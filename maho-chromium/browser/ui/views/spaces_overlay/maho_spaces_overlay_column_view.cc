@@ -15,7 +15,10 @@
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/highlight_path_generator.h"
+#include "ui/events/event.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "cc/paint/paint_shader.h"
@@ -175,20 +178,6 @@ class ColumnThemeBackground : public views::Background {
   const bool is_active_;
 };
 
-class GrabImageView : public views::ImageView {
-  METADATA_HEADER(GrabImageView, views::ImageView)
- public:
-  GrabImageView() = default;
-  ~GrabImageView() override = default;
-
-  ui::Cursor GetCursor(const ui::MouseEvent& event) override {
-    return ui::mojom::CursorType::kGrab;
-  }
-};
-
-BEGIN_METADATA(GrabImageView)
-END_METADATA
-
 }  // namespace
 
 BEGIN_METADATA(MahoSpacesOverlayColumnView)
@@ -221,6 +210,13 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
   }
 
   SetNotifyEnterExitOnChild(true);
+
+  // Columns are keyboard targets: Tab reaches them and Enter/Space switches
+  // to the space, matching a click.
+  SetFocusBehavior(FocusBehavior::ALWAYS);
+  views::FocusRing::Install(this);
+  views::InstallRoundRectHighlightPathGenerator(this, gfx::Insets(),
+                                                kColumnCornerRadiusDp);
 
 
   auto* header_row = AddChildView(std::make_unique<views::View>());
@@ -266,12 +262,6 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
   title_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   title_label_->SetElideBehavior(gfx::ELIDE_TAIL);
   title_row_layout->SetFlexForView(title_label_, 1);
-
-  tag_chip_ = title_row->AddChildView(std::make_unique<views::Label>(
-      u"Default", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5));
-  tag_chip_->SetAutoColorReadabilityEnabled(false);
-  tag_chip_->SetSubpixelRenderingEnabled(false);
-  tag_chip_->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(1, 4)));
 
   edit_button_ = title_row->AddChildView(
       views::CreateVectorImageButton(base::BindRepeating(
@@ -336,6 +326,7 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
       section_view->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
       section_view->GetViewAccessibility().SetName(
           SectionAccessibleName(section.title));
+      section_names_.push_back(SectionAccessibleName(section.title));
 
       if (i > 0) {
         auto* separator_row = section_view->AddChildView(std::make_unique<views::View>());
@@ -349,16 +340,6 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
 
         auto* spacer = separator_row->AddChildView(std::make_unique<views::View>());
         sep_layout->SetFlexForView(spacer, 1);
-
-        clear_arrow_ = separator_row->AddChildView(std::make_unique<views::ImageView>());
-        // Styled in UpdateColors()
-
-        clear_label_ = separator_row->AddChildView(std::make_unique<views::Label>(
-            u"Clear", views::style::CONTEXT_LABEL,
-            views::style::STYLE_BODY_5_MEDIUM));
-        clear_label_->SetAutoColorReadabilityEnabled(false);
-        clear_label_->SetSubpixelRenderingEnabled(false);
-        clear_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
       }
 
       for (const SpaceBoardTabItem* tab : section.tabs) {
@@ -375,15 +356,12 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
   GetViewAccessibility().SetName(
       is_active_ ? column_.name + u" (current space)" : column_.name);
 
-  // Add Footer (Grip + Ellipsis Menu)
+  // Footer: the space menu, right-aligned.
   auto* footer_row = AddChildView(std::make_unique<views::View>());
   auto* footer_layout = footer_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
   footer_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-
-  // Glyph color is bound to the sidebar palette in UpdateColors().
-  drag_handle_ = footer_row->AddChildView(std::make_unique<GrabImageView>());
 
   auto* spacer = footer_row->AddChildView(std::make_unique<views::View>());
   footer_layout->SetFlexForView(spacer, 1);
@@ -409,6 +387,16 @@ bool MahoSpacesOverlayColumnView::OnMousePressed(const ui::MouseEvent& event) {
   return false;
 }
 
+bool MahoSpacesOverlayColumnView::OnKeyPressed(const ui::KeyEvent& event) {
+  if ((event.key_code() == ui::VKEY_RETURN ||
+       event.key_code() == ui::VKEY_SPACE) &&
+      space_selected_callback_) {
+    space_selected_callback_.Run(column_.space_id);
+    return true;
+  }
+  return views::View::OnKeyPressed(event);
+}
+
 ui::Cursor MahoSpacesOverlayColumnView::GetCursor(const ui::MouseEvent& event) {
   return ui::mojom::CursorType::kHand;
 }
@@ -419,11 +407,7 @@ std::u16string MahoSpacesOverlayColumnView::GetTitleTextForTesting() const {
 
 std::vector<std::u16string>
 MahoSpacesOverlayColumnView::GetSectionTitlesForTesting() const {
-  std::vector<std::u16string> titles;
-  if (clear_label_) {
-    titles.push_back(u"Clear");
-  }
-  return titles;
+  return section_names_;
 }
 
 void MahoSpacesOverlayColumnView::SetPalette(
@@ -470,28 +454,8 @@ void MahoSpacesOverlayColumnView::UpdateColors() {
   // Tab count is readable metadata: secondary role, never tertiary.
   subtitle_label_->SetEnabledColor(palette_.secondary_text);
 
-  if (clear_label_) {
-    clear_label_->SetEnabledColor(palette_.secondary_text);
-  }
-
-  if (clear_arrow_) {
-    clear_arrow_->SetImage(ui::ImageModel::FromVectorIcon(
-        maho_lucide_icons::kArrowUpIcon, palette_.neutral_glyph, 12));
-  }
-
-  if (drag_handle_) {
-    drag_handle_->SetImage(ui::ImageModel::FromVectorIcon(
-        maho_lucide_icons::kMoveIcon, palette_.neutral_glyph, 16));
-  }
-
   if (empty_state_label_) {
     empty_state_label_->SetEnabledColor(palette_.secondary_text);
-  }
-
-  if (tag_chip_) {
-    tag_chip_->SetBackground(
-        views::CreateRoundedRectBackground(palette_.row_hover, 4));
-    tag_chip_->SetEnabledColor(palette_.secondary_text);
   }
 
   // Functional glyphs use the contrast-guarded neutral role in every state;

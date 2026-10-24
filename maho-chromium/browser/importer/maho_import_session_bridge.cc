@@ -110,7 +110,7 @@ void MahoImportSessionBridge::HandleProgressOnUI(uint32_t kind,
                                                  int32_t count,
                                                  std::string message) {
   for (ImportProgressAction action :
-       AdvanceImportProgress(kind, &terminal_state_)) {
+       AdvanceImportProgress(kind, import_type, &terminal_state_)) {
     switch (action) {
       case ImportProgressAction::kReleaseSession:
         ReleaseSession();
@@ -243,13 +243,39 @@ void MahoImportSessionBridge::ForwardProgress(uint32_t kind,
         handler_->NotifyImportProgress(import_type, count, "", false);
         break;
       case 2:  // TypeComplete
+        legacy_succeeded_types_ |= import_type;
         handler_->NotifyImportProgress(import_type, count, "", false);
         break;
-      case 3:  // AllComplete
-        handler_->NotifyImportProgress(import_type, count, "", true);
+      case 3: {  // AllComplete
+        // Only a run where every attempted type failed ends in an error.
+        // When any type imported, the run succeeded (partially): the failed
+        // types already reached the page as typed errors, and an error here
+        // would offer a whole-selection retry that duplicates imported data.
+        const bool all_failed =
+            legacy_failed_types_ != 0 && legacy_succeeded_types_ == 0;
+        handler_->NotifyImportProgress(
+            import_type, count, all_failed ? legacy_type_error_ : "", true);
         break;
+      }
       case 4:  // Error
-        handler_->NotifyImportProgress(import_type, count, message, true);
+        // A typed error is one failed type, not the end of the import: the
+        // welcome page keeps running until AllComplete.
+        if (import_type != 0) {
+          legacy_failed_types_ |= import_type;
+        }
+        if (import_type != 0 && legacy_type_error_.empty()) {
+          legacy_type_error_ = message.empty()
+                                   ? std::string("Some data couldn't be imported.")
+                                   : message;
+        }
+        // The page and handler only treat a non-empty error as a failure, so
+        // a typed error must never reach them with empty text.
+        handler_->NotifyImportProgress(
+            import_type, count,
+            (import_type != 0 && message.empty())
+                ? std::string("Some data couldn't be imported.")
+                : message,
+            import_type == 0);
         break;
     }
   }

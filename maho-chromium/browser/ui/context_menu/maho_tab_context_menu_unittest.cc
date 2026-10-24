@@ -2,8 +2,10 @@
 
 #include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
 
+#include <iterator>
 #include <memory>
 
+#include "build/build_config.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/menus/simple_menu_model.h"
@@ -47,18 +49,34 @@ TEST(MahoTabContextMenuTest, BuildMenuModelContainsCopyLink) {
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_COPY_URL));
 }
 
-TEST(MahoTabContextMenuTest, BuildMenuModelContainsShare) {
+// Share is a native share picker on macOS only; elsewhere it would duplicate
+// Copy Link, so the item is not offered.
+TEST(MahoTabContextMenuTest, BuildMenuModelShareOnlyWithNativeSharePicker) {
   MahoTabContextMenu menu(nullptr, 0);
   std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
   ASSERT_NE(model, nullptr);
+#if BUILDFLAG(IS_MAC)
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_SHARE));
+#else
+  EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_TAB_SHARE));
+#endif
 }
 
-TEST(MahoTabContextMenuTest, BuildMenuModelContainsChangeIcon) {
+// The tab row has no custom-icon rendering, so the menu must not offer an
+// enabled "Change Icon..." that does nothing.
+TEST(MahoTabContextMenuTest, BuildMenuModelOmitsChangeIcon) {
   MahoTabContextMenu menu(nullptr, 0);
   std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
   ASSERT_NE(model, nullptr);
-  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_CHANGE_ICON));
+  EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_TAB_CHANGE_ICON));
+}
+
+// Regular windows expose Reload like the Incognito menu does.
+TEST(MahoTabContextMenuTest, BuildMenuModelContainsReload) {
+  MahoTabContextMenu menu(nullptr, 0);
+  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
+  ASSERT_NE(model, nullptr);
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_RELOAD));
 }
 
 TEST(MahoTabContextMenuTest, BuildMenuModelContainsRename) {
@@ -197,15 +215,15 @@ TEST(MahoTabContextMenuTest, TopLevelOrderMatchesProduction) {
 
   // Expected sequence (index → command):
   //  0  Copy Link
-  //  1  Share
+  //  1  Share (macOS only; absent elsewhere, shifting the rest up by one)
   //  2  [separator]
-  //  3  Change Icon…
-  //  4  Rename…
-  //  5  Mute
-  //  6  Pin (null core → role != "pinned" → "Pin")
-  //  7  Add to Favorites (L3-compliant slot 57010)
-  //  8  [separator]
-  //  9  Open in Split View
+  //  3  Rename…
+  //  4  Mute
+  //  5  Pin (null core → role != "pinned" → "Pin")
+  //  6  Add to Favorites (L3-compliant slot 57010)
+  //  7  [separator]
+  //  8  Open in Split View
+  //  9  Reload
   // 10  Duplicate
   // 11  Boost
   // 12  Move to (submenu)
@@ -215,63 +233,43 @@ TEST(MahoTabContextMenuTest, TopLevelOrderMatchesProduction) {
   // 16  Archive Tabs Below
   // 17  [separator]
   // 18  Close Tab
+#if BUILDFLAG(IS_MAC)
   ASSERT_EQ(items.size(), 19u);
+#else
+  ASSERT_EQ(items.size(), 18u);
+#endif
 
-  EXPECT_EQ(items[0].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[0].command_id, IDC_MAHO_TAB_COPY_URL);
-
-  EXPECT_EQ(items[1].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[1].command_id, IDC_MAHO_TAB_SHARE);
-
-  EXPECT_EQ(items[2].type, ui::MenuModel::TYPE_SEPARATOR);
-
-  EXPECT_EQ(items[3].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[3].command_id, IDC_MAHO_TAB_CHANGE_ICON);
-
-  EXPECT_EQ(items[4].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[4].command_id, IDC_MAHO_TAB_RENAME);
-
-  EXPECT_EQ(items[5].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[5].command_id, IDC_MAHO_TAB_MUTE);
-
-  // Null core → QueryTabRole returns "" → not pinned → "Pin".
-  EXPECT_EQ(items[6].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[6].command_id, IDC_MAHO_TAB_PIN);
-
-  // "Add to Favorites" reuses the historical favorite slot value 57010 under an
-  // L3-compliant name in production; the header enum for that slot is 57010.
-  EXPECT_EQ(items[7].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[7].command_id, 57010);
-
-  EXPECT_EQ(items[8].type, ui::MenuModel::TYPE_SEPARATOR);
-
-  EXPECT_EQ(items[9].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[9].command_id, IDC_MAHO_TAB_OPEN_SPLIT);
-
-  EXPECT_EQ(items[10].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[10].command_id, IDC_MAHO_TAB_DUPLICATE);
-
-  EXPECT_EQ(items[11].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[11].command_id, IDC_MAHO_TAB_BOOST);
-
-  EXPECT_EQ(items[12].type, ui::MenuModel::TYPE_SUBMENU);
-  EXPECT_EQ(items[12].command_id, IDC_MAHO_TAB_MOVE_TO_SPACE);
-
-  EXPECT_EQ(items[13].type, ui::MenuModel::TYPE_SEPARATOR);
-
-  EXPECT_EQ(items[14].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[14].command_id, IDC_MAHO_TAB_FREEZE);
-
-  EXPECT_EQ(items[15].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[15].command_id, IDC_MAHO_TAB_ARCHIVE);
-
-  EXPECT_EQ(items[16].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[16].command_id, IDC_MAHO_TAB_ARCHIVE_BELOW);
-
-  EXPECT_EQ(items[17].type, ui::MenuModel::TYPE_SEPARATOR);
-
-  EXPECT_EQ(items[18].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[18].command_id, IDC_MAHO_TAB_CLOSE);
+  const ItemDesc expected[] = {
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_COPY_URL},
+#if BUILDFLAG(IS_MAC)
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_SHARE},
+#endif
+      {ui::MenuModel::TYPE_SEPARATOR, -1},
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_RENAME},
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_MUTE},
+      // Null core → QueryTabRole returns "" → not pinned → "Pin".
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_PIN},
+      // "Add to Favorites" reuses the historical favorite slot value 57010.
+      {ui::MenuModel::TYPE_COMMAND, 57010},
+      {ui::MenuModel::TYPE_SEPARATOR, -1},
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_OPEN_SPLIT},
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_RELOAD},
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_DUPLICATE},
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_BOOST},
+      {ui::MenuModel::TYPE_SUBMENU, IDC_MAHO_TAB_MOVE_TO_SPACE},
+      {ui::MenuModel::TYPE_SEPARATOR, -1},
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_FREEZE},
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_ARCHIVE},
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_ARCHIVE_BELOW},
+      {ui::MenuModel::TYPE_SEPARATOR, -1},
+      {ui::MenuModel::TYPE_COMMAND, IDC_MAHO_TAB_CLOSE},
+  };
+  for (size_t i = 0; i < std::size(expected); ++i) {
+    EXPECT_EQ(items[i].type, expected[i].type) << "index " << i;
+    if (expected[i].type != ui::MenuModel::TYPE_SEPARATOR) {
+      EXPECT_EQ(items[i].command_id, expected[i].command_id) << "index " << i;
+    }
+  }
 }
 
 TEST(MahoTabContextMenuTest, TopLevelHasExactlyFourSeparators) {
@@ -412,8 +410,8 @@ TEST(MahoTabContextMenuTest, EmptyCoreTabIdDoesNotBreakEnabledState) {
 // Share and Archive Tab — null-browser safety
 // ---------------------------------------------------------------------------
 
-// Share falls back to copying the URL. With a null browser there is no
-// WebContents, so the clipboard write is skipped — must not crash.
+// Share routes to the row delegate's share surface. With a null browser there
+// is no tab and no delegate, so nothing happens — must not crash.
 TEST(MahoTabContextMenuTest, ShareSilentWithNullBrowser) {
   MahoTabContextMenu menu(nullptr, 0);
   menu.ExecuteCommand(IDC_MAHO_TAB_SHARE, 0);

@@ -11,8 +11,9 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/memory/ref_counted.h"
-#include "base/strings/string_number_conversions.h"
+#include "base/supports_user_data.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
@@ -77,8 +78,11 @@ class CacheWarmerImpl : public base::RefCounted<CacheWarmerImpl> {
         continue;
       }
 
-      // Skip if cache already has items for this config.
-      if (LiveFolderItemCache::GetInstance().GetItems(*config_json)) {
+      // Skip configs whose cached items are still fresh.
+      const base::Time updated =
+          LiveFolderItemCache::GetInstance().GetUpdateTime(*config_json);
+      if (!updated.is_null() &&
+          base::Time::Now() - updated < LiveFolderRefreshInterval(*provider_type)) {
         continue;
       }
 
@@ -140,16 +144,7 @@ class CacheWarmerImpl : public base::RefCounted<CacheWarmerImpl> {
 
     const std::string* token = config->GetDict().FindString("token");
     if (!token || token->empty()) {
-      // No token — insert a placeholder item like the page handler does.
-      std::vector<LiveFolderCachedItem> items;
-      LiveFolderCachedItem ci;
-      ci.id = "gcal_open";
-      ci.title = "Open Google Calendar";
-      ci.subtitle = "View your events";
-      ci.url = "https://calendar.google.com";
-      items.push_back(std::move(ci));
-      LiveFolderItemCache::GetInstance().SetItems(config_json, std::move(items));
-      NotifySidebar();
+      StoreItems(config_json, LiveFolderGoogleCalendarPlaceholderItems());
       return;
     }
 
@@ -157,10 +152,7 @@ class CacheWarmerImpl : public base::RefCounted<CacheWarmerImpl> {
         config->GetDict().FindString("calendar_id");
     std::string cal = calendar_id ? *calendar_id : "primary";
 
-    std::string url =
-        "https://www.googleapis.com/calendar/v3/calendars/" + cal +
-        "/events?maxResults=20&orderBy=startTime&singleEvents=true"
-        "&timeMin=2026-01-01T00:00:00Z";
+    std::string url = LiveFolderGoogleCalendarEventsUrl(cal, base::Time::Now());
 
     auto request = std::make_unique<network::ResourceRequest>();
     request->url = GURL(url);
@@ -183,90 +175,26 @@ class CacheWarmerImpl : public base::RefCounted<CacheWarmerImpl> {
   void OnGitHubResponse(const std::string& config_json,
                         std::optional<std::string> body) {
     if (!body.has_value()) {
-      return;
+      return;  // Keep the previous items; retry on the next stale tick.
     }
-
-    std::optional<base::Value> parsed =
-        base::JSONReader::Read(*body, base::JSON_PARSE_RFC);
-    if (!parsed || !parsed->is_list()) {
-      return;
-    }
-
-    std::vector<LiveFolderCachedItem> items;
-    for (const auto& entry : parsed->GetList()) {
-      const auto* dict = entry.GetIfDict();
-      if (!dict) {
-        continue;
-      }
-      LiveFolderCachedItem ci;
-      const std::string* title = dict->FindString("title");
-      ci.title = title ? *title : "Untitled PR";
-
-      const auto* user_dict = dict->FindDict("user");
-      if (user_dict) {
-        const std::string* login = user_dict->FindString("login");
-        ci.subtitle = login ? *login : "";
-      }
-
-      const std::string* html_url = dict->FindString("html_url");
-      ci.url = html_url ? *html_url : "";
-
-      std::optional<int> number = dict->FindInt("number");
-      ci.id = number ? "pr_" + base::NumberToString(*number) : "";
-
-      items.push_back(std::move(ci));
-    }
-
-    LiveFolderItemCache::GetInstance().SetItems(config_json, std::move(items));
-    NotifySidebar();
+    StoreItems(config_json, ParseLiveFolderGitHubPRs(*body));
   }
 
   void OnGoogleCalendarResponse(const std::string& config_json,
                                 std::optional<std::string> body) {
     if (!body.has_value()) {
-      return;
+      return;  // Keep the previous items; retry on the next stale tick.
     }
+    StoreItems(config_json, ParseLiveFolderGoogleCalendarEvents(*body));
+  }
 
-    std::optional<base::Value> parsed =
-        base::JSONReader::Read(*body, base::JSON_PARSE_RFC);
-    if (!parsed || !parsed->is_dict()) {
-      return;
+  void StoreItems(const std::string& config_json,
+                  std::optional<std::vector<LiveFolderCachedItem>> items) {
+    if (!items.has_value()) {
+      return;  // Malformed response: never overwrite or mark fresh.
     }
-
-    const auto* items_list = parsed->GetDict().FindList("items");
-    if (!items_list) {
-      return;
-    }
-
-    std::vector<LiveFolderCachedItem> items;
-    for (const auto& entry : *items_list) {
-      const auto* dict = entry.GetIfDict();
-      if (!dict) {
-        continue;
-      }
-      LiveFolderCachedItem ci;
-      const std::string* summary = dict->FindString("summary");
-      ci.title = summary ? *summary : "Untitled Event";
-
-      const auto* start_dict = dict->FindDict("start");
-      if (start_dict) {
-        const std::string* dt = start_dict->FindString("dateTime");
-        if (!dt) {
-          dt = start_dict->FindString("date");
-        }
-        ci.subtitle = dt ? *dt : "";
-      }
-
-      const std::string* html_link = dict->FindString("htmlLink");
-      ci.url = html_link ? *html_link : "";
-
-      const std::string* id = dict->FindString("id");
-      ci.id = id ? *id : "";
-
-      items.push_back(std::move(ci));
-    }
-
-    LiveFolderItemCache::GetInstance().SetItems(config_json, std::move(items));
+    LiveFolderItemCache::GetInstance().SetItems(config_json,
+                                                std::move(*items));
     NotifySidebar();
   }
 
@@ -280,6 +208,36 @@ class CacheWarmerImpl : public base::RefCounted<CacheWarmerImpl> {
   std::vector<std::unique_ptr<network::SimpleURLLoader>> active_loaders_;
 };
 
+void WarmStaleFolders(Profile* profile) {
+  const base::ListValue& folder_list =
+      profile->GetPrefs()->GetList(maho::sidebar_prefs::kLiveFolders);
+  if (folder_list.empty()) {
+    return;
+  }
+  auto warmer = base::MakeRefCounted<CacheWarmerImpl>(
+      profile->GetURLLoaderFactory());
+  warmer->Start(folder_list);
+}
+
+// Profile-owned timer that keeps sidebar live folders fresh while the browser
+// runs, independent of whether chrome://maho-live-folders is open. Destroyed
+// with the profile, which also stops the timer.
+const char kRefreshSchedulerKey[] = "maho_live_folder_refresh_scheduler";
+
+class RefreshScheduler : public base::SupportsUserData::Data {
+ public:
+  explicit RefreshScheduler(Profile* profile) {
+    // Tick at the shortest provider interval; each tick refetches only the
+    // folders whose cached items have gone stale.
+    timer_.Start(FROM_HERE, LiveFolderRefreshInterval("google_calendar"),
+                 base::BindRepeating(&WarmStaleFolders,
+                                     base::Unretained(profile)));
+  }
+
+ private:
+  base::RepeatingTimer timer_;
+};
+
 }  // namespace
 
 // static
@@ -288,15 +246,11 @@ void LiveFolderCacheWarmer::WarmCache(Profile* profile) {
     return;
   }
 
-  const base::ListValue& folder_list =
-      profile->GetPrefs()->GetList(maho::sidebar_prefs::kLiveFolders);
-  if (folder_list.empty()) {
-    return;
+  WarmStaleFolders(profile);
+  if (!profile->GetUserData(kRefreshSchedulerKey)) {
+    profile->SetUserData(kRefreshSchedulerKey,
+                         std::make_unique<RefreshScheduler>(profile));
   }
-
-  auto warmer = base::MakeRefCounted<CacheWarmerImpl>(
-      profile->GetURLLoaderFactory());
-  warmer->Start(folder_list);
 }
 
 }  // namespace maho

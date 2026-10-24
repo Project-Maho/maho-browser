@@ -274,11 +274,22 @@ bool ApplyThemeJsonToSpace(MahoCore* core,
   std::string event_json;
   base::JSONWriter::Write(base::Value(std::move(event)), &event_json);
   char* result = maho_core_handle_event(core, event_json.c_str());
-  if (result) {
-    std::string updates(result);
-    maho_string_free(result);
-    maho::InvalidateSidebarCoreCacheForUpdatesJson(updates);
+  if (!result) {
+    // Core rejected or dropped the update_space_config event (e.g. a theme
+    // shape serde refuses); nothing changed, so do not report success.
+    return false;
   }
+  std::string updates(result);
+  maho_string_free(result);
+  // Serde rejections come back as a structured {"error":{...}} payload
+  // rather than null; that is also a dropped apply.
+  if (std::optional<base::Value> parsed_updates =
+          base::JSONReader::Read(updates, base::JSON_PARSE_RFC);
+      parsed_updates && parsed_updates->is_dict() &&
+      parsed_updates->GetDict().Find("error")) {
+    return false;
+  }
+  maho::InvalidateSidebarCoreCacheForUpdatesJson(updates);
   // Persist to disk so the theme (incl. opacity) survives restart; otherwise
   // update_space_config only mutates in-memory core state and is lost on relaunch.
   maho_core_save_state(core);

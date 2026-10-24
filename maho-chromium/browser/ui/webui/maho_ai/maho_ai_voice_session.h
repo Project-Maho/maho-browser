@@ -3,6 +3,7 @@
 #ifndef MAHO_BROWSER_UI_WEBUI_MAHO_AI_MAHO_AI_VOICE_SESSION_H_
 #define MAHO_BROWSER_UI_WEBUI_MAHO_AI_MAHO_AI_VOICE_SESSION_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -46,14 +47,21 @@ class MahoAiVoiceSession {
   ~MahoAiVoiceSession();
 
   // Ensures the model is present (downloading if needed), opens the engine, and
-  // runs |on_ready| with whether the session is ready to receive audio.
+  // runs |on_ready| with whether the session is ready to receive audio. A
+  // Start() that arrives while model setup is still running does not restart
+  // setup: it becomes the pending request (newest wins; a superseded request
+  // is answered with false) and is served when setup finishes.
   void Start(ReadyCallback on_ready);
 
   // Appends a chunk of 16 kHz mono f32 PCM. No-op until the engine is ready.
   void PushAudio(const std::vector<float>& pcm16k);
 
   // Finalizes the utterance: transcribes the accumulated buffer and forwards
-  // the result via the final/error callbacks.
+  // the result via the final/error callbacks. Exactly one terminal callback
+  // (final or error) follows unless a newer Start() is accepted first, in which
+  // case this utterance's result is dropped so it cannot leak into the new
+  // session. During model setup it cancels the pending request (answered with
+  // false) while setup itself keeps running for the next Start().
   void Stop();
 
  private:
@@ -66,13 +74,16 @@ class MahoAiVoiceSession {
   static std::optional<std::string> TranscribeOnWorker(uintptr_t engine_token,
                                                        std::vector<float> pcm);
 
-  void OnModelChecked(ReadyCallback on_ready, ModelState state);
-  void StartDownload(ReadyCallback on_ready);
-  void OnDownloaded(ReadyCallback on_ready, base::FilePath temp_path);
-  void OnDownloadVerified(ReadyCallback on_ready, bool ok);
-  void CreateEngine(ReadyCallback on_ready);
-  void OnEngineCreated(ReadyCallback on_ready, MahoSttSession* engine);
-  void OnTranscribed(std::optional<std::string> transcript);
+  void OnModelChecked(ModelState state);
+  void StartDownload();
+  void OnDownloaded(base::FilePath temp_path);
+  void OnDownloadVerified(bool ok);
+  void CreateEngine();
+  void OnEngineCreated(MahoSttSession* engine);
+  // Ends model setup with |error| and rejects the pending request, if any.
+  void FailSetup(const std::string& error);
+  void OnTranscribed(uint64_t session_seq,
+                     std::optional<std::string> transcript);
 
   base::FilePath model_path_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
@@ -87,6 +98,15 @@ class MahoAiVoiceSession {
   // maho-stt-ffi and handed across sequences; not a raw_ptr candidate.
   RAW_PTR_EXCLUSION MahoSttSession* engine_ = nullptr;
   bool active_ = false;
+  // Incremented by every accepted Start(). Stop() binds the current value into
+  // its transcription reply; replies from an older session are discarded.
+  uint64_t session_seq_ = 0;
+  // True while the first Start() is checking/downloading the model or creating
+  // the engine, so a second Start() cannot race it.
+  bool starting_ = false;
+  // The request served when setup finishes; empty if it was cancelled by
+  // Stop(). Only the newest Start() during setup is kept.
+  ReadyCallback pending_ready_;
 
   base::WeakPtrFactory<MahoAiVoiceSession> weak_factory_{this};
 };

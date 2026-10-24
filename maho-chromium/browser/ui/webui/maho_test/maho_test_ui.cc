@@ -3,11 +3,13 @@
 #include "maho/browser/ui/webui/maho_test/maho_test_ui.h"
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/files/file_path.h"
 #include "base/time/time.h"
@@ -25,7 +27,6 @@
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -34,7 +35,6 @@
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "components/bookmarks/browser/bookmark_model.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -200,11 +200,21 @@ std::string BuildSidebarSnapshotJson(const maho::MahoSidebarViewStateModel& stat
   return json;
 }
 
-bool ShouldSeedRuntimeVerificationState(const GURL& url) {
-  std::string seed_value;
-  return url.has_query() &&
-         net::GetValueForKeyInQuery(url, "seed", &seed_value) &&
-         !seed_value.empty();
+// Seeding mutates the real profile (pins, favorites, custom titles, a new
+// space, folders), so a bare chrome://maho-test/?seed=N must not do it unless
+// the process was started for verification with this switch.
+constexpr char kEnableMahoTestSeedingSwitch[] = "maho-enable-test-seeding";
+
+enum class SeedRequestStatus {
+  kNone,       // No ?seed= in the URL.
+  kInvalid,    // ?seed= present but not 1 or 2.
+  kDisabled,   // Valid level, but the seeding switch is absent.
+  kScheduled,  // Valid level and switch present; seeding posted.
+};
+
+bool IsMahoTestSeedingEnabled() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      kEnableMahoTestSeedingSwitch);
 }
 
 std::vector<std::string>& FavoriteDebugLines() {
@@ -212,30 +222,24 @@ std::vector<std::string>& FavoriteDebugLines() {
   return *debug_lines;
 }
 
-int GetSeedLevel(const GURL& url) {
+// Parses ?seed= strictly: only the exact integers 1 and 2 are levels.
+// Returns nullopt when the key is absent, 0 when present but invalid.
+std::optional<int> GetSeedLevel(const GURL& url) {
   std::string seed_value;
   if (!url.has_query() ||
       !net::GetValueForKeyInQuery(url, "seed", &seed_value)) {
-    return 0;
+    return std::nullopt;
   }
   int level = 0;
-  base::StringToInt(seed_value, &level);
+  if (!base::StringToInt(seed_value, &level) || level < 1 || level > 2) {
+    return 0;
+  }
   return level;
 }
 
 void SeedLevel1(Profile* profile) {
   if (!profile) {
     return;
-  }
-
-  bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(profile);
-  if (bookmark_model && bookmark_model->loaded() &&
-      bookmark_model->bookmark_bar_node() &&
-      bookmark_model->bookmark_bar_node()->children().empty()) {
-    bookmark_model->AddURL(bookmark_model->bookmark_bar_node(), 0,
-                           u"Maho Test Seed",
-                           GURL("data:text/html,runtime-seed"));
   }
 
   ProfileBrowserCollection* collection =
@@ -978,7 +982,34 @@ void SeedLevel2(Profile* profile) {
 
 
 
-std::string BuildSidebarSnapshotHtml(Profile* profile) {
+std::string BuildSeedStatusHtml(SeedRequestStatus status, int level) {
+  switch (status) {
+    case SeedRequestStatus::kNone:
+      return std::string();
+    case SeedRequestStatus::kInvalid:
+      return "  <div class=\"status warn\"><p><strong>Seeding ignored:</strong> "
+             "?seed= must be 1 or 2. Your profile was not changed.</p></div>\n";
+    case SeedRequestStatus::kDisabled:
+      return "  <div class=\"status warn\"><p><strong>Seeding disabled:</strong> "
+             "?seed=" + base::NumberToString(level) +
+             " needs the --" + std::string(kEnableMahoTestSeedingSwitch) +
+             " switch. Your profile was not changed.</p></div>\n";
+    case SeedRequestStatus::kScheduled:
+      return "  <div class=\"status warn\"><p><strong>Profile modified:</strong> "
+             "seed level " + base::NumberToString(level) +
+             " is changing THIS profile (pinned tabs" +
+             std::string(level >= 2
+                             ? ", favorites, custom titles, a \"Seed Space 2\" "
+                               "space, folders and extra tabs"
+                             : "") +
+             "). These changes persist and are not undone automatically. "
+             "Reload without ?seed= to see the seeded state.</p></div>\n";
+  }
+  return std::string();
+}
+
+std::string BuildSidebarSnapshotHtml(Profile* profile,
+                                     const std::string& seed_status_html) {
   std::string html = R"html(<!DOCTYPE html>
 <html>
 <head>
@@ -1011,6 +1042,7 @@ std::string BuildSidebarSnapshotHtml(Profile* profile) {
     dd { margin: 0; }
     ul { margin: 8px 0 0 20px; }
     code, pre { background: #0f172a; padding: 2px 6px; border-radius: 4px; }
+    .warn { border-left: 4px solid #e94560; }
   </style>
 </head>
 <body>
@@ -1021,6 +1053,7 @@ std::string BuildSidebarSnapshotHtml(Profile* profile) {
     <p>Sidebar tree JSON fields: normal_tree, parent_folder_id, folder_child_index.</p>
   </div>
 )html";
+  html += seed_status_html;
 
   if (!profile) {
     html += R"html(<p><span class="ok">NO PROFILE</span> Unable to read sidebar state.</p>
@@ -1278,16 +1311,28 @@ void MahoTestHTMLSource::StartDataRequest(
     const content::WebContents::Getter& wc_getter,
     content::URLDataSource::GotDataCallback callback) {
   LOG(INFO) << "MahoTestHTMLSource::StartDataRequest URL=" << url.spec();
-  if (ShouldSeedRuntimeVerificationState(url)) {
-    LOG(INFO) << "MahoTestHTMLSource: posting seeding runtime verification state level=" << GetSeedLevel(url);
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE,
-        base::BindOnce(&SeedRuntimeVerificationState, profile_, GetSeedLevel(url)));
+  const std::optional<int> seed_level = GetSeedLevel(url);
+  SeedRequestStatus seed_status = SeedRequestStatus::kNone;
+  if (seed_level.has_value()) {
+    if (*seed_level == 0) {
+      seed_status = SeedRequestStatus::kInvalid;
+    } else if (!IsMahoTestSeedingEnabled()) {
+      seed_status = SeedRequestStatus::kDisabled;
+    } else {
+      seed_status = SeedRequestStatus::kScheduled;
+      LOG(INFO) << "MahoTestHTMLSource: posting seeding runtime verification "
+                   "state level="
+                << *seed_level;
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&SeedRuntimeVerificationState, profile_,
+                                    *seed_level));
+    }
   }
 
-  std::move(callback).Run(
-      base::MakeRefCounted<base::RefCountedString>(
-          BuildSidebarSnapshotHtml(profile_)));
+  std::move(callback).Run(base::MakeRefCounted<base::RefCountedString>(
+      BuildSidebarSnapshotHtml(
+          profile_,
+          BuildSeedStatusHtml(seed_status, seed_level.value_or(0)))));
   LOG(INFO) << "MahoTestHTMLSource::StartDataRequest finished";
 }
 

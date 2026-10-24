@@ -11,6 +11,7 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/memory/raw_ref.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -23,8 +24,11 @@
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/components/maho_importer/maho_importer_constants.mojom.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/combobox_model.h"
+#include "ui/events/event.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/canvas.h"
 #include "ui/shell_dialogs/select_file_policy.h"
 #include "ui/shell_dialogs/selected_file_info.h"
@@ -60,9 +64,12 @@ enum MahoMigrationStringIds {
   IDS_MAHO_MIGRATION_TITLE,
 };
 #endif
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/controls/focus_ring.h"
+#include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/layout/box_layout.h"
@@ -145,6 +152,18 @@ std::u16string GetMahoLocalizedString(int resource_id) {
   return l10n_util::GetStringUTF16(resource_id);
 }
 
+// In-progress item count for a progress row ("12 items…"). Maho's grit
+// strings ship English-only, so like GetMahoLocalizedString() this covers ko
+// explicitly and uses English everywhere else.
+std::u16string GetMahoItemsInProgressText(int32_t count) {
+  const std::u16string number = base::NumberToString16(count);
+  std::string locale = g_browser_process->GetApplicationLocale();
+  if (base::StartsWith(locale, "ko", base::CompareCase::INSENSITIVE_ASCII)) {
+    return number + u"개 항목…";
+  }
+  return number + (count == 1 ? u" item…" : u" items…");
+}
+
 // Data types and their string IDs.
 struct DataTypeInfo {
   uint32_t flag;
@@ -204,6 +223,14 @@ BrowserCard::BrowserCard(size_t index,
   AddChildView(std::move(text_column));
 
   SetFocusBehavior(FocusBehavior::ALWAYS);
+  // Cards behave as a radio group: expose that to assistive tech and draw a
+  // focus ring so keyboard selection is visible.
+  GetViewAccessibility().SetRole(ax::mojom::Role::kRadioButton);
+  GetViewAccessibility().SetName(base::UTF8ToUTF16(browser.display_name));
+  GetViewAccessibility().SetCheckedState(ax::mojom::CheckedState::kFalse);
+  views::InstallRoundRectHighlightPathGenerator(this, gfx::Insets(),
+                                                kCardCornerRadius);
+  views::FocusRing::Install(this);
 }
 
 BrowserCard::~BrowserCard() = default;
@@ -211,6 +238,9 @@ BrowserCard::~BrowserCard() = default;
 void BrowserCard::SetSelected(bool selected) {
   if (selected_ == selected) return;
   selected_ = selected;
+  GetViewAccessibility().SetCheckedState(
+      selected ? ax::mojom::CheckedState::kTrue
+               : ax::mojom::CheckedState::kFalse);
   SchedulePaint();
 }
 
@@ -274,6 +304,17 @@ bool BrowserCard::OnMousePressed(const ui::MouseEvent& event) {
   return true;
 }
 
+bool BrowserCard::OnKeyPressed(const ui::KeyEvent& event) {
+  if (event.key_code() != ui::VKEY_RETURN &&
+      event.key_code() != ui::VKEY_SPACE) {
+    return views::View::OnKeyPressed(event);
+  }
+  if (on_select_) {
+    on_select_.Run(index_);
+  }
+  return true;
+}
+
 BEGIN_METADATA(BrowserCard)
 END_METADATA
 
@@ -318,9 +359,17 @@ std::u16string MahoMigrationDialogView::GetWindowTitle() const {
 }
 
 void MahoMigrationDialogView::WindowClosing() {
-  // X-close during import routes through the cancel path (Row 9).
-  if (state_ == DialogState::kImporting) {
-    // Already handled by OnCancelClicked triggering close.
+  // Closing via the title-bar X or Esc bypasses OnCancelClicked(); stop an
+  // in-flight import so it does not keep running after the dialog is gone.
+  // was_cancelled_ stays true unless a success path cleared it.
+  if ((state_ == DialogState::kImporting ||
+       state_ == DialogState::kCancelling) &&
+      import_session_bridge_) {
+    import_session_bridge_->Cancel();
+  }
+  // Dismissing the success screen before its auto-close is still a success.
+  if (state_ == DialogState::kSuccess) {
+    was_cancelled_ = false;
   }
   if (callback_) {
     std::move(callback_).Run(was_cancelled_, current_import_bitmask_);
@@ -553,7 +602,6 @@ void MahoMigrationDialogView::StartImport(uint32_t mask) {
   const auto& browser = browsers_[selected_browser_index_.value()];
 
   current_import_bitmask_ = mask;
-  was_cancelled_ = false;
   TransitionTo(DialogState::kImporting);
 
   // Disable cards during import.
@@ -677,15 +725,33 @@ void MahoMigrationDialogView::OnCancelClicked() {
     case DialogState::kPartialFail:
     case DialogState::kFullFail:
     case DialogState::kIdle:
-    case DialogState::kSuccess:
       was_cancelled_ = true;
+      GetWidget()->Close();
+      break;
+    case DialogState::kSuccess:
+      // "Close" after a completed import is not a cancellation.
+      was_cancelled_ = false;
       GetWidget()->Close();
       break;
   }
 }
 
 void MahoMigrationDialogView::OnRetryClicked() {
-  // Row 8: Retry after full failure — reset and re-import.
+  // Row 8: Retry after full failure — reset and re-import. StartImport()
+  // disabled the cards and checkboxes and swapped in the progress rows;
+  // restore the selection UI so the import re-runs with the same choices.
+  for (const auto& card : browser_cards_) {
+    card->SetEnabled(true);
+  }
+  if (selected_browser_index_.has_value()) {
+    const uint32_t supported =
+        browsers_[selected_browser_index_.value()].services_supported;
+    for (auto& row : checkboxes_) {
+      row.checkbox->SetEnabled((supported & row.flag) != 0);
+    }
+  }
+  progress_container_->SetVisible(false);
+  checkboxes_container_->SetVisible(true);
   TransitionTo(DialogState::kIdle);
   status_label_->SetVisible(false);
   OnImportClicked();
@@ -727,13 +793,15 @@ void MahoMigrationDialogView::OnImportProgress(
     // Final overall completion signal — evaluate results.
     cancel_timeout_timer_.Stop();
 
-    // Check per-type results.
+    // Check per-type results. A requested type that never reported
+    // completion did not import, so it counts as failed; an error on the
+    // overall signal (e.g. the session could not start) is a failure too.
     bool any_succeeded = false;
-    bool any_failed = false;
+    bool any_failed = !error.empty();
     for (const auto& [flag, succeeded] : type_succeeded_) {
       if (succeeded) {
         any_succeeded = true;
-      } else if (type_completed_[flag]) {
+      } else {
         any_failed = true;
       }
     }
@@ -778,8 +846,7 @@ void MahoMigrationDialogView::OnImportProgress(
     }
   } else if (items_imported > 0) {
     // Update count while in progress.
-    row.count_label->SetText(base::UTF8ToUTF16(
-        std::to_string(items_imported) + " items…"));
+    row.count_label->SetText(GetMahoItemsInProgressText(items_imported));
   }
 }
 

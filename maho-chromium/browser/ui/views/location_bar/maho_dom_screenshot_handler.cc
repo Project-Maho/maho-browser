@@ -9,7 +9,10 @@
 #include "base/base64.h"
 #include "base/check.h"
 #include "base/containers/span.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/memory/ref_counted_memory.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -17,14 +20,14 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/share/share_attempt.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
-#include "chrome/browser/ui/sharing_hub/sharing_hub_bubble_controller.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_manager.h"
@@ -33,7 +36,9 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "maho/browser/ui/views/location_bar/maho_dom_screenshot_action_dialog_view.h"
+#include "net/base/filename_util.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -42,6 +47,10 @@
 #include "ui/gfx/image/image.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "maho/browser/ui/notifications/maho_notification_share_mac.h"  // nogncheck
+#endif
 
 namespace {
 
@@ -59,6 +68,64 @@ std::u16string FilenameForURL(const GURL& url) {
   return base::ASCIIToUTF16(
       base::StrCat({"maho_screenshot_", url.GetHost(), ".png"}));
 }
+
+Browser* BrowserForTab(content::WebContents* web_contents) {
+  if (!web_contents) {
+    return nullptr;
+  }
+  return static_cast<Browser*>(
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents));
+}
+
+#if BUILDFLAG(IS_MAC)
+// Writes |png| into a fresh temp directory and returns the file path, or an
+// empty path on failure. Runs on a blocking-capable pool thread.
+base::FilePath WriteScreenshotToTempFile(
+    scoped_refptr<base::RefCountedMemory> png,
+    std::u16string filename) {
+  base::FilePath dir;
+  if (!base::CreateNewTempDirectory(FILE_PATH_LITERAL("maho_screenshot_share"),
+                                    &dir)) {
+    return base::FilePath();
+  }
+  const base::FilePath file =
+      dir.Append(base::FilePath::FromUTF16Unsafe(filename));
+  if (!base::WriteFile(file, base::span(*png))) {
+    base::DeletePathRecursively(dir);
+    return base::FilePath();
+  }
+  return file;
+}
+
+void DeleteScreenshotTempDir(const base::FilePath& file) {
+  base::ThreadPool::PostTask(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+      base::GetDeletePathRecursivelyCallback(file.DirName()));
+}
+
+// Opens the native macOS share sheet for the PNG at |file| (shared as the
+// image file itself), anchored to the tab's web contents view. The temp
+// directory is removed once the share sheet closes.
+void ShowShareSheetForScreenshotFile(
+    base::WeakPtr<content::WebContents> web_contents,
+    const base::FilePath& file) {
+  if (file.empty()) {
+    return;
+  }
+  Browser* browser = BrowserForTab(web_contents.get());
+  BrowserView* browser_view =
+      browser ? BrowserView::GetBrowserViewForBrowser(browser) : nullptr;
+  views::View* anchor =
+      browser_view ? browser_view->GetContentsView() : nullptr;
+  if (!anchor || !anchor->GetWidget()) {
+    DeleteScreenshotTempDir(file);
+    return;
+  }
+  maho::ShowNativeSharePicker(anchor, net::FilePathToFileURL(file),
+                              file.BaseName().LossyDisplayName(),
+                              base::BindOnce(&DeleteScreenshotTempDir, file));
+}
+#endif  // BUILDFLAG(IS_MAC)
 
 }  // namespace
 
@@ -334,10 +401,14 @@ void MahoDomScreenshotHandler::ShowResultBubble(
   }
 
   MahoDomScreenshotActionMenu menu;
+#if BUILDFLAG(IS_MAC)
+  // Only macOS has a native share sheet; elsewhere there is no real share
+  // destination, so the entry is not offered at all.
   menu.header_label = u"Send To...";
   menu.header_icon = &maho_lucide_icons::kShareIcon;
   menu.header_activate = base::BindOnce(
       &MahoDomScreenshotHandler::OnSendToClicked, weak_factory_.GetWeakPtr());
+#endif
 
   menu.rows.push_back({
       u"Copy", &maho_lucide_icons::kCopyIcon, true, false,
@@ -355,39 +426,6 @@ void MahoDomScreenshotHandler::ShowResultBubble(
                      weak_factory_.GetWeakPtr()),
   });
 
-  constexpr bool edit_enabled = true;
-  menu.rows.push_back({
-      u"Edit", &maho_lucide_icons::kPencilLineIcon, edit_enabled, false,
-      edit_enabled
-          ? base::BindOnce(&MahoDomScreenshotHandler::OnEditClicked,
-                           weak_factory_.GetWeakPtr())
-          : base::OnceClosure(),
-  });
-
-#if BUILDFLAG(IS_MAC)
-  constexpr bool imessage_enabled = true;
-#else
-  const bool imessage_enabled = false;
-#endif
-  menu.rows.push_back({
-      u"Send via iMessage...", &maho_lucide_icons::kMessageSquareIcon, imessage_enabled, false,
-      imessage_enabled
-          ? base::BindOnce(
-                &MahoDomScreenshotHandler::OnSendViaIMessageClicked,
-                weak_factory_.GetWeakPtr())
-          : base::OnceClosure(),
-  });
-
-  constexpr bool save_to_library_enabled = true;
-  menu.rows.push_back({
-      u"Save to Library", &maho_lucide_icons::kArrowDownToLineIcon, save_to_library_enabled,
-      false,
-      save_to_library_enabled
-          ? base::BindOnce(&MahoDomScreenshotHandler::OnSaveToLibraryClicked,
-                           weak_factory_.GetWeakPtr())
-          : base::OnceClosure(),
-  });
-
   menu.dismiss_callback = base::BindOnce(
       &MahoDomScreenshotHandler::OnBubbleDismissed,
       weak_factory_.GetWeakPtr());
@@ -402,9 +440,19 @@ void MahoDomScreenshotHandler::ShowResultBubble(
 void MahoDomScreenshotHandler::OnCopyClicked() {
   const SkBitmap bitmap = captured_image_.AsBitmap();
   if (!bitmap.isNull()) {
-    {
-      ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
-      writer.WriteImage(bitmap);
+    ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+    writer.WriteImage(bitmap);
+  }
+  // Clipboard writes confirm with the shared toast; a null bitmap copies
+  // nothing, so say so instead of closing silently.
+  if (Browser* browser = BrowserForTab(web_contents())) {
+    if (auto* overlay =
+            MahoNotificationOverlay::GetOrCreateForBrowser(browser)) {
+      overlay->Show(bitmap.isNull() ? u"Couldn't copy screenshot"
+                                    : u"Screenshot copied",
+                    std::u16string(), base::Seconds(2),
+                    bitmap.isNull() ? MahoToastView::Icon::kNone
+                                    : MahoToastView::Icon::kCopy);
     }
   }
   Finish();
@@ -466,25 +514,23 @@ void MahoDomScreenshotHandler::OnBubbleDismissed() {
   Finish();
 }
 
+#if BUILDFLAG(IS_MAC)
 void MahoDomScreenshotHandler::OnSendToClicked() {
+  // Share the captured image itself: write it to a temp PNG and hand the file
+  // to the native share sheet. This object finishes now; the share flow only
+  // holds a weak WebContents pointer.
   content::WebContents* wc = web_contents();
-  if (!wc) {
-    Finish();
-    return;
-  }
-  BrowserWindowInterface* browser =
-      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(wc);
-  if (!browser) {
-    Finish();
-    return;
-  }
-  sharing_hub::SharingHubBubbleController* controller =
-      sharing_hub::SharingHubBubbleController::CreateOrGetFromWebContents(wc);
-  if (controller) {
-    controller->ShowBubble(share::ShareAttempt(wc));
+  scoped_refptr<base::RefCountedMemory> png = captured_image_.As1xPNGBytes();
+  if (wc && png && png->size() > 0) {
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(&WriteScreenshotToTempFile, std::move(png),
+                       FilenameForURL(wc->GetLastCommittedURL())),
+        base::BindOnce(&ShowShareSheetForScreenshotFile, wc->GetWeakPtr()));
   }
   Finish();
 }
+#endif  // BUILDFLAG(IS_MAC)
 
 void MahoDomScreenshotHandler::OnRetakeClicked() {
   content::WebContents* wc = web_contents();
@@ -494,18 +540,6 @@ void MahoDomScreenshotHandler::OnRetakeClicked() {
         base::BindOnce(&MahoDomScreenshotHandler::TriggerCapture, wc));
   }
   Finish();
-}
-
-void MahoDomScreenshotHandler::OnEditClicked() {
-  Finish();
-}
-
-void MahoDomScreenshotHandler::OnSendViaIMessageClicked() {
-  Finish();
-}
-
-void MahoDomScreenshotHandler::OnSaveToLibraryClicked() {
-  OnDownloadClicked();
 }
 
 void MahoDomScreenshotHandler::AgentHostClosed(
@@ -524,6 +558,7 @@ void MahoDomScreenshotHandler::Finish() {
   if (finished_) {
     return;
   }
+  RemovePageOverlay();
   Observe(nullptr);
   finished_ = true;
   capture_anchor_screen_.reset();
@@ -536,6 +571,26 @@ void MahoDomScreenshotHandler::Finish() {
   }
   result_bubble_widget_ = nullptr;
   delete this;
+}
+
+void MahoDomScreenshotHandler::RemovePageOverlay() {
+  // The selection overlay lives in the page, not in this object. Tear it down
+  // on every exit (timeout, failure, dismissal) so an abandoned session never
+  // leaves an interactive overlay behind or blocks the next capture. The page
+  // side ignores the call when |session_token_| is no longer the live session.
+  content::WebContents* wc = web_contents();
+  if (!wc || wc->IsBeingDestroyed() || session_token_.empty()) {
+    return;
+  }
+  content::RenderFrameHost* rfh = wc->GetPrimaryMainFrame();
+  if (!rfh || !rfh->IsRenderFrameLive()) {
+    return;
+  }
+  rfh->ExecuteJavaScriptInIsolatedWorld(
+      base::UTF8ToUTF16("window.__mahoDomScreenshotCleanup&&"
+                        "window.__mahoDomScreenshotCleanup('" +
+                        session_token_ + "');"),
+      base::DoNothing(), kIsolatedWorldIdForDomScreenshot);
 }
 
 void MahoDomScreenshotHandler::DidFinishNavigation(

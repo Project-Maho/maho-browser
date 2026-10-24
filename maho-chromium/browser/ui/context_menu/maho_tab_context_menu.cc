@@ -10,6 +10,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
@@ -24,6 +25,7 @@
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
@@ -167,6 +169,20 @@ int MahoTabContextMenu::CountEligibleSplitTabs() const {
   return eligible;
 }
 
+bool MahoTabContextMenu::IsActiveTabSelected() const {
+  TabStripModel* model = browser_ ? browser_->GetTabStripModel() : nullptr;
+  if (!model) {
+    return false;
+  }
+  const int active_index = model->active_index();
+  for (const auto& id : selected_tab_ids_) {
+    if (maho::context_menu::ResolveTabIndex(browser_, id) == active_index) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   auto model = std::make_unique<ui::SimpleMenuModel>(this);
 
@@ -291,7 +307,12 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
                       move_to_space_submenu_.get());
 
     model->AddSeparator(ui::NORMAL_SEPARATOR);
-    model->AddItem(IDC_MAHO_TAB_FREEZE, u"Sleep Selected Tabs");
+    // The active tab cannot be discarded; name the exclusion in the label
+    // instead of silently sleeping one tab fewer than selected.
+    model->AddItem(IDC_MAHO_TAB_FREEZE,
+                   IsActiveTabSelected()
+                       ? u"Sleep Selected Tabs (Except Current Tab)"
+                       : u"Sleep Selected Tabs");
     model->AddItem(IDC_MAHO_TAB_ARCHIVE, u"Archive Tabs");
 
     return model;
@@ -309,39 +330,40 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   //  0  Copy Link
   model->AddItem(IDC_MAHO_TAB_COPY_URL, u"Copy Link");
 
-  //  1  Share
+#if BUILDFLAG(IS_MAC)
+  //  1  Share — only where a native share surface exists. Elsewhere Share
+  //  could only copy the link, a duplicate of Copy Link above, so it is not
+  //  offered at all.
   model->AddItem(IDC_MAHO_TAB_SHARE, u"Share");
+#endif
 
   //  2  [separator]
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
-  //  3  Change Icon…
-  model->AddItem(IDC_MAHO_TAB_CHANGE_ICON, u"Change Icon...");
-
-  //  4  Rename…
+  //  3  Rename…
   model->AddItem(IDC_MAHO_TAB_RENAME, u"Rename...");
 
-  //  5  Mute
+  //  4  Mute
   if (contents && contents->IsAudioMuted()) {
     model->AddItem(IDC_MAHO_TAB_UNMUTE, u"Unmute Tab");
   } else {
     model->AddItem(IDC_MAHO_TAB_MUTE, u"Mute Tab");
   }
 
-  //  6  Pin / Unpin
+  //  5  Pin / Unpin
   if (QueryTabRole(core_tab_id_) == "pinned") {
     model->AddItem(IDC_MAHO_TAB_UNPIN, u"Unpin");
   } else {
     model->AddItem(IDC_MAHO_TAB_PIN, u"Pin");
   }
 
-  //  7  Add to Favorites
+  //  6  Add to Favorites
   model->AddItem(IDC_MAHO_TAB_FAVORITE, u"Add to Favorites");
 
-  //  8  [separator]
+  //  7  [separator]
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
-  //  9  Open in Split View / Remove from Split View
+  //  8  Open in Split View / Remove from Split View
   {
     TabStripModel* split_tsm =
         browser_ ? browser_->GetTabStripModel() : nullptr;
@@ -354,6 +376,9 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
       model->AddItem(IDC_MAHO_TAB_OPEN_SPLIT, u"Open in Split View");
     }
   }
+
+  //  9  Reload (same command the Incognito menu exposes)
+  model->AddItem(IDC_MAHO_TAB_RELOAD, u"Reload");
 
   // 10  Duplicate
   model->AddItem(IDC_MAHO_TAB_DUPLICATE, u"Duplicate Tab");
@@ -487,9 +512,15 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       TabStripModel* multi_tsm =
           browser_ ? browser_->GetTabStripModel() : nullptr;
       if (multi_tsm) {
+        int slept = 0;
+        bool kept_active_awake = false;
         for (const auto& tab_id : selected_tab_ids_) {
           int idx = maho::context_menu::ResolveTabIndex(browser_, tab_id);
-          if (idx >= 0 && idx != multi_tsm->active_index()) {
+          if (idx >= 0 && idx == multi_tsm->active_index()) {
+            kept_active_awake = true;
+            continue;
+          }
+          if (idx >= 0) {
             if (content::WebContents* wc = multi_tsm->GetWebContentsAt(idx)) {
               if (auto* unit =
                       resource_coordinator::TabLifecycleUnitExternal::
@@ -498,9 +529,19 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
                     mojom::LifecycleUnitState::DISCARDED) {
                   unit->DiscardTab(
                       mojom::LifecycleUnitDiscardReason::EXTERNAL);
+                  ++slept;
                 }
               }
             }
+          }
+        }
+        if (kept_active_awake) {
+          if (auto* overlay =
+                  MahoNotificationOverlay::GetOrCreateForBrowser(browser_)) {
+            overlay->Show(
+                base::UTF8ToUTF16("Slept " + std::to_string(slept) +
+                                  (slept == 1 ? " tab" : " tabs")),
+                u"The current tab stays awake.", base::Seconds(3));
           }
         }
       }
@@ -671,19 +712,17 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
         ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
         writer.WriteText(base::UTF8ToUTF16(contents->GetVisibleURL().spec()));
       }
-      break;
-    }
-    case IDC_MAHO_TAB_SHARE: {
-      content::WebContents* contents =
-          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
-                              : nullptr;
       if (contents) {
-        ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
-        writer.WriteText(base::UTF8ToUTF16(contents->GetVisibleURL().spec()));
+        maho::ShowLinkCopiedToast(browser_);
       }
       break;
     }
-    case IDC_MAHO_TAB_CHANGE_ICON:
+    case IDC_MAHO_TAB_SHARE:
+      // Share goes to the row's platform share surface (same contract as the
+      // favorites menu); it is no longer a second Copy Link.
+      if (has_valid_tab_index && delegate_) {
+        delegate_->ShareTab(tab_index_);
+      }
       break;
     case IDC_MAHO_TAB_RENAME:
       if (delegate_) {
@@ -840,9 +879,9 @@ bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
     case IDC_MAHO_TAB_OPEN_SPLIT:
     case IDC_MAHO_TAB_REMOVE_SPLIT:
     case IDC_MAHO_TAB_BOOST:
-    case IDC_MAHO_TAB_SHARE:
-    case IDC_MAHO_TAB_CHANGE_ICON:
       return has_valid_tab_index;
+    case IDC_MAHO_TAB_SHARE:
+      return has_valid_tab_index && delegate_ != nullptr;
     case IDC_MAHO_TAB_ARCHIVE:
       return !core_tab_id_.empty();
     case IDC_MAHO_TAB_ARCHIVE_BELOW:

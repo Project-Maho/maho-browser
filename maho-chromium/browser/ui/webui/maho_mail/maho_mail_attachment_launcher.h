@@ -14,8 +14,9 @@ namespace maho::mail {
 using AttachmentLaunchCallback = base::OnceCallback<void(bool, std::string)>;
 
 // Opens the validated attachment with the platform's default application.
-// The implementation owns |attachment| through the platform handoff and
-// removes its browser-owned launch pathname exactly once before replying.
+// The implementation owns |attachment| through the platform handoff. On a
+// failed open it deletes the launch copy before replying; on success it leaves
+// the copy for the viewer and the registry's stale-copy sweep deletes it.
 void LaunchConsumedAttachment(
     std::unique_ptr<MahoMailAttachmentRegistry::ConsumedAttachment> attachment,
     AttachmentLaunchCallback callback);

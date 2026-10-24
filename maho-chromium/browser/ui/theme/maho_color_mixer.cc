@@ -136,9 +136,14 @@ void AddTextColors(ui::ColorMixer& mixer, bool dark_mode) {
 }
 
 void AddToastColors(ui::ColorMixer& mixer, bool dark_mode) {
+  // A toast floats above arbitrary page content, so its background must carry
+  // the text contrast on its own: there is no blur behind it. Alpha 40 (~16%)
+  // left the fill almost transparent, so a toast over a dark page was dark text
+  // on a dark wash. 240 matches kMahoColorCtrlTabOverlayBackground, the other
+  // surface that floats above content, and keeps a hint of translucency.
   mixer[kMahoColorToastBackground] = {dark_mode
-      ? SkColorSetARGB(40, 42, 39, 61)
-      : SkColorSetARGB(40, 255, 255, 255)};
+      ? SkColorSetARGB(240, 42, 39, 61)
+      : SkColorSetARGB(240, 255, 255, 255)};
   mixer[kMahoColorToastForeground] = {dark_mode
       ? SkColorSetARGB(255, 243, 243, 247)
       : SkColorSetARGB(255, 45, 51, 74)};

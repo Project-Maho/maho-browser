@@ -455,8 +455,13 @@ class ArchiveRowView : public views::View,
       on_restore_.Run();
       return true;
     }
+    // Deleting an archived tab is permanent, so a plain Backspace (which a
+    // user may press expecting to edit the search field) must not trigger it.
+    // Forward-Delete, or Backspace with the platform accelerator (Cmd+Delete
+    // on macOS, where the Delete key arrives as VKEY_BACK), is deliberate.
     if (event.key_code() == ui::VKEY_DELETE ||
-        event.key_code() == ui::VKEY_BACK) {
+        (event.key_code() == ui::VKEY_BACK &&
+         (event.flags() & ui::EF_PLATFORM_ACCELERATOR))) {
       on_delete_.Run();
       return true;
     }

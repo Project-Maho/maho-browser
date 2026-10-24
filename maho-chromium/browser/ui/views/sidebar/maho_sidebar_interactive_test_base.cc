@@ -129,6 +129,8 @@ void MahoSidebarInteractiveTestBase::SetUpCommandLine(
   // active (no relay session in tests), which would leave browser() null and
   // crash ResolveViews(). Disable the gate so the standard window exists.
   command_line->AppendSwitch("maho-disable-login-gate");
+  // chrome://maho-test/?seed=N (SeedTestPage) only seeds with this switch.
+  command_line->AppendSwitch("maho-enable-test-seeding");
   command_line->AppendSwitch("no-proxy-server");
   command_line->AppendSwitch("no-sandbox");
 }

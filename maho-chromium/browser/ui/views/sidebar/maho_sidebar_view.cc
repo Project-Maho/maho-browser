@@ -39,8 +39,8 @@
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "components/prefs/pref_service.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -1061,7 +1061,7 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
     case MahoSidebarLibraryRailView::Category::kMedia: {
       if (!media_view_) {
         media_view_ = library_content_host_->AddChildView(
-            std::make_unique<MahoSidebarMediaView>());
+            std::make_unique<MahoSidebarMediaView>(browser_));
         media_view_->SetSidebarPalette(sidebar_palette());
         media_palette_subscription_ = AddSidebarPaletteChangedCallback(
             base::BindRepeating(&MahoSidebarMediaView::SetSidebarPalette,

@@ -124,6 +124,14 @@ namespace {
 namespace ai = maho::ai_prefs;
 namespace acct = maho::account_prefs;
 
+// The local-only pref is registered with the welcome prefs; tolerate pref
+// services (tests) that do not register it.
+bool IsLocalOnlyProfile(PrefService* prefs) {
+  const PrefService::Preference* pref =
+      prefs->FindPreference(acct::kLocalOnly);
+  return pref && pref->GetValue()->is_bool() && pref->GetValue()->GetBool();
+}
+
 template <typename String>
 void ClearVaultString(String& value) {
   for (auto& character : value) {
@@ -6786,11 +6794,13 @@ void MahoSettingsPageHandler::GetAccountStatus(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto status = maho_settings::mojom::AccountStatus::New();
+  status->local_only = IsLocalOnlyProfile(prefs_);
 
   std::string encrypted_b64 =
       prefs_->GetString(acct::kRelayAccessTokenEncryptedB64);
   if (encrypted_b64.empty()) {
     status->signed_in = false;
+    status->session_valid = false;
     status->email = "";
     status->display_name = "";
     status->user_id = "";
@@ -6802,6 +6812,7 @@ void MahoSettingsPageHandler::GetAccountStatus(
   }
 
   status->signed_in = true;
+  status->session_valid = maho::auth::HasValidRelaySession(prefs_);
   status->email = prefs_->GetString(acct::kRelayUserEmail);
   status->display_name = prefs_->GetString(acct::kRelayUserDisplayName);
   status->user_id = prefs_->GetString(acct::kRelayUserId);
@@ -7003,11 +7014,13 @@ void MahoSettingsPageHandler::BroadcastAccountStatus() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto status = maho_settings::mojom::AccountStatus::New();
+  status->local_only = IsLocalOnlyProfile(prefs_);
 
   std::string encrypted_b64 =
       prefs_->GetString(acct::kRelayAccessTokenEncryptedB64);
   if (encrypted_b64.empty()) {
     status->signed_in = false;
+    status->session_valid = false;
     status->email = "";
     status->display_name = "";
     status->user_id = "";
@@ -7016,6 +7029,7 @@ void MahoSettingsPageHandler::BroadcastAccountStatus() {
     status->subscription_expires_at = 0;
   } else {
     status->signed_in = true;
+    status->session_valid = maho::auth::HasValidRelaySession(prefs_);
     status->email = prefs_->GetString(acct::kRelayUserEmail);
     status->display_name = prefs_->GetString(acct::kRelayUserDisplayName);
     status->user_id = prefs_->GetString(acct::kRelayUserId);

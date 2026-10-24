@@ -33,8 +33,8 @@
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"   // nogncheck
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
-#include "chrome/browser/ui/browser_navigator.h"  // nogncheck
-#include "chrome/browser/ui/browser_navigator_params.h"  // nogncheck
+#include "chrome/browser/ui/navigator/browser_navigator.h"  // nogncheck
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"  // nogncheck
 #include "chrome/browser/ui/browser_tabstrip.h"  // nogncheck
 #include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/browser/ui/startup/startup_tab.h"  // nogncheck
@@ -339,17 +339,22 @@ void MahoWelcomePageHandler::StartImport(int32_t browser_index,
   if (browser_index < 0 ||
       static_cast<size_t>(browser_index) >= detected_browsers_.size()) {
     LOG(WARNING) << "StartImport: browser_index out of range: " << browser_index;
+    NotifyImportProgress(
+        0, 0, "That browser is no longer available. Choose it again.", true);
     return;
   }
 
   if (import_session_bridge_ && import_session_bridge_->is_active()) {
     LOG(WARNING) << "StartImport: import already in progress";
+    NotifyImportProgress(0, 0, "An import is already running.", true);
     return;
   }
 
   MahoCore* core = maho::GetCore();
   if (!core) {
     LOG(ERROR) << "StartImport: MahoCore not initialized";
+    NotifyImportProgress(0, 0, "Maho isn't ready to import yet. Try again.",
+                         true);
     return;
   }
 
@@ -394,9 +399,7 @@ void MahoWelcomePageHandler::StartImport(int32_t browser_index,
   if (!import_session_bridge_->Start(core, browser_json, items,
                                      essentials_json)) {
     import_session_bridge_.reset();
-    if (page_) {
-      page_->OnImportProgress(0, 0, "Failed to start import session", true);
-    }
+    NotifyImportProgress(0, 0, "The import couldn't start. Try again.", true);
   }
 }
 
@@ -404,6 +407,21 @@ void MahoWelcomePageHandler::NotifyImportProgress(uint32_t type,
                                                    int32_t items_imported,
                                                    const std::string& error,
                                                    bool complete) {
+  if (!complete && type != 0 && !error.empty()) {
+    run_had_type_failure_ = true;
+  }
+  if (complete) {
+    // The bridge completes without an error whenever any type imported, so
+    // an error-free completion means data came in, even if some types
+    // failed. A failed run never clears data an earlier run imported.
+    if (error.empty()) {
+      import_succeeded_ = true;
+      import_partial_ = run_had_type_failure_;
+    } else if (import_succeeded_) {
+      import_partial_ = true;
+    }
+    run_had_type_failure_ = false;
+  }
   if (page_) {
     page_->OnImportProgress(type, items_imported, error, complete);
   }
@@ -437,11 +455,16 @@ void MahoWelcomePageHandler::OnOpenMigrationDialogBrowsersDetected(
   maho::MahoMigrationDialogView::Show(
       parent, profile_, detected_browsers_,
       base::BindOnce(
-          [](OpenMigrationDialogCallback cb, bool was_cancelled, uint32_t imported_items_bitmask) {
+          [](base::WeakPtr<MahoWelcomePageHandler> handler,
+             OpenMigrationDialogCallback cb, bool was_cancelled,
+             uint32_t imported_items_bitmask) {
+            if (handler && !was_cancelled && imported_items_bitmask != 0) {
+              handler->import_succeeded_ = true;
+            }
             std::move(cb).Run(maho_welcome::mojom::MigrationDialogResult::New(
                 was_cancelled, imported_items_bitmask));
           },
-          std::move(callback)));
+          weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoWelcomePageHandler::GetLocalizedStrings(
@@ -474,7 +497,7 @@ void MahoWelcomePageHandler::GetLocalizedStrings(
   add("IDS_MAHO_WELCOME_IMPORT_PROGRESS_STATUS", "Importing in progress...");
   add("IDS_MAHO_WELCOME_IMPORT_ERROR_TITLE", "Import couldn't be completed");
   add("IDS_MAHO_WELCOME_IMPORT_ERROR_BODY",
-      "Your data was not changed. Go back and try the import again.");
+      "Your data couldn't be imported. Go back and try the import again.");
   add("IDS_MAHO_WELCOME_IMPORT_STARTING_STATUS", "Starting import…");
   add("IDS_MAHO_WELCOME_IMPORT_BROWSER_PLACEHOLDER", "Browser");
   add("IDS_MAHO_WELCOME_IMPORT_PROFILE_PLACEHOLDER", "Profile");
@@ -978,12 +1001,28 @@ void MahoWelcomePageHandler::FinishOnboarding() {
     return;
   }
 
-  if (!maho::auth::HasValidRelaySession(profile_->GetPrefs())) {
-    LOG(ERROR) << "FinishOnboarding: Refusing to finish onboarding without valid relay session.";
+  PrefService* prefs = profile_->GetPrefs();
+  if (!maho::welcome::CanFinishOnboarding(
+          maho::auth::HasValidRelaySession(prefs),
+          prefs->GetBoolean(maho::welcome::kLocalOnly))) {
+    LOG(ERROR) << "FinishOnboarding: Refusing to finish onboarding without a "
+                  "valid relay session or the local-only choice.";
     return;
   }
 
   DoFinishOnboarding();
+}
+
+void MahoWelcomePageHandler::SetLocalOnlyMode(
+    SetLocalOnlyModeCallback callback) {
+  PrefService* prefs = profile_->GetPrefs();
+  if (maho::auth::HasValidRelaySession(prefs)) {
+    // A signed-in profile is not local-only; keep the account flow.
+    std::move(callback).Run(false);
+    return;
+  }
+  prefs->SetBoolean(maho::welcome::kLocalOnly, true);
+  std::move(callback).Run(true);
 }
 
 void MahoWelcomePageHandler::DevSkipOnboarding() {
@@ -1061,7 +1100,11 @@ void MahoWelcomePageHandler::RevealBrowserAndCloseWelcome() {
 
   auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(
       static_cast<Browser*>(main_bwi));
-  overlay->Show(u"Welcome to Maho", u"Import complete. Start exploring.");
+  overlay->Show(u"Welcome to Maho",
+                !import_succeeded_ ? u"Start exploring."
+                : import_partial_
+                    ? u"Some data couldn't be imported. Start exploring."
+                    : u"Import complete. Start exploring.");
 
   // Destroys the welcome window and this handler; must be the last statement.
   CloseWelcomeTab();
@@ -1280,7 +1323,9 @@ void MahoWelcomePageHandler::StartSync(
   char* result = maho_core_join_sync(
       core, maho::auth::GetSyncRelayUrl().c_str(), recovery_phrase.c_str());
   if (!result) {
-    std::move(callback).Run(true, "");
+    // maho_core_join_sync returns null only when the join could not run
+    // (import gate active, invalid input, or a core error).
+    std::move(callback).Run(false, "Couldn't start sync. Try again.");
     return;
   }
   std::string json(result);
@@ -1419,13 +1464,12 @@ void MahoWelcomePageHandler::MailDeleteAccount(
 
 void MahoWelcomePageHandler::GetAiProviderConfigured(
     GetAiProviderConfiguredCallback callback) {
-  PrefService* prefs = profile_->GetPrefs();
-  bool configured =
-      !prefs->GetString(maho::ai_prefs::kProvider).empty() ||
-      !prefs->GetString(maho::ai_prefs::kApiKey).empty() ||
-      !prefs->GetString(maho::ai_prefs::kByokOpenAIEncryptedB64).empty() ||
-      !prefs->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64).empty();
-  std::move(callback).Run(configured);
+  // Same readiness rule as GetByokCredentialConfigured: the login-written
+  // "maho-managed" default is not a configured BYOK provider.
+  PrefService* prefs = profile_ ? profile_->GetPrefs() : nullptr;
+  const std::string provider =
+      prefs ? prefs->GetString(maho::ai_prefs::kProvider) : std::string();
+  std::move(callback).Run(IsByokProviderConfiguredForRuntime(provider, prefs));
 }
 
 void MahoWelcomePageHandler::SetTranslationProvider(

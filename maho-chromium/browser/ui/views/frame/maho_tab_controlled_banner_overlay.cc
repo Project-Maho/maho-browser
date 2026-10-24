@@ -186,38 +186,45 @@ void MahoTabControlledBannerOverlay::OnControlActivityChanged(
     return;
   }
 
-  const bool is_controlling =
-      activity.target.has_value() &&
-      activity.target->window_id == browser_->GetSessionID().id() &&
-      activity.state != maho::ai::ControlActivityState::kDisconnected &&
-      activity.state != maho::ai::ControlActivityState::kFailed;
-
-  if (!is_controlling) {
-    HideBanner();
-    return;
-  }
-
   // Direct control (Maho CLI tools, repl, pipe, remote MCP clients) is not
   // agent delegation: it only surfaces through this banner and the sidebar
   // control indicator, never by opening the AI side panel. Only an explicit
   // hand-off to the built-in agent (maho_agent_delegate) opens the panel.
-  int64_t target_tab_id = activity.target->tab_id;
-  std::u16string controller_name =
-      base::UTF8ToUTF16(activity.controller_display_name);
+  UpdateForActiveTab();
+}
 
-  TabStripModel* tab_strip = browser_->GetTabStripModel();
+void MahoTabControlledBannerOverlay::UpdateForActiveTab() {
+  // The control activity service is the source of truth: the banner shows
+  // whenever the active tab of this window has a live control activity, so
+  // switching away and back to a controlled tab restores the banner.
+  auto* service = browser_ && browser_->GetProfile()
+                      ? maho::ai::MahoControlActivityService::GetForProfile(
+                            browser_->GetProfile())
+                      : nullptr;
+  TabStripModel* tab_strip = browser_ ? browser_->GetTabStripModel() : nullptr;
   content::WebContents* active_contents =
       tab_strip ? tab_strip->GetActiveWebContents() : nullptr;
   auto* helper =
       active_contents
           ? sessions::SessionTabHelper::FromWebContents(active_contents)
           : nullptr;
-
-  if (helper && helper->session_id().id() == target_tab_id) {
-    ShowBanner(target_tab_id, controller_name);
-  } else {
+  if (!service || !helper) {
     HideBanner();
+    return;
   }
+
+  const int64_t active_tab_id = helper->session_id().id();
+  for (const maho::ai::ControlActivity& activity : service->GetActivities()) {
+    if (activity.target.has_value() &&
+        activity.target->window_id == browser_->GetSessionID().id() &&
+        activity.target->tab_id == active_tab_id &&
+        !maho::ai::IsTerminalControlActivityState(activity.state)) {
+      ShowBanner(active_tab_id,
+                 base::UTF8ToUTF16(activity.controller_display_name));
+      return;
+    }
+  }
+  HideBanner();
 }
 
 void MahoTabControlledBannerOverlay::OnTabStripModelChanged(
@@ -225,28 +232,7 @@ void MahoTabControlledBannerOverlay::OnTabStripModelChanged(
     const TabStripModelChange& change,
     const TabStripSelectionChange& selection) {
   if (selection.active_tab_changed()) {
-    if (browser_ && browser_->GetProfile()) {
-      if (auto* service =
-              maho::ai::MahoControlActivityService::GetForProfile(browser_->GetProfile())) {
-        const auto activity =
-            service->GetActivity(base::NumberToString(current_controlled_tab_id_));
-        if (activity) {
-          OnControlActivityChanged(*activity);
-        } else {
-          content::WebContents* active_contents =
-              tab_strip_model ? tab_strip_model->GetActiveWebContents() : nullptr;
-          auto* helper =
-              active_contents
-                  ? sessions::SessionTabHelper::FromWebContents(active_contents)
-                  : nullptr;
-          if (helper && helper->session_id().id() == current_controlled_tab_id_) {
-            ShowBanner(current_controlled_tab_id_, current_controller_name_);
-          } else {
-            HideBanner();
-          }
-        }
-      }
-    }
+    UpdateForActiveTab();
   }
 }
 

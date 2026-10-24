@@ -109,15 +109,39 @@ MahoAiVoiceSession::~MahoAiVoiceSession() {
 }
 
 void MahoAiVoiceSession::Start(ReadyCallback on_ready) {
-  if (active_ || engine_) {
+  if (starting_) {
+    // Model setup (hash check, first-run download, engine load) is already in
+    // flight. Queue this request instead of rejecting it; only the newest one
+    // is served when setup finishes.
+    ReadyCallback superseded = std::move(pending_ready_);
+    pending_ready_ = std::move(on_ready);
+    if (superseded) {
+      std::move(superseded).Run(false);
+    }
+    return;
+  }
+  if (active_) {
     std::move(on_ready).Run(false);
     return;
   }
+  if (engine_) {
+    // The engine stays loaded across utterances; later push-to-talk sessions
+    // reuse it. A pending transcription of the previous utterance may still be
+    // running on |stt_runner_|; bumping |session_seq_| makes OnTranscribed()
+    // drop its result so it cannot be delivered as this session's transcript.
+    ++session_seq_;
+    pcm_.clear();
+    active_ = true;
+    std::move(on_ready).Run(true);
+    return;
+  }
+  starting_ = true;
+  pending_ready_ = std::move(on_ready);
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&MahoAiVoiceSession::CheckModelOnWorker, model_path_),
       base::BindOnce(&MahoAiVoiceSession::OnModelChecked,
-                     weak_factory_.GetWeakPtr(), std::move(on_ready)));
+                     weak_factory_.GetWeakPtr()));
 }
 
 void MahoAiVoiceSession::PushAudio(const std::vector<float>& pcm16k) {
@@ -128,6 +152,15 @@ void MahoAiVoiceSession::PushAudio(const std::vector<float>& pcm16k) {
 }
 
 void MahoAiVoiceSession::Stop() {
+  if (starting_) {
+    // Cancel during setup: drop the pending request but let setup finish so
+    // the next Start() finds the model ready.
+    ReadyCallback cancelled = std::move(pending_ready_);
+    if (cancelled) {
+      std::move(cancelled).Run(false);
+    }
+    return;
+  }
   if (!active_ || !engine_) {
     return;
   }
@@ -139,7 +172,7 @@ void MahoAiVoiceSession::Stop() {
       base::BindOnce(&MahoAiVoiceSession::TranscribeOnWorker,
                      reinterpret_cast<uintptr_t>(engine_), std::move(pcm)),
       base::BindOnce(&MahoAiVoiceSession::OnTranscribed,
-                     weak_factory_.GetWeakPtr()));
+                     weak_factory_.GetWeakPtr(), session_seq_));
 }
 
 // static
@@ -197,23 +230,21 @@ std::optional<std::string> MahoAiVoiceSession::TranscribeOnWorker(
   return out;
 }
 
-void MahoAiVoiceSession::OnModelChecked(ReadyCallback on_ready,
-                                        ModelState state) {
+void MahoAiVoiceSession::OnModelChecked(ModelState state) {
   switch (state) {
     case ModelState::kReady:
-      CreateEngine(std::move(on_ready));
+      CreateEngine();
       return;
     case ModelState::kMissing:
     case ModelState::kCorrupt:
-      StartDownload(std::move(on_ready));
+      StartDownload();
       return;
   }
 }
 
-void MahoAiVoiceSession::StartDownload(ReadyCallback on_ready) {
+void MahoAiVoiceSession::StartDownload() {
   if (!url_loader_factory_) {
-    on_error_.Run("Voice model unavailable");
-    std::move(on_ready).Run(false);
+    FailSetup("Voice model unavailable");
     return;
   }
   auto request = std::make_unique<network::ResourceRequest>();
@@ -245,15 +276,13 @@ void MahoAiVoiceSession::StartDownload(ReadyCallback on_ready) {
   loader_->DownloadToTempFile(
       url_loader_factory_.get(),
       base::BindOnce(&MahoAiVoiceSession::OnDownloaded,
-                     weak_factory_.GetWeakPtr(), std::move(on_ready)));
+                     weak_factory_.GetWeakPtr()));
 }
 
-void MahoAiVoiceSession::OnDownloaded(ReadyCallback on_ready,
-                                      base::FilePath temp_path) {
+void MahoAiVoiceSession::OnDownloaded(base::FilePath temp_path) {
   loader_.reset();
   if (temp_path.empty()) {
-    on_error_.Run("Voice model download failed");
-    std::move(on_ready).Run(false);
+    FailSetup("Voice model download failed");
     return;
   }
   base::ThreadPool::PostTaskAndReplyWithResult(
@@ -261,37 +290,60 @@ void MahoAiVoiceSession::OnDownloaded(ReadyCallback on_ready,
       base::BindOnce(&MahoAiVoiceSession::InstallAndVerifyOnWorker, temp_path,
                      model_path_),
       base::BindOnce(&MahoAiVoiceSession::OnDownloadVerified,
-                     weak_factory_.GetWeakPtr(), std::move(on_ready)));
+                     weak_factory_.GetWeakPtr()));
 }
 
-void MahoAiVoiceSession::OnDownloadVerified(ReadyCallback on_ready, bool ok) {
+void MahoAiVoiceSession::OnDownloadVerified(bool ok) {
   if (!ok) {
-    on_error_.Run("Voice model verification failed");
-    std::move(on_ready).Run(false);
+    FailSetup("Voice model verification failed");
     return;
   }
-  CreateEngine(std::move(on_ready));
+  CreateEngine();
 }
 
-void MahoAiVoiceSession::CreateEngine(ReadyCallback on_ready) {
+void MahoAiVoiceSession::CreateEngine() {
   stt_runner_->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&MahoAiVoiceSession::CreateEngineOnWorker, model_path_),
       base::BindOnce(&MahoAiVoiceSession::OnEngineCreated,
-                     weak_factory_.GetWeakPtr(), std::move(on_ready)));
+                     weak_factory_.GetWeakPtr()));
 }
 
-void MahoAiVoiceSession::OnEngineCreated(ReadyCallback on_ready,
-                                         MahoSttSession* engine) {
-  engine_ = engine;
-  active_ = engine != nullptr;
-  if (!active_) {
-    on_error_.Run("Voice engine failed to initialize");
+void MahoAiVoiceSession::OnEngineCreated(MahoSttSession* engine) {
+  if (!engine) {
+    FailSetup("Voice engine failed to initialize");
+    return;
   }
-  std::move(on_ready).Run(active_);
+  starting_ = false;
+  engine_ = engine;
+  pcm_.clear();
+  ReadyCallback on_ready = std::move(pending_ready_);
+  if (!on_ready) {
+    // The request was cancelled during setup. Keep the engine loaded for the
+    // next Start(), but do not open a session nobody is feeding.
+    return;
+  }
+  ++session_seq_;
+  active_ = true;
+  std::move(on_ready).Run(true);
 }
 
-void MahoAiVoiceSession::OnTranscribed(std::optional<std::string> transcript) {
+void MahoAiVoiceSession::FailSetup(const std::string& error) {
+  starting_ = false;
+  on_error_.Run(error);
+  ReadyCallback on_ready = std::move(pending_ready_);
+  if (on_ready) {
+    std::move(on_ready).Run(false);
+  }
+}
+
+void MahoAiVoiceSession::OnTranscribed(uint64_t session_seq,
+                                       std::optional<std::string> transcript) {
+  if (session_seq != session_seq_) {
+    // A newer session started while this utterance was transcribing; its
+    // result belongs to an abandoned session.
+    return;
+  }
   if (!transcript.has_value()) {
     on_error_.Run("Transcription failed");
     return;

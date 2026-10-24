@@ -86,7 +86,9 @@ class MahoSpaceDeleteConfirmationDialogView : public views::DialogDelegate {
     SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk) |
                static_cast<int>(ui::mojom::DialogButton::kCancel));
     SetModalType(ui::mojom::ModalType::kWindow);
-    SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kOk));
+    // Deleting a space closes all of its tabs and cannot be undone, so Enter
+    // must land on Cancel rather than the destructive action.
+    SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kCancel));
     SetButtonLabel(ui::mojom::DialogButton::kOk, u"Delete");
     SetButtonLabel(ui::mojom::DialogButton::kCancel, u"Cancel");
 

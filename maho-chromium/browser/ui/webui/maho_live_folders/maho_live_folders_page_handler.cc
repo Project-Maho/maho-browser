@@ -10,6 +10,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/uuid.h"
 #include "base/values.h"
@@ -345,22 +346,8 @@ void MahoLiveFolderPageHandler::FetchGoogleCalendarEvents(
 
   const std::string* token = config->GetDict().FindString("token");
   if (!token || token->empty()) {
-    auto item = maho_live_folders::mojom::LiveFolderItem::New();
-    item->id = "gcal_open";
-    item->title = "Open Google Calendar";
-    item->subtitle = "View your events";
-    item->url = "https://calendar.google.com";
-    item->icon_url = "";
-    item->timestamp = 0;
-    std::vector<maho_live_folders::mojom::LiveFolderItemPtr> items;
-    items.push_back(std::move(item));
-    cached_items_[folder.id] = std::move(items);
-
-    std::vector<maho_live_folders::mojom::LiveFolderItemPtr> cloned;
-    for (const auto& ci : cached_items_[folder.id]) {
-      cloned.push_back(ci->Clone());
-    }
-    page_->OnFolderUpdated(folder.id, std::move(cloned));
+    ApplyFetchResult(folder.id,
+                     maho::LiveFolderGoogleCalendarPlaceholderItems());
     return;
   }
 
@@ -369,9 +356,7 @@ void MahoLiveFolderPageHandler::FetchGoogleCalendarEvents(
   std::string cal = calendar_id ? *calendar_id : "primary";
 
   std::string url =
-      "https://www.googleapis.com/calendar/v3/calendars/" + cal +
-      "/events?maxResults=20&orderBy=startTime&singleEvents=true"
-      "&timeMin=2026-01-01T00:00:00Z";
+      maho::LiveFolderGoogleCalendarEventsUrl(cal, base::Time::Now());
 
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = GURL(url);
@@ -396,48 +381,9 @@ void MahoLiveFolderPageHandler::OnGitHubResponse(
     std::optional<std::string> body) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   active_loaders_.erase(folder_id);
-
-  std::vector<maho_live_folders::mojom::LiveFolderItemPtr> items;
-  if (body.has_value()) {
-    items = ParseGitHubPRs(*body);
-  }
-  cached_items_[folder_id] = std::move(items);
-
-  // Populate the shared item cache for sidebar tree injection.
-  auto folder_it = folders_.find(folder_id);
-  if (folder_it != folders_.end()) {
-    std::vector<maho::LiveFolderCachedItem> cache_items;
-    for (const auto& item : cached_items_[folder_id]) {
-      maho::LiveFolderCachedItem ci;
-      ci.id = item->id;
-      ci.title = item->title;
-      ci.subtitle = item->subtitle;
-      ci.url = item->url;
-      cache_items.push_back(std::move(ci));
-    }
-    maho::LiveFolderItemCache::GetInstance().SetItems(
-        folder_it->second.config_json, std::move(cache_items));
-    // Trigger sidebar rebuild so expanded live folders show updated children.
-    if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-      bridge->NotifyChanged();
-    }
-  }
-
-  auto cb_it = pending_callbacks_.find(folder_id);
-  if (cb_it != pending_callbacks_.end()) {
-    std::vector<maho_live_folders::mojom::LiveFolderItemPtr> cloned;
-    for (const auto& item : cached_items_[folder_id]) {
-      cloned.push_back(item->Clone());
-    }
-    std::move(cb_it->second).Run(std::move(cloned));
-    pending_callbacks_.erase(cb_it);
-  }
-
-  std::vector<maho_live_folders::mojom::LiveFolderItemPtr> cloned;
-  for (const auto& item : cached_items_[folder_id]) {
-    cloned.push_back(item->Clone());
-  }
-  page_->OnFolderUpdated(folder_id, std::move(cloned));
+  ApplyFetchResult(folder_id, body.has_value()
+                                  ? maho::ParseLiveFolderGitHubPRs(*body)
+                                  : std::nullopt);
 }
 
 void MahoLiveFolderPageHandler::OnGoogleCalendarResponse(
@@ -445,141 +391,73 @@ void MahoLiveFolderPageHandler::OnGoogleCalendarResponse(
     std::optional<std::string> body) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   active_loaders_.erase(folder_id);
+  ApplyFetchResult(folder_id,
+                   body.has_value()
+                       ? maho::ParseLiveFolderGoogleCalendarEvents(*body)
+                       : std::nullopt);
+}
 
-  std::vector<maho_live_folders::mojom::LiveFolderItemPtr> items;
-  if (body.has_value()) {
-    items = ParseGoogleCalendarEvents(*body);
-  }
-  cached_items_[folder_id] = std::move(items);
-
+void MahoLiveFolderPageHandler::ApplyFetchResult(
+    const std::string& folder_id,
+    std::optional<std::vector<maho::LiveFolderCachedItem>> fetched) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto folder_it = folders_.find(folder_id);
-  if (folder_it != folders_.end()) {
-    std::vector<maho::LiveFolderCachedItem> cache_items;
-    for (const auto& item : cached_items_[folder_id]) {
-      maho::LiveFolderCachedItem ci;
-      ci.id = item->id;
-      ci.title = item->title;
-      ci.subtitle = item->subtitle;
-      ci.url = item->url;
-      cache_items.push_back(std::move(ci));
+  if (folder_it == folders_.end()) {
+    pending_callbacks_.erase(folder_id);
+    return;
+  }
+
+  if (fetched.has_value()) {
+    std::vector<maho_live_folders::mojom::LiveFolderItemPtr> items;
+    for (const auto& cached : *fetched) {
+      auto item = maho_live_folders::mojom::LiveFolderItem::New();
+      item->id = cached.id;
+      item->title = cached.title;
+      item->subtitle = cached.subtitle;
+      item->url = cached.url;
+      item->icon_url = "";
+      item->timestamp = 0;
+      items.push_back(std::move(item));
     }
+    cached_items_[folder_id] = std::move(items);
+
+    // Same items as the cache warmer writes, so the sidebar tree does not
+    // change depending on which writer refreshed last.
     maho::LiveFolderItemCache::GetInstance().SetItems(
-        folder_it->second.config_json, std::move(cache_items));
+        folder_it->second.config_json, std::move(*fetched));
     if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
       bridge->NotifyChanged();
     }
+  } else {
+    // Network/HTTP failure or malformed body: keep the previous items and do
+    // not mark the shared cache fresh, so the next tick retries.
+    LOG(WARNING) << "maho-live-folders: refresh failed for folder "
+                 << folder_id << "; keeping previous items";
   }
 
   auto cb_it = pending_callbacks_.find(folder_id);
   if (cb_it != pending_callbacks_.end()) {
-    std::vector<maho_live_folders::mojom::LiveFolderItemPtr> cloned;
-    for (const auto& item : cached_items_[folder_id]) {
+    GetFolderItemsCallback callback = std::move(cb_it->second);
+    pending_callbacks_.erase(cb_it);
+    std::move(callback).Run(CloneCachedItems(folder_id));
+  }
+
+  if (fetched.has_value()) {
+    page_->OnFolderUpdated(folder_id, CloneCachedItems(folder_id));
+  }
+}
+
+std::vector<maho_live_folders::mojom::LiveFolderItemPtr>
+MahoLiveFolderPageHandler::CloneCachedItems(
+    const std::string& folder_id) const {
+  std::vector<maho_live_folders::mojom::LiveFolderItemPtr> cloned;
+  auto it = cached_items_.find(folder_id);
+  if (it != cached_items_.end()) {
+    for (const auto& item : it->second) {
       cloned.push_back(item->Clone());
     }
-    std::move(cb_it->second).Run(std::move(cloned));
-    pending_callbacks_.erase(cb_it);
   }
-
-  std::vector<maho_live_folders::mojom::LiveFolderItemPtr> cloned;
-  for (const auto& item : cached_items_[folder_id]) {
-    cloned.push_back(item->Clone());
-  }
-  page_->OnFolderUpdated(folder_id, std::move(cloned));
-}
-
-// static
-std::vector<maho_live_folders::mojom::LiveFolderItemPtr>
-MahoLiveFolderPageHandler::ParseGitHubPRs(const std::string& json) {
-  std::vector<maho_live_folders::mojom::LiveFolderItemPtr> items;
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) {
-    return items;
-  }
-
-  for (const auto& entry : parsed->GetList()) {
-    const auto* dict = entry.GetIfDict();
-    if (!dict) {
-      continue;
-    }
-    const std::string* title = dict->FindString("title");
-    const std::string* html_url = dict->FindString("html_url");
-    std::optional<int> number = dict->FindInt("number");
-    if (!title || !html_url || !number) {
-      continue;
-    }
-
-    std::string subtitle;
-    const auto* user = dict->FindDict("user");
-    if (user) {
-      const std::string* login = user->FindString("login");
-      if (login) {
-        subtitle = *login;
-      }
-    }
-
-    auto item = maho_live_folders::mojom::LiveFolderItem::New();
-    item->id = "pr_" + base::NumberToString(*number);
-    item->title = "#" + base::NumberToString(*number) + " " + *title;
-    item->subtitle = subtitle;
-    item->url = *html_url;
-    item->icon_url = "";
-    item->timestamp = 0;
-    items.push_back(std::move(item));
-  }
-  return items;
-}
-
-// static
-std::vector<maho_live_folders::mojom::LiveFolderItemPtr>
-MahoLiveFolderPageHandler::ParseGoogleCalendarEvents(
-    const std::string& json) {
-  std::vector<maho_live_folders::mojom::LiveFolderItemPtr> items;
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) {
-    return items;
-  }
-
-  const auto* events_list = parsed->GetDict().FindList("items");
-  if (!events_list) {
-    return items;
-  }
-
-  int index = 0;
-  for (const auto& entry : *events_list) {
-    const auto* dict = entry.GetIfDict();
-    if (!dict) {
-      continue;
-    }
-    const std::string* summary = dict->FindString("summary");
-    const std::string* html_link = dict->FindString("htmlLink");
-    if (!summary) {
-      continue;
-    }
-
-    std::string subtitle;
-    const auto* start = dict->FindDict("start");
-    if (start) {
-      const std::string* date_time = start->FindString("dateTime");
-      const std::string* date = start->FindString("date");
-      if (date_time) {
-        subtitle = *date_time;
-      } else if (date) {
-        subtitle = *date;
-      }
-    }
-
-    auto item = maho_live_folders::mojom::LiveFolderItem::New();
-    item->id = "gcal_" + base::NumberToString(index++);
-    item->title = *summary;
-    item->subtitle = subtitle;
-    item->url = html_link ? *html_link : "https://calendar.google.com";
-    item->icon_url = "";
-    item->timestamp = 0;
-    items.push_back(std::move(item));
-  }
-  return items;
+  return cloned;
 }
 
 void MahoLiveFolderPageHandler::SaveFolders() {

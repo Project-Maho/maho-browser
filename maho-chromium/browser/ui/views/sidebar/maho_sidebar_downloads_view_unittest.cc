@@ -12,6 +12,7 @@
 #include "ui/base/models/image_model.h"
 #include "ui/gfx/render_text.h"
 #include "ui/gfx/render_text_test_api.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -210,6 +211,35 @@ TEST_F(MahoSidebarDownloadsViewTest, NoMatchShowsEmptyState) {
   EXPECT_EQ(0, CountDownloadRows(view.get()));
   EXPECT_TRUE(view->empty_state_view_for_testing()->GetVisible());
   EXPECT_FALSE(view->scroll_view_for_testing()->GetVisible());
+}
+
+TEST_F(MahoSidebarDownloadsViewTest, EmptyStateDistinguishesNoMatchFromNoHistory) {
+  auto title_text = [](MahoSidebarDownloadsView* view) {
+    for (views::View* child : view->empty_state_view_for_testing()->children()) {
+      if (auto* label = views::AsViewClass<views::Label>(child)) {
+        return std::u16string(label->GetText());
+      }
+    }
+    return std::u16string();
+  };
+
+  auto view = std::make_unique<MahoSidebarDownloadsView>(/*browser=*/nullptr);
+  view->SetDownloadsForTesting(MakeFiveCompleted());
+  view->SetSearchQueryForTesting(u"zzz-no-match");
+  ASSERT_TRUE(view->empty_state_view_for_testing()->GetVisible());
+  EXPECT_EQ(u"No matching downloads", title_text(view.get()));
+  EXPECT_EQ(u"No matching downloads",
+            view->scroll_view_for_testing()->GetViewAccessibility().GetValue());
+
+  view->SetDownloadsForTesting({});
+  view->SetSearchQueryForTesting(u"");
+  ASSERT_TRUE(view->empty_state_view_for_testing()->GetVisible());
+  EXPECT_EQ(u"No downloads yet", title_text(view.get()));
+  EXPECT_EQ(u"No downloads",
+            view->scroll_view_for_testing()->GetViewAccessibility().GetValue());
+
+  view->SetSearchQueryForTesting(u"anything");
+  EXPECT_EQ(u"No downloads yet", title_text(view.get()));
 }
 
 TEST_F(MahoSidebarDownloadsViewTest, SearchMatchesUnicodeAccentFoldedQuery) {

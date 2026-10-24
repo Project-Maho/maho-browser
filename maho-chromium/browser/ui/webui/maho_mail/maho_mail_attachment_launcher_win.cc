@@ -13,6 +13,14 @@ void FinishLaunch(
     AttachmentLaunchCallback callback,
     platform_util::OpenOperationResult result) {
   const bool opened = result == platform_util::OPEN_SUCCEEDED;
+  if (opened) {
+    // OPEN_SUCCEEDED means the viewer was spawned, not that it has read the
+    // file; the registry's stale-copy sweep removes it later.
+    MahoMailAttachmentRegistry::ReleaseLaunchedAttachment(
+        std::move(attachment));
+    std::move(callback).Run(true, std::string());
+    return;
+  }
   MahoMailAttachmentRegistry::DeleteConsumedAttachment(
       std::move(attachment),
       base::BindOnce(

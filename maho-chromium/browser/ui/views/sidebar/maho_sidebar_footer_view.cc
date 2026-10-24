@@ -418,13 +418,21 @@ void MahoSidebarFooterView::ShowContextMenuForViewImpl(
   if (!browser_) {
     return;
   }
+  // Footer empty area acts on this window's real active space (a literal
+  // placeholder id matched no core space, so every action was a no-op).
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  const std::string space_id =
+      bridge ? bridge->GetActiveSpaceId(browser_.get()) : std::string();
+  if (space_id.empty()) {
+    return;
+  }
 
   context_menu_runner_.reset();
   active_context_menu_model_.reset();
   active_space_context_menu_.reset();
 
   active_space_context_menu_ =
-      std::make_unique<MahoSpaceContextMenu>(browser_, "sidebar-spaces");
+      std::make_unique<MahoSpaceContextMenu>(browser_, space_id);
   active_context_menu_model_ = active_space_context_menu_->BuildMenuModel();
   context_menu_runner_ = std::make_unique<views::MenuRunner>(
       active_context_menu_model_.get(), views::MenuRunner::CONTEXT_MENU);

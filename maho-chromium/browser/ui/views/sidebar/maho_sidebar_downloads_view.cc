@@ -31,6 +31,7 @@
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_private_context_policy.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"  // nogncheck
 #include "maho/browser/ui/downloads/maho_download_bridge_service.h"
 #include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
@@ -582,6 +583,21 @@ class DownloadsEmptyStateView : public views::View {
     subtitle_label_->SetEnabledColor(palette.secondary_text);
   }
 
+  void Configure(bool has_downloads, bool has_search_query) {
+    if (has_downloads && has_search_query) {
+      title_label_->SetText(u"No matching downloads");
+      subtitle_label_->SetText(u"Clear the search to see all downloads.");
+      GetViewAccessibility().SetName(
+          u"Downloads empty state, no matching downloads");
+    } else {
+      title_label_->SetText(u"No downloads yet");
+      subtitle_label_->SetText(u"Files you download will show up here.");
+      GetViewAccessibility().SetName(
+          u"Downloads empty state, no downloads yet");
+    }
+    InvalidateLayout();
+  }
+
   void Layout(PassKey) override {
     LayoutSuperclass<views::View>(this);
     if (!icon_ || !title_label_ || !subtitle_label_) {
@@ -630,7 +646,7 @@ std::vector<DownloadActionSpec> BuildActionsForDownload(const DownloadItem& item
     return {{u"Pause", u"Pause download", DownloadActionKind::kPause},
             {u"Cancel", u"Cancel download", DownloadActionKind::kCancel}};
   }
-  if (item.state == "paused") {
+  if (item.state == "paused" || (item.state == "failed" && item.can_resume)) {
     return {{u"Resume", u"Resume download", DownloadActionKind::kResume},
             {u"Cancel", u"Cancel download", DownloadActionKind::kCancel}};
   }
@@ -1131,11 +1147,31 @@ void MahoSidebarDownloadsView::ReloadDownloads() {
     // reaches this view from a non-regular profile cannot leak regular
     // download metadata.
     downloads = ParseDownloads();
+    // MahoCore persists an error interruption only as paused/cancelled; the
+    // bridge knows which rows actually failed this session and why.
+    if (auto* service = maho::MahoDownloadBridgeServiceFactory::GetForProfile(
+            browser_->GetProfile())) {
+      for (DownloadItem& item : downloads) {
+        if (item.state != "paused" && item.state != "cancelled") {
+          continue;
+        }
+        if (auto failure = service->GetLiveFailure(item.id)) {
+          item.state = "failed";
+          item.error = base::UTF16ToUTF8(failure->message);
+          item.can_resume = failure->can_resume;
+        }
+      }
+    }
   }
 
+  // Captured before the search filter so an empty result can say whether the
+  // history is empty or only the current query matched nothing.
+  const bool has_downloads = !downloads.empty();
+  bool has_search_query = false;
   if (search_field_) {
     std::u16string query = base::i18n::FoldCase(search_field_->GetText());
-    if (!query.empty()) {
+    has_search_query = !query.empty();
+    if (has_search_query) {
       downloads.erase(
           std::remove_if(downloads.begin(), downloads.end(),
                          [&query](const DownloadItem& item) {
@@ -1150,9 +1186,13 @@ void MahoSidebarDownloadsView::ReloadDownloads() {
 
   list_container_->RemoveAllChildViews();
   if (downloads.empty()) {
+    static_cast<DownloadsEmptyStateView*>(empty_state_view_.get())
+        ->Configure(has_downloads, has_search_query);
     empty_state_view_->SetVisible(true);
     scroll_view_->SetVisible(false);
-    scroll_view_->GetViewAccessibility().SetValue(u"No downloads");
+    scroll_view_->GetViewAccessibility().SetValue(
+        has_downloads && has_search_query ? u"No matching downloads"
+                                          : u"No downloads");
     return;
   }
 
@@ -1316,6 +1356,13 @@ void MahoSidebarDownloadsView::HandleResolvedDownloadFileAction(
   if (!exists) {
     DLOG(WARNING) << "[MahoDL] file missing; skipping "
                   << (action == DownloadActionKind::kOpen ? "open" : "reveal");
+    if (browser_) {
+      if (auto* overlay =
+              MahoNotificationOverlay::GetOrCreateForBrowser(browser_)) {
+        overlay->Show(u"File Not Found",
+                      u"This file was moved or deleted.");
+      }
+    }
     return;
   }
   auto* profile = browser_ ? browser_->GetProfile() : nullptr;

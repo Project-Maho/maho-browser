@@ -47,8 +47,8 @@
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "components/tabs/public/tab_interface.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
@@ -1230,8 +1230,7 @@ void MahoCommandOverlayView::UpdateResultViews(
         const auto& stored = model_->results();
         const int stored_size = static_cast<int>(stored.size());
         for (size_t i = 0; i < stored.size(); ++i) {
-          const bool is_ask_row =
-              i == 0 && palette_action_ == PaletteAction::kAskMaho;
+          const bool is_ask_row = i == 0 && HasAskMahoQuery();
           CommandSuggestion presented_suggestion = stored[i];
           if (is_ask_row) {
             presented_suggestion.title =
@@ -1305,8 +1304,7 @@ void MahoCommandOverlayView::UpdateResultViews(
 
   const int results_size = static_cast<int>(results.size());
   for (size_t i = 0; i < results.size(); ++i) {
-    const bool is_ask_row =
-        i == 0 && palette_action_ == PaletteAction::kAskMaho;
+    const bool is_ask_row = i == 0 && HasAskMahoQuery();
     CommandSuggestion presented_suggestion = results[i];
     if (is_ask_row) {
       presented_suggestion.title = base::UTF16ToUTF8(textfield_->GetText());
@@ -1395,7 +1393,9 @@ void MahoCommandOverlayView::UpdateSelectionImpl(int new_index,
     row->SetSelected(true);
     row->ScrollViewToVisible();
     textfield_->GetViewAccessibility().SetActiveDescendant(*row);
-    if (sync_textfield &&
+    // In Ask Maho the field holds the user's question; traversing the result
+    // rows must not overwrite it with a row's URL or search query.
+    if (sync_textfield && palette_action_ != PaletteAction::kAskMaho &&
         new_index < static_cast<int>(model_->results().size())) {
       const std::string payload =
           TextfieldTextForSuggestion(model_->results()[new_index]);
@@ -1459,18 +1459,29 @@ void MahoCommandOverlayView::RecordSuggestionUsage(
   }
 }
 
+bool MahoCommandOverlayView::HasAskMahoQuery() const {
+  if (palette_action_ != PaletteAction::kAskMaho || !textfield_) {
+    return false;
+  }
+  return !base::TrimWhitespace(textfield_->GetText(), base::TRIM_ALL).empty();
+}
+
 void MahoCommandOverlayView::ActivateSelected() {
   DCHECK(browser_);
 
-  if (palette_action_ == PaletteAction::kAskMaho) {
+  // With nothing typed there is no question to ask; the selected row (e.g. a
+  // recent search) activates normally instead of a silent empty submission.
+  // Only the Ask row (index 0) submits the question; any other selected row
+  // opens that row instead.
+  if (HasAskMahoQuery() && (!model_ || model_->selected_index() <= 0)) {
     std::string query = base::UTF16ToUTF8(textfield_->GetText());
     Browser* browser = browser_;
     if (MahoCommandActionHandler::OnQuerySubmitted(
             browser, query, palette_action_, context_class_)) {
       Dismiss();
       bool has_popup = maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(browser) != nullptr;
-      if (!has_popup && browser && browser->GetFeatures().side_panel_ui()) {
-        browser->GetFeatures().side_panel_ui()->Show(
+      if (!has_popup && browser && SidePanelUI::From(browser)) {
+        SidePanelUI::From(browser)->Show(
             SidePanelEntryId::kMahoAiPanel);
       }
     }

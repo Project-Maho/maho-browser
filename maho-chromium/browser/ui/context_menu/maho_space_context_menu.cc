@@ -6,10 +6,12 @@
 #include <string>
 #include <vector>
 
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
@@ -17,9 +19,11 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
@@ -174,6 +178,91 @@ std::string GetSpaceName(MahoCore* core, const std::string& space_id) {
   return kDefaultSpaceName;
 }
 
+// Recovers the live Browser for a UI-thread reply; null once the window is
+// gone, so replies posted after close stay silent instead of dangling.
+Browser* BrowserFromWeak(const base::WeakPtr<BrowserWindowInterface>& weak) {
+  return static_cast<Browser*>(weak.get());
+}
+
+// Terminal states of Export Theme; "no custom theme" is not a write failure.
+enum class ExportThemeResult { kWritten, kNoCustomTheme, kWriteFailed };
+
+// Upper-right toast for space-menu outcomes (share/export/import). Space
+// actions run off the UI thread, so every terminal state must be reported
+// here; a silent no-op is indistinguishable from success.
+void ShowSpaceMenuToast(Browser* browser,
+                        const std::u16string& title,
+                        const std::u16string& body) {
+  if (!browser) {
+    return;
+  }
+  if (auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(browser)) {
+    overlay->Show(title, body, base::Seconds(3));
+  }
+}
+
+// Resolves the share link for |space_id| on the pool. Returns nullopt on any
+// failure; never touches the clipboard (UI-thread-affine).
+std::optional<std::string> ResolveSpaceShareLinkOnPool(
+    const std::string& space_id) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return std::nullopt;
+  }
+
+  const std::string space_name = GetSpaceName(core, space_id);
+  char* collection_json = maho_core_create_shared_collection(
+      core, space_id.c_str(), space_name.c_str());
+  if (!collection_json) {
+    return std::nullopt;
+  }
+
+  std::string collection_result(collection_json);
+  maho_string_free(collection_json);
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(collection_result, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return std::nullopt;
+  }
+
+  const auto& dict = parsed->GetDict();
+  const std::string* collection_id = dict.FindString("id");
+  if (!collection_id) {
+    collection_id = dict.FindString("collection_id");
+  }
+  if (!collection_id) {
+    return std::nullopt;
+  }
+
+  char* share_link_json = maho_core_get_share_link(core, collection_id->c_str());
+  if (!share_link_json) {
+    return std::nullopt;
+  }
+  std::string share_link_result(share_link_json);
+  maho_string_free(share_link_json);
+
+  std::optional<base::Value> link_parsed =
+      base::JSONReader::Read(share_link_result, base::JSON_PARSE_RFC);
+  std::string link;
+  if (link_parsed && link_parsed->is_dict()) {
+    const std::string* url = link_parsed->GetDict().FindString("url");
+    if (!url) {
+      url = link_parsed->GetDict().FindString("link");
+    }
+    if (url) {
+      link = *url;
+    }
+  } else if (link_parsed && link_parsed->is_string()) {
+    link = link_parsed->GetString();
+  } else {
+    link = share_link_result;
+  }
+  if (link.empty()) {
+    return std::nullopt;
+  }
+  return link;
+}
+
 void CreateFolderOnPool(const std::string& space_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -252,7 +341,13 @@ MahoSpaceContextMenu::MahoSpaceContextMenu(Browser* browser,
                                            const std::string& space_id)
     : browser_(browser), space_id_(space_id) {}
 
-MahoSpaceContextMenu::~MahoSpaceContextMenu() = default;
+MahoSpaceContextMenu::~MahoSpaceContextMenu() {
+  // A still-open Export/Import dialog holds |this| as a raw listener; detach
+  // it so a late FileSelected() can never reach a destroyed menu.
+  if (select_file_dialog_) {
+    select_file_dialog_->ListenerDestroyed();
+  }
+}
 
 std::unique_ptr<ui::SimpleMenuModel> MahoSpaceContextMenu::BuildMenuModel() {
   auto model = std::make_unique<ui::SimpleMenuModel>(this);
@@ -273,77 +368,43 @@ std::unique_ptr<ui::SimpleMenuModel> MahoSpaceContextMenu::BuildMenuModel() {
 }
 
 void MahoSpaceContextMenu::ShareSpace() {
-  base::ThreadPool::PostTask(
+  if (!browser_) {
+    return;
+  }
+  // Core work on the pool; clipboard write + feedback back on the UI thread.
+  base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+      base::BindOnce(&ResolveSpaceShareLinkOnPool, space_id_),
       base::BindOnce(
-          [](const std::string& space_id) {
-            MahoCore* core = maho::GetCore();
-            if (!core) {
+          [](base::WeakPtr<BrowserWindowInterface> weak_browser,
+             std::optional<std::string> link) {
+            Browser* browser = BrowserFromWeak(weak_browser);
+            if (!link) {
+              ShowSpaceMenuToast(browser, u"Couldn't share space",
+                                 u"No share link could be created.");
               return;
             }
-
-            const std::string space_name = GetSpaceName(core, space_id);
-            char* collection_json = maho_core_create_shared_collection(
-                core, space_id.c_str(), space_name.c_str());
-            if (!collection_json) {
-              return;
+            {
+              ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+              writer.WriteText(base::UTF8ToUTF16(*link));
             }
-
-            std::string collection_result(collection_json);
-            maho_string_free(collection_json);
-            std::optional<base::Value> parsed = base::JSONReader::Read(
-                collection_result, base::JSON_PARSE_RFC);
-            if (!parsed || !parsed->is_dict()) {
-              return;
-            }
-
-            const auto& dict = parsed->GetDict();
-            const std::string* collection_id = dict.FindString("id");
-            if (!collection_id) {
-              collection_id = dict.FindString("collection_id");
-            }
-            if (!collection_id) {
-              return;
-            }
-
-            char* share_link_json =
-                maho_core_get_share_link(core, collection_id->c_str());
-            if (!share_link_json) {
-              return;
-            }
-            std::string share_link_result(share_link_json);
-            maho_string_free(share_link_json);
-
-            std::optional<base::Value> link_parsed =
-                base::JSONReader::Read(share_link_result, base::JSON_PARSE_RFC);
-            std::string link_to_copy;
-            if (link_parsed && link_parsed->is_dict()) {
-              const std::string* url =
-                  link_parsed->GetDict().FindString("url");
-              if (!url) {
-                url = link_parsed->GetDict().FindString("link");
-              }
-              if (url) {
-                link_to_copy = *url;
-              }
-            } else if (link_parsed && link_parsed->is_string()) {
-              link_to_copy = link_parsed->GetString();
-            } else {
-              link_to_copy = share_link_result;
-            }
-
-            if (!link_to_copy.empty()) {
-              ui::ScopedClipboardWriter writer(
-                  ui::ClipboardBuffer::kCopyPaste);
-              writer.WriteText(base::UTF8ToUTF16(link_to_copy));
-            }
+            maho::ShowLinkCopiedToast(browser);
           },
-          space_id_));
+          browser_->GetWeakPtr()));
 }
 
 void MahoSpaceContextMenu::ExportTheme() {
   MahoCore* core = maho::GetCore();
   if (!core) {
+    return;
+  }
+  // Spaces created by the importer or by core without a theme have no custom
+  // theme dict; there is nothing to export, so say that instead of opening a
+  // Save dialog that can only end in a misleading write-failure toast.
+  if (!maho_theme::SerializeSpaceThemeJson(core, space_id_)) {
+    ShowSpaceMenuToast(browser_, u"No custom theme to export",
+                       u"This space uses the default theme. Set one with "
+                       u"Edit Theme Color first.");
     return;
   }
 
@@ -389,36 +450,75 @@ void MahoSpaceContextMenu::FileSelected(const ui::SelectedFileInfo& file,
   const PendingFileOp op = pending_file_op_;
   const std::string space_id = space_id_;
   pending_file_op_ = PendingFileOp::kNone;
+  if (!browser_) {
+    return;
+  }
+  base::WeakPtr<BrowserWindowInterface> weak_browser = browser_->GetWeakPtr();
 
   if (op == PendingFileOp::kExportTheme) {
-    base::ThreadPool::PostTask(
+    base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
         base::BindOnce(
-            [](const std::string& space_id, const base::FilePath& path) {
+            [](const std::string& space_id,
+               const base::FilePath& path) -> ExportThemeResult {
               MahoCore* core = maho::GetCore();
-              if (!core || !maho_theme::ExportSpaceThemeToFile(core, space_id, path)) {
-                LOG(WARNING) << "ExportTheme: failed to write file";
+              std::optional<std::string> theme_json =
+                  core ? maho_theme::SerializeSpaceThemeJson(core, space_id)
+                       : std::nullopt;
+              if (!theme_json) {
+                return ExportThemeResult::kNoCustomTheme;
+              }
+              return base::WriteFile(path, *theme_json)
+                         ? ExportThemeResult::kWritten
+                         : ExportThemeResult::kWriteFailed;
+            },
+            space_id, path),
+        base::BindOnce(
+            [](base::WeakPtr<BrowserWindowInterface> weak_browser,
+               base::FilePath path, ExportThemeResult result) {
+              Browser* browser = BrowserFromWeak(weak_browser);
+              switch (result) {
+                case ExportThemeResult::kWritten:
+                  ShowSpaceMenuToast(browser, u"Theme exported",
+                                     path.BaseName().LossyDisplayName());
+                  return;
+                case ExportThemeResult::kNoCustomTheme:
+                  // Nothing was written; never report a write failure here.
+                  ShowSpaceMenuToast(browser, u"No custom theme to export",
+                                     u"This space uses the default theme.");
+                  return;
+                case ExportThemeResult::kWriteFailed:
+                  LOG(WARNING) << "ExportTheme: failed to write file";
+                  ShowSpaceMenuToast(browser, u"Couldn't export theme",
+                                     u"The theme file could not be written.");
+                  return;
               }
             },
-            space_id, path));
+            weak_browser, path));
   } else if (op == PendingFileOp::kImportTheme) {
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
         base::BindOnce(&maho_theme::ReadValidatedThemeJson, path),
         base::BindOnce(
-            [](const std::string& space_id,
+            [](base::WeakPtr<BrowserWindowInterface> weak_browser,
+               const std::string& space_id,
                std::optional<std::string> validated_json) {
+               Browser* browser = BrowserFromWeak(weak_browser);
                if (!validated_json) {
+                 ShowSpaceMenuToast(browser, u"Couldn't import theme",
+                                    u"The file is not a valid Maho theme.");
                  return;
                }
                MahoCore* core = maho::GetCore();
-               if (!core) {
-                 return;
-               }
-               if (!maho_theme::ApplyThemeJsonToSpace(core, space_id,
+               if (!core ||
+                   !maho_theme::ApplyThemeJsonToSpace(core, space_id,
                                                      *validated_json)) {
+                 ShowSpaceMenuToast(browser, u"Couldn't import theme",
+                                    u"The theme could not be applied.");
                  return;
                }
+               ShowSpaceMenuToast(browser, u"Theme imported",
+                                  std::u16string());
                MahoSpaceThemeState::ChangedSpaceIds changed_spaces =
                    MahoSpaceThemeState::UpdateFromCore();
                if (changed_spaces.empty()) {
@@ -431,7 +531,7 @@ void MahoSpaceContextMenu::FileSelected(const ui::SelectedFileInfo& file,
                      affected_browser);
                }
             },
-            space_id));
+            weak_browser, space_id));
   }
 }
 
@@ -463,18 +563,20 @@ void MahoSpaceContextMenu::ExecuteCommand(int command_id, int event_flags) {
       MahoSpaceThemePickerDialog::Open(
           browser_, initial_json,
           base::BindOnce(
-              [](std::string space_id,
+              [](base::WeakPtr<BrowserWindowInterface> weak_browser,
+                 std::string space_id,
                  const std::string& committed_theme_json,
                  bool cancelled) {
                 if (cancelled || committed_theme_json.empty()) {
                   return;
                 }
                 MahoCore* core = maho::GetCore();
-                if (!core) {
-                  return;
-                }
-                if (!maho_theme::ApplyThemeJsonToSpace(core, space_id,
+                if (!core ||
+                    !maho_theme::ApplyThemeJsonToSpace(core, space_id,
                                                       committed_theme_json)) {
+                  ShowSpaceMenuToast(BrowserFromWeak(weak_browser),
+                                     u"Couldn't change theme",
+                                     u"The theme could not be applied.");
                   return;
                 }
                 std::vector<std::string> changed_spaces =
@@ -489,7 +591,7 @@ void MahoSpaceContextMenu::ExecuteCommand(int command_id, int event_flags) {
                       affected_browser);
                 }
               },
-              space_id_));
+              browser_->GetWeakPtr(), space_id_));
       break;
     }
     case IDC_MAHO_SPACE_DELETE: {

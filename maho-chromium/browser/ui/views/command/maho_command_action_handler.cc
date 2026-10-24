@@ -19,8 +19,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
@@ -208,7 +208,7 @@ void ToggleMahoAiPanel(Browser* browser) {
     return;
   }
 
-  auto* side_panel_ui = browser->GetFeatures().side_panel_ui();
+  auto* side_panel_ui = SidePanelUI::From(browser);
   if (!side_panel_ui) {
     LOG(WARNING) << kShortcutTracePrefix
                  << " ai_panel toggle skipped: side_panel_ui was null";
@@ -320,8 +320,11 @@ void ExecutePrivateCommandAction(Browser* browser,
     chrome::ReloadBypassingCache(browser, WindowOpenDisposition::CURRENT_TAB);
   } else if (action_id == "copy_url") {
     if (active) {
-      ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
-      writer.WriteText(base::UTF8ToUTF16(active->GetVisibleURL().spec()));
+      {
+        ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+        writer.WriteText(base::UTF8ToUTF16(active->GetVisibleURL().spec()));
+      }
+      ShowLinkCopiedToast(browser);
     }
   } else if (action_id == "toggle_sidebar") {
     // Local-only: must NOT persist sidebar prefs. The container flips its
@@ -872,6 +875,12 @@ void OpenCommandSuggestion(Browser* browser,
     }
 
     CopyTextToClipboard(text_to_copy);
+    // Clipboard writes always confirm with the shared copy toast.
+    if (auto* overlay =
+            MahoNotificationOverlay::GetOrCreateForBrowser(browser)) {
+      overlay->Show(u"Copied to clipboard", base::UTF8ToUTF16(text_to_copy),
+                    base::Seconds(2), MahoToastView::Icon::kCopy);
+    }
     return;
   }
 
@@ -964,7 +973,7 @@ void OpenCommandSuggestion(Browser* browser,
 
   if (gurl.spec() == maho::kMahoAIURL ||
       gurl.spec() == maho::kMahoAIPublicURL) {
-    browser->GetFeatures().side_panel_ui()->Show(
+    SidePanelUI::From(browser)->Show(
         SidePanelEntryId::kMahoAiPanel);
     return;
   }
@@ -1037,7 +1046,7 @@ bool MahoCommandActionHandler::OnQuerySubmitted(
   bool has_popup = maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(
                        browser) != nullptr;
   if (!has_popup) {
-    auto* side_panel_ui = browser->GetFeatures().side_panel_ui();
+    auto* side_panel_ui = SidePanelUI::From(browser);
     const bool ai_panel_showing =
         side_panel_ui &&
         side_panel_ui->GetCurrentEntryId() ==

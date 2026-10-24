@@ -360,6 +360,9 @@ struct VaultStatus {
   uint32 auto_lock_minutes;
   uint32 failed_unlock_count;
   int64? retry_at_timestamp;
+  // Account-escrowed Vault locked because no account seed is in memory
+  // (signed out or session expired); signing in unlocks it.
+  bool account_seed_missing;
 };
 
 // Public item metadata only. Passwords, OTP seeds, passkey credential IDs, and
@@ -640,6 +643,12 @@ struct ContentBlockerMutationResult {
 
 struct AccountStatus {
   bool signed_in;
+  // False when stored credentials exist but the relay session expired: the
+  // profile stays usable while sync is paused until the next sign-in.
+  bool session_valid;
+  // True when the user chose "Continue without an account" on first run and
+  // has not signed in since (maho.auth.local_only).
+  bool local_only;
   string email;
   string display_name;
   string user_id;

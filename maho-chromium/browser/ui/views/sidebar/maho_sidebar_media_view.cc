@@ -14,9 +14,11 @@
 #include "base/functional/bind.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/thread_pool.h"
 #include "base/i18n/case_conversion.h"
 #include "chrome/browser/platform_util.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_data.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"  // nogncheck
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -365,7 +367,8 @@ END_METADATA
 BEGIN_METADATA(MahoSidebarMediaView)
 END_METADATA
 
-MahoSidebarMediaView::MahoSidebarMediaView() {
+MahoSidebarMediaView::MahoSidebarMediaView(Browser* browser)
+    : browser_(browser) {
   BuildUi();
 }
 
@@ -643,7 +646,23 @@ void MahoSidebarMediaView::HandleMediaAction(const std::string& item_id,
   }
 
   const base::FilePath path = base::FilePath::FromUTF8Unsafe(*it->file_path);
-  if (!base::PathExists(path)) {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()}, base::BindOnce(&base::PathExists, path),
+      base::BindOnce(&MahoSidebarMediaView::HandleResolvedMediaAction,
+                     weak_factory_.GetWeakPtr(), action, path));
+}
+
+void MahoSidebarMediaView::HandleResolvedMediaAction(MediaActionKind action,
+                                                     base::FilePath path,
+                                                     bool exists) {
+  if (!exists) {
+    if (browser_) {
+      if (auto* overlay =
+              MahoNotificationOverlay::GetOrCreateForBrowser(browser_)) {
+        overlay->Show(u"File Not Found",
+                      u"This file was moved or deleted.");
+      }
+    }
     return;
   }
 

@@ -379,6 +379,8 @@ void MahoMailPageHandler::ReconnectAccount(const std::string& account_id, Reconn
             self->web_contents_->GetController().LoadURLWithParams(params);
           },
           weak_factory_.GetWeakPtr(), profile_, std::move(callback));
+  // For reauthorization mail-core derives the provider (and login hint) from
+  // the stored account, so the provider argument here is not authoritative.
   if (backend_for_testing_) {
     backend_for_testing_->OAuthLoopbackSignIn(
         "gmail", options_json, std::move(completion));
@@ -443,7 +445,7 @@ void MahoMailPageHandler::OnNewMail(const std::string& account_id,
                                     uint64_t cursor,
                                     uint64_t epoch) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  page_->OnNewMail(account_id);
+  page_->OnNewMail(account_id, email_id, message_id);
 }
 
 void MahoMailPageHandler::OnMutation(const std::string& account_id, const std::string& payload) {

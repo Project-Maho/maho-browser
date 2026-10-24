@@ -33,8 +33,8 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
@@ -51,6 +51,11 @@
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"
+#if BUILDFLAG(IS_MAC)
+#include "maho/browser/ui/notifications/maho_notification_share_mac.h"  // nogncheck
+#endif
+#include "ui/base/clipboard/clipboard_buffer.h"
+#include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/common/referrer.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
@@ -1625,13 +1630,25 @@ void MahoSidebarTabListView::ShowContextMenuForViewImpl(
   if (!browser_) {
     return;
   }
-  MahoSpaceContextMenu context_menu(browser_, "sidebar-spaces");
-  auto menu_model = context_menu.BuildMenuModel();
-  views::MenuRunner menu_runner(menu_model.get(),
-                                views::MenuRunner::CONTEXT_MENU);
-  menu_runner.RunMenuAt(source->GetWidget(), nullptr,
-                        gfx::Rect(point, gfx::Size()),
-                        views::MenuAnchorPosition::kTopLeft, source_type);
+  // Act on this window's real active space; there is no core space with a
+  // placeholder id, so a literal id made every menu action a silent no-op.
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  const std::string space_id =
+      bridge ? bridge->GetActiveSpaceId(browser_.get()) : std::string();
+  if (space_id.empty()) {
+    return;
+  }
+  active_space_menu_runner_.reset();
+  active_space_menu_model_.reset();
+  active_space_context_menu_ =
+      std::make_unique<MahoSpaceContextMenu>(browser_, space_id);
+  active_space_menu_model_ = active_space_context_menu_->BuildMenuModel();
+  active_space_menu_runner_ = std::make_unique<views::MenuRunner>(
+      active_space_menu_model_.get(), views::MenuRunner::CONTEXT_MENU);
+  active_space_menu_runner_->RunMenuAt(source->GetWidget(), nullptr,
+                                       gfx::Rect(point, gfx::Size()),
+                                       views::MenuAnchorPosition::kTopLeft,
+                                       source_type);
 }
 
 // --- Custom clipboard format for Maho sidebar drag ---
@@ -2210,6 +2227,33 @@ int SidebarTabRowView::live_tab_index_for_testing() const {
 
 void SidebarTabRowView::RenameTab(int /*tab_index*/) {
   BeginTitleEditing();
+}
+
+void SidebarTabRowView::ShareTab(int tab_index) {
+  TabStripModel* model = browser_ ? browser_->GetTabStripModel() : nullptr;
+  if (!model || !model->ContainsIndex(tab_index)) {
+    return;
+  }
+  content::WebContents* contents = model->GetWebContentsAt(tab_index);
+  if (!contents) {
+    return;
+  }
+  const GURL url = contents->GetVisibleURL();
+  if (!url.is_valid()) {
+    return;
+  }
+#if BUILDFLAG(IS_MAC)
+  if (GetWidget()) {
+    maho::ShowNativeSharePicker(this, url, contents->GetTitle(),
+                                base::DoNothing());
+    return;
+  }
+#endif
+  {
+    ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+    writer.WriteText(base::UTF8ToUTF16(url.spec()));
+  }
+  maho::ShowLinkCopiedToast(browser_);
 }
 
 void SidebarTabRowView::OnThemeChanged() {
@@ -7849,11 +7893,15 @@ void MahoSidebarTabListView::OnClearPressed(const ui::Event& event) {
     return;
   }
   clear_menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
-  clear_menu_model_->AddItem(kClearLastHour, u"Last hour");
-  clear_menu_model_->AddItem(kClearToday, u"Today");
-  clear_menu_model_->AddItem(kClearThisWeek, u"This week");
-  clear_menu_model_->AddItem(kClearThisMonth, u"This month");
-  clear_menu_model_->AddItem(kClearOlderThan30Days, u"Older than 30 days");
+  // Each item closes tabs whose last use is before the cutoff computed by
+  // ComputeClearCutoffSeconds, so the labels name the idle window, not the
+  // recent one.
+  clear_menu_model_->AddItem(kClearLastHour, u"Not used in the last hour");
+  clear_menu_model_->AddItem(kClearToday, u"Not used today");
+  clear_menu_model_->AddItem(kClearThisWeek, u"Not used this week");
+  clear_menu_model_->AddItem(kClearThisMonth, u"Not used this month");
+  clear_menu_model_->AddItem(kClearOlderThan30Days,
+                             u"Not used in the last 30 days");
 
   clear_menu_runner_ = std::make_unique<views::MenuRunner>(
       clear_menu_model_.get(), views::MenuRunner::HAS_MNEMONICS);

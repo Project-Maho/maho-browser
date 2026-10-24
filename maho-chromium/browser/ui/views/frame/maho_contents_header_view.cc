@@ -44,6 +44,7 @@
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/net/maho_translate_injection_handler.h"
+#include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"  // nogncheck
 #include "maho/browser/ui/maho_settings_navigation.h"
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.h"
@@ -269,6 +270,7 @@ MahoContentsHeaderView::MahoContentsHeaderView(BrowserView* browser_view,
   views::InkDrop::Get(host_button_)
       ->SetMode(views::InkDropHost::InkDropMode::OFF);
   layout->SetFlexForView(host_button_, 1);
+  host_button_->set_context_menu_controller(this);
 
   translate_button_ = AddChildView(CreateHeaderButton(
       base::BindRepeating(&MahoContentsHeaderView::OnTranslatePressed,
@@ -559,7 +561,7 @@ bool MahoContentsHeaderView::MaybeObserveFullscreen() {
   }
   Browser* browser = GetBrowser();
   ExclusiveAccessManager* manager =
-      browser ? browser->GetFeatures().exclusive_access_manager() : nullptr;
+      browser ? ExclusiveAccessManager::From(browser) : nullptr;
   FullscreenController* controller =
       manager ? manager->fullscreen_controller() : nullptr;
   if (!controller) {
@@ -794,10 +796,46 @@ void MahoContentsHeaderView::ActivatePaneTab() {
 }
 
 void MahoContentsHeaderView::OnHostPressed(const ui::Event& event) {
+  EditAddress();
+}
+
+void MahoContentsHeaderView::EditAddress() {
   ActivatePaneTab();
   if (MahoSidebarContainerView* container = GetSidebarContainer()) {
     container->ShowCommandOverlayForCurrentTab();
   }
+}
+
+void MahoContentsHeaderView::ShowContextMenuForViewImpl(
+    views::View* source,
+    const gfx::Point& point,
+    ui::mojom::MenuSourceType source_type) {
+  Browser* browser = GetBrowser();
+  if (!browser || !source->GetWidget()) {
+    return;
+  }
+  // Opening a menu is not an action: do not activate this pane (or move
+  // focus) here, or an Esc-dismissed menu would still switch split panes.
+  // The copy actions read this pane's own contents through the getter;
+  // Edit Address activates the pane itself when chosen.
+  address_context_menu_runner_.reset();
+  address_context_menu_model_.reset();
+  address_context_menu_ = std::make_unique<MahoAddressBarContextMenu>(
+      browser,
+      base::BindRepeating(&MahoContentsHeaderView::EditAddress,
+                          weak_factory_.GetWeakPtr()),
+      base::BindRepeating(
+          [](base::WeakPtr<MahoContentsHeaderView> header)
+              -> content::WebContents* {
+            return header ? header->web_contents() : nullptr;
+          },
+          weak_factory_.GetWeakPtr()));
+  address_context_menu_model_ = address_context_menu_->BuildMenuModel();
+  address_context_menu_runner_ = std::make_unique<views::MenuRunner>(
+      address_context_menu_model_.get(), views::MenuRunner::CONTEXT_MENU);
+  address_context_menu_runner_->RunMenuAt(
+      source->GetWidget(), nullptr, gfx::Rect(point, gfx::Size()),
+      views::MenuAnchorPosition::kTopLeft, source_type);
 }
 
 void MahoContentsHeaderView::OnSecurityPressed(const ui::Event& event) {
@@ -860,7 +898,10 @@ void MahoContentsHeaderView::ShowTranslatePopover() {
   if (!web_contents()) {
     return;
   }
-  const bool translated = maho::IsMahoPageTranslated(web_contents());
+  // The popover offers restore whenever the document shows translated text,
+  // including after a later failure (kError), so the primary button does not
+  // silently re-translate a page that is already translated.
+  const bool translated = maho::HasMahoTranslatedContent(web_contents());
   views::Widget* popover_widget = MahoTranslatePopoverView::Show(
       translate_button_,
       translated ? MahoTranslatePopoverView::Mode::kTranslated
@@ -912,9 +953,11 @@ void MahoContentsHeaderView::OnTranslatePopoverPrimary() {
   if (!web_contents()) {
     return;
   }
-  if (maho::IsMahoPageTranslated(web_contents())) {
+  if (maho::HasMahoTranslatedContent(web_contents())) {
     maho::RestoreOriginalPage(web_contents());
   } else {
+    // No translated content yet (including a first translation that failed
+    // before the swap): there is nothing to restore, so translate.
     web_contents()->ClearFocusedElement();
     maho::TranslatePageViaOnDevice(
         web_contents(), ResolveTranslateTargetLanguage(GetProfile()));
@@ -1079,7 +1122,17 @@ void MahoContentsHeaderView::OnTranslateLanguageSelected(
   translate::TranslatePrefs(profile->GetPrefs())
       .SetRecentTargetLanguage(language_code);
   CloseTranslatePopover();
-  OnTranslatePopoverPrimary();
+  if (!web_contents()) {
+    return;
+  }
+  // Always translate into the chosen language, including when the page is
+  // already shown translated into another one; the primary action would
+  // restore the original instead.
+  web_contents()->ClearFocusedElement();
+  maho::TranslatePageViaOnDevice(web_contents(),
+                                 ResolveTranslateTargetLanguage(profile));
+  UpdateTranslateAffordance();
+  UpdateChrome();
 }
 
 void MahoContentsHeaderView::OnAlwaysTranslateLanguage() {
@@ -1411,7 +1464,10 @@ void MahoContentsHeaderView::UpdateChrome() {
   }
 
   SetButtonIcon(translate_button_, maho_lucide_icons::kLanguagesIcon);
-  if (maho::IsMahoPageTranslated(web_contents())) {
+  // Accent the icon whenever the document shows translated text, including
+  // after a later failure, so the affordance matches the popover's restore
+  // action.
+  if (maho::HasMahoTranslatedContent(web_contents())) {
     const ui::ColorVariant accent =
         has_palette ? ui::ColorVariant(palette_.primary_text)
                     : ui::ColorVariant(ui::kColorSysOnSurface);

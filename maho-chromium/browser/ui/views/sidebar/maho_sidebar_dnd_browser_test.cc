@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/json/json_reader.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
@@ -105,6 +106,12 @@ int ResolveIndexForStableId(TabStripModel* model, const std::string& id) {
 
 class MahoSidebarDnDBrowserTest : public InProcessBrowserTest {
  public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    // chrome://maho-test/?seed=N only mutates the profile with this switch.
+    command_line->AppendSwitch("maho-enable-test-seeding");
+  }
+
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
     SetShellEventObserverForTesting(&observer_);
