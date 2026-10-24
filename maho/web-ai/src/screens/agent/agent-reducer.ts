@@ -119,14 +119,14 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
       if (!isRunActive(state.phase) && !state.pollFailed) return state;
       // Identical repeats are a no-op (no re-render, no scroll bump).
       if (state.pollFailed && state.errorMessage === action.message) return state;
-      // Visible but recoverable: banner shown and running state ended, yet
-      // activeAssistantId/activeTurnId and pending approvals are kept so the
-      // next successful event continues the same assistant message.
+      // Recoverable: banner shown, but the run keeps its live phase so Stop
+      // stays available and Send / new-session stay locked while the kernel
+      // is still working. activeAssistantId/activeTurnId and pending approvals
+      // are kept so the next successful event continues the same message.
       return {
         ...state,
         errorCredentialCode: null,
         errorMessage: action.message,
-        phase: 'error',
         pollFailed: true,
         scrollRevision: state.pollFailed ? state.scrollRevision : state.scrollRevision + 1,
       };
@@ -151,7 +151,7 @@ function isStreamLocked(state: AgentState): boolean {
 /** Leaves the recoverable poll-failure state: banner cleared, run streaming again. */
 function recoverFromPollFailure(state: AgentState): AgentState {
   if (!state.pollFailed) return state;
-  return { ...state, errorCredentialCode: null, errorMessage: null, phase: 'streaming', pollFailed: false };
+  return { ...state, errorCredentialCode: null, errorMessage: null, pollFailed: false };
 }
 
 function cancelRun(state: AgentState, expectEcho = false): AgentState {
@@ -180,6 +180,11 @@ function expirePendingInteractions(messages: readonly AgentMessage[]): readonly 
     if (message.role !== 'assistant') return message;
     let blocksChanged = false;
     const blocks = message.blocks.map((block) => {
+      if (block.kind === 'tool_call' && block.status === 'running') {
+        // The run is over: a tool call with no result will never get one.
+        blocksChanged = true;
+        return { ...block, status: 'stopped' as const };
+      }
       if (block.kind === 'interaction_request' && block.status === 'pending' && !isTerminalState(block.initialState)) {
         blocksChanged = true;
         return { ...block, initialState: 'cancelled' };

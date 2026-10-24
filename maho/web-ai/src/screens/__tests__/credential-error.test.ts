@@ -82,6 +82,6 @@ describe('getCredentialErrorPresentation', () => {
 
     fireEvent.click(screen.getByTestId('credential-error-action'));
 
-    expect(window.location.hash).toBe('#onboarding?step=auth');
+    expect(window.location.hash).toBe('#onboarding?step=auth&mode=reauth');
   });
 });

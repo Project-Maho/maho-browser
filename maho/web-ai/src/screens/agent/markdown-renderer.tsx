@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useMemo } from 'preact/hooks';
+import './markdown.css';
 
 interface MarkdownRendererProps {
   text: string;
@@ -175,7 +176,8 @@ function renderInline(text: string, keyPrefix: string, plainLinks: boolean): Com
   while (remaining.length > 0) {
     const codeStart = remaining.indexOf('`');
     const linkStart = remaining.indexOf('[');
-    const nextStart = firstNonNegative(codeStart, linkStart);
+    const emphasisStart = remaining.indexOf('*');
+    const nextStart = firstNonNegative(firstNonNegative(codeStart, linkStart), emphasisStart);
 
     if (nextStart === -1) {
       parts.push(remaining);
@@ -187,7 +189,11 @@ function renderInline(text: string, keyPrefix: string, plainLinks: boolean): Com
       remaining = remaining.slice(nextStart);
     }
 
-    const parsed = remaining.startsWith('`') ? parseCode(remaining) : parseLink(remaining, plainLinks);
+    const parsed = remaining.startsWith('`')
+      ? parseCode(remaining)
+      : remaining.startsWith('*')
+        ? parseEmphasis(remaining, plainLinks)
+        : parseLink(remaining, plainLinks);
     if (parsed === null) {
       parts.push(remaining.slice(0, 1));
       remaining = remaining.slice(1);
@@ -213,6 +219,28 @@ function parseCode(text: string) {
   if (end === -1) return null;
   const code = text.slice(1, end);
   return { length: end + 1, node: (prefix: string, index: number) => <code key={`${prefix}-code-${index}`}>{code}</code> };
+}
+
+function parseEmphasis(text: string, plainLinks: boolean) {
+  const strong = /^\*\*([^*]+)\*\*/.exec(text);
+  if (strong !== null) {
+    const inner = strong[1] ?? '';
+    return {
+      length: strong[0].length,
+      node: (prefix: string, index: number) => (
+        <strong key={`${prefix}-strong-${index}`}>{renderInline(inner, `${prefix}-strong-${index}`, plainLinks)}</strong>
+      ),
+    };
+  }
+  const em = /^\*([^*\s][^*]*)\*/.exec(text);
+  if (em === null) return null;
+  const inner = em[1] ?? '';
+  return {
+    length: em[0].length,
+    node: (prefix: string, index: number) => (
+      <em key={`${prefix}-em-${index}`}>{renderInline(inner, `${prefix}-em-${index}`, plainLinks)}</em>
+    ),
+  };
 }
 
 function parseLink(text: string, plainLinks: boolean) {

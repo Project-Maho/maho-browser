@@ -3,9 +3,7 @@
 // suggestion contract in maho/crates/maho-agent/src/suggestions.rs
 // (Suggestion{title, prompt}, MAX_PASSIVE_SUGGESTIONS = 2) and its
 // SuggestionSettings gate: when suggestions are disabled the catalog is empty
-// and no cards render. The strings mirror the desktop
-// maho_ai/views/suggestions.ts catalog one-for-one so the surfaces cannot
-// drift. Enforcement of the runtime flags lives exclusively in the
+// and no cards render. Enforcement of the runtime flags lives exclusively in the
 // CapabilityBroker; this module only names what the UI shows and dispatches.
 import type { AgentRuntimeConfig } from '../../bridge/types';
 
@@ -18,18 +16,19 @@ export interface SuggestionSettingsState {
   readonly enabled: boolean;
 }
 
-// Idle catalog: mirrors the backend engine's deterministic generic-fallback
-// templates. English-only strings, single-sourced so the cards and their
-// vitest boundary cannot drift.
+// Idle catalog: shown on an empty session, so the prompts must stand on their
+// own — they never refer to a prior outcome or workflow that does not exist.
+// English-only strings, single-sourced so the cards and their vitest boundary
+// cannot drift.
 export const SUGGESTED_TASKS: readonly SuggestedTask[] = [
   {
-    title: 'Follow up on this topic',
+    title: 'Research a topic',
     prompt:
-      'What are the recommended next steps or related actions based on this outcome?',
+      'Help me research a topic: ask what I want to learn, then gather the key facts and summarize them with sources.',
   },
   {
-    title: 'Turn into routine',
-    prompt: 'Convert this workflow into a reusable routine with regular scheduling.',
+    title: 'Set up a routine',
+    prompt: 'Help me set up a recurring routine: ask what I want done and how often, then propose a schedule.',
   },
 ] as const;
 

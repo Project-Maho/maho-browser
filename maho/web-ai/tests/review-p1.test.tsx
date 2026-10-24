@@ -75,7 +75,7 @@ it.each(['resolve', 'reject'] as const)('P1 ignores a late poll %s after replaci
   expect(onDone).not.toHaveBeenCalled();
 });
 
-it('P1 poll rejection ends visible running state and a subsequent wake recovers delivery', async () => {
+it('P1 poll rejection shows a banner, keeps Stop available, and a subsequent wake recovers delivery', async () => {
   const poll = vi.fn().mockRejectedValueOnce(new Error('poll failed')).mockResolvedValue(null);
   const ctx = reviewBridge({ agentPollEvent: poll });
   render(<AgentScreen bridge={ctx.bridge} />);
@@ -85,7 +85,8 @@ it('P1 poll rejection ends visible running state and a subsequent wake recovers 
   await act(async () => { wakeAgentSession('agent-1'); });
   await failed;
   expect(screen.queryByTestId('agent-error-banner')).not.toBeNull();
-  expect(screen.queryByRole('button', { name: 'Stop current run' })).toBeNull();
+  // The kernel run is still alive: Stop must stay reachable during the poll outage.
+  expect(screen.queryByRole('button', { name: 'Stop current run' })).not.toBeNull();
   poll.mockResolvedValueOnce(JSON.stringify({ type: 'complete', data: 'recovered result' }));
   await act(async () => { wakeAgentSession('agent-1'); });
   expect(screen.getByText('recovered result')).toBeInTheDocument();

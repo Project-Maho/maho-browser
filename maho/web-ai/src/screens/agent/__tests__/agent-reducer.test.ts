@@ -192,7 +192,8 @@ describe('agentReducer poll errors (W1)', () => {
   it('shows a visible recoverable error but keeps the active assistant and turn', () => {
     const streaming = run(live(), { type: 'AGENT_TOKEN', token: 'Hi', messageId: 'a1', createdAt: now });
     const next = agentReducer(streaming, { type: 'POLL_ERROR', message: 'bridge down' });
-    expect(next.phase).toBe('error');
+    // The run keeps its live phase so Stop stays usable during the outage.
+    expect(next.phase).toBe('streaming');
     expect(next.errorMessage).toBe('bridge down');
     expect(next.pollFailed).toBe(true);
     expect(next.activeAssistantId).toBe('a1');
@@ -327,5 +328,17 @@ describe('agentReducer tool_call / artifact identity (W9)', () => {
       { type: 'AGENT_ARTIFACT', artifact: { ...artifact, sizeBytes: 2 }, messageId: 'a1', createdAt: now });
     const arts = blocksOf(state).filter((b) => b.kind === 'artifact');
     expect(arts).toHaveLength(1);
+  });
+});
+
+describe('agentReducer unfinished tool calls when the run ends', () => {
+  it.each([
+    ['CANCEL', { type: 'CANCEL' } as const],
+    ['AGENT_ERROR', { type: 'AGENT_ERROR', message: 'boom' } as const],
+    ['AGENT_COMPLETE', { type: 'AGENT_COMPLETE', fullText: '', messageId: 'a9', createdAt: now } as const],
+  ])('marks a result-less tool call stopped on %s', (_name, end) => {
+    const running = run(live(), { type: 'AGENT_TOOL_CALL', id: 'tc1', name: 'search', args: '{}', messageId: 'a1', createdAt: now });
+    const ended = agentReducer(running, end);
+    expect(blocksOf(ended).find((b) => b.kind === 'tool_call')).toMatchObject({ status: 'stopped' });
   });
 });

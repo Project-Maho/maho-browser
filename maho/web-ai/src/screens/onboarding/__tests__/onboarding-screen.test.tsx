@@ -184,6 +184,20 @@ describe('OnboardingScreen', () => {
     expect(mockBridge.completeOnboarding).toHaveBeenCalledOnce();
   });
 
+  it('clears a default-browser failure banner after skipping to completion', async () => {
+    mockBridge.openDefaultBrowserSettings.mockRejectedValueOnce(new Error(''));
+    render(<OnboardingScreen />);
+    await advanceThroughLogin();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(await screen.findByRole('button', { name: /set as default/i }));
+    expect(await screen.findByText(/couldn't open default browser settings/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /maybe later/i }));
+    await screen.findByRole('heading', { name: /you're all set/i });
+    expect(screen.queryByText(/couldn't open default browser settings/i)).toBeNull();
+  });
+
   it('opens native default-browser settings before finishing', async () => {
     render(<OnboardingScreen />);
     await advanceThroughLogin();

@@ -94,6 +94,8 @@ export interface ChatStoreState {
   credentialErrorCode: CredentialErrorCode | null;
   isStreaming: boolean;
   messages: MessageItem[];
+  /** The banner currently shown came from a recoverable poll failure. */
+  pollFailed: boolean;
   missingApiKey: boolean;
   pollReadyHandle: string | null;
   provider: ProviderConfig | null;
@@ -116,6 +118,8 @@ export type ChatStoreAction =
   | { type: 'STREAM_THINKING'; text: string }
   | { type: 'STREAM_COMPLETE'; finalMessage: string }
   | { type: 'STREAM_ERROR'; message: string; credentialErrorCode?: CredentialErrorCode | null }
+  | { type: 'POLL_ERROR'; message: string; credentialErrorCode?: CredentialErrorCode | null }
+  | { type: 'CANCEL_FAILURE'; message: string }
   | { type: 'STREAM_IMAGE'; delta: ImageDelta }
   | { type: 'TOOL_DELTA'; autoRun?: boolean; delta: ToolCallDelta }
   | { type: 'TOOL_RESPONSE_START'; toolCallId: string }
@@ -124,6 +128,12 @@ export type ChatStoreAction =
   | { type: 'TOOL_BATCH_PENDING' }
   | { type: 'TOOL_BATCH_RESOLVED' }
   | { type: 'TURN_CANCELLED' };
+
+/** Progress after a recoverable poll failure means polling recovered: drop its banner. */
+function clearPollFailure(state: ChatStoreState): ChatStoreState {
+  if (!state.pollFailed) return state;
+  return { ...state, errorMessage: null, credentialErrorCode: null, pollFailed: false };
+}
 
 export function initialChatStoreState(): ChatStoreState {
   return {
@@ -135,6 +145,7 @@ export function initialChatStoreState(): ChatStoreState {
     credentialErrorCode: null,
     isStreaming: false,
     messages: [],
+    pollFailed: false,
     missingApiKey: false,
     pollReadyHandle: null,
     provider: null,
@@ -155,6 +166,7 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
         conversationPersisted: false,
         errorMessage: null,
         credentialErrorCode: null,
+        pollFailed: false,
         isStreaming: false,
         messages: [],
         missingApiKey: false,
@@ -171,6 +183,7 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
         conversationId: action.conversationId,
         conversationPersisted: action.conversationPersisted,
         errorMessage: null,
+        pollFailed: false,
         isStreaming: false,
         messages: action.messages,
         missingApiKey: false,
@@ -197,6 +210,7 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
         conversationPersisted: false,
         errorMessage: action.message,
         credentialErrorCode: action.credentialErrorCode ?? null,
+        pollFailed: false,
         isStreaming: false,
         pollReadyHandle: null,
         provider: null,
@@ -212,6 +226,7 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
         conversationPersisted: false,
         errorMessage: null,
         credentialErrorCode: null,
+        pollFailed: false,
         isStreaming: false,
         messages: [],
         missingApiKey: true,
@@ -240,6 +255,7 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
         draft: '',
         errorMessage: null,
         credentialErrorCode: null,
+        pollFailed: false,
         isStreaming: true,
         messages: [
           ...state.messages,
@@ -252,6 +268,7 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
         ...state,
         errorMessage: action.message,
         credentialErrorCode: action.credentialErrorCode ?? null,
+        pollFailed: false,
         isStreaming: false,
         messages: removeEmptyStreamingAssistant(state.messages),
       };
@@ -260,6 +277,7 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
         ...state,
         errorMessage: null,
         credentialErrorCode: null,
+        pollFailed: false,
         isStreaming: true,
         messages: appendAssistantTokens(closeStreamingThinking(state.messages), action.text),
       };
@@ -268,31 +286,49 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
         ...state,
         errorMessage: null,
         credentialErrorCode: null,
+        pollFailed: false,
         isStreaming: true,
         messages: appendThinkingTokens(removeEmptyStreamingAssistant(state.messages), action.text),
       };
     case 'STREAM_COMPLETE':
       return {
-        ...state,
+        ...clearPollFailure(state),
         isStreaming: false,
-        messages: completeAssistantMessage(state.messages, action.finalMessage),
+        messages: completeAssistantMessage(closeStreamingThinking(state.messages), action.finalMessage),
       };
     case 'STREAM_ERROR':
       return {
         ...state,
         errorMessage: action.message,
         credentialErrorCode: action.credentialErrorCode ?? null,
+        pollFailed: false,
         isStreaming: false,
-        messages: removeEmptyStreamingAssistant(markAssistantStreamClosed(state.messages)),
+        messages: removeEmptyStreamingAssistant(markAssistantStreamClosed(closeStreamingThinking(state.messages))),
+      };
+    case 'POLL_ERROR':
+      // Polling recovers with backoff, so the turn is still alive: surface the
+      // error without closing the streaming assistant message. Idle polling
+      // failures (no live turn, no banner of ours) are not user-facing.
+      if (!state.isStreaming && !state.pollFailed) return state;
+      return {
+        ...state,
+        errorMessage: action.message,
+        credentialErrorCode: action.credentialErrorCode ?? null,
+        pollFailed: true,
+      };
+    case 'CANCEL_FAILURE':
+      return {
+        ...state,
+        errorMessage: action.message,
       };
     case 'STREAM_IMAGE':
       return {
-        ...state,
+        ...clearPollFailure(state),
         messages: appendImageDelta(state.messages, action.delta),
       };
     case 'TOOL_DELTA':
       return {
-        ...state,
+        ...clearPollFailure(state),
         messages: upsertToolRequest(state.messages, action.delta, action.autoRun ?? false),
       };
     case 'TOOL_RESPONSE_START':
@@ -332,10 +368,15 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
         toolBatchPending: false,
       };
     case 'TURN_CANCELLED':
+      // A successful stop resolves any earlier stop/poll error (as the agent's
+      // cancelRun does), so no stale banner stays above an idle chat.
       return {
         ...state,
+        errorMessage: null,
+        credentialErrorCode: null,
+        pollFailed: false,
         isStreaming: false,
-        messages: removeEmptyStreamingAssistant(markAssistantStreamClosed(state.messages)),
+        messages: removeEmptyStreamingAssistant(markAssistantStreamClosed(closeStreamingThinking(state.messages))),
       };
     default:
       return state;

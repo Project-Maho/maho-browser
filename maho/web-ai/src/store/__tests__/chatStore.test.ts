@@ -3,7 +3,10 @@ import type { ChatEvent } from '../../bridge/types';
 import {
   StreamCadenceBuffer,
   coalesceChatEventBatch,
+  chatStoreReducer,
   createChatStore,
+  initialChatStoreState,
+  type ChatStoreState,
 } from '../chatStore';
 
 describe('StreamCadenceBuffer', () => {
@@ -220,5 +223,97 @@ describe('createChatStore', () => {
     expect(store.getState().isStreaming).toBe(false);
     expect((store.getState().messages[1] as any).content).toBe('Initial buffered text');
     expect((store.getState().messages[1] as any).isStreaming).toBe(false);
+  });
+});
+
+describe('chatStoreReducer turn lifecycle', () => {
+  const streaming = (): ChatStoreState => ({
+    ...initialChatStoreState(),
+    booting: false,
+    isStreaming: true,
+    messages: [
+      { kind: 'chat', id: 'u1', role: 'user', content: { kind: 'text', text: 'hi' } },
+      { kind: 'thinking', id: 't1', thinking: 'hmm', isStreaming: true },
+      { kind: 'chat', id: 'a1', role: 'assistant', content: 'Part', images: [], isStreaming: true },
+    ],
+  });
+
+  it('POLL_ERROR surfaces the error without closing the live assistant message', () => {
+    const next = chatStoreReducer(streaming(), { type: 'POLL_ERROR', message: 'poll failed' });
+    expect(next.errorMessage).toBe('poll failed');
+    expect(next.isStreaming).toBe(true);
+    const resumed = chatStoreReducer(next, { type: 'STREAM_APPEND', text: ' two' });
+    const assistants = resumed.messages.filter((m) => m.kind === 'chat' && m.role === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ content: 'Part two' });
+  });
+
+  it('STREAM_COMPLETE after a POLL_ERROR clears the recovered poll banner', () => {
+    const failed = chatStoreReducer(streaming(), { type: 'POLL_ERROR', message: 'poll failed' });
+    const done = chatStoreReducer(failed, { type: 'STREAM_COMPLETE', finalMessage: 'Part' });
+    expect(done.errorMessage).toBeNull();
+    expect(done.pollFailed).toBe(false);
+  });
+
+  it('POLL_ERROR while idle does not raise a banner', () => {
+    const idle = { ...initialChatStoreState(), booting: false };
+    expect(chatStoreReducer(idle, { type: 'POLL_ERROR', message: 'poll failed' }).errorMessage).toBeNull();
+  });
+
+  it('STREAM_COMPLETE keeps a non-poll error banner', () => {
+    const state = { ...streaming(), errorMessage: 'other' };
+    expect(chatStoreReducer(state, { type: 'STREAM_COMPLETE', finalMessage: '' }).errorMessage).toBe('other');
+  });
+
+  it('TURN_CANCELLED after a failed stop clears the stop error banner', () => {
+    const failedStop = chatStoreReducer(streaming(), { type: 'CANCEL_FAILURE', message: "Couldn't stop the response. Try again." });
+    expect(failedStop.errorMessage).not.toBeNull();
+    const cancelled = chatStoreReducer(failedStop, { type: 'TURN_CANCELLED' });
+    expect(cancelled.errorMessage).toBeNull();
+    expect(cancelled.isStreaming).toBe(false);
+  });
+
+  it.each([
+    ['STREAM_COMPLETE', { type: 'STREAM_COMPLETE', finalMessage: '' } as const],
+    ['STREAM_ERROR', { type: 'STREAM_ERROR', message: 'x' } as const],
+    ['TURN_CANCELLED', { type: 'TURN_CANCELLED' } as const],
+  ])('%s closes a streaming thinking item', (_name, action) => {
+    const next = chatStoreReducer(streaming(), action);
+    expect(next.messages.find((m) => m.kind === 'thinking')).toMatchObject({ isStreaming: false });
+  });
+
+  it('TURN_CANCELLED after a POLL_ERROR clears the poll banner', () => {
+    const failed = chatStoreReducer(streaming(), { type: 'POLL_ERROR', message: 'poll failed' });
+    const cancelled = chatStoreReducer(failed, { type: 'TURN_CANCELLED' });
+    expect(cancelled.errorMessage).toBeNull();
+    expect(cancelled.pollFailed).toBe(false);
+  });
+
+  it.each([
+    ['TURN_CANCELLED', { type: 'TURN_CANCELLED' } as const],
+    ['STREAM_ERROR', { type: 'STREAM_ERROR', message: 'stream failed' } as const],
+    ['SEND_TURN_FAILURE', { type: 'SEND_TURN_FAILURE', message: 'send failed' } as const],
+  ])('an idle POLL_ERROR after %s does not raise or replace a banner', (_name, action) => {
+    const failed = chatStoreReducer(streaming(), { type: 'POLL_ERROR', message: 'poll failed' });
+    const ended = chatStoreReducer(failed, action);
+    const idlePoll = chatStoreReducer(ended, { type: 'POLL_ERROR', message: 'poll again' });
+    expect(idlePoll.pollFailed).toBe(false);
+    expect(idlePoll.errorMessage).toBe(ended.errorMessage);
+  });
+
+  it('an idle POLL_ERROR after a re-boot does not raise a banner', () => {
+    const failed = chatStoreReducer(streaming(), { type: 'POLL_ERROR', message: 'poll failed' });
+    const booting = chatStoreReducer(failed, { type: 'BOOT_START' });
+    expect(booting.pollFailed).toBe(false);
+    const booted = chatStoreReducer({ ...booting, pollFailed: true }, {
+      type: 'BOOT_SUCCESS',
+      conversationId: 'c2',
+      conversationPersisted: false,
+      messages: [],
+      provider: null,
+      sessionHandle: 'h2',
+    } as never);
+    expect(booted.pollFailed).toBe(false);
+    expect(chatStoreReducer(booted, { type: 'POLL_ERROR', message: 'poll again' }).errorMessage).toBeNull();
   });
 });

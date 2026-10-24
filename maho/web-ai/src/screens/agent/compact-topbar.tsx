@@ -27,7 +27,7 @@ export function CompactTopbar({
         </IconButton>
         <div class="agent-topbar-spacer" />
         <div class="agent-topbar-actions">
-          <IconButton label="Open settings" testId="agent-settings" onClick={onOpenSettings}>
+          <IconButton label="Open settings" testId="agent-settings" disabled={isRunning} onClick={onOpenSettings}>
             <Icon name="settings" size={18} aria-hidden />
           </IconButton>
           {onBack && (

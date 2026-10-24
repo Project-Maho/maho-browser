@@ -197,6 +197,7 @@ export function ChatScreen({
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const draftRef = useRef('');
+  const composingRef = useRef(false);
   const stickToBottomRef = useRef(true);
   const activeHandleRef = useRef<string | null>(null);
   const bootstrapGenerationRef = useRef(0);
@@ -296,6 +297,15 @@ export function ChatScreen({
   useEffect(() => {
     void bootstrapSession(routeSessionId);
   }, [bootstrapSession, routeSessionId]);
+
+  // A fresh chat's identity otherwise lives only in component state, and any
+  // overlay route (#byok, re-auth) unmounts this screen. Once the conversation
+  // has a saved row, record it in the current history entry so Back resumes it.
+  // replaceState fires no hashchange, so the live session is not re-bootstrapped.
+  useEffect(() => {
+    if (routeSessionId || !state.conversationPersisted || !state.conversationId) return;
+    writeChatHashSessionId(state.conversationId);
+  }, [routeSessionId, state.conversationId, state.conversationPersisted]);
 
   draftRef.current = state.draft;
 
@@ -490,7 +500,7 @@ export function ChatScreen({
     },
     onPollError: (message) => {
       dispatch({
-        type: 'STREAM_ERROR',
+        type: 'POLL_ERROR',
         message,
         credentialErrorCode: parseCredentialErrorCode(message),
       });
@@ -566,9 +576,14 @@ export function ChatScreen({
 
     try {
       await bridge.chatCancelTurn(handle);
-    } finally {
-      dispatch({ type: 'TURN_CANCELLED' });
+    } catch (error) {
+      dispatch({
+        type: 'CANCEL_FAILURE',
+        message: `Couldn't stop the response. ${toErrorMessage(error, 'Try again.')}`,
+      });
+      return;
     }
+    dispatch({ type: 'TURN_CANCELLED' });
   }, [bridge, state.isStreaming, state.sessionHandle]);
 
   const handleApproveTool = useCallback(
@@ -634,8 +649,12 @@ export function ChatScreen({
       return;
     }
 
+    // The current entry may already point at the previous conversation.
+    writeChatHashSessionId(null);
+    // Discard the abandoned new-task draft so the fresh session starts empty.
+    await drafts.clearScope({ kind: 'new_task' });
     await bootstrapSession(null);
-  }, [bootstrapSession, routeSessionId]);
+  }, [bootstrapSession, drafts, routeSessionId]);
 
   const handleImageUpload = useCallback(
     async (event: Event) => {
@@ -678,6 +697,9 @@ export function ChatScreen({
         dispatch({ type: 'SEND_TURN_START', message: content });
         await bridge.chatSendMessage(handle, content);
         if (state.conversationId) {
+          // Save the user turn like the text path does, so the conversation row
+          // the history entry points at (#chat?sessionId=) really exists.
+          void bridge.saveConversationMessage?.(state.conversationId, 'user', text || '[Image]').catch(() => undefined);
           dispatch({ type: 'CONVERSATION_PERSISTED', conversationId: state.conversationId });
         }
         void acknowledgeDraft(state.conversationId ? { kind: 'conversation', conversationId: state.conversationId } : undefined);
@@ -750,9 +772,9 @@ export function ChatScreen({
             <div class="chat-empty-icon" aria-hidden="true">
               <span>🔑</span>
             </div>
-            <h2 class="chat-empty-heading">Configure your API key</h2>
+            <h2 class="chat-empty-heading">Finish setting up AI</h2>
             <p class="chat-empty-copy">
-              Add an OpenAI or Anthropic key before starting a conversation.
+              Your selected provider needs an API key, or a base URL and model, before you can start a conversation.
             </p>
             <button
               type="button"
@@ -761,7 +783,7 @@ export function ChatScreen({
                 window.location.hash = '#byok';
               }}
             >
-              Configure API key
+              Open AI settings
             </button>
           </section>
         ) : showEmptyState ? (
@@ -839,7 +861,16 @@ export function ChatScreen({
             onInput={(event) => {
               setDraft((event.target as HTMLTextAreaElement).value);
             }}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+            }}
             onKeyDown={(event) => {
+              if (event.isComposing || event.keyCode === 229 || composingRef.current) {
+                return;
+              }
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 void sendTextTurn();
@@ -876,6 +907,26 @@ export function ChatScreen({
       </form>
     </div>
   );
+}
+
+/**
+ * Sets (or removes) `sessionId` on the current `#chat` history entry in place,
+ * keeping other hash params and `history.state` (the app's `mahoDepth` stamp).
+ */
+function writeChatHashSessionId(conversationId: string | null): void {
+  const raw = window.location.hash.replace(/^#/u, '');
+  const qIdx = raw.indexOf('?');
+  const name = qIdx === -1 ? raw : raw.slice(0, qIdx);
+  if (name !== 'chat') return;
+  // Keep other params byte-for-byte (parseHash decodes with decodeURIComponent).
+  const others = (qIdx === -1 ? '' : raw.slice(qIdx + 1))
+    .split('&')
+    .filter((part) => part && !part.startsWith('sessionId='));
+  const current = raw.slice(qIdx + 1).split('&').find((part) => part.startsWith('sessionId='));
+  const next = conversationId === null ? undefined : `sessionId=${encodeURIComponent(conversationId)}`;
+  if (current === next) return;
+  const parts = next === undefined ? others : [next, ...others];
+  window.history.replaceState(window.history.state, '', `#chat${parts.length ? `?${parts.join('&')}` : ''}`);
 }
 
 function historyToMessages(history: BridgeChatMessage[]): MessageItem[] {
@@ -1079,10 +1130,12 @@ async function resolveProviderConfig(
         model: configuredModel,
       };
     }
+    // An unset provider means the managed default, matching AI settings.
+    case '':
     case 'maho-managed':
       return {
-        credentialProvider: providerId,
-        id: providerId,
+        credentialProvider: 'maho-managed',
+        id: 'maho-managed',
         label: 'Maho AI',
       };
     default:

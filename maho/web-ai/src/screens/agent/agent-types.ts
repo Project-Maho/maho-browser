@@ -23,7 +23,7 @@ export type AgentBlock =
       readonly name: string;
       readonly args: string;
       readonly result: string | null;
-      readonly status: 'running' | 'done';
+      readonly status: 'running' | 'done' | 'stopped';
       readonly startedAt: number;
       readonly durationMs: number | null;
     }
@@ -70,8 +70,8 @@ export interface AgentState {
   readonly errorMessage: string | null;
   readonly errorCredentialCode: CredentialErrorCode | null;
   /**
-   * The error was a poll transport failure: the banner is shown and the
-   * running state ended, but the session is still attached and recoverable —
+   * The error was a poll transport failure: the banner is shown but the run
+   * keeps its live phase — the session is still attached and recoverable, and
    * the next successful stream event continues the same turn.
    */
   readonly pollFailed: boolean;

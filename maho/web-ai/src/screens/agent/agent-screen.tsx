@@ -329,7 +329,9 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
     window.location.hash = 'byok';
   }, []);
 
-  const suggestedCards = getSuggestedTaskCards({ enabled: suggestionsEnabled });
+  const suggestedCards = bridge.agentSetRuntimeConfig
+    ? getSuggestedTaskCards({ enabled: suggestionsEnabled })
+    : [];
   const startSuggestedTask = useCallback((task: SuggestedTask) => {
     void submitPrompt(task.prompt, SUGGESTED_TASK_RUNTIME_CONFIG);
   }, [submitPrompt]);
@@ -385,6 +387,7 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
           messages={state.messages}
           onScroll={onScroll}
           onShareArtifact={handleShareArtifact}
+          interactionAnswersSupported={bridge.agentResolveInteraction !== undefined}
           onAnswerInteraction={handleInteractionAnswer}
           phase={state.phase}
           scrollRef={scrollRef}

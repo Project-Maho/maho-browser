@@ -1,4 +1,4 @@
-import { type JSX, type RefObject } from 'preact';
+import { type RefObject } from 'preact';
 import { memo } from 'preact/compat';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatContent } from '../../bridge/types';
@@ -15,6 +15,7 @@ import { formatStructuredValue } from '../../store/chatStore';
 import { Icon } from '../../ui/icon';
 import type { CredentialErrorCode } from '../../screens/credential-error';
 import { CredentialErrorCard } from '../../screens/credential-error-card';
+import { MarkdownRenderer } from '../../screens/agent/markdown-renderer';
 
 export interface MessageListProps {
   messages: readonly MessageItem[];
@@ -419,138 +420,4 @@ export function SystemRow({ message }: { message: SystemMessageItem }) {
       <div class="chat-system-card">{message.content}</div>
     </div>
   );
-}
-
-export const MarkdownRenderer = memo(function MarkdownRenderer({ text }: { text: string }) {
-  return <div class="chat-markdown">{parseMarkdown(text)}</div>;
-});
-
-export function parseMarkdown(text: string): JSX.Element[] {
-  const normalized = text.replace(/\r\n/g, '\n');
-  const lines = normalized.split('\n');
-  const blocks: JSX.Element[] = [];
-
-  for (let index = 0; index < lines.length;) {
-    const line = lines[index] ?? '';
-    if (!line.trim()) {
-      index += 1;
-      continue;
-    }
-
-    if (line.startsWith('```')) {
-      const codeLines: string[] = [];
-      index += 1;
-      while (index < lines.length && !lines[index]?.startsWith('```')) {
-        codeLines.push(lines[index] ?? '');
-        index += 1;
-      }
-      index += index < lines.length ? 1 : 0;
-      blocks.push(
-        <pre key={`code-${blocks.length}`} class="chat-markdown-pre">
-          <code>{codeLines.join('\n')}</code>
-        </pre>,
-      );
-      continue;
-    }
-
-    if (line.startsWith('- ')) {
-      const items: string[] = [];
-      while (index < lines.length && (lines[index] ?? '').startsWith('- ')) {
-        items.push((lines[index] ?? '').slice(2));
-        index += 1;
-      }
-      blocks.push(
-        <ul key={`list-${blocks.length}`} class="chat-markdown-list">
-          {items.map((item, itemIndex) => (
-            <li key={`item-${itemIndex}`}>{parseInlineMarkdown(item, `list-${blocks.length}-${itemIndex}`)}</li>
-          ))}
-        </ul>,
-      );
-      continue;
-    }
-
-    const paragraphLines: string[] = [];
-    while (index < lines.length) {
-      const currentLine = lines[index] ?? '';
-      if (!currentLine.trim() || currentLine.startsWith('```') || currentLine.startsWith('- ')) {
-        break;
-      }
-      paragraphLines.push(currentLine);
-      index += 1;
-    }
-
-    blocks.push(
-      <p key={`p-${blocks.length}`} class="chat-markdown-paragraph">
-        {parseInlineMarkdown(paragraphLines.join(' '), `p-${blocks.length}`)}
-      </p>,
-    );
-  }
-
-  return blocks;
-}
-
-function parseInlineMarkdown(text: string, keyPrefix: string): Array<string | JSX.Element> {
-  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g;
-  const nodes: Array<string | JSX.Element> = [];
-  let cursor = 0;
-  let matchIndex = 0;
-
-  for (;;) {
-    const match = pattern.exec(text);
-    if (!match) {
-      break;
-    }
-
-    if (match.index > cursor) {
-      nodes.push(text.slice(cursor, match.index));
-    }
-
-    const token = match[0];
-    if (token.startsWith('**')) {
-      const inner = token.slice(2, -2);
-      nodes.push(
-        <strong key={`${keyPrefix}-strong-${matchIndex}`}>
-          {parseInlineMarkdown(inner, `${keyPrefix}-strong-${matchIndex}`)}
-        </strong>,
-      );
-    } else if (token.startsWith('*')) {
-      const inner = token.slice(1, -1);
-      nodes.push(
-        <em key={`${keyPrefix}-em-${matchIndex}`}>
-          {parseInlineMarkdown(inner, `${keyPrefix}-em-${matchIndex}`)}
-        </em>,
-      );
-    } else if (token.startsWith('`')) {
-      nodes.push(
-        <code key={`${keyPrefix}-code-${matchIndex}`} class="chat-markdown-inline-code">
-          {token.slice(1, -1)}
-        </code>,
-      );
-    } else {
-      const linkMatch = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
-      if (linkMatch) {
-        nodes.push(
-          <a
-            key={`${keyPrefix}-link-${matchIndex}`}
-            href={linkMatch[2]}
-            target="_blank"
-            rel="noreferrer noopener"
-          >
-            {linkMatch[1]}
-          </a>,
-        );
-      } else {
-        nodes.push(token);
-      }
-    }
-
-    cursor = match.index + token.length;
-    matchIndex += 1;
-  }
-
-  if (cursor < text.length) {
-    nodes.push(text.slice(cursor));
-  }
-
-  return nodes;
 }

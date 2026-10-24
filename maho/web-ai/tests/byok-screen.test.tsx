@@ -123,10 +123,26 @@ describe('AiSettingsScreen', () => {
       expect(mockBridge.byokSetKey).toHaveBeenCalledWith('anthropic', 'sk-ant-secret');
     });
     fireEvent.click(screen.getByRole('button', { name: 'Clear API key' }));
+    // Clearing needs an explicit second confirmation step.
+    expect(mockBridge.byokDeleteKey).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm removing saved API key' }));
     await waitFor(() => {
       expect(mockBridge.byokDeleteKey).toHaveBeenCalledWith('anthropic');
       expect(screen.getByText('Anthropic API key is not saved.')).toBeTruthy();
     });
+  });
+
+  it('resets an armed Clear confirmation when the provider changes', async () => {
+    mockBridge.getAiSettings.mockResolvedValue({ ...OPENAI_SETTINGS, hasByokAnthropic: true });
+    render(<AiSettingsScreen />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear API key' }));
+    expect(screen.getByRole('button', { name: 'Confirm removing saved API key' })).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'AI provider' }), { target: { value: 'anthropic' } });
+
+    await waitFor(() => expect(mockBridge.setAiProvider).toHaveBeenCalledWith('anthropic'));
+    expect(screen.queryByRole('button', { name: 'Confirm removing saved API key' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Clear API key' })).toBeTruthy();
   });
 
   it('persists the optional model on blur', async () => {

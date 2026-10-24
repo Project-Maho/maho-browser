@@ -16,6 +16,9 @@ const mockBridge = {
   chatSessionFree: vi.fn().mockResolvedValue(undefined),
   chatPollEvents: vi.fn().mockResolvedValue([]),
   chatGetHistory: vi.fn().mockResolvedValue([]),
+  chatRegisterTool: vi.fn().mockResolvedValue(undefined),
+  chatSendMessage: vi.fn().mockResolvedValue(undefined),
+  saveConversationMessage: vi.fn().mockResolvedValue(true),
   conversationsList: vi.fn().mockResolvedValue([]),
 };
 
@@ -23,7 +26,112 @@ vi.mock('../hooks/use-bridge', () => ({
   useBridge: () => mockBridge,
 }));
 
+const agentLifecycle = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
+vi.mock('../screens/agent/agent-screen', async () => {
+  const { useEffect } = await import('preact/hooks');
+  return {
+    AgentScreen: ({ goal }: { goal?: string }) => {
+      useEffect(() => {
+        agentLifecycle.mounts += 1;
+        return () => { agentLifecycle.unmounts += 1; };
+      }, []);
+      return <div data-testid="agent-screen">{goal}</div>;
+    },
+  };
+});
+
+import { act, fireEvent, waitFor, within } from '@testing-library/preact';
+
 import { App, Profiler } from '../app';
+
+describe('App Router - overlays and Back', () => {
+  const navigate = async (hash: string) => {
+    await act(async () => {
+      window.history.pushState(null, '', hash);
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+  };
+  const goBack = async () => {
+    await act(async () => {
+      const popped = new Promise((resolve) => window.addEventListener('popstate', resolve, { once: true }));
+      window.history.back();
+      await popped;
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+  };
+
+  beforeEach(() => {
+    agentLifecycle.mounts = 0;
+    agentLifecycle.unmounts = 0;
+    window.history.replaceState(null, '', '#agent?goal=g1');
+  });
+
+  it('keeps the agent session mounted while settings is open from #agent', async () => {
+    render(<App />);
+    expect(await screen.findByTestId('agent-screen')).toBeVisible();
+
+    await navigate('#byok');
+    expect(await screen.findByTestId('aiScreenBYOK')).not.toBeNull();
+    expect(screen.getByTestId('agent-screen')).not.toBeVisible();
+    expect(agentLifecycle.unmounts).toBe(0);
+
+    await goBack();
+    await waitFor(() => expect(screen.getByTestId('agent-screen')).toBeVisible());
+    expect(agentLifecycle.mounts).toBe(1);
+    expect(agentLifecycle.unmounts).toBe(0);
+  });
+
+  it('releases the agent screen when navigating to a non-overlay route', async () => {
+    render(<App />);
+    await screen.findByTestId('agent-screen');
+    await navigate('#privacy');
+    expect(screen.queryByTestId('agent-screen')).toBeNull();
+    expect(agentLifecycle.unmounts).toBe(1);
+  });
+
+  it('resumes a new chat after settings is opened from it and Back is pressed', async () => {
+    window.history.replaceState(null, '', '#chat');
+    mockBridge.chatGetHistory.mockResolvedValueOnce([
+      { id: 'm1', role: 'user', content: 'Remember me', createdAt: '2026-10-24T00:00:00Z' },
+    ]);
+    render(<App />);
+    const input = await screen.findByLabelText('Message');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled());
+    fireEvent.input(input, { target: { value: 'Remember me' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(window.location.hash).toBe('#chat?sessionId=session-1'));
+
+    await navigate('#byok');
+    expect(await screen.findByTestId('aiScreenBYOK')).not.toBeNull();
+
+    await goBack();
+    await waitFor(() => expect(mockBridge.chatSessionResume).toHaveBeenCalledWith('session-1', expect.anything()));
+    expect(await within(await screen.findByRole('log')).findByText('Remember me')).not.toBeNull();
+  });
+
+  it('delegates Back to the native shell after a child screen popped history itself', async () => {
+    const onBack = vi.fn();
+    window.MahoBridgeAndroid = { onBack };
+    const back = vi.spyOn(window.history, 'back');
+    try {
+      window.history.replaceState(null, '', '#privacy');
+      render(<App />);
+      await navigate('#onboarding?step=auth&mode=reauth');
+      // The child screen (not App) goes back, e.g. after re-auth.
+      await goBack();
+      back.mockClear();
+
+      await waitFor(() => expect(screen.getByText('Coming Soon')).not.toBeNull());
+      fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+      expect(onBack).toHaveBeenCalledOnce();
+      expect(back).not.toHaveBeenCalled();
+    } finally {
+      back.mockRestore();
+      delete window.MahoBridgeAndroid;
+    }
+  });
+});
 
 describe('App Router - Mobile Chat Launch Routing', () => {
   beforeEach(() => {

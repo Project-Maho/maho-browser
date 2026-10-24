@@ -10,7 +10,7 @@
  */
 import { Fragment, type ComponentChildren } from 'preact';
 import { Suspense, lazy } from 'preact/compat';
-import { useLayoutEffect, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { useHashRoute } from './hooks/use-hash-route';
 import { ChatScreen } from './screens/chat/chat-screen';
 import { Icon } from './ui/icon';
@@ -150,9 +150,32 @@ declare global {
 
 export function App({ onRender = logRenderProfile }: { onRender?: ProfilerOnRenderCallback } = {}) {
   const route = useHashRoute();
+  // Number of in-app hash navigations that can be undone with history.back().
+  // Back returns to the previous SPA screen first and only asks the native
+  // shell to dismiss the web view once the SPA history is exhausted. The depth
+  // is stamped into each history entry, so it stays correct no matter who
+  // calls history.back()/forward() (child screens included).
+  const inAppDepthRef = useRef(readHistoryDepth() ?? 0);
+
+  useEffect(() => {
+    if (readHistoryDepth() === null) stampHistoryDepth(inAppDepthRef.current);
+    const onHashChange = () => {
+      const depth = readHistoryDepth();
+      if (depth !== null) {
+        inAppDepthRef.current = depth;
+      } else {
+        inAppDepthRef.current += 1;
+        stampHistoryDepth(inAppDepthRef.current);
+      }
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
   const handleBack = () => {
-    if (window.MahoBridgeAndroid?.onBack) {
+    if (inAppDepthRef.current > 0) {
+      window.history.back();
+    } else if (window.MahoBridgeAndroid?.onBack) {
       window.MahoBridgeAndroid.onBack();
     } else if (window.webkit?.messageHandlers?.mahoBridgeNav) {
       window.webkit.messageHandlers.mahoBridgeNav.postMessage('back');
@@ -160,6 +183,18 @@ export function App({ onRender = logRenderProfile }: { onRender?: ProfilerOnRend
       window.history.back();
     }
   };
+
+  // The agent run lives in AgentScreen's memory and its native session is freed
+  // on unmount. Settings/re-auth opened from #agent are overlays that return to
+  // it, so the agent stays mounted (hidden) underneath them.
+  const retainedAgentRef = useRef<{ goal?: string } | null>(null);
+  if (route.name === 'agent') {
+    retainedAgentRef.current = { goal: route.params.goal };
+  } else if (!isAgentOverlayRoute(route.name, route.params)) {
+    retainedAgentRef.current = null;
+  }
+  const retainedAgent = retainedAgentRef.current;
+  const agentVisible = route.name === 'agent';
 
   const renderScreen = () => {
     switch (route.name) {
@@ -176,11 +211,7 @@ export function App({ onRender = logRenderProfile }: { onRender?: ProfilerOnRend
           </Suspense>
         );
       case 'agent':
-        return (
-          <Suspense fallback={<ScreenFallback onBack={handleBack} />}>
-            <AgentScreen goal={route.params.goal} onBack={handleBack} />
-          </Suspense>
-        );
+        return null; // rendered by the retained agent host below
       case 'chat':
         return <ChatScreen onBack={handleBack} sessionId={route.params.sessionId} />;
       case 'conversations':
@@ -210,7 +241,18 @@ export function App({ onRender = logRenderProfile }: { onRender?: ProfilerOnRend
     }
   };
 
-  const screen = renderScreen();
+  const screen = (
+    <Fragment>
+      <div key="agent-host" style={{ display: agentVisible ? 'contents' : 'none' }} aria-hidden={agentVisible ? undefined : 'true'}>
+        {retainedAgent && (
+          <Suspense fallback={<ScreenFallback onBack={handleBack} />}>
+            <AgentScreen goal={retainedAgent.goal} onBack={handleBack} />
+          </Suspense>
+        )}
+      </div>
+      {renderScreen()}
+    </Fragment>
+  );
 
   if (isProfilingEnabled()) {
     return (
@@ -221,6 +263,24 @@ export function App({ onRender = logRenderProfile }: { onRender?: ProfilerOnRend
   }
 
   return screen;
+}
+
+function isAgentOverlayRoute(name: string, params: Record<string, string>): boolean {
+  return name === 'byok' || (name === 'onboarding' && params.mode === 'reauth');
+}
+
+function readHistoryDepth(): number | null {
+  const state: unknown = window.history.state;
+  if (state && typeof state === 'object' && typeof (state as { mahoDepth?: unknown }).mahoDepth === 'number') {
+    return (state as { mahoDepth: number }).mahoDepth;
+  }
+  return null;
+}
+
+function stampHistoryDepth(depth: number): void {
+  const state: unknown = window.history.state;
+  const base = state && typeof state === 'object' ? (state as Record<string, unknown>) : {};
+  window.history.replaceState({ ...base, mahoDepth: depth }, '');
 }
 
 // ─── Fallback screen ─────────────────────────────────────────────────────────

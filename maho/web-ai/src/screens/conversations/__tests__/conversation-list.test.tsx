@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/preact';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ComposerDraftScope,
@@ -78,7 +78,8 @@ describe('ConversationListScreen archive management', () => {
       affectedIds: ['conversation-1'],
       missingIds: [],
     });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    // The screen must never depend on native prompt/confirm (WKWebView without a UI delegate answers null/false).
+    vi.spyOn(window, 'confirm');
     vi.spyOn(window, 'prompt');
   });
 
@@ -248,7 +249,9 @@ describe('ConversationListScreen archive management', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select all archived conversations' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete 2 conversations' }));
 
-    expect(window.confirm).toHaveBeenCalledWith('Delete 2 archived conversations?');
+    const confirmDialog = await screen.findByRole('alertdialog', { name: 'Delete 2 archived conversations?' });
+    expect(window.confirm).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Delete' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Cannot delete while an active session is using: Live run.',
     );
@@ -278,6 +281,7 @@ describe('ConversationListScreen archive management', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Select conversations' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select all archived conversations' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete 2 conversations' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => {
       expect(mockBridge.conversationBulk).toHaveBeenCalledWith('delete', ['deleted', 'missing']);
@@ -300,13 +304,13 @@ describe('ConversationListScreen archive management', () => {
       .mockResolvedValueOnce([makeConversation({ id: 'grouped', title: 'Grouped chat', projectId: 'project-new' })])
       .mockResolvedValueOnce([makeConversation({ id: 'grouped', title: 'Grouped chat', projectId: 'project-new' })])
       .mockResolvedValueOnce([makeConversation({ id: 'grouped', title: 'Grouped chat', projectId: null })]);
-    vi.mocked(window.prompt)
-      .mockReturnValueOnce('Research')
-      .mockReturnValueOnce('Renamed research');
 
     render(<ConversationListScreen />);
     await screen.findByText('No active conversations');
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    const createDialog = await screen.findByRole('dialog', { name: 'New project' });
+    fireEvent.input(within(createDialog).getByLabelText('Project name'), { target: { value: 'Research' } });
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Create' }));
 
     expect(await screen.findByRole('heading', { name: 'Research' })).toBeInTheDocument();
     expect(mockBridge.conversationProjectCreate).toHaveBeenCalledWith('Research');
@@ -314,11 +318,15 @@ describe('ConversationListScreen archive management', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Project actions for Research' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Rename project' }));
+    const renameDialog = await screen.findByRole('dialog', { name: 'Rename project' });
+    fireEvent.input(within(renameDialog).getByLabelText('Project name'), { target: { value: 'Renamed research' } });
+    fireEvent.click(within(renameDialog).getByRole('button', { name: 'Rename' }));
     expect(await screen.findByRole('heading', { name: 'Renamed research' })).toBeInTheDocument();
     expect(mockBridge.conversationProjectRename).toHaveBeenCalledWith('project-new', 'Renamed research');
 
     fireEvent.click(screen.getByRole('button', { name: 'Project actions for Renamed research' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete project' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete project' }));
     await waitFor(() => expect(mockBridge.conversationProjectDelete).toHaveBeenCalledWith('project-new'));
     expect(await screen.findByRole('heading', { name: 'No project' })).toBeInTheDocument();
   });
@@ -382,5 +390,57 @@ describe('ConversationListScreen archive management', () => {
     expect(await screen.findByText('Renamed notes')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open Renamed notes conversation' }));
     expect(window.location.hash).toBe('#chat?sessionId=conversation-rename');
+  });
+
+  it('dismisses an open project menu on outside pointerdown and on Escape', async () => {
+    mockBridge.conversationProjectList.mockResolvedValue([
+      { id: 'project-a', name: 'Alpha project', createdAt: '2026-06-20T09:00:00Z', updatedAt: '2026-06-20T09:00:00Z' },
+    ]);
+    mockBridge.conversationList.mockResolvedValue([makeConversation({ id: 'a', title: 'Alpha', projectId: 'project-a' })]);
+    render(<ConversationListScreen />);
+    await screen.findByText('Alpha');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project actions for Alpha project' }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    // Flush the post-paint effect that registers the document listeners.
+    await act(async () => {});
+    // jsdom lacks PointerEvent, so dispatch a plain bubbling pointerdown.
+    await act(async () => { document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })); });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project actions for Alpha project' }));
+    await act(async () => {});
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  });
+
+  it('keeps the project menu open for a pointerdown on its own item so the tap reaches click', async () => {
+    mockBridge.conversationProjectList.mockResolvedValue([
+      { id: 'project-a', name: 'Alpha project', createdAt: '2026-06-20T09:00:00Z', updatedAt: '2026-06-20T09:00:00Z' },
+    ]);
+    mockBridge.conversationList.mockResolvedValue([makeConversation({ id: 'a', title: 'Alpha', projectId: 'project-a' })]);
+    render(<ConversationListScreen />);
+    await screen.findByText('Alpha');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project actions for Alpha project' }));
+    await act(async () => {});
+    const item = screen.getByRole('menuitem', { name: 'Rename project' });
+    await act(async () => { item.dispatchEvent(new Event('pointerdown', { bubbles: true })); });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename project' }));
+    expect(await screen.findByRole('dialog', { name: 'Rename project' })).toBeInTheDocument();
+  });
+
+  it('cancels a project delete from the dialog with Escape', async () => {
+    mockBridge.conversationProjectList.mockResolvedValue([
+      { id: 'project-a', name: 'Alpha project', createdAt: '2026-06-20T09:00:00Z', updatedAt: '2026-06-20T09:00:00Z' },
+    ]);
+    mockBridge.conversationList.mockResolvedValue([makeConversation({ id: 'a', title: 'Alpha', projectId: 'project-a' })]);
+    render(<ConversationListScreen />);
+    await screen.findByText('Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Project actions for Alpha project' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete project' }));
+    fireEvent.keyDown(await screen.findByRole('alertdialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(mockBridge.conversationProjectDelete).not.toHaveBeenCalled();
   });
 });

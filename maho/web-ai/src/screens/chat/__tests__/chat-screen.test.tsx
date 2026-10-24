@@ -120,7 +120,7 @@ describe('ChatScreen', () => {
       });
     });
     expect(mockBridge.byokGetKey).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: 'Configure API key' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open AI settings' })).toBeNull();
   });
 
   it('does not fall back when the selected provider is missing its credential', async () => {
@@ -136,7 +136,7 @@ describe('ChatScreen', () => {
     render(<ChatScreen />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Configure API key' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Open AI settings' })).toBeTruthy();
     });
     expect(mockBridge.byokGetKey).toHaveBeenCalledTimes(1);
     expect(mockBridge.byokGetKey).toHaveBeenCalledWith('openai');
@@ -252,6 +252,34 @@ describe('ChatScreen', () => {
       });
       expect(within(screen.getByRole('log')).getByText('Hello from test')).toBeTruthy();
     });
+  });
+
+  it('records a new conversation in the current history entry once it is saved', async () => {
+    window.history.replaceState({ mahoDepth: 3 }, '', '#chat');
+    const historyLength = window.history.length;
+    // beforeEach's hash assignment may still deliver its own event; only a
+    // hashchange to the session URL would mean the write re-routed the screen.
+    const sessionHashChanges = vi.fn();
+    const hashChanges = (event: HashChangeEvent) => {
+      if (event.newURL.includes('sessionId=')) sessionHashChanges(event.newURL);
+    };
+    window.addEventListener('hashchange', hashChanges);
+    try {
+      render(<ChatScreen />);
+      await waitFor(() => expect(mockBridge.chatPollEvents).toHaveBeenCalledWith('session-new'));
+      expect(window.location.hash).toBe('#chat');
+
+      fireEvent.input(screen.getByLabelText('Message'), { target: { value: 'Keep me' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+      await waitFor(() => expect(window.location.hash).toBe('#chat?sessionId=session-new'));
+      expect(window.history.state).toEqual({ mahoDepth: 3 });
+      expect(window.history.length).toBe(historyLength);
+      expect(sessionHashChanges).not.toHaveBeenCalled();
+      expect(mockBridge.chatSessionStart).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('hashchange', hashChanges);
+    }
   });
 
   it('normalizes native wire tokens and complete payloads', async () => {
@@ -633,7 +661,7 @@ describe('ChatScreen', () => {
     render(<ChatScreen />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Configure API key' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Open AI settings' })).toBeTruthy();
     });
 
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
