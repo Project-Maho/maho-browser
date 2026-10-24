@@ -46,9 +46,11 @@ export function useCalendarClient({
 
   const [workingHoursStart, setWorkingHoursStart] = useState("09:00");
   const [workingHoursEnd, setWorkingHoursEnd] = useState("18:00");
-  const [pendingDeletions, setPendingDeletions] = useState<{ [id: string]: { event: CalendarEvent; timeoutId: any } }>({});
+  const [pendingDeletions, setPendingDeletions] = useState<{ [id: string]: { event: CalendarEvent; timeoutId: any; scope?: "single" | "all" } }>({});
 
   const eventCacheRef = useRef<Map<string, { timestamp: number; evs: CalendarEvent[]; cals: GoogleCalendarEntry[]; cats: CalendarCategory[] }>>(new Map());
+
+  const fetchSeqRef = useRef(0);
   const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
   const gmailAccounts = accounts
@@ -57,6 +59,10 @@ export function useCalendarClient({
   const effectiveAccountId = accountId || gmailAccounts[0]?.id || "";
 
   const fetchEvents = useCallback(async () => {
+    // Responses for an earlier date window can resolve after a newer one;
+    // only the latest request may write state.
+    const seq = ++fetchSeqRef.current;
+    const isLatest = () => seq === fetchSeqRef.current;
     const targetAccounts = (accounts && accounts.length > 0)
       ? accounts
       : (effectiveAccountId ? [{ id: effectiveAccountId }] : []);
@@ -102,13 +108,14 @@ export function useCalendarClient({
       const allCalendars = results.flatMap(r => r.cals);
       const allCategories = results.flatMap(r => r.cats);
 
+      if (!isLatest()) return;
       setEvents(allEvents);
       setCalendars(allCalendars);
       setCategories(allCategories);
     } catch (err) {
-      toast("error", err instanceof Error ? err.message : t("common.error"));
+      if (isLatest()) toast("error", err instanceof Error ? err.message : t("common.error"));
     } finally {
-      setLoading(false);
+      if (isLatest()) setLoading(false);
     }
   }, [accounts, effectiveAccountId, toast, t, currentDate, currentView]);
 
@@ -211,57 +218,67 @@ export function useCalendarClient({
     }
   };
 
-  const handleDeleteEvent = useCallback((eventId: string) => {
+  const handleDeleteEvent = useCallback((eventId: string, scope?: "single" | "all") => {
     const eventToDelete = events.find(e => e.id === eventId);
     if (!eventToDelete) return;
 
     // Clear cache to keep it clean
     eventCacheRef.current.clear();
 
-    setEvents(prev => prev.filter(e => e.id !== eventId));
+    // Google events arrive one row per occurrence, so deleting the whole
+    // series must remove every row that shares its series id.
+    const seriesId = eventToDelete.recurring_event_id ?? eventToDelete.id;
+    const removed = scope === "all"
+      ? events.filter(e => e.id === eventId || e.id === seriesId || e.recurring_event_id === seriesId)
+      : [eventToDelete];
+    const removedIds = new Set(removed.map(e => e.id));
+    const restoreRemoved = () => {
+      setEvents(prev => {
+        const missing = removed.filter(r => !prev.some(e => e.id === r.id));
+        if (missing.length === 0) return prev;
+        return [...prev, ...missing].sort((a, b) => a.dtstart.localeCompare(b.dtstart));
+      });
+    };
+
+    setEvents(prev => prev.filter(e => !removedIds.has(e.id)));
 
     const timeoutId = setTimeout(async () => {
       try {
-        await api.deleteCalendarEvent(eventId);
+        await api.deleteCalendarEvent(eventId, scope);
         setPendingDeletions(prev => {
           const next = { ...prev };
           delete next[eventId];
           return next;
         });
+        if (scope === "all") await reloadEvents();
       } catch (err) {
         toast("error", err instanceof Error ? err.message : String(err));
-        setEvents(prev => {
-          if (prev.some(e => e.id === eventId)) return prev;
-          return [...prev, eventToDelete].sort((a, b) => a.dtstart.localeCompare(b.dtstart));
-        });
+        restoreRemoved();
       }
     }, 8000);
 
     setPendingDeletions(prev => ({
       ...prev,
-      [eventId]: { event: eventToDelete, timeoutId }
+      [eventId]: { event: eventToDelete, timeoutId, scope }
     }));
 
-    sonnerToast.success(t("calendar.eventDeleted", "Event deleted"), {
+    sonnerToast.success(t("calendar.eventDeleted"), {
       duration: 8000,
       action: {
-        label: t("common.undo", "Undo"),
+        label: t("common.undo"),
         onClick: () => {
           clearTimeout(timeoutId);
-          setEvents(prev => {
-            if (prev.some(e => e.id === eventId)) return prev;
-            return [...prev, eventToDelete].sort((a, b) => a.dtstart.localeCompare(b.dtstart));
-          });
+          restoreRemoved();
           setPendingDeletions(prev => {
             const next = { ...prev };
             delete next[eventId];
             return next;
           });
-          toast("info", t("calendar.deletionUndone", "Deletion undone"));
+          toast("info", t("calendar.deletionUndone"));
         }
       }
     });
-  }, [events, t, toast]);
+  }, [events, reloadEvents, t, toast]);
 
   const handleSelectEvent = (event: CalendarEvent, e?: React.SyntheticEvent) => {
     const native = e?.nativeEvent as MouseEvent;
@@ -324,7 +341,7 @@ export function useCalendarClient({
     sonnerToast.success(t("calendar.eventsDeleted", { count: ids.length }), {
       duration: 8000,
       action: {
-        label: t("common.undo", "Undo"),
+        label: t("common.undo"),
         onClick: () => {
           clearTimeout(timeoutId);
           setEvents(prev => {
@@ -336,7 +353,7 @@ export function useCalendarClient({
             ids.forEach(id => delete next[id]);
             return next;
           });
-          toast("info", t("calendar.deletionUndone", "Deletion undone"));
+          toast("info", t("calendar.deletionUndone"));
         }
       }
     });
@@ -470,7 +487,7 @@ export function useCalendarClient({
       // Execute any pending deletes immediately on unmount
       Object.entries(pendingDeletionsRef.current).forEach(([id, d]) => {
         clearTimeout(d.timeoutId);
-        void api.deleteCalendarEvent(id);
+        void api.deleteCalendarEvent(id, d.scope);
       });
     };
   }, []);
@@ -487,7 +504,7 @@ export function useCalendarClient({
     const setup = async () => {
       const unlisten = await listen<number>("calendar-auto-declined", (event) => {
         const count = event.payload;
-        toast("info", t("calendar.autoDeclined", "Auto-declined {{count}} conflicting events", { count }));
+        toast("info", t("calendar.autoDeclined", { count }));
       });
       if (cancelled) {
         unlisten();
@@ -513,13 +530,12 @@ export function useCalendarClient({
         "calendar-rsvp-reply-failed",
         ({ payload }) => {
           sonnerToast.error(
-            t("calendar.rsvp.reply_failed_title", "Calendar RSVP send failed"),
+            t("calendar.rsvpToast.failedTitle"),
             {
-              description: t(
-                "calendar.rsvp.reply_failed_description",
-                "Your response to \"{{summary}}\" was saved locally but could not be sent to the organizer: {{error}}",
-                { summary: payload.summary, error: payload.error },
-              ),
+              description: t("calendar.rsvpToast.failedDescription", {
+                summary: payload.summary,
+                error: payload.error,
+              }),
             },
           );
         },
@@ -534,13 +550,9 @@ export function useCalendarClient({
         "calendar-rsvp-reply-queued",
         ({ payload }) => {
           sonnerToast.info(
-            t("calendar.rsvp.reply_queued_title", "Calendar RSVP queued"),
+            t("calendar.rsvpToast.queuedTitle"),
             {
-              description: t(
-                "calendar.rsvp.reply_queued_description",
-                "Your response to \"{{summary}}\" will be sent when the network recovers.",
-                { summary: payload.summary },
-              ),
+              description: t("calendar.rsvpToast.queuedDescription", { summary: payload.summary }),
             },
           );
         },
@@ -555,12 +567,9 @@ export function useCalendarClient({
         "calendar-rsvp-reply-drained",
         () => {
           sonnerToast.success(
-            t("calendar.rsvp.reply_drained_title", "Calendar RSVP sent"),
+            t("calendar.rsvpToast.drainedTitle"),
             {
-              description: t(
-                "calendar.rsvp.reply_drained_description",
-                "Your queued RSVP was sent successfully.",
-              ),
+              description: t("calendar.rsvpToast.drainedDescription"),
             },
           );
         },

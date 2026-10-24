@@ -15,7 +15,7 @@ export class PageCallbackRouter {
     removeListener(id: number): void;
   };
   onNewMail: {
-    addListener(listener: (accountId: string) => void): number;
+    addListener(listener: (accountId: string, emailId: string, messageId: string) => void): number;
     removeListener(id: number): void;
   };
   onMutation: {

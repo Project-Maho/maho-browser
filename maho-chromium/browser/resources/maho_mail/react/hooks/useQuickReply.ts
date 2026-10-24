@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import * as api from "../api";
 import type { Email, EmailDetail, ComposeEmailRequest, SendRequestedOptions } from "../types";
-import { parseRecipientsFn } from "./useComposeRecipients";
+import { parseStoredRecipients } from "./useComposeRecipients";
 
 type ToastFn = (type: "success" | "error", message: string) => void;
 
@@ -9,7 +9,7 @@ interface UseQuickReplyOptions {
   email: Email | null;
   emailDetail: EmailDetail | null;
   accountEmail?: string;
-  onSendRequested?: (request: ComposeEmailRequest, options?: SendRequestedOptions) => void;
+  onSendRequested?: (request: ComposeEmailRequest, options?: SendRequestedOptions) => void | Promise<void>;
   toast: ToastFn;
   t: (key: string) => string;
 }
@@ -59,12 +59,12 @@ export function useQuickReply({
       const ccAddresses: string[] = [];
 
       if (replyAll) {
-        const allTo = parseRecipientsFn(email.to_addresses);
+        const allTo = parseStoredRecipients(email.to_addresses);
         for (const addr of allTo) {
           if (!toAddresses.includes(addr)) toAddresses.push(addr);
         }
         if (email.cc_addresses) {
-          const allCc = parseRecipientsFn(email.cc_addresses);
+          const allCc = parseStoredRecipients(email.cc_addresses);
           for (const addr of allCc) {
             if (!toAddresses.includes(addr)) ccAddresses.push(addr);
           }
@@ -92,19 +92,28 @@ export function useQuickReply({
       };
 
       if (onSendRequested) {
-        onSendRequested(request, {
-          composition: {
-            accountId: email.account_id,
-            to: request.to.join(", "),
-            cc: request.cc?.join(", "),
-            subject: request.subject,
-            body: quickReplyText,
-            inReplyTo: request.in_reply_to,
-            references: request.references,
-          },
-        });
-        setQuickReplyText("");
-        setQuickReplyExpanded(false);
+        // Keep the typed reply until the send request is accepted so a failed
+        // draft save never discards it.
+        try {
+          setQuickReplySending(true);
+          await onSendRequested(request, {
+            composition: {
+              accountId: email.account_id,
+              to: request.to.join(", "),
+              cc: request.cc?.join(", "),
+              subject: request.subject,
+              body: quickReplyText,
+              inReplyTo: request.in_reply_to,
+              references: request.references,
+            },
+          });
+          setQuickReplyText("");
+          setQuickReplyExpanded(false);
+        } catch (err) {
+          toast("error", err instanceof Error ? err.message : t("email.quickReplyFailed"));
+        } finally {
+          setQuickReplySending(false);
+        }
         return;
       }
 

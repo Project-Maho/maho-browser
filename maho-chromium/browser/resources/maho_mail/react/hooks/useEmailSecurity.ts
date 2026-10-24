@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import * as api from "../api";
 import type { EmailDetail } from "../types";
 import type { PgpVerifyResult, SmimeVerifyResult } from "../types";
@@ -40,6 +40,10 @@ export function useEmailSecurity({
   const [smimeDecryptError, setSmimeDecryptError] = useState<string | null>(null);
   const [smimeVerifyResult, setSmimeVerifyResult] = useState<SmimeVerifyResult | null>(null);
 
+  // Bumped on every request and on reset; a response whose generation no
+  // longer matches belongs to a previously shown email and is dropped.
+  const generationRef = useRef(0);
+
   const email = emailDetail?.email ?? null;
   const bodyText = email?.body_text ?? "";
   const bodyHtmlStr = email?.body_html ?? "";
@@ -63,15 +67,17 @@ export function useEmailSecurity({
 
   const handlePgpDecrypt = useCallback(async () => {
     if (!email) return;
+    const generation = ++generationRef.current;
+    const isCurrent = () => generation === generationRef.current;
     try {
       setPgpDecrypting(true);
       setPgpDecryptError(null);
       const decrypted = await api.decryptEmailPgp(email.account_id, bodyText);
-      setPgpDecryptedText(decrypted);
+      if (isCurrent()) setPgpDecryptedText(decrypted);
     } catch (err) {
-      setPgpDecryptError(err instanceof Error ? err.message : "Decryption failed");
+      if (isCurrent()) setPgpDecryptError(err instanceof Error ? err.message : "Decryption failed");
     } finally {
-      setPgpDecrypting(false);
+      if (isCurrent()) setPgpDecrypting(false);
     }
   }, [email, bodyText]);
 
@@ -109,15 +115,17 @@ export function useEmailSecurity({
 
   const handleSmimeDecrypt = useCallback(async () => {
     if (!email) return;
+    const generation = ++generationRef.current;
+    const isCurrent = () => generation === generationRef.current;
     try {
       setSmimeDecrypting(true);
       setSmimeDecryptError(null);
       const decrypted = await api.decryptEmailSmime(email.account_id, bodyText);
-      setSmimeDecryptedText(decrypted);
+      if (isCurrent()) setSmimeDecryptedText(decrypted);
     } catch (err) {
-      setSmimeDecryptError(err instanceof Error ? err.message : "S/MIME decryption failed");
+      if (isCurrent()) setSmimeDecryptError(err instanceof Error ? err.message : "S/MIME decryption failed");
     } finally {
-      setSmimeDecrypting(false);
+      if (isCurrent()) setSmimeDecrypting(false);
     }
   }, [email, bodyText]);
 
@@ -137,6 +145,7 @@ export function useEmailSecurity({
   }, [email, bodyText]);
 
   const resetSecurity = useCallback(() => {
+    generationRef.current += 1;
     setPgpDecryptedText(null);
     setPgpDecrypting(false);
     setPgpDecryptError(null);

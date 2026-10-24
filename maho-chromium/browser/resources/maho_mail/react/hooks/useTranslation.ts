@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import * as api from "../api";
 import type { TranslationConfig, TranslationProvider } from "../types";
 
@@ -89,6 +89,9 @@ export function useTranslation() {
     isModelLoading: false,
     partialFailureCount: 0,
   }));
+  // Bumped per request and on clear so a late result for a previously shown
+  // email never lands on the current one.
+  const requestIdRef = useRef(0);
 
   const translate = useCallback(async (text: string, from?: string, to?: string) => {
     const config = loadConfig();
@@ -107,6 +110,7 @@ export function useTranslation() {
       return;
     }
 
+    const requestId = ++requestIdRef.current;
     setState((s) => ({ ...s, isTranslating: true, error: null, fromLang, toLang }));
 
     try {
@@ -116,8 +120,10 @@ export function useTranslation() {
       } else {
         result = await api.translateText({ text, targetLang: toLang, sourceLang: fromLang });
       }
+      if (requestId !== requestIdRef.current) return;
       setState((s) => ({ ...s, translatedText: result, translatedHtml: result, isTranslating: false }));
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       const message = err instanceof Error ? err.message : String(err);
       setState((s) => ({ ...s, error: message, isTranslating: false }));
     }
@@ -136,7 +142,8 @@ export function useTranslation() {
   }, []);
 
   const clearTranslation = useCallback(() => {
-    setState((s) => ({ ...s, translatedText: null, translatedHtml: null, error: null }));
+    requestIdRef.current += 1;
+    setState((s) => ({ ...s, translatedText: null, translatedHtml: null, error: null, isTranslating: false }));
   }, []);
 
   const cleanup = useCallback(() => {

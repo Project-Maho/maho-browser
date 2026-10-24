@@ -581,9 +581,13 @@ export function useMailClient(onError?: (message: string) => void) {
         if (!isCurrent()) return;
 
         let allEmails: EmailSummary[] = [];
-        results.forEach((result) => {
+        // Keep pagination offsets in step with the rows now loaded so the
+        // next loadMoreEmails continues after them instead of from 0.
+        const syncedOffsets: AggregateOffsets = {};
+        results.forEach((result, index) => {
           if (result.status === "fulfilled") {
             allEmails = allEmails.concat(result.value);
+            syncedOffsets[targets[index].accountId] = result.value.length;
           }
         });
 
@@ -594,7 +598,7 @@ export function useMailClient(onError?: (message: string) => void) {
         });
 
         setEmails(allEmails);
-        setAggregateOffsets({});
+        setAggregateOffsets(syncedOffsets);
       } else {
         const result = await api.syncFolder(selection.accountId, selection.folderId);
         if (!isCurrent()) return;
@@ -713,6 +717,18 @@ export function useMailClient(onError?: (message: string) => void) {
     setSelectedEmail(prev => prev && ids.includes(prev.email.id) ? null : prev);
   }, []);
 
+  // Applies a server-confirmed read/star change to the loaded list and the
+  // open email. An explicit read-state change supersedes the pending
+  // auto-mark-read timer so "mark unread" is not reverted two seconds later.
+  const patchEmails = useCallback((ids: string[], patch: Partial<Pick<EmailSummary, "is_read" | "is_starred">>) => {
+    if (patch.is_read !== undefined && selectingRef.current && ids.includes(selectingRef.current) && markReadTimerRef.current) {
+      clearTimeout(markReadTimerRef.current);
+      markReadTimerRef.current = null;
+    }
+    setEmails(prev => prev.map(email => ids.includes(email.id) ? { ...email, ...patch } : email));
+    setSelectedEmail(prev => prev && ids.includes(prev.email.id) ? { ...prev, email: { ...prev.email, ...patch } } : prev);
+  }, []);
+
   // Selection change handlers
   const selectAggregate = useCallback((folderType: FolderType) => {
     setSelection({ type: "aggregate", folderType });
@@ -802,6 +818,7 @@ export function useMailClient(onError?: (message: string) => void) {
     // Actions
     clearSelectedEmail,
     removeEmails,
+    patchEmails,
     loadAccounts,
     loadAllFolders,
     syncAllFolders,
@@ -837,6 +854,7 @@ export function useMailClient(onError?: (message: string) => void) {
     loadAccounts,
     clearSelectedEmail,
     removeEmails,
+    patchEmails,
     loadAllFolders,
     syncAllFolders,
     loadMoreEmails,

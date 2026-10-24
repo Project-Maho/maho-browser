@@ -124,8 +124,8 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
   }
 
   if (eventName === 'new-mail' || eventName === 'new-emails') {
-    const listenerId = callbackRouter.onNewMail.addListener((accountId: string) => {
-      dispatchEvent(handler, eventName, { account_id: accountId, message_ids: [] });
+    const listenerId = callbackRouter.onNewMail.addListener((accountId: string, _emailId: string, messageId: string) => {
+      dispatchEvent(handler, eventName, { account_id: accountId, message_ids: messageId ? [messageId] : [] });
     });
     return () => {
       callbackRouter.removeListener(listenerId);

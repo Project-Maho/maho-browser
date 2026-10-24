@@ -368,6 +368,8 @@
 .ProseMirror blockquote { border-left: 3px solid var(--border); padding-left: 1em; color: var(--muted-foreground); }
 .ProseMirror ul, .ProseMirror ol { padding-left: 1.5em; }
 .ProseMirror a { color: var(--primary); text-decoration: underline; }
+/* Node selections (e.g. a node-selected quote header) must be visible. */
+.ProseMirror .ProseMirror-selectednode { outline: 2px solid var(--primary); }
 
 /* Tauri window drag region */
 *[data-tauri-drag-region] { app-region: drag; }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, type MutableRefObject } from "react";
 import { isValidEmail } from "../utils/email";
+import { parseAddressList } from "../utils/addresses";
 import type { ReplyContext } from "../types";
 
 export interface UseComposeRecipientsParams {
@@ -38,13 +39,10 @@ function buildInitialTo(
 
   const recipients = new Set<string>();
   recipients.add(replyTo.original_from);
-  if (replyTo.original_to_addresses) {
-    replyTo.original_to_addresses
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .forEach((recipient) => recipients.add(recipient));
-  }
+  // Address columns are stored as JSON arrays; parse them instead of
+  // comma-splitting the serialized text.
+  parseStoredRecipients(replyTo.original_to_addresses)
+    .forEach((recipient) => recipients.add(recipient));
 
   if (accountEmail) {
     const selfLower = accountEmail.toLowerCase();
@@ -58,10 +56,7 @@ function buildInitialTo(
 function buildInitialCc(replyTo?: ReplyContext, accountEmail?: string): string {
   if (!replyTo?.reply_all || !replyTo.original_cc_addresses) return "";
 
-  return replyTo.original_cc_addresses
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
+  return parseStoredRecipients(replyTo.original_cc_addresses)
     .filter((recipient) => recipient.toLowerCase() !== accountEmail?.toLowerCase())
     .join(", ");
 }
@@ -94,6 +89,15 @@ export function parseRecipientsFn(value: string): string[] {
   const token = value.slice(start).trim();
   if (token) recipients.push(token);
   return recipients;
+}
+
+/**
+ * Parse a stored address column. The backend persists address lists as JSON
+ * arrays; legacy rows hold RFC 2822 text, which is split quote-aware.
+ */
+export function parseStoredRecipients(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  return raw.trim().startsWith("[") ? parseAddressList(raw) : parseRecipientsFn(raw);
 }
 
 export function useComposeRecipients({
