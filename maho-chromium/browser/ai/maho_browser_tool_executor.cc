@@ -156,26 +156,10 @@ MahoBrowserToolExecutor::FallbackTier InferFallbackTier(
 
 }  // namespace
 
-MahoBrowserToolExecutor::BrowserActionAuthorization::
-    BrowserActionAuthorization() = default;
-MahoBrowserToolExecutor::BrowserActionAuthorization::
-    BrowserActionAuthorization(const BrowserActionAuthorization&) = default;
-MahoBrowserToolExecutor::BrowserActionAuthorization::
-    BrowserActionAuthorization(BrowserActionAuthorization&&) = default;
-MahoBrowserToolExecutor::BrowserActionAuthorization&
-MahoBrowserToolExecutor::BrowserActionAuthorization::operator=(
-    const BrowserActionAuthorization&) = default;
-MahoBrowserToolExecutor::BrowserActionAuthorization&
-MahoBrowserToolExecutor::BrowserActionAuthorization::operator=(
-    BrowserActionAuthorization&&) = default;
-MahoBrowserToolExecutor::BrowserActionAuthorization::
-    ~BrowserActionAuthorization() = default;
-
 MahoBrowserToolExecutor::MahoBrowserToolExecutor(
     Browser* browser,
     bool browser_tools_v1_enabled,
     base::RepeatingCallback<bool()> ai_gate,
-    BrowserActionApprovalCallback action_approval_callback,
     maho::MahoMcpBrowserDelegate* browser_action_delegate_for_testing,
     maho::MahoMcpLeaseRegistry* browser_action_lease_registry_for_testing,
     std::string browser_action_lease_holder_id,
@@ -183,7 +167,6 @@ MahoBrowserToolExecutor::MahoBrowserToolExecutor(
     : browser_(browser),
       browser_tools_v1_enabled_(browser_tools_v1_enabled),
       ai_gate_(ai_gate),
-      action_approval_callback_(std::move(action_approval_callback)),
       browser_action_delegate_for_testing_(browser_action_delegate_for_testing),
       browser_action_lease_registry_for_testing_(
           browser_action_lease_registry_for_testing),
@@ -370,8 +353,7 @@ void MahoBrowserToolExecutor::ExecuteMailTool(
     return;
   }
 
-  if (authorization.action ==
-      maho::ai::MailAuthorizationAction::kRequireApproval) {
+  if (IsMailWriteTool(tool_name)) {
     // The desktop-agent surface currently has typed schemas only for compose
     // writes. Account mutations and other Mail writes remain direct-MCP tools
     // and are rejected here rather than falling through to read dispatch.
@@ -385,10 +367,6 @@ void MahoBrowserToolExecutor::ExecuteMailTool(
       return;
     }
     std::string error;
-    if (!ApproveMailWrite(tool_name, &error)) {
-      std::move(callback).Run(BuildErrorResult(tool_name, error));
-      return;
-    }
     std::string draft_id;
     if (tool_name == "mail_update_draft") {
       draft_id = GetStringArgument(arguments, "draft_id");
@@ -409,17 +387,14 @@ void MahoBrowserToolExecutor::ExecuteMailTool(
         weak_factory_.GetWeakPtr(), tool_name, std::nullopt,
         std::move(callback));
     if (tool_name == "mail_send") {
-      delegate->MailSendEmail(*request_json, /*already_authorized=*/true,
-                              std::move(write_completion));
+      delegate->MailSendEmail(*request_json, std::move(write_completion));
       return;
     }
     if (tool_name == "mail_save_draft") {
-      delegate->MailSaveDraft(*request_json, /*already_authorized=*/true,
-                              std::move(write_completion));
+      delegate->MailSaveDraft(*request_json, std::move(write_completion));
       return;
     }
     delegate->MailUpdateDraft(draft_id, *request_json,
-                              /*already_authorized=*/true,
                               std::move(write_completion));
     return;
   }
@@ -505,29 +480,6 @@ MahoBrowserToolExecutor::GetMailAuthorizationContext() const {
     context.helper_generation = service->generation();
   }
   return context;
-}
-
-bool MahoBrowserToolExecutor::ApproveMailWrite(const std::string& tool_name,
-                                               std::string* error) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!action_approval_callback_) {
-    *error =
-        "Mail write requires approval authorization, which is unavailable.";
-    return false;
-  }
-  BrowserActionAuthorization metadata;
-  metadata.tool_name = tool_name;
-  metadata.kind = "mail";
-  metadata.sensitivity = "high";
-  metadata.requires_approval = true;
-  BrowserActionApprovalDecision decision =
-      action_approval_callback_.Run(metadata);
-  if (!decision.approved) {
-    *error = decision.error.empty() ? "Mail write approval was denied."
-                                    : decision.error;
-    return false;
-  }
-  return true;
 }
 
 // static
@@ -745,10 +697,6 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
     base::DictValue result = BuildBrowserActionErrorResult(
         std::string(contract.tool_name), kActionDeniedError,
         authorization_error);
-    if (authorization_error == maho::ai::kCredentialTypingApprovalRequired ||
-        authorization_error == maho::ai::kCredentialTypingDenied) {
-      result.Set("reason_code", authorization_error);
-    }
     AttachFallbackDecision(result, fallback_decision);
     std::move(callback).Run(std::move(result));
     return;
@@ -975,19 +923,8 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
     action_result = maho::MahoMcpBrowserActionHandler::HandleClick(
         delegate, browser_action_refs_, tab_id, &arguments);
   } else if (tool_name == "browser_type") {
-    // allow_credentials requests crossing the credential-typing boundary; it
-    // is not itself proof of approval. Paths without an in-process Agent
-    // approval callback have already passed the native credential gate, so the
-    // request may reach the trusted field classifier. The in-browser Agent is
-    // the production caller that supplies action_approval_callback_; keep its
-    // existing Vault-only credential boundary by stripping generic credential
-    // typing there. Vault fill controls remain the only Agent credential path.
-    base::DictValue type_arguments = arguments.Clone();
-    if (action_approval_callback_) {
-      type_arguments.Remove("allow_credentials");
-    }
     action_result = maho::MahoMcpBrowserActionHandler::HandleType(
-        delegate, browser_action_refs_, tab_id, &type_arguments);
+        delegate, browser_action_refs_, tab_id, &arguments);
   } else if (tool_name == "browser_select") {
     action_result = maho::MahoMcpBrowserActionHandler::HandleSelect(
         delegate, browser_action_refs_, tab_id, &arguments);
@@ -1154,21 +1091,6 @@ void MahoBrowserToolExecutor::ExecuteScreenshotProof(
         tool_name, kActionDeniedError,
         "Capability policy denied action: " + std::string(evaluation.message)));
     return;
-  }
-
-  // A broker-mandated approval ask (guard-tier file ask, final-confirm gate)
-  // must not be silently dropped: screenshot proof has no contract-level
-  // approval handshake, so the ask routes through the action approval
-  // callback and fails closed when none is wired.
-  if (evaluation.RequiresApproval()) {
-    std::string ask_error;
-    if (!RunBrokerApprovalAsk(tool_name, /*kind=*/"capture",
-                              /*sensitivity=*/"sensitive", *active_origin,
-                              &ask_error)) {
-      std::move(callback).Run(BuildBrowserActionErrorResult(
-          tool_name, kActionDeniedError, ask_error));
-      return;
-    }
   }
 
   // Lease acquisition
@@ -1660,7 +1582,6 @@ bool MahoBrowserToolExecutor::AuthorizeBrowserAction(
     return false;
   }
 
-  std::string destination_origin;
   if (contract.domain_policy ==
       maho::ai::BrowserActionDomainPolicy::kActiveTabOriginOrApprovedDestination) {
     const std::string* url_str = arguments.FindString("url");
@@ -1669,117 +1590,14 @@ bool MahoBrowserToolExecutor::AuthorizeBrowserAction(
       return false;
     }
     GURL destination_url(*url_str);
-    std::optional<std::string> maybe_destination = OriginString(destination_url);
-    if (!maybe_destination.has_value() ||
+    if (!OriginString(destination_url).has_value() ||
         IsBlockedNavigationScheme(destination_url)) {
       error = "Navigation blocked: destination origin is not permitted.";
       return false;
     }
-    destination_origin = *maybe_destination;
-  }
-
-  // Credential typing crosses the Vault boundary on its own axis. Driving the
-  // browser needs no approval, so browser_type carries no contract ask any
-  // more; a request to type into a credential field must still authorize, and
-  // therefore opens this handshake by itself rather than riding on a
-  // contract-level approval. Broker-mandated asks (runtime tier file ask,
-  // final-confirm gate) surface through the same typed-approval handshake as
-  // contract-required tools; tools that ask for more than one reason still
-  // prompt exactly once.
-  const bool credential_typing_requested =
-      contract.tool_name == "browser_type" &&
-      arguments.FindBool("allow_credentials").value_or(false);
-  const auto credential_authorization =
-      maho::ai::AuthorizeCredentialTyping(credential_typing_requested);
-
-  if (credential_typing_requested || evaluation.RequiresApproval() ||
-      maho::ai::RequiresApproval(contract)) {
-    if (!action_approval_callback_) {
-      if (credential_authorization.action ==
-          maho::ai::CredentialTypingAuthorizationAction::kRequireApproval) {
-        maho::MahoMcpTargetResolution resolution =
-            delegate->ResolveTabTarget(tab_id);
-        if (!resolution.target.valid) {
-          error = std::string(maho::ai::kCredentialTypingApprovalRequired);
-          return false;
-        }
-        if (!delegate->ConfirmCredentialTypingApproval(contract.tool_name,
-                                                        resolution.target)) {
-          error = std::string(maho::ai::kCredentialTypingDenied);
-          return false;
-        }
-      } else {
-        error = "Browser action requires typed approval authorization.";
-        return false;
-      }
-    } else {
-      BrowserActionAuthorization metadata;
-      metadata.tool_name = std::string(contract.tool_name);
-      metadata.kind =
-          credential_typing_requested
-              ? "credential_typing"
-              : std::string(maho::ai::BrowserActionKindName(contract.kind));
-      metadata.sensitivity =
-          credential_typing_requested
-              ? "credential"
-              : std::string(maho::ai::BrowserActionSensitivityName(
-                    contract.sensitivity));
-      metadata.requires_approval = true;
-      metadata.requires_lease = maho::ai::RequiresLease(contract);
-      metadata.domain_policy = std::string(
-          maho::ai::BrowserActionDomainPolicyName(contract.domain_policy));
-      metadata.empty_allowlist_policy = std::string(
-          maho::ai::BrowserActionEmptyAllowlistPolicyName(
-              contract.empty_allowlist_policy));
-      metadata.active_origin = *active_origin;
-      metadata.destination_origin = std::move(destination_origin);
-      metadata.page_derived_justification =
-          arguments.FindBool("page_derived_justification")
-              .value_or(arguments.FindBool("pageDerivedJustification")
-                            .value_or(false));
-
-      BrowserActionApprovalDecision approval_decision =
-          action_approval_callback_.Run(metadata);
-      if (!approval_decision.approved) {
-        error = credential_typing_requested
-                    ? std::string(maho::ai::kCredentialTypingDenied)
-                    : (approval_decision.error.empty()
-                           ? "Browser action approval was denied."
-                           : std::move(approval_decision.error));
-        return false;
-      }
-    }
   }
 
   if (!EnsureBrowserActionLease(contract, tab_id, error)) {
-    return false;
-  }
-  return true;
-}
-
-bool MahoBrowserToolExecutor::RunBrokerApprovalAsk(
-    const std::string& tool_name,
-    const std::string& kind,
-    const std::string& sensitivity,
-    const std::string& active_origin,
-    std::string* error) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!action_approval_callback_) {
-    *error = "Broker policy requires approval for " + tool_name +
-             ", but no approval authorization is wired.";
-    return false;
-  }
-  BrowserActionAuthorization metadata;
-  metadata.tool_name = tool_name;
-  metadata.kind = kind;
-  metadata.sensitivity = sensitivity;
-  metadata.requires_approval = true;
-  metadata.active_origin = active_origin;
-  BrowserActionApprovalDecision decision =
-      action_approval_callback_.Run(metadata);
-  if (!decision.approved) {
-    *error = decision.error.empty() ? "Broker-mandated approval was denied."
-                                    : std::move(decision.error);
     return false;
   }
   return true;

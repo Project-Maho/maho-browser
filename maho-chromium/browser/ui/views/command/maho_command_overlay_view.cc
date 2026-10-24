@@ -1230,8 +1230,7 @@ void MahoCommandOverlayView::UpdateResultViews(
         const auto& stored = model_->results();
         const int stored_size = static_cast<int>(stored.size());
         for (size_t i = 0; i < stored.size(); ++i) {
-          const bool is_ask_row =
-              i == 0 && palette_action_ == PaletteAction::kAskMaho;
+          const bool is_ask_row = i == 0 && HasAskMahoQuery();
           CommandSuggestion presented_suggestion = stored[i];
           if (is_ask_row) {
             presented_suggestion.title =
@@ -1305,8 +1304,7 @@ void MahoCommandOverlayView::UpdateResultViews(
 
   const int results_size = static_cast<int>(results.size());
   for (size_t i = 0; i < results.size(); ++i) {
-    const bool is_ask_row =
-        i == 0 && palette_action_ == PaletteAction::kAskMaho;
+    const bool is_ask_row = i == 0 && HasAskMahoQuery();
     CommandSuggestion presented_suggestion = results[i];
     if (is_ask_row) {
       presented_suggestion.title = base::UTF16ToUTF8(textfield_->GetText());
@@ -1459,10 +1457,19 @@ void MahoCommandOverlayView::RecordSuggestionUsage(
   }
 }
 
+bool MahoCommandOverlayView::HasAskMahoQuery() const {
+  if (palette_action_ != PaletteAction::kAskMaho || !textfield_) {
+    return false;
+  }
+  return !base::TrimWhitespace(textfield_->GetText(), base::TRIM_ALL).empty();
+}
+
 void MahoCommandOverlayView::ActivateSelected() {
   DCHECK(browser_);
 
-  if (palette_action_ == PaletteAction::kAskMaho) {
+  // With nothing typed there is no question to ask; the selected row (e.g. a
+  // recent search) activates normally instead of a silent empty submission.
+  if (HasAskMahoQuery()) {
     std::string query = base::UTF16ToUTF8(textfield_->GetText());
     Browser* browser = browser_;
     if (MahoCommandActionHandler::OnQuerySubmitted(

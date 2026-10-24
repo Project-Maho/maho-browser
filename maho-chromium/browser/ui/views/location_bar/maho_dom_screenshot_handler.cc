@@ -20,11 +20,11 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/share/share_attempt.h"
+#include "chrome/browser/image_editor/screenshot_flow.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
-#include "chrome/browser/ui/sharing_hub/sharing_hub_bubble_controller.h"
+#include "chrome/browser/ui/sharing_hub/screenshot/screenshot_captured_bubble_controller.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_manager.h"
@@ -355,39 +355,6 @@ void MahoDomScreenshotHandler::ShowResultBubble(
                      weak_factory_.GetWeakPtr()),
   });
 
-  constexpr bool edit_enabled = true;
-  menu.rows.push_back({
-      u"Edit", &maho_lucide_icons::kPencilLineIcon, edit_enabled, false,
-      edit_enabled
-          ? base::BindOnce(&MahoDomScreenshotHandler::OnEditClicked,
-                           weak_factory_.GetWeakPtr())
-          : base::OnceClosure(),
-  });
-
-#if BUILDFLAG(IS_MAC)
-  constexpr bool imessage_enabled = true;
-#else
-  const bool imessage_enabled = false;
-#endif
-  menu.rows.push_back({
-      u"Send via iMessage...", &maho_lucide_icons::kMessageSquareIcon, imessage_enabled, false,
-      imessage_enabled
-          ? base::BindOnce(
-                &MahoDomScreenshotHandler::OnSendViaIMessageClicked,
-                weak_factory_.GetWeakPtr())
-          : base::OnceClosure(),
-  });
-
-  constexpr bool save_to_library_enabled = true;
-  menu.rows.push_back({
-      u"Save to Library", &maho_lucide_icons::kArrowDownToLineIcon, save_to_library_enabled,
-      false,
-      save_to_library_enabled
-          ? base::BindOnce(&MahoDomScreenshotHandler::OnSaveToLibraryClicked,
-                           weak_factory_.GetWeakPtr())
-          : base::OnceClosure(),
-  });
-
   menu.dismiss_callback = base::BindOnce(
       &MahoDomScreenshotHandler::OnBubbleDismissed,
       weak_factory_.GetWeakPtr());
@@ -474,14 +441,21 @@ void MahoDomScreenshotHandler::OnSendToClicked() {
   }
   BrowserWindowInterface* browser =
       GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(wc);
-  if (!browser) {
+  if (!browser || captured_image_.IsEmpty()) {
     Finish();
     return;
   }
-  sharing_hub::SharingHubBubbleController* controller =
-      sharing_hub::SharingHubBubbleController::CreateOrGetFromWebContents(wc);
+  // Share the captured image itself, not the page URL: hand it to the
+  // screenshot sharing bubble (share / edit / download for this image).
+  sharing_hub::ScreenshotCapturedBubbleController* controller =
+      sharing_hub::ScreenshotCapturedBubbleController::Get(wc);
   if (controller) {
-    controller->ShowBubble(share::ShareAttempt(wc));
+    image_editor::ScreenshotCaptureResult capture_result;
+    capture_result.result_code =
+        image_editor::ScreenshotCaptureResultCode::SUCCESS;
+    capture_result.image = captured_image_;
+    capture_result.screen_bounds = capture_anchor_screen_.value_or(gfx::Rect());
+    controller->ShowBubble(capture_result);
   }
   Finish();
 }
@@ -494,18 +468,6 @@ void MahoDomScreenshotHandler::OnRetakeClicked() {
         base::BindOnce(&MahoDomScreenshotHandler::TriggerCapture, wc));
   }
   Finish();
-}
-
-void MahoDomScreenshotHandler::OnEditClicked() {
-  Finish();
-}
-
-void MahoDomScreenshotHandler::OnSendViaIMessageClicked() {
-  Finish();
-}
-
-void MahoDomScreenshotHandler::OnSaveToLibraryClicked() {
-  OnDownloadClicked();
 }
 
 void MahoDomScreenshotHandler::AgentHostClosed(
@@ -524,6 +486,7 @@ void MahoDomScreenshotHandler::Finish() {
   if (finished_) {
     return;
   }
+  RemovePageOverlay();
   Observe(nullptr);
   finished_ = true;
   capture_anchor_screen_.reset();
@@ -536,6 +499,26 @@ void MahoDomScreenshotHandler::Finish() {
   }
   result_bubble_widget_ = nullptr;
   delete this;
+}
+
+void MahoDomScreenshotHandler::RemovePageOverlay() {
+  // The selection overlay lives in the page, not in this object. Tear it down
+  // on every exit (timeout, failure, dismissal) so an abandoned session never
+  // leaves an interactive overlay behind or blocks the next capture. The page
+  // side ignores the call when |session_token_| is no longer the live session.
+  content::WebContents* wc = web_contents();
+  if (!wc || wc->IsBeingDestroyed() || session_token_.empty()) {
+    return;
+  }
+  content::RenderFrameHost* rfh = wc->GetPrimaryMainFrame();
+  if (!rfh || !rfh->IsRenderFrameLive()) {
+    return;
+  }
+  rfh->ExecuteJavaScriptInIsolatedWorld(
+      base::UTF8ToUTF16("window.__mahoDomScreenshotCleanup&&"
+                        "window.__mahoDomScreenshotCleanup('" +
+                        session_token_ + "');"),
+      base::DoNothing(), kIsolatedWorldIdForDomScreenshot);
 }
 
 void MahoDomScreenshotHandler::DidFinishNavigation(

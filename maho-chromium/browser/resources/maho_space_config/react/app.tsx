@@ -156,6 +156,11 @@ function SpaceConfigApp(
     if (saving) {
       return;
     }
+    if (!spaceName) {
+      setSaveError('Enter a name for this Space.');
+      nameInputRef.current?.focus();
+      return;
+    }
 
     setSaving(true);
     setSaveError('');
@@ -169,7 +174,7 @@ function SpaceConfigApp(
 
       const promises: Array<Promise<{success: boolean}>> = [];
 
-      if (nameChanged && spaceName) {
+      if (nameChanged) {
         promises.push(handler.updateName(spaceName));
       }
 
@@ -343,7 +348,7 @@ function SpaceConfigApp(
           </Button>
           <Button
             className="h-10 flex-1 rounded-lg text-sm font-semibold"
-            disabled={saving}
+            disabled={saving || !spaceName}
             type="button"
             onClick={() => {
               void handleSave();

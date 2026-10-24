@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useId, useState} from 'react';
 import {Button} from '@ui/button';
 import {Input} from '@ui/input';
 import {User, Database, Code, X, Check, Settings} from '@icons/lucide';
@@ -9,17 +9,27 @@ export function SlashEditors({store}: {store: MahoAiStore}) {
   const state = useAppState(store);
   const {activeSlashEditor, activeWorkspace} = state;
 
-  if (!activeSlashEditor || !activeWorkspace) {
+  if (!activeSlashEditor) {
     return null;
   }
 
   const handleClose = () => {
     store.setActiveSlashEditor(null);
   };
+  // Agent profiles are global; MCP servers and CLI tools belong to a workspace.
+  const needsWorkspace = activeSlashEditor === 'mcp-add' || activeSlashEditor === 'cli-add';
 
   return (
-    <div className="mx-3 my-2 p-4 rounded-2xl glass relative animate-in fade-in zoom-in-95 duration-200">
+    <div
+      className="mx-3 my-2 p-4 rounded-2xl glass relative animate-in fade-in zoom-in-95 duration-200"
+      onKeyDown={event => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          handleClose();
+        }
+      }}>
       <Button
+        aria-label="Close"
         variant="ghost"
         size="icon"
         onClick={handleClose}
@@ -31,10 +41,15 @@ export function SlashEditors({store}: {store: MahoAiStore}) {
       {activeSlashEditor === 'agent-new' && (
         <AgentNewForm store={store} onClose={handleClose} />
       )}
-      {activeSlashEditor === 'mcp-add' && (
+      {needsWorkspace && !activeWorkspace ? (
+        <p className="pr-6 text-xs text-muted-foreground" role="status">
+          No workspace is loaded yet. Close this panel and try again in a moment.
+        </p>
+      ) : null}
+      {activeSlashEditor === 'mcp-add' && activeWorkspace && (
         <McpAddForm store={store} workspaceId={activeWorkspace.id} onClose={handleClose} />
       )}
-      {activeSlashEditor === 'cli-add' && (
+      {activeSlashEditor === 'cli-add' && activeWorkspace && (
         <CliAddForm store={store} workspaceId={activeWorkspace.id} onClose={handleClose} />
       )}
     </div>
@@ -42,6 +57,7 @@ export function SlashEditors({store}: {store: MahoAiStore}) {
 }
 
 function AgentNewForm({store, onClose}: {store: MahoAiStore; onClose: () => void}) {
+  const fieldId = useId();
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState('');
@@ -74,8 +90,9 @@ function AgentNewForm({store, onClose}: {store: MahoAiStore; onClose: () => void
         <span>Create AI Agent Profile</span>
       </div>
       <div className="flex flex-col gap-1.5">
-        <label className="text-[10px] font-medium text-muted-foreground">Profile Name</label>
+        <label htmlFor={`${fieldId}-1`} className="text-[10px] font-medium text-muted-foreground">Profile Name</label>
         <Input
+          id={`${fieldId}-1`}
           placeholder="e.g. Code Reviewer"
           value={name}
           onChange={e => setName(e.target.value)}
@@ -84,8 +101,9 @@ function AgentNewForm({store, onClose}: {store: MahoAiStore; onClose: () => void
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <label className="text-[10px] font-medium text-muted-foreground">System Instruction Prompt</label>
+        <label htmlFor={`${fieldId}-2`} className="text-[10px] font-medium text-muted-foreground">System Instruction Prompt</label>
         <textarea
+          id={`${fieldId}-2`}
           placeholder="You are an expert developer..."
           value={prompt}
           onChange={e => setPrompt(e.target.value)}
@@ -93,8 +111,9 @@ function AgentNewForm({store, onClose}: {store: MahoAiStore; onClose: () => void
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <label className="text-[10px] font-medium text-muted-foreground">Preferred Model (Optional)</label>
+        <label htmlFor={`${fieldId}-3`} className="text-[10px] font-medium text-muted-foreground">Preferred Model (Optional)</label>
         <Input
+          id={`${fieldId}-3`}
           placeholder="gemini-2.5-pro"
           value={model}
           onChange={e => setModel(e.target.value)}
@@ -123,6 +142,7 @@ function McpAddForm({
   workspaceId: string;
   onClose: () => void;
 }) {
+  const fieldId = useId();
   const [name, setName] = useState('');
   const [transport, setTransport] = useState<'stdio' | 'http'>('stdio');
   const [command, setCommand] = useState('');
@@ -168,8 +188,9 @@ function McpAddForm({
         <span>Add MCP Client Server</span>
       </div>
       <div className="flex flex-col gap-1.5">
-        <label className="text-[10px] font-medium text-muted-foreground">Server Name</label>
+        <label htmlFor={`${fieldId}-1`} className="text-[10px] font-medium text-muted-foreground">Server Name</label>
         <Input
+          id={`${fieldId}-1`}
           placeholder="e.g. filesystem"
           value={name}
           onChange={e => setName(e.target.value)}
@@ -178,8 +199,8 @@ function McpAddForm({
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <label className="text-[10px] font-medium text-muted-foreground">Transport Protocol</label>
-        <div className="flex gap-2">
+        <span id={`${fieldId}-2`} className="text-[10px] font-medium text-muted-foreground">Transport Protocol</span>
+        <div aria-labelledby={`${fieldId}-2`} className="flex gap-2" role="group">
           <Button
             type="button"
             variant={transport === 'stdio' ? 'default' : 'outline'}
@@ -202,8 +223,9 @@ function McpAddForm({
       </div>
       {transport === 'stdio' ? (
         <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] font-medium text-muted-foreground">Shell Command / JSON Array</label>
+          <label htmlFor={`${fieldId}-3`} className="text-[10px] font-medium text-muted-foreground">Shell Command / JSON Array</label>
           <Input
+            id={`${fieldId}-3`}
             placeholder='npx -y @modelcontextprotocol/server-filesystem /path'
             value={command}
             onChange={e => setCommand(e.target.value)}
@@ -213,8 +235,9 @@ function McpAddForm({
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] font-medium text-muted-foreground">SSE Server URL</label>
+          <label htmlFor={`${fieldId}-4`} className="text-[10px] font-medium text-muted-foreground">SSE Server URL</label>
           <Input
+            id={`${fieldId}-4`}
             placeholder="http://localhost:3001/sse"
             value={url}
             onChange={e => setUrl(e.target.value)}
@@ -224,8 +247,9 @@ function McpAddForm({
         </div>
       )}
       <div className="flex flex-col gap-1.5">
-        <label className="text-[10px] font-medium text-muted-foreground">Auth Keychain ID (Optional)</label>
+        <label htmlFor={`${fieldId}-5`} className="text-[10px] font-medium text-muted-foreground">Auth Keychain ID (Optional)</label>
         <Input
+          id={`${fieldId}-5`}
           placeholder="e.g. github_token"
           value={authKeychainId}
           onChange={e => setAuthKeychainId(e.target.value)}
@@ -254,6 +278,7 @@ function CliAddForm({
   workspaceId: string;
   onClose: () => void;
 }) {
+  const fieldId = useId();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [commandTemplate, setCommandTemplate] = useState('');
@@ -301,8 +326,9 @@ function CliAddForm({
         <span>Add CLI Tool</span>
       </div>
       <div className="flex flex-col gap-1.5">
-        <label className="text-[10px] font-medium text-muted-foreground">Tool Name</label>
+        <label htmlFor={`${fieldId}-1`} className="text-[10px] font-medium text-muted-foreground">Tool Name</label>
         <Input
+          id={`${fieldId}-1`}
           placeholder="e.g. git_diff"
           value={name}
           onChange={e => setName(e.target.value)}
@@ -311,8 +337,9 @@ function CliAddForm({
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <label className="text-[10px] font-medium text-muted-foreground">Description (for LLM discovery)</label>
+        <label htmlFor={`${fieldId}-2`} className="text-[10px] font-medium text-muted-foreground">Description (for LLM discovery)</label>
         <Input
+          id={`${fieldId}-2`}
           placeholder="Retrieve git diff in the current workspace"
           value={description}
           onChange={e => setDescription(e.target.value)}
@@ -321,8 +348,9 @@ function CliAddForm({
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <label className="text-[10px] font-medium text-muted-foreground">Command Template</label>
+        <label htmlFor={`${fieldId}-3`} className="text-[10px] font-medium text-muted-foreground">Command Template</label>
         <Input
+          id={`${fieldId}-3`}
           placeholder="git diff HEAD"
           value={commandTemplate}
           onChange={e => setCommandTemplate(e.target.value)}
@@ -331,8 +359,9 @@ function CliAddForm({
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <label className="text-[10px] font-medium text-muted-foreground">Working Directory (Optional)</label>
+        <label htmlFor={`${fieldId}-4`} className="text-[10px] font-medium text-muted-foreground">Working Directory (Optional)</label>
         <Input
+          id={`${fieldId}-4`}
           placeholder="/Users/example/project"
           value={workingDir}
           onChange={e => setWorkingDir(e.target.value)}

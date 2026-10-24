@@ -27,40 +27,15 @@
 
 namespace {
 
-using Authorization = MahoBrowserToolExecutor::BrowserActionAuthorization;
-using ApprovalDecision = MahoBrowserToolExecutor::BrowserActionApprovalDecision;
-
-ApprovalDecision ApproveAction(const Authorization&) {
-  ApprovalDecision decision;
-  decision.approved = true;
-  return decision;
-}
-
 class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
  public:
   maho::ai::MailAuthorizationContext mail_authorization_context{
       true, true, false, true, maho::ai::MailGlobalPolicy::kPrompt, 1};
-  int mail_approval_count = 0;
-  int credential_typing_approval_count = 0;
-  bool credential_typing_approval_result = true;
   bool defer_mail_reads = false;
   MailReadCallback pending_mail_read;
 
   maho::ai::MailAuthorizationContext GetMailAuthorizationContext() override {
     return mail_authorization_context;
-  }
-
-  bool ConfirmMailToolApproval(std::string_view,
-                               std::string_view) override {
-    ++mail_approval_count;
-    return true;
-  }
-
-  bool ConfirmCredentialTypingApproval(
-      std::string_view,
-      const maho::ResolvedMahoMcpTarget&) override {
-    ++credential_typing_approval_count;
-    return credential_typing_approval_result;
   }
 
   int active_tab_id = 7;
@@ -353,34 +328,27 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
   int mail_update_draft_count = 0;
   std::string last_write_request_json;
   std::string last_update_draft_id;
-  bool last_write_already_authorized = false;
 
   void MailSendEmail(const std::string& request_json,
-                     bool already_authorized,
                      MailReadCallback callback) override {
     ++mail_send_count;
     last_write_request_json = request_json;
-    last_write_already_authorized = already_authorized;
     std::move(callback).Run(true, R"({"queued":true})");
   }
 
   void MailSaveDraft(const std::string& request_json,
-                     bool already_authorized,
                      MailReadCallback callback) override {
     ++mail_save_draft_count;
     last_write_request_json = request_json;
-    last_write_already_authorized = already_authorized;
     std::move(callback).Run(true, R"({"draft_id":"d1"})");
   }
 
   void MailUpdateDraft(const std::string& draft_id,
                        const std::string& request_json,
-                       bool already_authorized,
                        MailReadCallback callback) override {
     ++mail_update_draft_count;
     last_update_draft_id = draft_id;
     last_write_request_json = request_json;
-    last_write_already_authorized = already_authorized;
     std::move(callback).Run(true, R"({"updated":true})");
   }
 
@@ -413,8 +381,6 @@ class MahoBrowserToolExecutorTest : public testing::Test {
   }
 
   MahoBrowserToolExecutor MakeExecutor(
-      MahoBrowserToolExecutor::BrowserActionApprovalCallback approval_callback =
-          MahoBrowserToolExecutor::BrowserActionApprovalCallback(),
       maho::MahoMcpLeaseRegistry* lease_registry = nullptr,
       std::string lease_holder_id = "agent-session",
       const MahoAiRuntimeConfig* runtime_config = nullptr) {
@@ -423,7 +389,7 @@ class MahoBrowserToolExecutorTest : public testing::Test {
     }
     return MahoBrowserToolExecutor(
         nullptr, true, base::BindRepeating([] { return true; }),
-        std::move(approval_callback), &delegate_, lease_registry,
+        &delegate_, lease_registry,
         std::move(lease_holder_id), runtime_config);
   }
 
@@ -517,8 +483,8 @@ TEST_F(MahoBrowserToolExecutorTest, LeaseRequiredActionWithoutTabIdFailsClosed) 
 }
 
 // Driving the browser needs no approval authorization at all: a sensitive
-// in-browser action runs with no approval callback wired. Only an action that
-// leaves the browser still fails closed when authorization is missing.
+// in-browser action runs with no approval callback wired, and so does an action
+// that leaves the browser (file upload).
 TEST_F(MahoBrowserToolExecutorTest, SensitiveActionRunsWithoutAuthorization) {
   auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
@@ -535,20 +501,16 @@ TEST_F(MahoBrowserToolExecutorTest, SensitiveActionRunsWithoutAuthorization) {
   base::DictValue upload_result = Execute(
       executor, "browser_file_upload_select", std::move(upload_arguments));
 
-  EXPECT_FALSE(upload_result.FindBool("ok").value_or(true));
-  EXPECT_EQ(upload_result.FindInt("error_code").value_or(0), -32008);
+  EXPECT_TRUE(upload_result.FindBool("ok").value_or(false))
+      << upload_result.DebugString();
 }
 
-// The denial path keeps its invariants where the ask still exists: nothing is
-// dispatched and no lease is taken on the way out.
-TEST_F(MahoBrowserToolExecutorTest, ApprovalDenialBlocksLeaseAndDispatch) {
-  auto executor = MakeExecutor(base::BindRepeating(
-      [](const Authorization& metadata) {
-        ApprovalDecision decision;
-        decision.error = "denied by test approval";
-        return decision;
-      }));
+// A stale target still fails closed before dispatch, and no lease is taken on
+// the way out.
+TEST_F(MahoBrowserToolExecutorTest, StaleTargetBlocksLeaseAndDispatch) {
+  auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
+  delegate_.advance_generation_on_revalidate = true;
 
   base::DictValue arguments;
   arguments.Set("ref", 1);
@@ -556,10 +518,8 @@ TEST_F(MahoBrowserToolExecutorTest, ApprovalDenialBlocksLeaseAndDispatch) {
       Execute(executor, "browser_file_upload_select", std::move(arguments));
 
   EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_NE(result.FindString("error")->find("denied by test approval"),
-            std::string::npos);
   EXPECT_FALSE(lease_registry_.IsHeldBy(7, "agent-session"));
-  EXPECT_EQ(delegate_.click_count, 0);
+  EXPECT_EQ(delegate_.file_input_count, 0);
 }
 
 TEST_F(MahoBrowserToolExecutorTest,
@@ -581,7 +541,7 @@ TEST_F(MahoBrowserToolExecutorTest,
 }
 
 TEST_F(MahoBrowserToolExecutorTest, ApprovedClickDispatchesViaMcpHandler) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
 
   base::DictValue arguments;
@@ -599,7 +559,7 @@ TEST_F(MahoBrowserToolExecutorTest, ExternalLeaseContentionForceSteals) {
   auto external_lease = lease_registry_.Acquire(
       7, "external-session", base::Seconds(60), false);
   ASSERT_TRUE(external_lease.ok);
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
 
   base::DictValue arguments;
@@ -613,8 +573,7 @@ TEST_F(MahoBrowserToolExecutorTest, ExternalLeaseContentionForceSteals) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, LeaseRequiredActionFailsWithoutLeaseHolder) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction),
-                               &lease_registry_, std::string());
+  auto executor = MakeExecutor(&lease_registry_, std::string());
   PopulateRef(executor, 1, 101);
 
   base::DictValue arguments;
@@ -628,7 +587,7 @@ TEST_F(MahoBrowserToolExecutorTest, LeaseRequiredActionFailsWithoutLeaseHolder) 
 }
 
 TEST_F(MahoBrowserToolExecutorTest, UnknownRefUsesMcpCompatibleError) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
 
   base::DictValue arguments;
@@ -646,7 +605,7 @@ class MahoBrowserToolExecutorFallbackTest
 
 TEST_F(MahoBrowserToolExecutorFallbackTest,
        DirectRefActionRequiresAccessibilitySnapshotState) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   delegate_.snapshot_refs[1] = 101;
 
   base::DictValue arguments;
@@ -667,7 +626,7 @@ TEST_F(MahoBrowserToolExecutorFallbackTest,
 
 TEST_F(MahoBrowserToolExecutorFallbackTest,
        SnapshotSelectedTierStillRunsApprovalAndLease) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
 
   base::DictValue arguments;
@@ -686,7 +645,7 @@ TEST_F(MahoBrowserToolExecutorFallbackTest,
 
 TEST_F(MahoBrowserToolExecutorFallbackTest,
        ScreenshotCuaRequiresExplicitApprovalBeforeDispatch) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
 
   base::DictValue arguments;
@@ -707,19 +666,12 @@ TEST_F(MahoBrowserToolExecutorFallbackTest,
   EXPECT_EQ(delegate_.click_count, 0);
 }
 
-// A denied approval cannot veto ordinary browser driving: the snapshot tier
-// still dispatches, because clicking never asks in the first place. The tier
-// that genuinely leaves the browser — screenshot_cua, which drives OS-level
-// input — stays refused either way, which is what the denial invariant is
-// actually protecting.
+// Nothing can veto browser driving through an approval callback: clicking and
+// its fallback tiers never ask. The screenshot_cua tier still fails closed for
+// its own structural reason (no screenshot-CUA path is wired here).
 TEST_F(MahoBrowserToolExecutorFallbackTest,
-       ApprovalDenialOnlyBlocksTheEscalatedFallbackTier) {
-  auto executor = MakeExecutor(base::BindRepeating(
-      [](const Authorization& metadata) {
-        ApprovalDecision decision;
-        decision.error = "fallback selected tier denied";
-        return decision;
-      }));
+       NoApprovalCallbackCanVetoTheFallbackTier) {
+  auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
 
   base::DictValue arguments;
@@ -745,7 +697,7 @@ TEST_F(MahoBrowserToolExecutorFallbackTest,
 }
 
 TEST_F(MahoBrowserToolExecutorTest, CredentialFieldRejectsWithoutTextEcho) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 2, 202);
   maho::MahoMcpFieldMetadata metadata;
   metadata.classified = true;
@@ -763,19 +715,8 @@ TEST_F(MahoBrowserToolExecutorTest, CredentialFieldRejectsWithoutTextEcho) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest,
-       CredentialFieldRemainsVaultOnlyAfterExistingAgentApprovalWithoutSecondPrompt) {
-  int agent_approval_count = 0;
-  auto executor = MakeExecutor(base::BindRepeating(
-      [](int* approval_count, const Authorization& metadata) {
-        ++*approval_count;
-        EXPECT_EQ(metadata.kind, "credential_typing");
-        EXPECT_EQ(metadata.sensitivity, "credential");
-        EXPECT_TRUE(metadata.requires_approval);
-        ApprovalDecision decision;
-        decision.approved = true;
-        return decision;
-      },
-      &agent_approval_count));
+       CredentialFieldTypesAfterExistingAgentApprovalWithoutSecondPrompt) {
+  auto executor = MakeExecutor();
   PopulateRef(executor, 2, 202);
   maho::MahoMcpFieldMetadata metadata;
   metadata.classified = true;
@@ -788,39 +729,15 @@ TEST_F(MahoBrowserToolExecutorTest,
   arguments.Set("allow_credentials", true);
   base::DictValue result = Execute(executor, "browser_type", std::move(arguments));
 
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_EQ(agent_approval_count, 1);
-  EXPECT_EQ(delegate_.credential_typing_approval_count, 0);
-  EXPECT_EQ(delegate_.type_count, 0);
-  EXPECT_EQ(result.DebugString().find("S3NTINEL"), std::string::npos);
-}
-
-TEST_F(MahoBrowserToolExecutorTest,
-       CredentialFieldNativeApprovalAllowsCredentialTyping) {
-  auto executor = MakeExecutor();
-  PopulateRef(executor, 2, 202);
-  maho::MahoMcpFieldMetadata metadata;
-  metadata.classified = true;
-  metadata.is_protected = true;
-  delegate_.field_metadata[202] = metadata;
-
-  base::DictValue arguments;
-  arguments.Set("ref", 2);
-  arguments.Set("text", "S3NTINEL-native-approved-password");
-  arguments.Set("allow_credentials", true);
-  base::DictValue result = Execute(executor, "browser_type", std::move(arguments));
-
-  EXPECT_TRUE(result.FindBool("ok").value_or(false));
-  EXPECT_EQ(delegate_.credential_typing_approval_count, 1);
+  EXPECT_TRUE(result.FindBool("ok").value_or(false)) << result.DebugString();
   EXPECT_EQ(delegate_.type_count, 1);
   EXPECT_EQ(result.DebugString().find("S3NTINEL"), std::string::npos);
 }
 
 TEST_F(MahoBrowserToolExecutorTest,
-       CredentialFieldNativeApprovalDenialReturnsStableReason) {
+       CredentialFieldTypingNeedsNoApproval) {
   auto executor = MakeExecutor();
   PopulateRef(executor, 2, 202);
-  delegate_.credential_typing_approval_result = false;
   maho::MahoMcpFieldMetadata metadata;
   metadata.classified = true;
   metadata.is_protected = true;
@@ -828,32 +745,38 @@ TEST_F(MahoBrowserToolExecutorTest,
 
   base::DictValue arguments;
   arguments.Set("ref", 2);
-  arguments.Set("text", "S3NTINEL-native-denied-password");
+  arguments.Set("text", "S3NTINEL-typed-password");
   arguments.Set("allow_credentials", true);
   base::DictValue result = Execute(executor, "browser_type", std::move(arguments));
 
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_EQ(result.FindInt("error_code").value(), -32008);
-  EXPECT_EQ(*result.FindString("reason_code"),
-            maho::ai::kCredentialTypingDenied);
-  EXPECT_EQ(delegate_.credential_typing_approval_count, 1);
-  EXPECT_EQ(delegate_.type_count, 0);
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_EQ(delegate_.type_count, 1);
   EXPECT_EQ(result.DebugString().find("S3NTINEL"), std::string::npos);
 }
 
-TEST(CredentialTypingAuthorizationTest, StableApprovalRequiredContract) {
-  const auto requires_approval =
-      maho::ai::AuthorizeCredentialTyping(true);
-  EXPECT_EQ(requires_approval.action,
-            maho::ai::CredentialTypingAuthorizationAction::kRequireApproval);
-  EXPECT_EQ(requires_approval.reason_code,
-            maho::ai::kCredentialTypingApprovalRequired);
-  EXPECT_EQ(maho::ai::AuthorizeCredentialTyping(false).action,
-            maho::ai::CredentialTypingAuthorizationAction::kAllow);
+TEST_F(MahoBrowserToolExecutorTest, ProtectedFieldTypingNeverWaitsOnAUser) {
+  // There is no denial path any more: an allow_credentials request on a
+  // protected field types exactly like any other typing request.
+  auto executor = MakeExecutor();
+  PopulateRef(executor, 2, 202);
+  maho::MahoMcpFieldMetadata metadata;
+  metadata.classified = true;
+  metadata.is_protected = true;
+  delegate_.field_metadata[202] = metadata;
+
+  base::DictValue arguments;
+  arguments.Set("ref", 2);
+  arguments.Set("text", "S3NTINEL-protected-password");
+  arguments.Set("allow_credentials", true);
+  base::DictValue result = Execute(executor, "browser_type", std::move(arguments));
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_EQ(delegate_.type_count, 1);
+  EXPECT_EQ(result.DebugString().find("S3NTINEL"), std::string::npos);
 }
 
 TEST_F(MahoBrowserToolExecutorTest, InvalidDirectionAndKeyFailBeforeDispatch) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue scroll_arguments;
   scroll_arguments.Set("direction", "diagonal");
@@ -873,7 +796,7 @@ TEST_F(MahoBrowserToolExecutorTest, InvalidDirectionAndKeyFailBeforeDispatch) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, NavigateEmptyActiveOriginFailsClosed) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   delegate_.active_url = "about:blank";
 
   base::DictValue arguments;
@@ -887,42 +810,26 @@ TEST_F(MahoBrowserToolExecutorTest, NavigateEmptyActiveOriginFailsClosed) {
 }
 
 // Driving the browser is full access: navigating — cross-origin included —
-// dispatches without any approval ask. Neither the contract, nor the
-// controller identity, nor the user's final-confirm setting gates it; the
-// second half runs the identical call with final_confirm on to pin that.
+// dispatches under any runtime config, and there is no approval channel left to
+// consult at all.
 TEST_F(MahoBrowserToolExecutorTest,
        BrowserNavigationNeverAsksUnderAnyRuntimeConfig) {
   MahoAiRuntimeConfig final_confirm_off;
   final_confirm_off.final_confirm = false;
-  std::optional<Authorization> captured;
-  auto executor = MakeExecutor(
-      base::BindRepeating(
-          [](std::optional<Authorization>* out, const Authorization& metadata) {
-            *out = metadata;
-            return ApproveAction(metadata);
-          },
-          &captured),
-      nullptr, "agent-session", &final_confirm_off);
+  auto executor =
+      MakeExecutor(nullptr, "agent-session", &final_confirm_off);
 
   base::DictValue arguments;
   arguments.Set("url", "https://other.example/path");
   base::DictValue result = Execute(executor, "browser_navigate", std::move(arguments));
 
   EXPECT_TRUE(result.FindBool("ok").value_or(false));
-  EXPECT_FALSE(captured.has_value());
   EXPECT_EQ(delegate_.navigate_count, 1);
 
   MahoAiRuntimeConfig final_confirm_on;
   final_confirm_on.final_confirm = true;
-  std::optional<Authorization> confirmed;
-  auto confirming_executor = MakeExecutor(
-      base::BindRepeating(
-          [](std::optional<Authorization>* out, const Authorization& metadata) {
-            *out = metadata;
-            return ApproveAction(metadata);
-          },
-          &confirmed),
-      nullptr, "agent-session", &final_confirm_on);
+  auto confirming_executor =
+      MakeExecutor(nullptr, "agent-session", &final_confirm_on);
 
   base::DictValue confirmed_arguments;
   confirmed_arguments.Set("url", "https://other.example/path");
@@ -930,7 +837,6 @@ TEST_F(MahoBrowserToolExecutorTest,
       confirming_executor, "browser_navigate", std::move(confirmed_arguments));
 
   EXPECT_TRUE(confirmed_result.FindBool("ok").value_or(false));
-  EXPECT_FALSE(confirmed.has_value());
   EXPECT_EQ(delegate_.navigate_count, 2);
 }
 
@@ -1027,16 +933,10 @@ TEST_F(MahoBrowserToolExecutorTest, HistoryBackNeedsNoApprovalPrompt) {
   EXPECT_EQ(delegate_.go_back_count, 1);
 }
 
-// Leaving the browser still asks, and the ask carries typed metadata.
-TEST_F(MahoBrowserToolExecutorTest,
-       AuthorizationReceivesTypedMetadataForBoundaryAction) {
-  std::optional<Authorization> captured;
-  auto executor = MakeExecutor(base::BindRepeating(
-      [](std::optional<Authorization>* out, const Authorization& metadata) {
-        *out = metadata;
-        return ApproveAction(metadata);
-      },
-      &captured));
+// A file upload needs no approval either: it dispatches straight through to
+// the delegate with the resolved tab and path.
+TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectDispatchesWithoutAsking) {
+  auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
 
   base::DictValue arguments;
@@ -1045,14 +945,7 @@ TEST_F(MahoBrowserToolExecutorTest,
   base::DictValue result =
       Execute(executor, "browser_file_upload_select", std::move(arguments));
 
-  ASSERT_TRUE(captured.has_value()) << result.DebugString();
-  EXPECT_EQ(captured->tool_name, "browser_file_upload_select");
-  EXPECT_EQ(captured->kind, "action");
-  EXPECT_EQ(captured->sensitivity, "sensitive");
-  EXPECT_TRUE(captured->requires_approval);
-  EXPECT_TRUE(captured->requires_lease);
-  EXPECT_EQ(captured->active_origin, "https://example.com");
-  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_TRUE(result.FindBool("ok").value_or(false)) << result.DebugString();
   EXPECT_EQ(delegate_.file_upload_count, 1);
   EXPECT_EQ(delegate_.last_upload_path, "/tmp/maho-upload.png");
   EXPECT_EQ(delegate_.last_upload_tab_id, 7);
@@ -1060,7 +953,7 @@ TEST_F(MahoBrowserToolExecutorTest,
 }
 
 TEST_F(MahoBrowserToolExecutorTest, FileUploadFailsWhenDelegateRejects) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
   delegate_.upload_should_succeed = false;
 
@@ -1076,7 +969,7 @@ TEST_F(MahoBrowserToolExecutorTest, FileUploadFailsWhenDelegateRejects) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithSelectorRoutesToInputAsync) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue arguments;
   arguments.Set("path", "/tmp/document.pdf");
@@ -1094,7 +987,7 @@ TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithSelectorRoutesToInputAsy
 }
 
 TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithCssAliasRoutesToInputAsync) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue arguments;
   arguments.Set("path", "/tmp/avatar.png");
@@ -1112,7 +1005,7 @@ TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithCssAliasRoutesToInputAsy
 }
 
 TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithSelectorFailsWhenDelegateRejects) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   delegate_.file_input_should_succeed = false;
 
   base::DictValue arguments;
@@ -1129,7 +1022,7 @@ TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithSelectorFailsWhenDelegat
 }
 
 TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectInvalidSelectorParams) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue empty_selector;
   empty_selector.Set("path", "/tmp/file.txt");
@@ -1154,9 +1047,9 @@ TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectInvalidSelectorParams) {
   EXPECT_EQ(delegate_.file_input_count, 0);
 }
 
-TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithSelectorRequiresApproval) {
-  // File upload crosses the browser boundary to the filesystem, so direct
-  // selector inputs still enforce required typed approval.
+TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithSelectorDispatchesWithoutAsking) {
+  // File upload reaches the filesystem, but agent-driven control is full
+  // access: a direct selector input dispatches like any other action.
   auto executor = MakeExecutor();
 
   base::DictValue arguments;
@@ -1165,16 +1058,12 @@ TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithSelectorRequiresApproval
   base::DictValue result =
       Execute(executor, "browser_file_upload_select", std::move(arguments));
 
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_EQ(result.FindInt("error_code").value_or(0), -32008);
-  const std::string* error = result.FindString("error");
-  ASSERT_TRUE(error);
-  EXPECT_NE(error->find("typed approval"), std::string::npos);
-  EXPECT_EQ(delegate_.file_input_count, 0);
+  EXPECT_TRUE(result.FindBool("ok").value_or(false)) << result.DebugString();
+  EXPECT_EQ(delegate_.file_input_count, 1);
 }
 
 TEST_F(MahoBrowserToolExecutorTest, VaultToolIsNotDispatchable) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue result = Execute(executor, "vault_fill_credential");
 
@@ -1185,7 +1074,7 @@ TEST_F(MahoBrowserToolExecutorTest, VaultToolIsNotDispatchable) {
 
 TEST_F(MahoBrowserToolExecutorTest,
        MailListAccountsFailsClosedWithoutBrowser) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   delegate_.mail_authorization_context.feature_enabled = false;
 
   base::DictValue result = Execute(executor, "mail_list_accounts");
@@ -1214,10 +1103,10 @@ TEST_F(MahoBrowserToolExecutorTest, MailAuthorizationDecisionCoversExactToolTabl
                "mail_helper_unavailable", "mail_helper_unavailable"},
       GateCase{{true, true, false, false,
                 maho::ai::MailGlobalPolicy::kAllow, 1},
-               "mail_read_consent_required", "mail_typed_approval_required"},
+               "mail_read_allowed", "mail_write_allowed"},
       GateCase{{true, true, false, true,
                 maho::ai::MailGlobalPolicy::kPrompt, 1},
-               "mail_read_allowed", "mail_typed_approval_required"},
+               "mail_read_allowed", "mail_write_allowed"},
   };
   for (const GateCase& gate_case : gate_cases) {
     for (std::string_view tool : maho::ai::kMailReadTools) {
@@ -1241,7 +1130,7 @@ TEST_F(MahoBrowserToolExecutorTest, MailAuthorizationDecisionCoversExactToolTabl
 
 TEST_F(MahoBrowserToolExecutorTest,
        EveryDeniedMailToolStopsBeforeDelegateDispatch) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   const std::array denied_states = {
       maho::ai::MailAuthorizationContext{
           false, false, false, false, maho::ai::MailGlobalPolicy::kPrompt, 0},
@@ -1265,51 +1154,33 @@ TEST_F(MahoBrowserToolExecutorTest,
       EXPECT_EQ(delegate_.mail_update_draft_count, 0) << tool;
     }
   }
+  // Read consent is not a gate: reads dispatch with the allow reason code.
   delegate_.mail_authorization_context = {
       true, true, false, false, maho::ai::MailGlobalPolicy::kAllow, 1};
   for (std::string_view tool : maho::ai::kMailReadTools) {
-    base::DictValue result = Execute(executor, std::string(tool));
-    EXPECT_EQ(*result.FindString("reason_code"),
-              "mail_read_consent_required")
+    EXPECT_EQ(maho::ai::AuthorizeMailTool(tool, delegate_.mail_authorization_context)
+                  .reason_code,
+              "mail_read_allowed")
         << tool;
-    EXPECT_EQ(delegate_.mail_list_accounts_count, 0) << tool;
   }
 }
 
 TEST_F(MahoBrowserToolExecutorTest, DeniedMailArgumentsAreRedacted) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
-  delegate_.mail_authorization_context.read_allowed = false;
-  delegate_.mail_authorization_context.global_policy =
-      maho::ai::MailGlobalPolicy::kAllow;
+  // Structural refusals still redact the argument payload.
+  auto executor = MakeExecutor();
+  delegate_.mail_authorization_context.feature_enabled = false;
   base::DictValue arguments;
   arguments.Set("email_id", "S3NTINEL-mail-secret");
   base::DictValue result =
       Execute(executor, "mail_get_email", std::move(arguments));
-  EXPECT_EQ(*result.FindString("reason_code"), "mail_read_consent_required");
+  EXPECT_EQ(*result.FindString("reason_code"), "mail_feature_disabled");
   EXPECT_EQ(*result.FindString("arguments"), "[REDACTED]");
   EXPECT_EQ(result.DebugString().find("S3NTINEL"), std::string::npos);
 }
 
 TEST_F(MahoBrowserToolExecutorTest,
-       InFlightMailReadFailsClosedAfterConsentRevocation) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
-  bool fired = false;
-  base::DictValue result;
-  base::OnceClosure release = ExecuteDeferredMailRead(executor, &result, &fired);
-
-  delegate_.mail_authorization_context.read_allowed = false;
-  std::move(release).Run();
-
-  ASSERT_TRUE(fired);
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_EQ(*result.FindString("reason_code"),
-            "mail_read_consent_required");
-  EXPECT_EQ(result.DebugString().find("account-1"), std::string::npos);
-}
-
-TEST_F(MahoBrowserToolExecutorTest,
        InFlightMailReadFailsClosedAfterFeatureDisable) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   bool fired = false;
   base::DictValue result;
   base::OnceClosure release = ExecuteDeferredMailRead(executor, &result, &fired);
@@ -1318,13 +1189,30 @@ TEST_F(MahoBrowserToolExecutorTest,
   std::move(release).Run();
 
   ASSERT_TRUE(fired);
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
   EXPECT_EQ(*result.FindString("reason_code"), "mail_feature_disabled");
   EXPECT_EQ(result.DebugString().find("account-1"), std::string::npos);
 }
 
 TEST_F(MahoBrowserToolExecutorTest,
+       InFlightMailReadForwardsWhenOnlyReadConsentChanged) {
+  // Read consent is no longer part of the completion recheck: flipping it mid
+  // flight does not cancel the read.
+  auto executor = MakeExecutor();
+  bool fired = false;
+  base::DictValue result;
+  base::OnceClosure release = ExecuteDeferredMailRead(executor, &result, &fired);
+
+  delegate_.mail_authorization_context.read_allowed = false;
+  std::move(release).Run();
+
+  ASSERT_TRUE(fired);
+  EXPECT_FALSE(result.FindString("reason_code"));
+}
+
+TEST_F(MahoBrowserToolExecutorTest,
        InFlightMailReadFailsClosedAfterHelperGenerationChange) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   bool fired = false;
   base::DictValue result;
   base::OnceClosure release = ExecuteDeferredMailRead(executor, &result, &fired);
@@ -1340,7 +1228,7 @@ TEST_F(MahoBrowserToolExecutorTest,
 
 TEST_F(MahoBrowserToolExecutorTest,
        InFlightMailReadFailsClosedAfterGlobalPolicyRevocation) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   bool fired = false;
   base::DictValue result;
   base::OnceClosure release = ExecuteDeferredMailRead(executor, &result, &fired);
@@ -1367,7 +1255,7 @@ TEST_F(MahoBrowserToolExecutorTest,
 }
 
 TEST_F(MahoBrowserToolExecutorTest, MailSendRequiresApprovalAndDispatches) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue arguments;
   arguments.Set("account_id", "account-1");
@@ -1388,7 +1276,6 @@ TEST_F(MahoBrowserToolExecutorTest, MailSendRequiresApprovalAndDispatches) {
 
   EXPECT_TRUE(result.FindBool("ok").value_or(false));
   EXPECT_EQ(delegate_.mail_send_count, 1);
-  EXPECT_TRUE(delegate_.last_write_already_authorized);
 
   std::optional<base::Value> parsed = base::JSONReader::Read(
       delegate_.last_write_request_json, base::JSON_PARSE_RFC);
@@ -1410,45 +1297,9 @@ TEST_F(MahoBrowserToolExecutorTest, MailSendRequiresApprovalAndDispatches) {
   EXPECT_EQ(*a0.FindString("data"), "QQ==");
 }
 
-TEST_F(MahoBrowserToolExecutorTest, MailSendDeniedDoesNotDispatch) {
-  auto executor = MakeExecutor(base::BindRepeating([](const Authorization&) {
-    ApprovalDecision decision;
-    decision.approved = false;
-    decision.error = "denied by policy";
-    return decision;
-  }));
-
-  base::DictValue arguments;
-  arguments.Set("account_id", "account-1");
-  base::ListValue to;
-  to.Append("dest@example.com");
-  arguments.Set("to", std::move(to));
-  arguments.Set("subject", "Hello");
-
-  base::DictValue result = Execute(executor, "mail_send", std::move(arguments));
-
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_EQ(delegate_.mail_send_count, 0);
-}
-
-TEST_F(MahoBrowserToolExecutorTest, MailSendWithoutApprovalCallbackFailsClosed) {
-  auto executor = MakeExecutor();  // No approval callback wired.
-
-  base::DictValue arguments;
-  arguments.Set("account_id", "account-1");
-  base::ListValue to;
-  to.Append("dest@example.com");
-  arguments.Set("to", std::move(to));
-  arguments.Set("subject", "Hello");
-
-  base::DictValue result = Execute(executor, "mail_send", std::move(arguments));
-
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_EQ(delegate_.mail_send_count, 0);
-}
 
 TEST_F(MahoBrowserToolExecutorTest, MailSendMissingRecipientsFails) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue arguments;
   arguments.Set("account_id", "account-1");
@@ -1461,7 +1312,7 @@ TEST_F(MahoBrowserToolExecutorTest, MailSendMissingRecipientsFails) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, MailUpdateDraftRequiresDraftId) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue arguments;
   arguments.Set("account_id", "account-1");
@@ -1478,7 +1329,7 @@ TEST_F(MahoBrowserToolExecutorTest, MailUpdateDraftRequiresDraftId) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, MailSaveDraftDispatchesWithAuthorization) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue arguments;
   arguments.Set("account_id", "account-1");
@@ -1493,11 +1344,10 @@ TEST_F(MahoBrowserToolExecutorTest, MailSaveDraftDispatchesWithAuthorization) {
   EXPECT_TRUE(result.FindBool("ok").value_or(false));
   EXPECT_EQ(delegate_.mail_save_draft_count, 1);
   EXPECT_EQ(delegate_.mail_send_count, 0);
-  EXPECT_TRUE(delegate_.last_write_already_authorized);
 }
 
 TEST_F(MahoBrowserToolExecutorTest, MailUpdateDraftDispatchesWithDraftId) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue arguments;
   arguments.Set("draft_id", "draft-123");
@@ -1513,11 +1363,10 @@ TEST_F(MahoBrowserToolExecutorTest, MailUpdateDraftDispatchesWithDraftId) {
   EXPECT_TRUE(result.FindBool("ok").value_or(false));
   EXPECT_EQ(delegate_.mail_update_draft_count, 1);
   EXPECT_EQ(delegate_.last_update_draft_id, "draft-123");
-  EXPECT_TRUE(delegate_.last_write_already_authorized);
 }
 
 TEST_F(MahoBrowserToolExecutorTest, MailSendMapsCcBccAndReplyHeaders) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue arguments;
   arguments.Set("account_id", "account-1");
@@ -1556,7 +1405,7 @@ TEST_F(MahoBrowserToolExecutorTest, MailSendMapsCcBccAndReplyHeaders) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest, MailSendRejectsAttachmentMissingField) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue arguments;
   arguments.Set("account_id", "account-1");
@@ -1584,7 +1433,7 @@ TEST_F(MahoBrowserToolExecutorParityTest,
        NavigateEmptyAllowedDomainFailsClosed_NotAdr0016Divergence) {
   // ADR 0016 states empty allowed-domain state fails closed on both MCP and
   // in-browser paths; this is parity, not an intentional divergence.
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   delegate_.active_url = "about:blank";
 
   base::DictValue arguments;
@@ -1601,7 +1450,7 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 
 TEST_F(MahoBrowserToolExecutorParityTest,
        AccessibilitySnapshotRequiredBeforeRefActionMatchesMcp) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   delegate_.snapshot_refs[1] = 101;
 
   base::DictValue arguments;
@@ -1618,7 +1467,7 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 
 TEST_F(MahoBrowserToolExecutorParityTest,
        ClickUnknownRefFailureMatchesMcpErrorCode) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 1, 101);
 
   base::DictValue arguments;
@@ -1637,7 +1486,7 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 TEST_F(MahoBrowserToolExecutorParityTest,
        TypeCredentialFieldDenialMatchesMcpAndDoesNotEchoText) {
   static constexpr char kSecret[] = "S3NTINEL-parity-secret";
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 2, 202);
   maho::MahoMcpFieldMetadata metadata;
   metadata.classified = true;
@@ -1660,7 +1509,7 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 }
 
 TEST_F(MahoBrowserToolExecutorParityTest, SelectResultValueMatchesMcp) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 3, 303);
 
   base::DictValue arguments;
@@ -1679,7 +1528,7 @@ TEST_F(MahoBrowserToolExecutorParityTest, SelectResultValueMatchesMcp) {
 
 TEST_F(MahoBrowserToolExecutorParityTest,
        ScrollDirectionAndPixelBehaviorMatchesMcp) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue down;
   down.Set("direction", "down");
@@ -1712,7 +1561,7 @@ TEST_F(MahoBrowserToolExecutorParityTest,
        Adr0016BrowserHoverSensitiveApprovalWithoutLease) {
   // ADR 0016: hover mirrors MCP's no-lease boundary, but the in-browser path
   // intentionally adds sensitive approval gating before dispatch.
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 4, 404);
 
   base::DictValue arguments;
@@ -1729,7 +1578,7 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 }
 
 TEST_F(MahoBrowserToolExecutorParityTest, KeyPressValidationMatchesMcp) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
 
   base::DictValue valid;
   valid.Set("key", "Enter");
@@ -1776,27 +1625,21 @@ TEST_F(MahoBrowserToolExecutorParityTest, KeyPressValidationMatchesMcp) {
   EXPECT_EQ(delegate_.key_press_count, 1);
 }
 
-// Parity default-deny applies to mutations that leave the browser: with no
-// typed-approval authorization wired the request is refused, and nothing is
-// dispatched or leased on the way out. In-browser mutation needs no
-// authorization at all, so the second half asserts the opposite.
+// No mutation is refused for lack of an approval authorization any more:
+// uploads that leave the browser and in-browser mutations both dispatch.
 TEST_F(MahoBrowserToolExecutorParityTest,
-       BoundaryMutationApprovalDefaultDenyPreventsDispatch) {
+       NoMutationIsRefusedForLackOfAuthorization) {
   auto executor = MakeExecutor();
   PopulateRef(executor, 5, 505);
 
   base::DictValue arguments;
   arguments.Set("ref", 5);
+  arguments.Set("path", "/tmp/parity-upload.png");
   base::DictValue result =
       Execute(executor, "browser_file_upload_select", std::move(arguments));
 
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_EQ(result.FindInt("error_code").value_or(0), -32008);
-  ASSERT_TRUE(result.FindString("error"));
-  EXPECT_NE(result.FindString("error")->find("typed approval"),
-            std::string::npos);
-  EXPECT_EQ(delegate_.click_count, 0);
-  EXPECT_FALSE(lease_registry_.IsHeldBy(7, "agent-session"));
+  EXPECT_TRUE(result.FindBool("ok").value_or(false)) << result.DebugString();
+  EXPECT_EQ(delegate_.file_upload_count, 1);
 
   base::DictValue click_arguments;
   click_arguments.Set("ref", 5);
@@ -1814,15 +1657,7 @@ TEST_F(MahoBrowserToolExecutorParityTest,
   // ask of its own — the origin machinery (domain policy plus the controller's
   // granted origins) is what scopes it, and a host-less scheme that no origin
   // rule could constrain is still refused outright.
-  std::optional<Authorization> captured;
-  auto executor = MakeExecutor(base::BindRepeating(
-      [](std::optional<Authorization>* out, const Authorization& metadata) {
-        *out = metadata;
-        ApprovalDecision decision;
-        decision.error = "ADR 0016 cross-origin approval denied by test";
-        return decision;
-      },
-      &captured));
+  auto executor = MakeExecutor();
 
   base::DictValue arguments;
   arguments.Set("url", "https://other.example/path");
@@ -1831,7 +1666,6 @@ TEST_F(MahoBrowserToolExecutorParityTest,
       Execute(executor, "browser_navigate", std::move(arguments));
 
   EXPECT_TRUE(result.FindBool("ok").value_or(false));
-  EXPECT_FALSE(captured.has_value());
   EXPECT_EQ(delegate_.navigate_count, 1);
 
   base::DictValue blocked;
@@ -1849,7 +1683,7 @@ TEST_F(MahoBrowserToolExecutorParityTest,
   auto external_lease = lease_registry_.Acquire(
       7, "external-session", base::Seconds(60), false);
   ASSERT_TRUE(external_lease.ok);
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 6, 606);
 
   base::DictValue arguments;
@@ -1865,7 +1699,7 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 
 TEST_F(MahoBrowserToolExecutorParityTest,
        ScreenshotProofDispatchesToCapturePath) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   base::DictValue arguments;
   base::DictValue result =
       Execute(executor, "screenshot_proof", std::move(arguments));
@@ -1888,7 +1722,7 @@ TEST_F(MahoBrowserToolExecutorParityTest,
       "isolated_world_1",
       4096);
 
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  auto executor = MakeExecutor();
   PopulateRef(executor, 10, 1010);
 
   // 1. Registered adapter on matching origin falls through to real DOM execution tier
@@ -1936,8 +1770,7 @@ TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
        ReadOnlyTierDeniesSensitiveFileScopedActionWithTierMessage) {
   MahoAiRuntimeConfig config;
   config.permission_tier = "read_only";
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction), nullptr,
-                               "agent-session", &config);
+  auto executor = MakeExecutor(nullptr, "agent-session", &config);
   PopulateRef(executor, 1, 101);
 
   base::DictValue arguments;
@@ -1956,33 +1789,20 @@ TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
 }
 
 TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
-       GuardTierPromptsForFileScopeOutsideWhitelist) {
-  // Guard tier is free inside the whitelist roots and ask-gates outside.
-  // browser_accessibility_snapshot carries no contract-level approval
-  // requirement, so the prompt below can only come from the broker tier ask
-  // surfacing through the executor.
+       GuardTierFileScopeOutsideWhitelistNeedsNoPrompt) {
+  // The guard tier never asks: agent-driven control is full access. Only the
+  // explicit read_only tier refuses a file-scoped request.
   MahoAiRuntimeConfig config;
   config.permission_tier = "guard";
   config.fs_whitelist_roots = {"/tmp/maho-allow"};
-  int approval_calls = 0;
-  auto executor = MakeExecutor(
-      base::BindRepeating(
-          [](int* calls, const Authorization&) {
-            ++*calls;
-            ApprovalDecision decision;
-            decision.approved = true;
-            return decision;
-          },
-          &approval_calls),
-      nullptr, "agent-session", &config);
+  auto executor = MakeExecutor(nullptr, "agent-session", &config);
   PopulateRef(executor, 1, 101);
 
   base::DictValue outside;
   outside.Set("path", "/etc/hosts");
   base::DictValue result =
       Execute(executor, "browser_accessibility_snapshot", std::move(outside));
-  EXPECT_TRUE(result.FindBool("ok").value_or(false));
-  EXPECT_EQ(approval_calls, 1);
+  EXPECT_TRUE(result.FindBool("ok").value_or(false)) << result.DebugString();
 }
 
 TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
@@ -1990,80 +1810,51 @@ TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
   MahoAiRuntimeConfig config;
   config.permission_tier = "guard";
   config.fs_whitelist_roots = {"/tmp/maho-allow"};
-  int approval_calls = 0;
-  auto executor = MakeExecutor(
-      base::BindRepeating(
-          [](int* calls, const Authorization&) {
-            ++*calls;
-            ApprovalDecision decision;
-            decision.approved = true;
-            return decision;
-          },
-          &approval_calls),
-      nullptr, "agent-session", &config);
+  auto executor = MakeExecutor(nullptr, "agent-session", &config);
   PopulateRef(executor, 1, 101);
 
   base::DictValue inside;
   inside.Set("path", "/tmp/maho-allow/report.pdf");
   base::DictValue result =
       Execute(executor, "browser_accessibility_snapshot", std::move(inside));
-  EXPECT_TRUE(result.FindBool("ok").value_or(false));
-  EXPECT_EQ(approval_calls, 0);
+  EXPECT_TRUE(result.FindBool("ok").value_or(false)) << result.DebugString();
 }
 
 TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
-       GuardTierFileScopeFailsClosedWithoutApprovalCallback) {
+       GuardTierFileScopeSucceedsWithoutApprovalCallback) {
   MahoAiRuntimeConfig config;
   config.permission_tier = "guard";
   config.fs_whitelist_roots = {"/tmp/maho-allow"};
-  auto executor = MakeExecutor(
-      MahoBrowserToolExecutor::BrowserActionApprovalCallback(), nullptr,
-      "agent-session", &config);
+  auto executor = MakeExecutor(nullptr, "agent-session", &config);
   PopulateRef(executor, 1, 101);
 
   base::DictValue outside;
   outside.Set("path", "/etc/hosts");
   base::DictValue result =
       Execute(executor, "browser_accessibility_snapshot", std::move(outside));
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_EQ(result.FindInt("error_code").value(), -32008);
+  EXPECT_TRUE(result.FindBool("ok").value_or(false)) << result.DebugString();
 }
 
 TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
        FullAccessTierAllowsFileScopeWithoutTierAsk) {
   MahoAiRuntimeConfig config;
   config.permission_tier = "full_access";
-  int approval_calls = 0;
-  auto executor = MakeExecutor(
-      base::BindRepeating(
-          [](int* calls, const Authorization&) {
-            ++*calls;
-            ApprovalDecision decision;
-            decision.approved = true;
-            return decision;
-          },
-          &approval_calls),
-      nullptr, "agent-session", &config);
+  auto executor = MakeExecutor(nullptr, "agent-session", &config);
   PopulateRef(executor, 1, 101);
 
-  // Contract-free read with a file-scope outside any whitelist: full_access
-  // falls through the tier gate, so no broker ask is owed at all.
   base::DictValue outside;
   outside.Set("path", "/etc/hosts");
   base::DictValue snapshot_result =
       Execute(executor, "browser_accessibility_snapshot", std::move(outside));
   EXPECT_TRUE(snapshot_result.FindBool("ok").value_or(false));
-  EXPECT_EQ(approval_calls, 0);
 
-  // A sensitive in-browser action owes no ask either: driving the browser is
-  // full access, and the tier adds nothing on top of that.
+  // A sensitive in-browser action owes no ask either.
   base::DictValue click_arguments;
   click_arguments.Set("ref", 1);
   base::DictValue click_result =
       Execute(executor, "browser_click", std::move(click_arguments));
   EXPECT_TRUE(click_result.FindBool("ok").value_or(false));
   EXPECT_EQ(delegate_.click_count, 1);
-  EXPECT_EQ(approval_calls, 0);
 }
 
 TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
@@ -2072,8 +1863,7 @@ TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
   // (empty) whitelist denies the read with the tier message.
   MahoAiRuntimeConfig config;
   config.permission_tier = "read_only";
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction), nullptr,
-                               "agent-session", &config);
+  auto executor = MakeExecutor(nullptr, "agent-session", &config);
 
   base::DictValue arguments;
   arguments.Set("path", "/etc/hosts");
@@ -2091,24 +1881,21 @@ TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
 }
 
 TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
-       GuardTierScreenshotAskFailsClosedWithoutCallback) {
+       GuardTierScreenshotCapturesWithoutAsking) {
   MahoAiRuntimeConfig config;
   config.permission_tier = "guard";
   config.fs_whitelist_roots = {"/tmp/maho-allow"};
-  auto executor = MakeExecutor(
-      MahoBrowserToolExecutor::BrowserActionApprovalCallback(), nullptr,
-      "agent-session", &config);
+  auto executor = MakeExecutor(nullptr, "agent-session", &config);
 
   base::DictValue arguments;
   arguments.Set("path", "/etc/hosts");
   base::DictValue result =
       Execute(executor, "screenshot_proof", std::move(arguments));
 
-  // The broker ask must not be silently dropped on a tool with no contract
-  // approval path; with no callback wired it fails closed.
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_EQ(result.FindInt("error_code").value(), -32008);
-  EXPECT_EQ(delegate_.capture_full_page_count, 0);
+  // The guard tier raises no ask, so a capture outside the whitelist simply
+  // runs.
+  EXPECT_TRUE(result.FindBool("ok").value_or(false)) << result.DebugString();
+  EXPECT_EQ(delegate_.capture_full_page_count, 1);
 }
 
 TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
@@ -2116,35 +1903,21 @@ TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
   MahoAiRuntimeConfig config;
   config.permission_tier = "guard";
   config.fs_whitelist_roots = {"/tmp/maho-allow"};
-  int approval_calls = 0;
-  auto executor = MakeExecutor(
-      base::BindRepeating(
-          [](int* calls, const Authorization& metadata) {
-            ++*calls;
-            EXPECT_EQ(metadata.tool_name, "screenshot_proof");
-            EXPECT_TRUE(metadata.requires_approval);
-            ApprovalDecision decision;
-            decision.approved = true;
-            return decision;
-          },
-          &approval_calls),
-      nullptr, "agent-session", &config);
+  auto executor = MakeExecutor(nullptr, "agent-session", &config);
 
   base::DictValue outside;
   outside.Set("path", "/etc/hosts");
   base::DictValue result =
       Execute(executor, "screenshot_proof", std::move(outside));
   EXPECT_TRUE(result.FindBool("ok").value_or(false));
-  EXPECT_EQ(approval_calls, 1);
   EXPECT_EQ(delegate_.capture_full_page_count, 1);
 
-  // Inside the whitelist the tier gate is inert: no second ask.
+  // Inside the whitelist the tier gate is inert as well.
   base::DictValue inside;
   inside.Set("path", "/tmp/maho-allow/proof.png");
   base::DictValue inside_result =
       Execute(executor, "screenshot_proof", std::move(inside));
   EXPECT_TRUE(inside_result.FindBool("ok").value_or(false));
-  EXPECT_EQ(approval_calls, 1);
   EXPECT_EQ(delegate_.capture_full_page_count, 2);
 }
 
@@ -2152,24 +1925,13 @@ TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
        FullAccessScreenshotCapturesOutsideWhitelistWithoutAsk) {
   MahoAiRuntimeConfig config;
   config.permission_tier = "full_access";
-  int approval_calls = 0;
-  auto executor = MakeExecutor(
-      base::BindRepeating(
-          [](int* calls, const Authorization&) {
-            ++*calls;
-            ApprovalDecision decision;
-            decision.approved = true;
-            return decision;
-          },
-          &approval_calls),
-      nullptr, "agent-session", &config);
+  auto executor = MakeExecutor(nullptr, "agent-session", &config);
 
   base::DictValue arguments;
   arguments.Set("path", "/etc/hosts");
   base::DictValue result =
       Execute(executor, "screenshot_proof", std::move(arguments));
   EXPECT_TRUE(result.FindBool("ok").value_or(false));
-  EXPECT_EQ(approval_calls, 0);
   EXPECT_EQ(delegate_.capture_full_page_count, 1);
 }
 
@@ -2181,24 +1943,13 @@ TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
   MahoAiRuntimeConfig config;
   config.permission_tier = "guard";
   config.fs_whitelist_roots = {"/tmp/maho-allow"};
-  int approval_calls = 0;
-  auto executor = MakeExecutor(
-      base::BindRepeating(
-          [](int* calls, const Authorization&) {
-            ++*calls;
-            ApprovalDecision decision;
-            decision.approved = true;
-            return decision;
-          },
-          &approval_calls),
-      nullptr, "agent-session", &config);
+  auto executor = MakeExecutor(nullptr, "agent-session", &config);
 
   base::DictValue arguments;
   arguments.Set("path", "/etc/hosts");
   base::DictValue guarded =
       Execute(executor, "screenshot_proof", std::move(arguments));
   EXPECT_TRUE(guarded.FindBool("ok").value_or(false));
-  EXPECT_EQ(approval_calls, 1);
 
   config.permission_tier = "full_access";
   base::DictValue full_arguments;
@@ -2206,7 +1957,6 @@ TEST_F(MahoBrowserToolExecutorRuntimeConfigTest,
   base::DictValue full =
       Execute(executor, "screenshot_proof", std::move(full_arguments));
   EXPECT_TRUE(full.FindBool("ok").value_or(false));
-  EXPECT_EQ(approval_calls, 1);
   EXPECT_EQ(delegate_.capture_full_page_count, 2);
 }
 

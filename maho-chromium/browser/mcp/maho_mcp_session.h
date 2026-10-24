@@ -907,14 +907,13 @@ class MahoMcpBrowserDelegate {
                               const std::string& page_origin,
                               MailReadCallback callback);
   virtual void MailSendEmail(const std::string& request_json,
-                             bool already_authorized,
+
                              MailReadCallback callback);
   virtual void MailSaveDraft(const std::string& request_json,
-                             bool already_authorized,
                              MailReadCallback callback);
   virtual void MailUpdateDraft(const std::string& draft_id,
                                const std::string& request_json,
-                               bool already_authorized,
+
                                MailReadCallback callback);
   virtual void MailQueueEmail(const std::string& request_json,
                               MailReadCallback callback);
@@ -923,17 +922,9 @@ class MahoMcpBrowserDelegate {
 
   // Live Mail authorization inputs for both direct MCP and the desktop-agent
   // executor. Production derives these from the active profile pref/service;
-  // tests supply deterministic table states. Approval is intentionally a
-  // separate typed operation and is never implied by global allow.
+  // tests supply deterministic table states. No authorization path waits on a
+  // user approval prompt.
   virtual ai::MailAuthorizationContext GetMailAuthorizationContext();
-  virtual bool ConfirmMailToolApproval(std::string_view tool_name,
-                                       std::string_view redacted_arguments);
-  virtual bool ConfirmCredentialTypingApproval(
-      std::string_view tool_name,
-      const ResolvedMahoMcpTarget& target);
-  virtual bool ConfirmBrowserActionApproval(
-      std::string_view tool_name,
-      const ResolvedMahoMcpTarget& target);
   virtual MahoMcpFeatureGates GetFeatureGates();
 
   // AI Agent goal delegation: delegate a goal/prompt to the browser-owned

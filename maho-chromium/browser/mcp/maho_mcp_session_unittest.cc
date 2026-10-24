@@ -105,7 +105,6 @@ public:
   int resolve_profile_calls = 0;
   int revalidate_calls = 0;
   std::string last_navigated_url;
-  bool approve_browser_actions = true;
   // Simulates the target tab changing underneath a resolved target between
   // resolution and dispatch, inside a single tool call.
   bool advance_generation_on_revalidate = false;
@@ -125,7 +124,6 @@ public:
     meta.is_protected = false;
     return meta;
   }
-  int browser_action_approval_calls = 0;
   int browser_type_call_count = 0;
   int browser_type_tab_id = 0;
   ui::AXNodeID browser_type_ax_id = 0;
@@ -258,13 +256,6 @@ public:
                                        ? ++next_generation
                                        : generation;
     return resolution;
-  }
-
-  bool ConfirmBrowserActionApproval(
-      std::string_view tool_name,
-      const ResolvedMahoMcpTarget& target) override {
-    ++browser_action_approval_calls;
-    return approve_browser_actions;
   }
 
   MahoMcpTargetResolution ResolveProfileTarget() override {
@@ -1436,19 +1427,18 @@ TEST_F(MahoMcpSessionTest, RevokedControllerCannotReacquireAuthority) {
   EXPECT_EQ(*error->FindString("message"), "Controller session was revoked");
 }
 
-TEST_F(MahoMcpSessionTest, AuthorityChangingControlCallRequiresApproval) {
+TEST_F(MahoMcpSessionTest, AuthorityChangingControlCallNeedsNoApproval) {
   InitResolvingSession();
-  delegate_->approve_browser_actions = false;
 
+  // Agent-driven control is full access: granting an exact origin commits
+  // without waiting on any approval.
   const auto responses = CallControlRaw(
       "browser_grant_exact_origin", R"({"origin":"https://example.com"})",
       2);
   ASSERT_EQ(responses.size(), 1u);
   const base::Value response = ParseLine(responses[0]);
-  const base::DictValue* error = response.GetDict().FindDict("error");
-  ASSERT_TRUE(error);
-  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorApprovalDenied);
-  EXPECT_EQ(delegate_->browser_action_approval_calls, 1);
+  EXPECT_FALSE(response.GetDict().FindDict("error")) << responses[0];
+  ASSERT_TRUE(response.GetDict().FindDict("result")) << responses[0];
 }
 
 TEST_F(MahoMcpSessionTest, JsonRpcErrorsAreRedactedAtEgress) {
@@ -1555,21 +1545,17 @@ TEST_F(MahoMcpSessionTest, MahoAgentDelegateFailsWhenNoEligibleBrowser) {
   EXPECT_EQ(delegate_->delegate_goal_call_count, 1);
 }
 
-// Leaving the browser still gates: selecting a local file for upload is a
-// filesystem boundary, so a denial must stop before the delegate is reached.
-TEST_F(MahoMcpSessionTest, BoundaryActionDenialStopsBeforeDispatch) {
+// Leaving the browser is full access too: selecting a local file for upload
+// reaches the delegate without any approval.
+TEST_F(MahoMcpSessionTest, BoundaryActionDispatchesWithoutAsking) {
   InitResolvingSession();
-  delegate_->approve_browser_actions = false;
 
   const auto responses = CallToolRaw("browser_file_upload_select",
                                      R"({"tab_id":7,"path":"/tmp/build.aab"})", 2);
   ASSERT_EQ(responses.size(), 1u);
   const auto parsed = ParseLine(responses[0]);
-  const auto* error = parsed.GetDict().FindDict("error");
-  ASSERT_TRUE(error) << responses[0];
-  EXPECT_EQ(error->FindInt("code").value(), kMahoMcpErrorApprovalDenied);
-  EXPECT_EQ(delegate_->browser_action_approval_calls, 1);
-  EXPECT_EQ(delegate_->file_upload_call_count, 0);
+  EXPECT_FALSE(parsed.GetDict().FindDict("error")) << responses[0];
+  EXPECT_EQ(delegate_->file_upload_call_count, 1);
 }
 
 #if !BUILDFLAG(IS_WIN)
@@ -2068,31 +2054,16 @@ class FakeMailReadDelegate : public FakeAsyncNetworkDelegate {
 public:
   ai::MailAuthorizationContext authorization_context{
       true, true, false, true, ai::MailGlobalPolicy::kPrompt};
-  int approval_count = 0;
-  std::string approval_metadata;
-  bool disable_during_approval = false;
   int save_draft_count = 0;
 
   void MailSaveDraft(const std::string& request_json,
-                     bool already_authorized,
                      MailReadCallback callback) override {
     ++save_draft_count;
-    EXPECT_TRUE(already_authorized);
     std::move(callback).Run(true, R"({"draft_id":"fixture-draft"})");
   }
 
   ai::MailAuthorizationContext GetMailAuthorizationContext() override {
     return authorization_context;
-  }
-
-  bool ConfirmMailToolApproval(std::string_view,
-                               std::string_view redacted_arguments) override {
-    ++approval_count;
-    approval_metadata = std::string(redacted_arguments);
-    if (disable_during_approval) {
-      authorization_context.feature_enabled = false;
-    }
-    return true;
   }
 
   enum class MailReadMethod {
@@ -2419,12 +2390,12 @@ TEST_F(MahoMcpSessionMailReadTest, MailDelegateFailureReturnsDeferredError) {
 }
 
 TEST_F(MahoMcpSessionMailReadTest,
-       MailReadConsentRevocationCancelsPendingReadResult) {
+       MailFeatureDisabledMidReadCancelsPendingReadResult) {
   auto responses =
       CallToolRaw("mail_get_email", R"({"email_id":"secret-id"})", 301);
   EXPECT_TRUE(responses.empty());
   auto pending = delegate_->TakePendingMailRead();
-  delegate_->authorization_context.read_allowed = false;
+  delegate_->authorization_context.feature_enabled = false;
   std::move(pending.callback).Run(true, R"({"subject":"must-not-leak"})");
 
   ASSERT_EQ(deferred_responses_.size(), 1u);
@@ -2432,7 +2403,7 @@ TEST_F(MahoMcpSessionMailReadTest,
   const auto *error = response.GetDict().FindDict("error");
   ASSERT_TRUE(error);
   EXPECT_EQ(error->FindInt("code").value(), -32008);
-  EXPECT_EQ(*error->FindString("message"), "mail_read_consent_required");
+  EXPECT_EQ(*error->FindString("message"), "mail_feature_disabled");
   EXPECT_EQ(response.DebugString().find("must-not-leak"), std::string::npos);
 }
 
@@ -2456,59 +2427,36 @@ TEST_F(MahoMcpSessionMailReadTest,
             std::string::npos);
 }
 
-TEST_F(MahoMcpSessionMailReadTest,
-       MailReviewApprovalCarriesSafeTransactionMetadata) {
+TEST_F(MahoMcpSessionMailReadTest, MailReviewWriteDispatchesWithoutAsking) {
   auto responses = CallToolRaw(
       "mail_save_draft",
       R"({"request_json":"{\"account_id\":\"account-A\",\"to\":[\"recipient@example.test\"],\"subject\":\"Fixture\",\"body_text\":\"PRIVATE_BODY_SENTINEL\",\"password\":\"SECRET_SENTINEL\"}"})",
       311);
   ASSERT_TRUE(responses.empty());
-  EXPECT_EQ(delegate_->approval_count, 1);
   EXPECT_EQ(delegate_->save_draft_count, 1);
-  EXPECT_EQ(delegate_->approval_metadata.find("PRIVATE_BODY_SENTINEL"),
+  EXPECT_EQ(deferred_responses_.size(), 1u);
+  EXPECT_EQ(deferred_responses_.front().find("PRIVATE_BODY_SENTINEL"),
             std::string::npos);
-  EXPECT_EQ(delegate_->approval_metadata.find("SECRET_SENTINEL"),
+  EXPECT_EQ(deferred_responses_.front().find("SECRET_SENTINEL"),
             std::string::npos);
-  auto metadata = base::JSONReader::ReadDict(delegate_->approval_metadata,
-                                           base::JSON_PARSE_RFC);
-  ASSERT_TRUE(metadata);
-  const std::string* account = metadata->FindString("account_id");
-  ASSERT_TRUE(account);
-  EXPECT_EQ(*account, "account-A");
-  const auto* recipients = metadata->FindList("to");
-  ASSERT_TRUE(recipients);
-  ASSERT_EQ(recipients->size(), 1u);
-  EXPECT_EQ((*recipients)[0].GetString(), "recipient@example.test");
 
   responses = CallToolRaw(
       "mail_save_draft",
       R"({"request_json":"{\"account_id\":\"account-B\",\"to\":[\"other@example.test\"],\"subject\":\"Fixture\",\"body_text\":\"PRIVATE_BODY_SENTINEL\"}"})",
       313);
   ASSERT_TRUE(responses.empty());
-  EXPECT_EQ(delegate_->approval_count, 2);
   EXPECT_EQ(delegate_->save_draft_count, 2);
-  auto second = base::JSONReader::ReadDict(delegate_->approval_metadata,
-                                         base::JSON_PARSE_RFC);
-  ASSERT_TRUE(second);
-  account = second->FindString("account_id");
-  ASSERT_TRUE(account);
-  EXPECT_EQ(*account, "account-B");
-  recipients = second->FindList("to");
-  ASSERT_TRUE(recipients);
-  ASSERT_EQ(recipients->size(), 1u);
-  EXPECT_EQ((*recipients)[0].GetString(), "other@example.test");
-  EXPECT_EQ(delegate_->approval_metadata.find("PRIVATE_BODY_SENTINEL"),
-            std::string::npos);
 }
 
 TEST_F(MahoMcpSessionMailReadTest,
-       MailReviewDisableDuringApprovalPreventsDispatch) {
-  delegate_->disable_during_approval = true;
+       MailReviewFeatureDisabledAfterApprovalPreventsDispatch) {
+  // Structural availability still refuses: disabling the feature between the
+  // request and the write stops the dispatch.
+  delegate_->authorization_context.feature_enabled = false;
   auto responses = CallToolRaw(
       "mail_save_draft",
       R"({"request_json":"{\"account_id\":\"account-A\",\"to\":[\"recipient@example.test\"],\"subject\":\"Fixture\",\"body_text\":\"PRIVATE_BODY_SENTINEL\"}"})",
       312);
-  EXPECT_EQ(delegate_->approval_count, 1);
   EXPECT_EQ(delegate_->save_draft_count, 0);
   ExpectImmediateError(responses, -32008);
   ASSERT_EQ(responses.size(), 1u);
@@ -2519,17 +2467,14 @@ TEST_F(MahoMcpSessionMailReadTest,
   EXPECT_TRUE(deferred_responses_.empty());
 }
 
-TEST_F(MahoMcpSessionMailReadTest,
-       GlobalAllowDoesNotBypassReadConsentAndDenialIsStable) {
+TEST_F(MahoMcpSessionMailReadTest, ReadConsentIsNotRequired) {
+  // Reading mail needs no consent toggle any more: the read is dispatched.
   delegate_->authorization_context.read_allowed = false;
   delegate_->authorization_context.global_policy = ai::MailGlobalPolicy::kAllow;
   auto responses =
       CallToolRaw("mail_get_email", R"({"email_id":"secret-id"})", 302);
-  ExpectImmediateError(responses, -32008);
-  base::Value response = ParseLine(responses.front());
-  EXPECT_EQ(*response.GetDict().FindDict("error")->FindString("message"),
-            "mail_read_consent_required");
-  EXPECT_EQ(delegate_->pending_mail_read_count(), 0u);
+  EXPECT_TRUE(responses.empty());
+  EXPECT_EQ(delegate_->pending_mail_read_count(), 1u);
 }
 
 TEST_F(MahoMcpSessionMailReadTest,
@@ -4356,53 +4301,27 @@ TEST_F(MahoMcpSessionTest,
   EXPECT_EQ(delegate_->browser_click_call_count, 0);
 }
 
-TEST_F(MahoMcpSessionTest, GrantedExactOriginIsRequiredForNavigation) {
+TEST_F(MahoMcpSessionTest, NavigationNeedsNoOriginGrant) {
   InitResolvingSession();
   ASSERT_EQ(CallControlRaw("browser_acquire_lease", R"({"tab_id":7})", 320)
                 .size(),
             1u);
 
-  auto denied =
+  // Agent-driven control is full access: navigation commits without an exact
+  // origin grant, whatever the destination origin.
+  auto cross_origin =
       CallToolRaw("browser_navigate",
-                  R"({"tab_id":7,"url":"https://example.com/x"})",
+                  R"({"tab_id":7,"url":"https://other.example/app"})",
                   321);
-  ASSERT_EQ(denied.size(), 1u);
-  const base::Value denied_response = ParseLine(denied[0]);
-  const base::DictValue* error =
-      denied_response.GetDict().FindDict("error");
-  ASSERT_TRUE(error);
-  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorApprovalDenied);
-  EXPECT_TRUE(delegate_->last_navigated_url.empty());
-
-  ASSERT_EQ(CallControlRaw("browser_grant_exact_origin",
-                           R"({"origin":"https://example.com"})", 322)
-                .size(),
-            1u);
-  auto allowed =
-      CallToolRaw("browser_navigate",
-                  R"({"tab_id":7,"url":"https://example.com/x"})",
-                  323);
-  ASSERT_EQ(allowed.size(), 1u);
-  EXPECT_EQ(delegate_->last_navigated_url, "https://example.com/x");
+  ASSERT_EQ(cross_origin.size(), 1u);
+  EXPECT_FALSE(ParseLine(cross_origin[0]).GetDict().FindDict("error"));
+  EXPECT_EQ(delegate_->last_navigated_url, "https://other.example/app");
 
   auto same_origin_route = CallToolRaw(
       "browser_navigate",
-      R"({"tab_id":7,"url":"https://example.com/app/dashboard"})", 3231);
+      R"({"tab_id":7,"url":"https://example.com/app/dashboard"})", 322);
   ASSERT_EQ(same_origin_route.size(), 1u);
   EXPECT_FALSE(ParseLine(same_origin_route[0]).GetDict().FindDict("error"));
-  EXPECT_EQ(delegate_->last_navigated_url,
-            "https://example.com/app/dashboard");
-
-  auto other_origin = CallToolRaw(
-      "browser_navigate", R"({"tab_id":7,"url":"https://other.example/app"})",
-      3232);
-  ASSERT_EQ(other_origin.size(), 1u);
-  const base::Value other_origin_response = ParseLine(other_origin[0]);
-  const base::DictValue* other_origin_error =
-      other_origin_response.GetDict().FindDict("error");
-  ASSERT_TRUE(other_origin_error);
-  EXPECT_EQ(other_origin_error->FindInt("code"),
-            kMahoMcpErrorApprovalDenied);
   EXPECT_EQ(delegate_->last_navigated_url,
             "https://example.com/app/dashboard");
 }
@@ -4759,8 +4678,6 @@ class TypeGuardFakeDelegate : public ResolvingFakeDelegate {
 public:
   std::unordered_map<ui::AXNodeID, MahoMcpFieldMetadata> field_metadata;
   int type_call_count = 0;
-  int credential_typing_approval_count = 0;
-  bool credential_typing_approval_result = true;
   std::string last_typed_text;
   int vault_fill_count = 0;
   int vault_totp_fill_count = 0;
@@ -4799,13 +4716,6 @@ public:
     }
     return ResolvingFakeDelegate::GetAccessibilitySnapshotV2(
         params, out_refs, observation_cache, token_sequence);
-  }
-
-  bool ConfirmCredentialTypingApproval(
-      std::string_view,
-      const ResolvedMahoMcpTarget&) override {
-    ++credential_typing_approval_count;
-    return credential_typing_approval_result;
   }
 
   bool Type(int tab_id, ui::AXNodeID ax_id, const std::string &text) override {
@@ -5361,32 +5271,27 @@ TEST_F(MahoMcpSessionTypeGuardTest,
 
   const auto *result = resp.GetDict().FindDict("result");
   ASSERT_TRUE(result) << resp.DebugString();
-  EXPECT_EQ(delegate_->credential_typing_approval_count, 1);
   EXPECT_EQ(delegate_->type_call_count, 1);
   EXPECT_EQ(delegate_->last_typed_text, "admin1234");
   EXPECT_EQ(resp.DebugString().find("admin1234"), std::string::npos);
 }
 
 TEST_F(MahoMcpSessionTypeGuardTest,
-       CredentialFieldRejectsWhenNativeApprovalIsDenied) {
+       CredentialFieldTypesWithNoDenialPath) {
   MahoMcpFieldMetadata secret;
   secret.classified = true;
   secret.is_protected = true;
   delegate_->field_metadata[202] = secret;
-  delegate_->credential_typing_approval_result = false;
   CaptureAccessibilitySnapshot(12);
   session_->ref_table()[2] = 202;
 
   base::Value response = CallTool(
       "browser_type",
-      R"({"tab_id":7,"ref":2,"text":"S3NTINEL-denied","allow_credentials":true})", 13);
+      R"({"tab_id":7,"ref":2,"text":"S3NTINEL-typed","allow_credentials":true})", 13);
 
-  const base::DictValue* error = response.GetDict().FindDict("error");
-  ASSERT_TRUE(error) << response.DebugString();
-  EXPECT_EQ(error->FindInt("code"), -32008);
-  EXPECT_EQ(*error->FindString("message"), "credential_typing_denied");
-  EXPECT_EQ(delegate_->credential_typing_approval_count, 1);
-  EXPECT_EQ(delegate_->type_call_count, 0);
+  // No approval exists to be denied: the protected field is typed.
+  EXPECT_FALSE(response.GetDict().FindDict("error")) << response.DebugString();
+  EXPECT_EQ(delegate_->type_call_count, 1);
   EXPECT_EQ(response.DebugString().find("S3NTINEL"), std::string::npos);
 }
 
@@ -6070,7 +5975,6 @@ TEST_F(MahoMcpSessionTest, CssLocatorMapsExactNode) {
 // approval would be refused, and the user is never prompted for it.
 TEST_F(MahoMcpSessionTest, BrowserManipulationNeverAsksForApproval) {
   InitResolvingSession();
-  delegate_->approve_browser_actions = false;
   delegate_->mock_locator_nodes = {
       {.ax_id = 101, .role = "button", .name = "Submit", .css = "#submit"},
   };
@@ -6086,7 +5990,6 @@ TEST_F(MahoMcpSessionTest, BrowserManipulationNeverAsksForApproval) {
   ASSERT_TRUE(action);
   EXPECT_TRUE(action->FindBool("dispatched").value_or(false));
   EXPECT_EQ(delegate_->browser_click_call_count, 1);
-  EXPECT_EQ(delegate_->browser_action_approval_calls, 0);
 }
 
 TEST_F(MahoMcpSessionTest, DetachedNodeError) {
@@ -6855,7 +6758,6 @@ TEST_F(MahoMcpSessionTest,
        HybridSecurity_TypedApprovalDenied_ReturnsApprovalDeniedWithZeroInput) {
   InitResolvingSession(true);
   delegate_->native_input_enabled = true;
-  delegate_->approve_browser_actions = false;  // Disallow approval
   ASSERT_TRUE(
       lease_registry_->Acquire(7, session_->session_id(), base::Seconds(60), /*force_steal=*/false).ok);
 
@@ -6909,7 +6811,6 @@ TEST_F(MahoMcpSessionTest,
        HybridSecurity_HappyPath_DispatchesViaNativeDispatcherSeam) {
   InitResolvingSession(true);
   delegate_->native_input_enabled = true;
-  delegate_->approve_browser_actions = true;
   ASSERT_TRUE(
       lease_registry_->Acquire(7, session_->session_id(), base::Seconds(60), /*force_steal=*/false).ok);
 
@@ -6971,7 +6872,6 @@ TEST_F(MahoMcpSessionTest,
 TEST_F(MahoMcpSessionTest, VisualFrame_RealCaptureMintsTokenAndDispatches) {
   InitResolvingSession(true);
   delegate_->native_input_enabled = true;
-  delegate_->approve_browser_actions = true;
   ASSERT_TRUE(
       lease_registry_->Acquire(7, session_->session_id(), base::Seconds(60), /*force_steal=*/false).ok);
 
@@ -7091,7 +6991,6 @@ TEST_F(MahoMcpSessionTest,
 TEST_F(MahoMcpSessionTest, HybridLoop_VisualClickDispatchesViaNativeDispatcherSeam) {
   InitResolvingSession(true);
   delegate_->native_input_enabled = true;
-  delegate_->approve_browser_actions = true;
   ASSERT_TRUE(
       lease_registry_->Acquire(7, session_->session_id(), base::Seconds(60), /*force_steal=*/false).ok);
 
@@ -7148,7 +7047,6 @@ TEST_F(MahoMcpSessionTest, HybridLoop_VisualClickDispatchesViaNativeDispatcherSe
 TEST_F(MahoMcpSessionTest, HybridLoop_DeniedConsentNeverDispatches) {
   InitResolvingSession(true);
   delegate_->native_input_enabled = true;
-  delegate_->approve_browser_actions = false;
   ASSERT_TRUE(
       lease_registry_->Acquire(7, session_->session_id(), base::Seconds(60), /*force_steal=*/false).ok);
 
@@ -7168,7 +7066,6 @@ TEST_F(MahoMcpSessionTest, HybridLoop_DeniedConsentNeverDispatches) {
 TEST_F(MahoMcpSessionTest, HybridLoop_StaleImageFailsClosed) {
   InitResolvingSession(true);
   delegate_->native_input_enabled = true;
-  delegate_->approve_browser_actions = true;
   ASSERT_TRUE(
       lease_registry_->Acquire(7, session_->session_id(), base::Seconds(60), /*force_steal=*/false).ok);
 
@@ -7201,7 +7098,6 @@ TEST_F(MahoMcpSessionTest, HybridLoop_StaleImageFailsClosed) {
 TEST_F(MahoMcpSessionTest, VisualClickExpiredCaptureIdRejectsWith32009) {
   InitResolvingSession(true);
   delegate_->native_input_enabled = true;
-  delegate_->approve_browser_actions = true;
   TestNativeInputDispatcher dispatcher;
   session_->SetNativeInputDispatcherForTesting(&dispatcher);
 

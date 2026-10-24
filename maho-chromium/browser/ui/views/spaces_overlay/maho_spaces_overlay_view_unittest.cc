@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
@@ -17,6 +18,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/events/event.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -119,15 +122,19 @@ class MahoSpacesOverlayColumnViewTest : public views::ViewsTestBase {
   MahoSpacesOverlayColumnViewTest() = default;
   ~MahoSpacesOverlayColumnViewTest() override = default;
 
-  MahoSpacesOverlayColumnView* CreateColumnView(const SpaceBoardColumn& column,
-                                                 bool is_active) {
+  MahoSpacesOverlayColumnView* CreateColumnView(
+      const SpaceBoardColumn& column,
+      bool is_active,
+      MahoSpacesOverlayColumnView::SpaceSelectedCallback callback =
+          base::DoNothing()) {
     host_widget_ = CreateTestWidget(
         views::Widget::InitParams::CLIENT_OWNS_WIDGET,
         views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
     host_widget_->Show();
 
     auto view = std::make_unique<MahoSpacesOverlayColumnView>(
-        nullptr, SpacesBoardRenderMode::kFullViewport, column, is_active, base::DoNothing());
+        nullptr, SpacesBoardRenderMode::kFullViewport, column, is_active,
+        std::move(callback));
     auto* raw = view.get();
     host_widget_->SetContentsView(std::move(view));
     return raw;
@@ -165,12 +172,12 @@ TEST_F(MahoSpacesOverlayColumnViewTest,
 
   auto* view = CreateColumnView(col, /*is_active=*/false);
 
-  EXPECT_EQ((std::vector<std::u16string>{u"Clear"}),
+  EXPECT_EQ((std::vector<std::u16string>{u"Pinned tabs", u"Tabs"}),
             view->GetSectionTitlesForTesting());
 }
 
 TEST_F(MahoSpacesOverlayColumnViewTest,
-       RegularOnlyTabsRenderNoSections) {
+       RegularOnlyTabsRenderSingleSection) {
   SpaceBoardColumn col = MakeColumn("s1", u"Grouped", 1);
 
   SpaceBoardTabItem regular_tab;
@@ -179,7 +186,23 @@ TEST_F(MahoSpacesOverlayColumnViewTest,
 
   auto* view = CreateColumnView(col, /*is_active=*/false);
 
-  EXPECT_TRUE(view->GetSectionTitlesForTesting().empty());
+  EXPECT_EQ((std::vector<std::u16string>{u"Tabs"}),
+            view->GetSectionTitlesForTesting());
+}
+
+TEST_F(MahoSpacesOverlayColumnViewTest, ReturnKeySelectsSpace) {
+  SpaceBoardColumn col = MakeColumn("s1", u"Keyboard", 0);
+  std::string selected;
+  auto* view = CreateColumnView(
+      col, /*is_active=*/false,
+      base::BindRepeating(
+          [](std::string* out, const std::string& id) { *out = id; },
+          &selected));
+
+  EXPECT_TRUE(view->IsFocusable());
+  ui::KeyEvent key(ui::EventType::kKeyPressed, ui::VKEY_RETURN, ui::EF_NONE);
+  EXPECT_TRUE(view->OnKeyPressed(key));
+  EXPECT_EQ("s1", selected);
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +258,26 @@ TEST_F(MahoSpacesOverlayTabRowViewTest, ClickTabRowFiresCallback) {
 
   EXPECT_EQ("space1", clicked_space);
   EXPECT_EQ("tab1", clicked_tab);
+}
+
+TEST_F(MahoSpacesOverlayTabRowViewTest, ReturnKeyOnFocusableTabRowFiresCallback) {
+  SpaceBoardTabItem tab;
+  tab.id = "tab1";
+  tab.title = u"Tab 1";
+
+  std::string activated_tab;
+  auto* raw_view = host_widget_->SetContentsView(
+      std::make_unique<MahoSpacesOverlayTabRowView>(
+          nullptr, tab, "space1",
+          base::BindRepeating(
+              [](std::string* out_tab, const std::string& space_id,
+                 const std::string& tab_id) { *out_tab = tab_id; },
+              &activated_tab)));
+
+  EXPECT_TRUE(raw_view->IsFocusable());
+  ui::KeyEvent key(ui::EventType::kKeyPressed, ui::VKEY_RETURN, ui::EF_NONE);
+  EXPECT_TRUE(raw_view->OnKeyPressed(key));
+  EXPECT_EQ("tab1", activated_tab);
 }
 
 // ---------------------------------------------------------------------------

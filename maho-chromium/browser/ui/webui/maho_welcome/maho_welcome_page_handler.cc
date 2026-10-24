@@ -339,17 +339,22 @@ void MahoWelcomePageHandler::StartImport(int32_t browser_index,
   if (browser_index < 0 ||
       static_cast<size_t>(browser_index) >= detected_browsers_.size()) {
     LOG(WARNING) << "StartImport: browser_index out of range: " << browser_index;
+    NotifyImportProgress(
+        0, 0, "That browser is no longer available. Choose it again.", true);
     return;
   }
 
   if (import_session_bridge_ && import_session_bridge_->is_active()) {
     LOG(WARNING) << "StartImport: import already in progress";
+    NotifyImportProgress(0, 0, "An import is already running.", true);
     return;
   }
 
   MahoCore* core = maho::GetCore();
   if (!core) {
     LOG(ERROR) << "StartImport: MahoCore not initialized";
+    NotifyImportProgress(0, 0, "Maho isn't ready to import yet. Try again.",
+                         true);
     return;
   }
 
@@ -394,9 +399,7 @@ void MahoWelcomePageHandler::StartImport(int32_t browser_index,
   if (!import_session_bridge_->Start(core, browser_json, items,
                                      essentials_json)) {
     import_session_bridge_.reset();
-    if (page_) {
-      page_->OnImportProgress(0, 0, "Failed to start import session", true);
-    }
+    NotifyImportProgress(0, 0, "The import couldn't start. Try again.", true);
   }
 }
 
@@ -404,6 +407,9 @@ void MahoWelcomePageHandler::NotifyImportProgress(uint32_t type,
                                                    int32_t items_imported,
                                                    const std::string& error,
                                                    bool complete) {
+  if (complete) {
+    import_succeeded_ = error.empty();
+  }
   if (page_) {
     page_->OnImportProgress(type, items_imported, error, complete);
   }
@@ -437,11 +443,16 @@ void MahoWelcomePageHandler::OnOpenMigrationDialogBrowsersDetected(
   maho::MahoMigrationDialogView::Show(
       parent, profile_, detected_browsers_,
       base::BindOnce(
-          [](OpenMigrationDialogCallback cb, bool was_cancelled, uint32_t imported_items_bitmask) {
+          [](base::WeakPtr<MahoWelcomePageHandler> handler,
+             OpenMigrationDialogCallback cb, bool was_cancelled,
+             uint32_t imported_items_bitmask) {
+            if (handler && !was_cancelled && imported_items_bitmask != 0) {
+              handler->import_succeeded_ = true;
+            }
             std::move(cb).Run(maho_welcome::mojom::MigrationDialogResult::New(
                 was_cancelled, imported_items_bitmask));
           },
-          std::move(callback)));
+          weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoWelcomePageHandler::GetLocalizedStrings(
@@ -1061,7 +1072,9 @@ void MahoWelcomePageHandler::RevealBrowserAndCloseWelcome() {
 
   auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(
       static_cast<Browser*>(main_bwi));
-  overlay->Show(u"Welcome to Maho", u"Import complete. Start exploring.");
+  overlay->Show(u"Welcome to Maho", import_succeeded_
+                                        ? u"Import complete. Start exploring."
+                                        : u"Start exploring.");
 
   // Destroys the welcome window and this handler; must be the last statement.
   CloseWelcomeTab();
@@ -1280,7 +1293,9 @@ void MahoWelcomePageHandler::StartSync(
   char* result = maho_core_join_sync(
       core, maho::auth::GetSyncRelayUrl().c_str(), recovery_phrase.c_str());
   if (!result) {
-    std::move(callback).Run(true, "");
+    // maho_core_join_sync returns null only when the join could not run
+    // (import gate active, invalid input, or a core error).
+    std::move(callback).Run(false, "Couldn't start sync. Try again.");
     return;
   }
   std::string json(result);
@@ -1419,13 +1434,12 @@ void MahoWelcomePageHandler::MailDeleteAccount(
 
 void MahoWelcomePageHandler::GetAiProviderConfigured(
     GetAiProviderConfiguredCallback callback) {
-  PrefService* prefs = profile_->GetPrefs();
-  bool configured =
-      !prefs->GetString(maho::ai_prefs::kProvider).empty() ||
-      !prefs->GetString(maho::ai_prefs::kApiKey).empty() ||
-      !prefs->GetString(maho::ai_prefs::kByokOpenAIEncryptedB64).empty() ||
-      !prefs->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64).empty();
-  std::move(callback).Run(configured);
+  // Same readiness rule as GetByokCredentialConfigured: the login-written
+  // "maho-managed" default is not a configured BYOK provider.
+  PrefService* prefs = profile_ ? profile_->GetPrefs() : nullptr;
+  const std::string provider =
+      prefs ? prefs->GetString(maho::ai_prefs::kProvider) : std::string();
+  std::move(callback).Run(IsByokProviderConfiguredForRuntime(provider, prefs));
 }
 
 void MahoWelcomePageHandler::SetTranslationProvider(

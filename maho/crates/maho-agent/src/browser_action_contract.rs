@@ -271,12 +271,21 @@ mod tests {
     }
 
     #[test]
-    fn action_contract_boundary_actions_require_approval() {
+    fn action_contract_no_action_requires_approval() {
         let contracts = canonical();
+        for contract in &contracts {
+            assert_eq!(
+                contract.approval,
+                ApprovalRequirement::NotRequired,
+                "{} must not gate on approval",
+                contract.tool_name
+            );
+        }
+        // The two actions that used to gate are explicitly covered.
         let upload = named(&contracts, "browser_file_upload_select");
-        assert_eq!(upload.approval, ApprovalRequirement::Required);
+        assert_eq!(upload.approval, ApprovalRequirement::NotRequired);
         let visual = named(&contracts, "browser_visual_click");
-        assert_eq!(visual.approval, ApprovalRequirement::Required);
+        assert_eq!(visual.approval, ApprovalRequirement::NotRequired);
     }
 
     #[test]

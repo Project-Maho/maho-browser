@@ -204,16 +204,19 @@ export class ThemePickerStore {
     });
   }
 
-  addStop(position?: {x: number; y: number}): void {
+  addStop(
+      position?: {x: number; y: number},
+      geom: CanvasGeometry = DEFAULT_CANVAS_GEOMETRY): void {
     this.patch(draft => {
       const sel = draft.selection;
       const maxDots = HARMONY_MAX_DOTS[sel.harmony];
       if (sel.stops.length >= maxDots) return;
 
-      const geom = DEFAULT_CANVAS_GEOMETRY;
+      // `position` is in the measured canvas' pixel space, so color and
+      // clamping must use that same geometry (the canvas is responsive).
       let pos: {x: number; y: number};
       if (position) {
-        pos = position;
+        pos = clampToCircle(position.x, position.y, geom);
       } else {
         const angleFraction = (sel.stops.length * 60) / 360;
         pos = positionForHueAndDistance(angleFraction, 0.7, geom);

@@ -550,17 +550,32 @@ pub fn create_account(
     Ok(AccountResponse::from_account(&account))
 }
 
-pub fn oauth_reauthorization_email(conn: &Connection, account_id: &str) -> Result<String> {
+/// Stored identity an OAuth reconnect must re-consent: the account's email
+/// (login hint) and the OAuth provider its credentials belong to.
+#[derive(Debug, PartialEq, Eq)]
+pub struct OAuthReauthorizationTarget {
+    pub email: String,
+    pub provider: &'static str,
+}
+
+pub fn oauth_reauthorization_target(
+    conn: &Connection,
+    account_id: &str,
+) -> Result<OAuthReauthorizationTarget> {
     let account = load_account(conn, account_id)?;
-    if !matches!(
-        account.auth_type.as_str(),
-        "oauth2_gmail" | "oauth2_outlook"
-    ) {
-        return Err(MailFfiError::InvalidRequest(format!(
-            "account {account_id} is not a supported OAuth account"
-        )));
-    }
-    Ok(account.email)
+    let provider = match account.auth_type.as_str() {
+        "oauth2_gmail" => "gmail",
+        "oauth2_outlook" => "outlook",
+        _ => {
+            return Err(MailFfiError::InvalidRequest(format!(
+                "account {account_id} is not a supported OAuth account"
+            )))
+        }
+    };
+    Ok(OAuthReauthorizationTarget {
+        email: account.email,
+        provider,
+    })
 }
 
 pub fn replace_oauth_credentials(

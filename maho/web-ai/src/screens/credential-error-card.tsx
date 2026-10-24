@@ -10,7 +10,7 @@ function openSettings(target: 'ai-settings' | 'account'): void {
   if (typeof window === 'undefined') {
     return;
   }
-  window.location.hash = target === 'account' ? '#onboarding?step=auth' : '#byok';
+  window.location.hash = target === 'account' ? '#onboarding?step=auth&mode=reauth' : '#byok';
 }
 
 export function CredentialErrorCard({ code }: CredentialErrorCardProps): JSX.Element {

@@ -232,78 +232,59 @@ export function MahoAiApp({store}: {store: MahoAiStore}) {
     const stateSnapshot = store.getSnapshot();
     const prompt = stateSnapshot.composer.prompt.trim();
 
-    if (prompt.startsWith('/')) {
-      const parts = prompt.split(/\s+/);
-      const cmd = parts[0].toLowerCase();
-
-      if (cmd === '/agent') {
-        const sub = parts[1]?.toLowerCase();
-        if (sub === 'new') {
-          store.setActiveSlashEditor('agent-new');
-          store.setComposerPrompt('');
-          return;
-        } else if (sub === 'switch') {
-          const name = parts.slice(2).join(' ').trim();
-          if (name) {
-            const targetProfile = stateSnapshot.profiles.find(p => p.name.toLowerCase() === name.toLowerCase());
-            if (targetProfile && stateSnapshot.activeWorkspace) {
-              void store.switchWorkspaceProfile(stateSnapshot.activeWorkspace.id, targetProfile.id);
-            } else {
-              toast.error(`Agent profile "${name}" not found`);
-            }
-          } else {
-            toast.error('Usage: /agent switch <name>');
-          }
-          store.setComposerPrompt('');
-          return;
+    const parts = prompt.split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+    // Only the known slash commands are intercepted; any other text that
+    // starts with "/" (a path, a subreddit, ...) is an ordinary prompt. On a
+    // usage error the prompt stays in the composer so it can be corrected.
+    if (cmd === '/agent') {
+      const sub = parts[1]?.toLowerCase();
+      if (sub === 'new') {
+        store.setActiveSlashEditor('agent-new');
+        store.setComposerPrompt('');
+      } else if (sub === 'switch') {
+        const name = parts.slice(2).join(' ').trim();
+        const targetProfile = stateSnapshot.profiles.find(p => p.name.toLowerCase() === name.toLowerCase());
+        if (!name) {
+          toast.error('Usage: /agent switch <name>');
+        } else if (!stateSnapshot.activeWorkspace) {
+          toast.error('No workspace is loaded yet. Try again in a moment.');
+        } else if (!targetProfile) {
+          toast.error(`Agent profile "${name}" not found`);
         } else {
-          toast.error('Usage: /agent new | /agent switch <name>');
+          void store.switchWorkspaceProfile(stateSnapshot.activeWorkspace.id, targetProfile.id);
           store.setComposerPrompt('');
-          return;
-        }
-      } else if (cmd === '/tools') {
-        const sub = parts[1]?.toLowerCase();
-        const target = parts[2]?.toLowerCase();
-        if (sub === 'add') {
-          if (target === 'mcp') {
-            store.setActiveSlashEditor('mcp-add');
-            store.setComposerPrompt('');
-            return;
-          } else if (target === 'cli') {
-            store.setActiveSlashEditor('cli-add');
-            store.setComposerPrompt('');
-            return;
-          } else {
-            toast.error('Usage: /tools add mcp | /tools add cli');
-            store.setComposerPrompt('');
-            return;
-          }
-        } else {
-          toast.error('Usage: /tools add mcp | /tools add cli');
-          store.setComposerPrompt('');
-          return;
-        }
-      } else if (cmd === '/workspace') {
-        const sub = parts[1]?.toLowerCase();
-        if (sub === 'import') {
-          const path = parts.slice(2).join(' ').trim();
-          if (path && stateSnapshot.activeWorkspace) {
-            void store.importProfileFromToml(stateSnapshot.activeWorkspace.id, path);
-          } else {
-            toast.error('Usage: /workspace import <path>');
-          }
-          store.setComposerPrompt('');
-          return;
-        } else {
-          toast.error('Usage: /workspace import <path>');
-          store.setComposerPrompt('');
-          return;
         }
       } else {
-        toast.error(`Unknown command "${cmd}". Available: /agent, /tools, /workspace`);
-        store.setComposerPrompt('');
-        return;
+        toast.error('Usage: /agent new | /agent switch <name>');
       }
+      return;
+    }
+    if (cmd === '/tools') {
+      const sub = parts[1]?.toLowerCase();
+      const target = parts[2]?.toLowerCase();
+      if (sub !== 'add' || (target !== 'mcp' && target !== 'cli')) {
+        toast.error('Usage: /tools add mcp | /tools add cli');
+      } else if (!stateSnapshot.activeWorkspace) {
+        toast.error('No workspace is loaded yet. Try again in a moment.');
+      } else {
+        store.setActiveSlashEditor(target === 'mcp' ? 'mcp-add' : 'cli-add');
+        store.setComposerPrompt('');
+      }
+      return;
+    }
+    if (cmd === '/workspace') {
+      const sub = parts[1]?.toLowerCase();
+      const path = parts.slice(2).join(' ').trim();
+      if (sub !== 'import' || !path) {
+        toast.error('Usage: /workspace import <path>');
+      } else if (!stateSnapshot.activeWorkspace) {
+        toast.error('No workspace is loaded yet. Try again in a moment.');
+      } else {
+        void store.importProfileFromToml(stateSnapshot.activeWorkspace.id, path);
+        store.setComposerPrompt('');
+      }
+      return;
     }
 
     if (!store.getSnapshot().currentSessionId) {
@@ -351,13 +332,17 @@ export function MahoAiApp({store}: {store: MahoAiStore}) {
   const composerHandlers = useMemo<ComposerHandlers>(() => ({
     onPromptChange: (value: string) => store.setComposerPrompt(value),
     onCancel: () => {
-      void store.cancelTurn();
+      void store.cancelTurn().catch(() => {
+        toast.error("Couldn't stop the current turn");
+      });
     },
     onComposerBlur: () => {
       void store.flushComposerDraft();
     },
     onStartSession: () => {
-      void store.startSession();
+      void store.startSession().catch(() => {
+        toast.error("Couldn't start a new session");
+      });
     },
     onLoadOpenTabs: () => {
       void store.loadOpenTabs();
@@ -409,7 +394,9 @@ export function MahoAiApp({store}: {store: MahoAiStore}) {
 
   const modeHandlers = useMemo(() => ({
     onNewSession: () => {
-      void store.startSession();
+      void store.startSession().catch(() => {
+        toast.error("Couldn't start a new session");
+      });
     },
     onClosePanel: () => {
       void store.closePanel();
@@ -425,7 +412,7 @@ export function MahoAiApp({store}: {store: MahoAiStore}) {
       void store.resumeSession(sessionId);
     },
     onRespondToApproval: (approvalId: string, approved: boolean) => {
-      void store.respondToApproval(approvalId, approved).then(dispatched => {
+      return store.respondToApproval(approvalId, approved).then(dispatched => {
         if (!dispatched) {
           toast.error(
               approved ? "Couldn't send your approval — the action was not allowed."
@@ -471,7 +458,10 @@ export function MahoAiApp({store}: {store: MahoAiStore}) {
             onGetViewMode={modeHandlers.onGetViewMode}
             onOpenRoutines={() => setCompactSurface('routines')}
             onOpenSettings={modeHandlers.onOpenSettings}
-            onResumeSession={modeHandlers.onResumeSession}
+            onResumeSession={sessionId => {
+              setCompactSurface('chat');
+              modeHandlers.onResumeSession(sessionId);
+            }}
             onSetViewMode={modeHandlers.onSetViewMode}
             onStartSession={() => {
               setCompactSurface('chat');
@@ -533,7 +523,10 @@ export function MahoAiApp({store}: {store: MahoAiStore}) {
                 commandDisclosure={
                   <CommandHints
                     disabled={readOnly || pendingTurn}
-                    onPick={command => store.setComposerPrompt(command)}
+                    onPick={command => {
+                      store.setComposerPrompt(command);
+                      store.focusComposer();
+                    }}
                   />
                 }
                 handlers={composerHandlers}

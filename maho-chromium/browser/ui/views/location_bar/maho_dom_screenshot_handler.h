@@ -63,11 +63,10 @@ class MahoDomScreenshotHandler
   void OnDownloadClicked();
   void OnSendToClicked();
   void OnRetakeClicked();
-  void OnEditClicked();
-  void OnSendViaIMessageClicked();
-  void OnSaveToLibraryClicked();
   void OnBubbleDismissed();
 
+  // Removes this session's selection overlay from the page, if still present.
+  void RemovePageOverlay();
   void Finish();
 
   // content::WebContentsObserver:

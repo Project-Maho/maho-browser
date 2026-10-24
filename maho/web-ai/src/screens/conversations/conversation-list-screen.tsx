@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from 'preact/hooks';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'preact/hooks';
 import type {
   ConversationBulkResult,
   ConversationListState,
@@ -112,6 +112,7 @@ function reducer(state: State, action: Action): State {
         selectedIds: [],
         selectionMode: false,
         moveMenuIds: null,
+        menuId: null,
         noticeMessage: `Moved ${action.ids.length} conversation${action.ids.length === 1 ? '' : 's'}.`,
       };
     }
@@ -199,6 +200,22 @@ export function ConversationListScreen({
   const longPressTimerRef = useRef<number | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const loadGenerationRef = useRef(0);
+  // In-app replacement for window.prompt/confirm, which WKWebView without a
+  // WKUIDelegate silently answers with null/false.
+  const [dialog, setDialog] = useState<DialogSpec | null>(null);
+  const dialogResolveRef = useRef<((value: string | null) => void) | null>(null);
+  const requestDialog = useCallback((spec: DialogSpec) => new Promise<string | null>((resolve) => {
+    dialogResolveRef.current?.(null);
+    dialogResolveRef.current = resolve;
+    setDialog(spec);
+  }), []);
+  const settleDialog = useCallback((value: string | null) => {
+    const resolve = dialogResolveRef.current;
+    dialogResolveRef.current = null;
+    setDialog(null);
+    resolve?.(value);
+  }, []);
+  useEffect(() => () => dialogResolveRef.current?.(null), []);
 
   const clearLongPress = useCallback(() => {
     if (longPressTimerRef.current !== null) {
@@ -232,16 +249,29 @@ export function ConversationListScreen({
     }
   }, [state.renamingId]);
 
+  const anyMenuOpen = state.menuId !== null || state.projectMenuId !== null || state.moveMenuIds !== null;
   useEffect(() => {
-    if (!state.menuId) return undefined;
-    const handlePointerDown = (event: globalThis.MouseEvent) => {
-      const target = event.target;
-      if (target instanceof HTMLElement && target.closest('[data-conversation-menu-root="true"]')) return;
+    if (!anyMenuOpen) return undefined;
+    const closeAll = () => {
       dispatch({ type: 'CLOSE_MENU' });
+      dispatch({ type: 'PROJECT_MENU', id: null });
+      dispatch({ type: 'MOVE_MENU', ids: null });
     };
-    document.addEventListener('mousedown', handlePointerDown);
-    return () => document.removeEventListener('mousedown', handlePointerDown);
-  }, [state.menuId]);
+    const handlePointerDown = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('[data-conversation-menu-root="true"]')) return;
+      closeAll();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeAll();
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [anyMenuOpen]);
 
   const createConversation = useCallback(async () => {
     dispatch({ type: 'CREATE_START' });
@@ -264,7 +294,7 @@ export function ConversationListScreen({
   }, [bridge, state.filter]);
 
   const createProject = useCallback(async () => {
-    const name = window.prompt('Project name')?.trim();
+    const name = (await requestDialog({ kind: 'name', title: 'New project', confirmLabel: 'Create' }))?.trim();
     if (!name) return;
     try {
       await bridge.conversationProjectCreate(name);
@@ -272,10 +302,11 @@ export function ConversationListScreen({
     } catch (error) {
       dispatch({ type: 'OPERATION_ERROR', message: toErrorMessage(error, 'Unable to create this project.') });
     }
-  }, [bridge, reloadProjectData]);
+  }, [bridge, reloadProjectData, requestDialog]);
 
   const renameProject = useCallback(async (project: ConversationProject) => {
-    const name = window.prompt('Project name', project.name)?.trim();
+    dispatch({ type: 'PROJECT_MENU', id: null });
+    const name = (await requestDialog({ kind: 'name', title: 'Rename project', confirmLabel: 'Rename', initialValue: project.name }))?.trim();
     if (!name || name === project.name) return;
     try {
       const ok = await bridge.conversationProjectRename(project.id, name);
@@ -284,10 +315,18 @@ export function ConversationListScreen({
     } catch (error) {
       dispatch({ type: 'OPERATION_ERROR', message: toErrorMessage(error, 'Unable to rename this project.') });
     }
-  }, [bridge, reloadProjectData]);
+  }, [bridge, reloadProjectData, requestDialog]);
 
   const deleteProject = useCallback(async (project: ConversationProject) => {
-    if (!window.confirm(`Delete project “${project.name}”? Conversations will remain in No project.`)) return;
+    dispatch({ type: 'PROJECT_MENU', id: null });
+    const confirmed = await requestDialog({
+      kind: 'confirm',
+      title: `Delete “${project.name}”?`,
+      message: 'Its conversations will move to No project.',
+      confirmLabel: 'Delete project',
+      destructive: true,
+    });
+    if (confirmed === null) return;
     try {
       const ok = await bridge.conversationProjectDelete(project.id);
       if (!ok) throw new Error('Unable to delete this project.');
@@ -295,23 +334,23 @@ export function ConversationListScreen({
     } catch (error) {
       dispatch({ type: 'OPERATION_ERROR', message: toErrorMessage(error, 'Unable to delete this project.') });
     }
-  }, [bridge, reloadProjectData]);
+  }, [bridge, reloadProjectData, requestDialog]);
 
   const moveConversations = useCallback(async (ids: string[], projectId: string | null) => {
     try {
       const result = await bridge.conversationProjectMove(ids, projectId);
+      // Apply the moves that did succeed before reporting any missing ids.
+      dispatch({ type: 'PROJECT_MOVE_DONE', ids: result.affectedIds, projectId });
       if (result.missingIds.length > 0) {
         throw new Error(`${result.missingIds.length} conversation${result.missingIds.length === 1 ? '' : 's'} could not be found.`);
       }
-      dispatch({ type: 'PROJECT_MOVE_DONE', ids: result.affectedIds, projectId });
     } catch (error) {
       try {
-        const projects = await bridge.conversationProjectList();
-        dispatch({ type: 'PROJECTS_REPLACED', projects });
+        await reloadProjectData();
       } catch { /* Preserve the original mutation error. */ }
       dispatch({ type: 'OPERATION_ERROR', message: toErrorMessage(error, 'Unable to move the selected conversations.') });
     }
-  }, [bridge]);
+  }, [bridge, reloadProjectData]);
 
   const submitRename = useCallback(async (conversationId: string, currentTitle: string) => {
     const nextTitle = state.renameDraft.trim();
@@ -335,9 +374,16 @@ export function ConversationListScreen({
 
   const runOperation = useCallback(async (operation: BulkOperation, ids: string[]) => {
     if (ids.length === 0) return;
-    if (operation === 'delete' && !window.confirm(`Delete ${ids.length} archived conversation${ids.length === 1 ? '' : 's'}?`)) {
+    if (operation === 'delete') {
       dispatch({ type: 'CLOSE_MENU' });
-      return;
+      const confirmed = await requestDialog({
+        kind: 'confirm',
+        title: `Delete ${ids.length} archived conversation${ids.length === 1 ? '' : 's'}?`,
+        message: 'This can’t be undone.',
+        confirmLabel: 'Delete',
+        destructive: true,
+      });
+      if (confirmed === null) return;
     }
     dispatch({ type: 'OPERATION_START' });
     try {
@@ -357,7 +403,7 @@ export function ConversationListScreen({
     } catch (error) {
       dispatch({ type: 'OPERATION_ERROR', message: toErrorMessage(error, `Unable to ${operation} the selected conversations.`) });
     }
-  }, [bridge, state.conversations]);
+  }, [bridge, requestDialog, state.conversations]);
 
   const handleNavigate = useCallback((conversationId: string) => {
     if (state.selectionMode) {
@@ -467,6 +513,78 @@ export function ConversationListScreen({
           </div>
         )}
       </main>
+      {dialog && <ListDialog spec={dialog} onSettle={settleDialog} />}
+    </div>
+  );
+}
+
+type DialogSpec =
+  | { kind: 'name'; title: string; confirmLabel: string; initialValue?: string }
+  | { kind: 'confirm'; title: string; message: string; confirmLabel: string; destructive?: boolean };
+
+/** Accessible modal used instead of window.prompt / window.confirm. Resolves a string (name or 'confirm') or null on cancel. */
+function ListDialog({ spec, onSettle }: { spec: DialogSpec; onSettle: (value: string | null) => void }) {
+  const [value, setValue] = useState(spec.kind === 'name' ? spec.initialValue ?? '' : '');
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const titleId = 'cl-dialog-title';
+
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (spec.kind === 'name') {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    } else {
+      confirmRef.current?.focus();
+    }
+    return () => previous?.focus();
+  }, [spec]);
+
+  const submitDisabled = spec.kind === 'name' && !value.trim();
+  return (
+    <div class="cl-dialog-backdrop" onPointerDown={(event) => { if (event.target === event.currentTarget) onSettle(null); }}>
+      <form
+        class="cl-dialog"
+        role={spec.kind === 'confirm' ? 'alertdialog' : 'dialog'}
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            onSettle(null);
+          }
+        }}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (submitDisabled) return;
+          onSettle(spec.kind === 'name' ? value.trim() : 'confirm');
+        }}
+      >
+        <h2 id={titleId} class="cl-dialog-title">{spec.title}</h2>
+        {spec.kind === 'confirm' && <p class="cl-dialog-message">{spec.message}</p>}
+        {spec.kind === 'name' && (
+          <input
+            ref={inputRef}
+            type="text"
+            class="cl-rename-input"
+            aria-label="Project name"
+            placeholder="Project name"
+            value={value}
+            onInput={(event) => setValue((event.target as HTMLInputElement).value)}
+          />
+        )}
+        <div class="cl-dialog-actions">
+          <button type="button" class="cl-inline-button" onClick={() => onSettle(null)}>Cancel</button>
+          <button
+            ref={confirmRef}
+            type="submit"
+            class={`cl-inline-button cl-inline-button--primary${spec.kind === 'confirm' && spec.destructive ? ' cl-dialog-destructive' : ''}`}
+            disabled={submitDisabled}
+          >
+            {spec.confirmLabel}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

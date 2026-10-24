@@ -31,6 +31,7 @@
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_private_context_policy.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"  // nogncheck
 #include "maho/browser/ui/downloads/maho_download_bridge_service.h"
 #include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
@@ -1316,6 +1317,13 @@ void MahoSidebarDownloadsView::HandleResolvedDownloadFileAction(
   if (!exists) {
     DLOG(WARNING) << "[MahoDL] file missing; skipping "
                   << (action == DownloadActionKind::kOpen ? "open" : "reveal");
+    if (browser_) {
+      if (auto* overlay =
+              MahoNotificationOverlay::GetOrCreateForBrowser(browser_)) {
+        overlay->Show(u"File Not Found",
+                      u"This file was moved or deleted.");
+      }
+    }
     return;
   }
   auto* profile = browser_ ? browser_->GetProfile() : nullptr;

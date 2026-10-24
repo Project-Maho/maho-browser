@@ -1267,11 +1267,11 @@ void MahoSidebarCreateSpaceView::UpdateCreateButtonState() {
   }
   std::u16string trimmed_name;
   base::TrimWhitespace(name_field_->GetText(), base::TRIM_ALL, &trimmed_name);
-  create_button_->SetEnabled(!trimmed_name.empty());
+  create_button_->SetEnabled(!trimmed_name.empty() && !create_in_flight_);
 }
 
 void MahoSidebarCreateSpaceView::OnCreatePressed() {
-  if (!name_field_) {
+  if (!name_field_ || create_in_flight_) {
     return;
   }
 
@@ -1281,6 +1281,7 @@ void MahoSidebarCreateSpaceView::OnCreatePressed() {
     return;
   }
 
+  create_in_flight_ = true;
   create_button_->SetEnabled(false);
   if (error_label_) {
     error_label_->SetVisible(false);
@@ -1358,6 +1359,7 @@ void MahoSidebarCreateSpaceView::ApplyThemeSelection(
 void MahoSidebarCreateSpaceView::OnSpaceCreated(bool success,
                                                 const std::string& new_space_id,
                                                 const std::string& profile_id) {
+  create_in_flight_ = false;
   if (!success || new_space_id.empty()) {
     if (error_label_) {
       error_label_->SetText(u"Couldn’t create space. Try again.");

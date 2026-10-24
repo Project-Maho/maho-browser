@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/base64.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
@@ -253,10 +254,17 @@ void MahoSyncRelayClient::Poll() {
                                         outgoing.get(), base::JSON_PARSE_RFC)
                                   : std::nullopt;
               if (messages && messages->is_list()) {
+                result.leased = true;
                 for (const auto& message : messages->GetList()) {
+                  const std::string* delivery_id =
+                      message.is_dict()
+                          ? message.GetDict().FindString("delivery_id")
+                          : nullptr;
                   std::string json;
-                  if (base::JSONWriter::Write(message, &json)) {
+                  if (delivery_id &&
+                      base::JSONWriter::Write(message, &json)) {
                     result.outgoing.push_back(std::move(json));
+                    result.delivery_ids.push_back(*delivery_id);
                   }
                 }
               }
@@ -264,7 +272,7 @@ void MahoSyncRelayClient::Poll() {
             return result;
           },
           state_ == State::kConnected && authenticated_ &&
-              pending_writes_.empty(),
+              pending_writes_.empty() && awaiting_ack_.empty(),
           active_key_),
       base::BindOnce(&MahoSyncRelayClient::OnPollComplete,
                      weak_ptr_factory_.GetWeakPtr(), poll_generation_));
@@ -302,6 +310,16 @@ void MahoSyncRelayClient::OnPollComplete(uint64_t generation,
     }
     for (auto& message : result.outgoing) {
       pending_writes_.push_back(std::move(message));
+    }
+    if (result.leased) {
+      awaiting_ack_.insert(result.delivery_ids.begin(),
+                           result.delivery_ids.end());
+      polls_waiting_for_ack_ = 0;
+    } else if (!awaiting_ack_.empty() &&
+               ++polls_waiting_for_ack_ >= kMaxPollsWaitingForAck) {
+      // The relay never answered part of the batch: drop the connection so
+      // Disconnect() requeues it and the next session resends it.
+      Disconnect();
     }
     if (state_ == State::kDisconnected) {
       Connect(result.server_url, result.key);
@@ -365,6 +383,26 @@ void MahoSyncRelayClient::Disconnect() {
   state_ = State::kDisconnected;
   authenticated_ = false;
   active_key_.clear();
+  ++connection_generation_;
+  if (envelope_apply_halted_) {
+    // Envelope tasks of this connection still queued on the core sequence
+    // must not apply after teardown; the relay redelivers them from the
+    // persisted receive cursor.
+    envelope_apply_halted_->data.store(true);
+    envelope_apply_halted_ = nullptr;
+  }
+  if (!awaiting_ack_.empty()) {
+    // Envelopes written without an ACK go back to the outbox on the core
+    // sequence so the next connection resends them.
+    awaiting_ack_.clear();
+    PostCoreTaskAndReply(FROM_HERE, base::BindOnce([] {
+                           if (::MahoCore* core = GetCore()) {
+                             maho_core_requeue_outgoing_envelopes(core);
+                           }
+                         }),
+                         base::DoNothing());
+  }
+  polls_waiting_for_ack_ = 0;
 
   readable_watcher_.Cancel();
   writable_watcher_.Cancel();
@@ -476,13 +514,37 @@ void MahoSyncRelayClient::HandleRelayFrame(const std::string& frame) {
   }
 
   if (frame_kind == MahoSyncRelayFrameKind::kEnvelope) {
-    ::MahoCore* core = maho::GetCore();
-    if (!core ||
-        maho_core_handle_incoming_sync_envelope(core, frame.c_str()) != 0) {
-      Disconnect();
-      return;
+    // The core lives on its own sequence (Poll leases there too); applying
+    // the envelope here would mutate SyncManager from the UI thread.
+    // Envelopes apply in order on the core sequence. Once one fails, every
+    // envelope already queued behind it is skipped there, before the UI reply
+    // can Disconnect(): applying N+1 would persist a receive cursor past N
+    // and the relay would never redeliver N. Disconnect() drops the flag, so
+    // each connection gets a fresh one here.
+    if (!envelope_apply_halted_) {
+      envelope_apply_halted_ =
+          base::MakeRefCounted<base::RefCountedData<std::atomic<bool>>>();
     }
-    DrainReceivedTabs();
+    PostCoreTask<bool>(
+        FROM_HERE,
+        base::BindOnce(
+            [](scoped_refptr<base::RefCountedData<std::atomic<bool>>> halted,
+               std::string frame) {
+              if (halted->data.load()) {
+                return false;
+              }
+              ::MahoCore* core = GetCore();
+              const bool ok = core && maho_core_handle_incoming_sync_envelope(
+                                          core, frame.c_str()) == 0;
+              if (!ok) {
+                halted->data.store(true);
+              }
+              return ok;
+            },
+            envelope_apply_halted_, frame),
+        base::BindOnce(&MahoSyncRelayClient::OnCoreFrameApplied,
+                       weak_ptr_factory_.GetWeakPtr(), connection_generation_,
+                       /*drain_received_tabs=*/true));
     return;
   }
 
@@ -509,11 +571,34 @@ void MahoSyncRelayClient::HandleRelayFrame(const std::string& frame) {
   const std::optional<int> seq = dict.FindInt("seq");
   DCHECK(delivery_id);
   DCHECK(seq);
-  ::MahoCore* core = maho::GetCore();
-  if (!core ||
-      maho_core_ack_sync_delivery(core, delivery_id->c_str(),
-                                  static_cast<uint64_t>(*seq)) != true) {
+  awaiting_ack_.erase(*delivery_id);
+  PostCoreTask<bool>(
+      FROM_HERE,
+      base::BindOnce(
+          [](std::string delivery_id, uint64_t seq) {
+            ::MahoCore* core = GetCore();
+            return core &&
+                   maho_core_ack_sync_delivery(core, delivery_id.c_str(), seq);
+          },
+          *delivery_id, static_cast<uint64_t>(*seq)),
+      base::BindOnce(&MahoSyncRelayClient::OnCoreFrameApplied,
+                     weak_ptr_factory_.GetWeakPtr(), connection_generation_,
+                     /*drain_received_tabs=*/false));
+}
+
+void MahoSyncRelayClient::OnCoreFrameApplied(uint64_t connection_generation,
+                                             bool drain_received_tabs,
+                                             bool ok) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (connection_generation != connection_generation_) {
+    return;
+  }
+  if (!ok) {
     Disconnect();
+    return;
+  }
+  if (drain_received_tabs) {
+    DrainReceivedTabs();
   }
 }
 

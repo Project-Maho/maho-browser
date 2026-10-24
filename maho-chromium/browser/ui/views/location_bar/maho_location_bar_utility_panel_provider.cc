@@ -521,7 +521,7 @@ MahoLocationBarUtilityPanelAction BuildCameraAction(Browser* browser) {
   const bool has_active_page = HasActivePageForSiteControls(browser);
   MahoLocationBarUtilityPanelAction action = MakeAction(
       u"Screenshot",
-      has_active_page ? u"Capture visible area" : u"Current page unavailable",
+      has_active_page ? u"Select an area to capture" : u"Current page unavailable",
       kCameraIcon,
       has_active_page ? MahoLocationBarUtilityPanelDataState::kLive
                       : MahoLocationBarUtilityPanelDataState::kUnavailable,

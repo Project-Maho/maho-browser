@@ -12,7 +12,9 @@
 #include "base/json/json_reader.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/supports_user_data.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
@@ -77,8 +79,11 @@ class CacheWarmerImpl : public base::RefCounted<CacheWarmerImpl> {
         continue;
       }
 
-      // Skip if cache already has items for this config.
-      if (LiveFolderItemCache::GetInstance().GetItems(*config_json)) {
+      // Skip configs whose cached items are still fresh.
+      const base::Time updated =
+          LiveFolderItemCache::GetInstance().GetUpdateTime(*config_json);
+      if (!updated.is_null() &&
+          base::Time::Now() - updated < LiveFolderRefreshInterval(*provider_type)) {
         continue;
       }
 
@@ -157,10 +162,7 @@ class CacheWarmerImpl : public base::RefCounted<CacheWarmerImpl> {
         config->GetDict().FindString("calendar_id");
     std::string cal = calendar_id ? *calendar_id : "primary";
 
-    std::string url =
-        "https://www.googleapis.com/calendar/v3/calendars/" + cal +
-        "/events?maxResults=20&orderBy=startTime&singleEvents=true"
-        "&timeMin=2026-01-01T00:00:00Z";
+    std::string url = LiveFolderGoogleCalendarEventsUrl(cal, base::Time::Now());
 
     auto request = std::make_unique<network::ResourceRequest>();
     request->url = GURL(url);
@@ -280,6 +282,36 @@ class CacheWarmerImpl : public base::RefCounted<CacheWarmerImpl> {
   std::vector<std::unique_ptr<network::SimpleURLLoader>> active_loaders_;
 };
 
+void WarmStaleFolders(Profile* profile) {
+  const base::ListValue& folder_list =
+      profile->GetPrefs()->GetList(maho::sidebar_prefs::kLiveFolders);
+  if (folder_list.empty()) {
+    return;
+  }
+  auto warmer = base::MakeRefCounted<CacheWarmerImpl>(
+      profile->GetURLLoaderFactory());
+  warmer->Start(folder_list);
+}
+
+// Profile-owned timer that keeps sidebar live folders fresh while the browser
+// runs, independent of whether chrome://maho-live-folders is open. Destroyed
+// with the profile, which also stops the timer.
+const char kRefreshSchedulerKey[] = "maho_live_folder_refresh_scheduler";
+
+class RefreshScheduler : public base::SupportsUserData::Data {
+ public:
+  explicit RefreshScheduler(Profile* profile) {
+    // Tick at the shortest provider interval; each tick refetches only the
+    // folders whose cached items have gone stale.
+    timer_.Start(FROM_HERE, LiveFolderRefreshInterval("google_calendar"),
+                 base::BindRepeating(&WarmStaleFolders,
+                                     base::Unretained(profile)));
+  }
+
+ private:
+  base::RepeatingTimer timer_;
+};
+
 }  // namespace
 
 // static
@@ -288,15 +320,11 @@ void LiveFolderCacheWarmer::WarmCache(Profile* profile) {
     return;
   }
 
-  const base::ListValue& folder_list =
-      profile->GetPrefs()->GetList(maho::sidebar_prefs::kLiveFolders);
-  if (folder_list.empty()) {
-    return;
+  WarmStaleFolders(profile);
+  if (!profile->GetUserData(kRefreshSchedulerKey)) {
+    profile->SetUserData(kRefreshSchedulerKey,
+                         std::make_unique<RefreshScheduler>(profile));
   }
-
-  auto warmer = base::MakeRefCounted<CacheWarmerImpl>(
-      profile->GetURLLoaderFactory());
-  warmer->Start(folder_list);
 }
 
 }  // namespace maho

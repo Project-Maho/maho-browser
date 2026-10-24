@@ -158,6 +158,24 @@ export function SavedPasswordsPane(
     };
   }, [clearTransientState]);
 
+  // The login itself is already saved when this runs, so a TOTP failure is
+  // reported on the saved row instead of keeping the drawer open: retrying
+  // from the drawer would add a duplicate login or reuse a stale revision.
+  const saveLoginTotp = async (
+      itemId: string, revision: VaultItem['revision'], secret: string): Promise<void> => {
+    const fallback = 'Login saved, but the authenticator key could not be saved.';
+    let message: string | null;
+    try {
+      const {result} = await handler.setVaultLoginTotp(itemId, revision, secret.trim());
+      message = result.success ? null : vaultOperationMessage(result, fallback);
+    } catch {
+      message = fallback;
+    }
+    if (message) {
+      setActionStatus({itemId, message, status: 'failed'});
+    }
+  };
+
   const handleAddPassword = async (input: AddSavedPasswordInput): Promise<string | null> => {
     const primaryOrigin = normalizeCredentialOrigin(input.origin);
     if (!primaryOrigin) {
@@ -181,10 +199,7 @@ export function SavedPasswordsPane(
       return vaultOperationMessage(result, 'Failed to save password.');
     }
     if (input.totpSecret && result.item) {
-      try {
-        await handler.setVaultLoginTotp(result.item.id, result.item.revision, input.totpSecret.trim());
-      } catch {
-      }
+      await saveLoginTotp(result.item.id, result.item.revision, input.totpSecret);
     }
     await loadSavedPasswords(false);
     return null;
@@ -229,10 +244,7 @@ export function SavedPasswordsPane(
     }
     if (input.totpSecret) {
       const nextRev = result.item?.revision ?? item.revision;
-      try {
-        await handler.setVaultLoginTotp(item.id, nextRev, input.totpSecret.trim());
-      } catch {
-      }
+      await saveLoginTotp(item.id, nextRev, input.totpSecret);
     }
     await loadSavedPasswords(false);
     return null;

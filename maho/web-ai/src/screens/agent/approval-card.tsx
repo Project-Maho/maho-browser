@@ -72,6 +72,11 @@ export interface ApprovalCardRequest {
 
 interface ApprovalCardProps {
   readonly request: ApprovalCardRequest;
+  /**
+   * False when this platform's bridge cannot deliver answers to the kernel:
+   * the card renders read-only with guidance instead of failing on tap.
+   */
+  readonly answerable?: boolean;
   /** Throws on failure so the card can surface the error and stay retryable. */
   readonly onAnswer: (
     requestId: string,
@@ -80,7 +85,7 @@ interface ApprovalCardProps {
   ) => Promise<void>;
 }
 
-export function ApprovalCard({ request, onAnswer }: ApprovalCardProps) {
+export function ApprovalCard({ request, onAnswer, answerable = true }: ApprovalCardProps) {
   const [sending, setSending] = useState(false);
   const [text, setText] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
@@ -99,7 +104,7 @@ export function ApprovalCard({ request, onAnswer }: ApprovalCardProps) {
   const answered = request.status === 'resolved';
   // Dead cards are natively disabled; an in-flight send only sets
   // aria-disabled so keyboard focus stays on the pressed control.
-  const dead = terminal || answered;
+  const dead = terminal || answered || !answerable;
   const disabled = sending || dead;
 
   const answer = (choice: AgentInteractionAnswer) => {
@@ -209,6 +214,11 @@ export function ApprovalCard({ request, onAnswer }: ApprovalCardProps) {
       {(answered || terminal) && (
         <div class="agent-approval-status" data-testid="agent-approval-status">
           {answered ? `Answered: ${request.answerLabel ?? ''}` : formatStateLabel(request.initialState ?? '')}
+        </div>
+      )}
+      {!answerable && !terminal && !answered && (
+        <div class="agent-approval-status" data-testid="agent-approval-unsupported">
+          Answering isn't available in this version of the app yet. Stop the run to continue.
         </div>
       )}
       {sendError && <div class="agent-approval-error" role="alert">{sendError}</div>}

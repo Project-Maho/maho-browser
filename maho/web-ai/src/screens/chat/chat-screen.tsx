@@ -197,6 +197,7 @@ export function ChatScreen({
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const draftRef = useRef('');
+  const composingRef = useRef(false);
   const stickToBottomRef = useRef(true);
   const activeHandleRef = useRef<string | null>(null);
   const bootstrapGenerationRef = useRef(0);
@@ -490,7 +491,7 @@ export function ChatScreen({
     },
     onPollError: (message) => {
       dispatch({
-        type: 'STREAM_ERROR',
+        type: 'POLL_ERROR',
         message,
         credentialErrorCode: parseCredentialErrorCode(message),
       });
@@ -566,9 +567,14 @@ export function ChatScreen({
 
     try {
       await bridge.chatCancelTurn(handle);
-    } finally {
-      dispatch({ type: 'TURN_CANCELLED' });
+    } catch (error) {
+      dispatch({
+        type: 'CANCEL_FAILURE',
+        message: `Couldn't stop the response. ${toErrorMessage(error, 'Try again.')}`,
+      });
+      return;
     }
+    dispatch({ type: 'TURN_CANCELLED' });
   }, [bridge, state.isStreaming, state.sessionHandle]);
 
   const handleApproveTool = useCallback(
@@ -634,8 +640,10 @@ export function ChatScreen({
       return;
     }
 
+    // Discard the abandoned new-task draft so the fresh session starts empty.
+    await drafts.clearScope({ kind: 'new_task' });
     await bootstrapSession(null);
-  }, [bootstrapSession, routeSessionId]);
+  }, [bootstrapSession, drafts, routeSessionId]);
 
   const handleImageUpload = useCallback(
     async (event: Event) => {
@@ -750,9 +758,9 @@ export function ChatScreen({
             <div class="chat-empty-icon" aria-hidden="true">
               <span>🔑</span>
             </div>
-            <h2 class="chat-empty-heading">Configure your API key</h2>
+            <h2 class="chat-empty-heading">Finish setting up AI</h2>
             <p class="chat-empty-copy">
-              Add an OpenAI or Anthropic key before starting a conversation.
+              Your selected provider needs an API key, or a base URL and model, before you can start a conversation.
             </p>
             <button
               type="button"
@@ -761,7 +769,7 @@ export function ChatScreen({
                 window.location.hash = '#byok';
               }}
             >
-              Configure API key
+              Open AI settings
             </button>
           </section>
         ) : showEmptyState ? (
@@ -839,7 +847,16 @@ export function ChatScreen({
             onInput={(event) => {
               setDraft((event.target as HTMLTextAreaElement).value);
             }}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+            }}
             onKeyDown={(event) => {
+              if (event.isComposing || event.keyCode === 229 || composingRef.current) {
+                return;
+              }
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 void sendTextTurn();
@@ -1079,10 +1096,12 @@ async function resolveProviderConfig(
         model: configuredModel,
       };
     }
+    // An unset provider means the managed default, matching AI settings.
+    case '':
     case 'maho-managed':
       return {
-        credentialProvider: providerId,
-        id: providerId,
+        credentialProvider: 'maho-managed',
+        id: 'maho-managed',
         label: 'Maho AI',
       };
     default:

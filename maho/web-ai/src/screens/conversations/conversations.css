@@ -454,6 +454,34 @@
 
 .cl-inline-button:disabled { opacity: 0.5; cursor: default; }
 
+.cl-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--color-on-surface) 40%, transparent);
+}
+
+.cl-dialog {
+  width: min(100%, 360px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--agent-chrome-shadow, 0 20px 60px -48px rgba(8,12,24,0.55));
+}
+
+.cl-dialog-title { margin: 0; font-size: 16px; font-weight: 600; color: var(--color-on-surface); }
+.cl-dialog-message { margin: 0; font-size: 14px; color: var(--color-on-surface-secondary); }
+.cl-dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+.cl-dialog-destructive { background: var(--color-error); }
+
 @media (max-width: 620px) {
   .cl-header { align-items: stretch; flex-direction: column; }
   .cl-header-actions { justify-content: flex-end; }

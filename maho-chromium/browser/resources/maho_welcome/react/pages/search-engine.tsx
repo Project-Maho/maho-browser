@@ -6,6 +6,7 @@ import type {SearchEngineInfo} from '../../maho_welcome.mojom-webui.js';
 
 interface Props {
   engines: readonly SearchEngineInfo[];
+  loaded: boolean;
   selectedEngine: string | null;
   onSelect: (keyword: string) => void;
 }
@@ -19,8 +20,8 @@ export function SearchEngineSidebar({store}: {store: MahoWelcomeStore}) {
   );
 }
 
-export function SearchEngineContent({engines, selectedEngine, onSelect}: Props) {
-  if (engines.length === 0) {
+export function SearchEngineContent({engines, loaded, selectedEngine, onSelect}: Props) {
+  if (!loaded) {
     return (
       <div className="flex h-full w-full items-center justify-center rounded-xl border border-border bg-background/50 p-8 text-center">
         <p className="text-sm text-muted-foreground">Loading search engines…</p>

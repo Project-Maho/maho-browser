@@ -187,6 +187,9 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
   std::unique_ptr<maho::MahoImportSessionBridge> import_session_bridge_;
   std::unique_ptr<maho::EssentialImporter> essential_importer_;
   bool is_finishing_ = false;
+  // True once an import finished without error (wizard import or migration
+  // dialog); selects the post-onboarding toast copy.
+  bool import_succeeded_ = false;
   scoped_refptr<ui::SelectFileDialog> sync_save_dialog_;
   SaveSyncKeyBackupCallback sync_save_callback_;
   std::string sync_save_content_;

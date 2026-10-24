@@ -273,7 +273,9 @@ describe('MahoWelcomeStore', () => {
       WelcomePage.Splash,
       WelcomePage.Appearance,
       WelcomePage.SourceSelect,
-      WelcomePage.ImportProgress,
+      // Next on the import choice skips the import (default-browser stage);
+      // the transient ImportProgress page is never reached by navigation.
+      WelcomePage.SourceSelect,
       WelcomePage.SearchEngine,
       WelcomePage.Essentials,
       WelcomePage.AIProvider,
@@ -498,9 +500,11 @@ describe('MahoWelcomeStore', () => {
 
     store.nextPage(); // Splash -> Appearance
     store.nextPage(); // Appearance -> SourceSelect
-    store.nextPage(); // SourceSelect -> ImportProgress
-    store.prevPage(); // ImportProgress -> SourceSelect
+    store.nextPage(); // SourceSelect A -> SourceSelect B (import skipped)
+    store.nextPage(); // SourceSelect B -> SearchEngine
+    store.prevPage(); // SearchEngine -> SourceSelect B, never ImportProgress
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.SourceSelect);
+    expect(store.getSnapshot().importStage).toBe('B');
     expect(store.getSnapshot().direction).toBe('backward');
   });
 
@@ -620,6 +624,40 @@ describe('MahoWelcomeStore', () => {
       statusMessage: '',
       browserIndex: 0,
     });
+  });
+
+  it('keeps a failed import on the progress page and allows retry or back', async () => {
+    const store = new MahoWelcomeStore();
+    await store.bootstrap();
+    store.startImport(0);
+    store.nextPage();
+    store.prevPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.ImportProgress);
+
+    mockImportProgress.listener?.(0, 0, 'Profile is locked', true);
+    expect(store.getSnapshot().importState.phase).toBe('error');
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.ImportProgress);
+
+    mockHandlerInstance.startImport.mockClear();
+    store.retryImport();
+    expect(store.getSnapshot().importState.phase).toBe('running');
+    expect(mockHandlerInstance.startImport).toHaveBeenCalledTimes(1);
+
+    mockImportProgress.listener?.(0, 0, 'Profile is locked', true);
+    store.prevPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.SourceSelect);
+    expect(store.getSnapshot().importStage).toBe('A');
+  });
+
+  it('returns from Completion to the page it was reached from', () => {
+    const store = new MahoWelcomeStore();
+    (store as unknown as {patch: (fn: (draft: Record<string, unknown>) => void) => void}).patch(draft => {
+      draft.currentPage = WelcomePage.AIProvider;
+    });
+    store.setAiProvider('skip');
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
+    store.prevPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
   });
 
   it('does not start import when nothing is selected', async () => {

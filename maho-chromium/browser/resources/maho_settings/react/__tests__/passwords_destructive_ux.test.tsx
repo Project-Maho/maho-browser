@@ -336,6 +336,14 @@ describe('Saved password delete confirmation target', () => {
       username: 'No username saved',
     });
   });
+
+  it('targets the note title for secure notes', () => {
+    expect(describeDeleteTarget(createItem({
+      itemKind: VaultItemKind.kSecureItem, origins: [], title: 'Bank PINs', usernameHint: ''}))).toEqual({
+      origin: 'Bank PINs',
+      username: '',
+    });
+  });
 });
 
 describe('Saved password delete confirmation dialog', () => {

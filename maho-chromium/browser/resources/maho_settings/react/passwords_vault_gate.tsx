@@ -82,7 +82,7 @@ export function getVaultAccessCopy(lockState: VaultLockState): VaultAccessCopy {
   return {
     actionLabel: 'Unlock Vault',
     description:
-        'Your Maho Vault unlocks when you sign in. After auto-lock, confirm it is you or enter your passphrase.',
+        'Your Maho Vault unlocks when you sign in. After auto-lock, enter your master passphrase to unlock it.',
     mode: 'unlock',
     title: 'Unlock Maho Vault',
   };

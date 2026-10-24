@@ -87,6 +87,9 @@ class MahoAiVoiceSession {
   // maho-stt-ffi and handed across sequences; not a raw_ptr candidate.
   RAW_PTR_EXCLUSION MahoSttSession* engine_ = nullptr;
   bool active_ = false;
+  // True while the first Start() is checking/downloading the model or creating
+  // the engine, so a second Start() cannot race it.
+  bool starting_ = false;
 
   base::WeakPtrFactory<MahoAiVoiceSession> weak_factory_{this};
 };

@@ -249,14 +249,14 @@ Generated: ${new Date().toISOString()}
         ) : (
           <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 p-3 rounded-lg border border-border/50">
             <Sparkles className="size-4 shrink-0 text-amber-500" />
-            <span>Save file is mandatory to enable sync. Click "Save File (.txt)" in the footer to unlock "Start syncing".</span>
+            <span>{`Save the backup file to enable sync. Click "${store.getString('IDS_MAHO_WELCOME_SYNC_BACKUP_SAVE_FILE')}" below to unlock "${store.getString('IDS_MAHO_WELCOME_SYNC_BACKUP_START_SYNC')}".`}</span>
           </div>
         )}
 
         {errorMessage ? (
           <Alert variant="destructive" aria-live="assertive">
             <AlertCircle className="size-4" />
-            <AlertTitle>Save file incomplete</AlertTitle>
+            <AlertTitle>{saveError ? 'Save file incomplete' : 'Sync setup incomplete'}</AlertTitle>
             <AlertDescription>{errorMessage}</AlertDescription>
           </Alert>
         ) : null}

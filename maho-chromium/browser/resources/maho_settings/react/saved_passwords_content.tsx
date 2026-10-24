@@ -112,6 +112,9 @@ const DRAWER_CONTENT_CLASS =
     'left-auto right-0 top-0 h-full max-w-md translate-x-0 translate-y-0 rounded-none border-y-0 border-r-0 glass-strong sm:rounded-none data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right overflow-y-auto';
 
 export function describeDeleteTarget(item: VaultItem): {origin: string; username: string} {
+  if (item.itemKind === VaultItemKind.kSecureItem) {
+    return {origin: item.title || 'Secure Note', username: ''};
+  }
   return {
     origin: getPrimaryOrigin(item) || 'No origin',
     username: item.usernameHint || 'No username saved',
@@ -432,6 +435,16 @@ export function SavedPasswordsContent(props: SavedPasswordsContentProps) {
                   </div>
                 </div>
 
+                {props.actionStatus && !props.actionStatus.itemId ? (
+                  <p
+                    className={`${STATUS_CLASS} mb-2 ${props.actionStatus.status === 'success' ? 'text-success' : 'text-destructive'}`}
+                    role="alert">
+                    {props.actionStatus.status === 'success' ?
+                        <Check className="size-3.5" /> : <AlertCircle className="size-3.5" />}
+                    {props.actionStatus.message}
+                  </p>
+                ) : null}
+
                 <div role="table" aria-label="Vault login items">
                   <div className={VAULT_TABLE_HEADER_CLASS} role="row">
                     <div role="columnheader">
@@ -439,10 +452,13 @@ export function SavedPasswordsContent(props: SavedPasswordsContentProps) {
                     </div>
                     <div
                       aria-sort={sortField === 'name' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
-                      className="cursor-pointer select-none text-foreground hover:text-foreground"
-                      role="columnheader"
-                      onClick={() => toggleSort('name')}>
-                      Name {sortField === 'name' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+                      role="columnheader">
+                      <button
+                        className="flex select-none items-center gap-1 text-foreground hover:text-foreground"
+                        type="button"
+                        onClick={() => toggleSort('name')}>
+                        Name <span aria-hidden="true">{sortField === 'name' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
+                      </button>
                     </div>
                     <div className="text-right" role="columnheader">Options</div>
                   </div>
@@ -850,7 +866,7 @@ function SavedPasswordRow({
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
-                  aria-label={`More options for ${domain}`}
+                  aria-label={`More options for ${displayName}`}
                   className={VAULT_ICON_BUTTON_CLASS}
                   size="icon"
                   title="More Options"
@@ -1412,6 +1428,8 @@ type DeleteSavedPasswordDialogProps = {
 function DeleteSavedPasswordDialog(
     {item, onCancel, onConfirm}: DeleteSavedPasswordDialogProps) {
   const {origin, username} = describeDeleteTarget(item);
+  const isSecureNote = item.itemKind === VaultItemKind.kSecureItem;
+  const targetLabel = isSecureNote ? 'note title' : 'origin';
   const confirmInputRef = React.useRef<HTMLInputElement | null>(null);
   const [confirmation, setConfirmation] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -1441,21 +1459,29 @@ function DeleteSavedPasswordDialog(
     }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Delete saved password?</DialogTitle>
+          <DialogTitle>{isSecureNote ? 'Delete secure note?' : 'Delete saved password?'}</DialogTitle>
           <DialogDescription>
-            This permanently removes the credential from the local Vault. It cannot be undone.
+            {isSecureNote ?
+                'This permanently removes the note from the local Vault. It cannot be undone.' :
+                'This permanently removes the credential from the local Vault. It cannot be undone.'}
           </DialogDescription>
         </DialogHeader>
         <div className={CONFIRM_DETAIL_CLASS}>
-          <span data-testid="delete-confirm-origin">Origin: {origin}</span>
-          <span data-testid="delete-confirm-username">Username: {username}</span>
+          {isSecureNote ? (
+            <span data-testid="delete-confirm-origin">Note: {origin}</span>
+          ) : (
+            <>
+              <span data-testid="delete-confirm-origin">Origin: {origin}</span>
+              <span data-testid="delete-confirm-username">Username: {username}</span>
+            </>
+          )}
         </div>
         <div className="grid gap-1.5">
           <label className="text-xs font-medium text-foreground" htmlFor="delete-confirm-input">
-            Type the origin to confirm
+            Type the {targetLabel} to confirm
           </label>
           <Input
-            aria-label="Confirm deletion by typing the origin"
+            aria-label={`Confirm deletion by typing the ${targetLabel}`}
             id="delete-confirm-input"
             placeholder={origin}
             ref={confirmInputRef}
@@ -1481,7 +1507,7 @@ function DeleteSavedPasswordDialog(
             disabled={busy}
             variant="outline"
             onClick={() => void confirmDelete()}>
-            {busy ? 'Deleting…' : 'Delete password'}
+            {busy ? 'Deleting…' : (isSecureNote ? 'Delete note' : 'Delete password')}
           </Button>
         </DialogFooter>
       </DialogContent>

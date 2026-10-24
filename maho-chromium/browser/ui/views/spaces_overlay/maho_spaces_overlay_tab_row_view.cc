@@ -9,6 +9,10 @@
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
+#include "ui/events/event.h"
+#include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/views/controls/focus_ring.h"
+#include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/image_view.h"
 #include "url/gurl.h"
 
@@ -33,6 +37,7 @@ constexpr int kGlyphSizeDp = 16;
 constexpr int kTextSpacingDp = 6;
 constexpr int kHeaderSpacingDp = 6;
 constexpr int kChipSpacingDp = 4;
+constexpr int kRowCornerRadiusDp = 6;
 
 }  // namespace
 
@@ -120,6 +125,17 @@ MahoSpacesOverlayTabRowView::MahoSpacesOverlayTabRowView(
 
   GetViewAccessibility().SetRole(ax::mojom::Role::kListItem);
   GetViewAccessibility().SetName(SpaceBoardTabCompactTitle(tab_));
+  if (!callback_.is_null()) {
+    // Activatable rows are keyboard targets: Tab reaches them and
+    // Enter/Space opens the tab, matching a click.
+    SetFocusBehavior(FocusBehavior::ALWAYS);
+    views::FocusRing::Install(this);
+    views::InstallRoundRectHighlightPathGenerator(this, gfx::Insets(),
+                                                  kRowCornerRadiusDp);
+    GetViewAccessibility().AddAction(ax::mojom::Action::kDoDefault);
+    GetViewAccessibility().SetDefaultActionVerb(
+        ax::mojom::DefaultActionVerb::kActivate);
+  }
 
   UpdateColors();
 }
@@ -148,7 +164,8 @@ void MahoSpacesOverlayTabRowView::OnThemeChanged() {
 void MahoSpacesOverlayTabRowView::UpdateColors() {
   if (IsMouseHovered() && !callback_.is_null()) {
     SetBackground(
-        views::CreateRoundedRectBackground(palette_.row_hover, 6));
+        views::CreateRoundedRectBackground(palette_.row_hover,
+                                           kRowCornerRadiusDp));
   } else {
     SetBackground(nullptr);
   }
@@ -194,6 +211,16 @@ bool MahoSpacesOverlayTabRowView::OnMousePressed(const ui::MouseEvent& event) {
     return true;
   }
   return views::View::OnMousePressed(event);
+}
+
+bool MahoSpacesOverlayTabRowView::OnKeyPressed(const ui::KeyEvent& event) {
+  if ((event.key_code() == ui::VKEY_RETURN ||
+       event.key_code() == ui::VKEY_SPACE) &&
+      !callback_.is_null()) {
+    callback_.Run(space_id_, tab_.id);
+    return true;
+  }
+  return views::View::OnKeyPressed(event);
 }
 
 ui::Cursor MahoSpacesOverlayTabRowView::GetCursor(const ui::MouseEvent& event) {

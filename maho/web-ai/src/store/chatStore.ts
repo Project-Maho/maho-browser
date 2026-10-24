@@ -116,6 +116,8 @@ export type ChatStoreAction =
   | { type: 'STREAM_THINKING'; text: string }
   | { type: 'STREAM_COMPLETE'; finalMessage: string }
   | { type: 'STREAM_ERROR'; message: string; credentialErrorCode?: CredentialErrorCode | null }
+  | { type: 'POLL_ERROR'; message: string; credentialErrorCode?: CredentialErrorCode | null }
+  | { type: 'CANCEL_FAILURE'; message: string }
   | { type: 'STREAM_IMAGE'; delta: ImageDelta }
   | { type: 'TOOL_DELTA'; autoRun?: boolean; delta: ToolCallDelta }
   | { type: 'TOOL_RESPONSE_START'; toolCallId: string }
@@ -275,7 +277,7 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
       return {
         ...state,
         isStreaming: false,
-        messages: completeAssistantMessage(state.messages, action.finalMessage),
+        messages: completeAssistantMessage(closeStreamingThinking(state.messages), action.finalMessage),
       };
     case 'STREAM_ERROR':
       return {
@@ -283,7 +285,20 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
         errorMessage: action.message,
         credentialErrorCode: action.credentialErrorCode ?? null,
         isStreaming: false,
-        messages: removeEmptyStreamingAssistant(markAssistantStreamClosed(state.messages)),
+        messages: removeEmptyStreamingAssistant(markAssistantStreamClosed(closeStreamingThinking(state.messages))),
+      };
+    case 'POLL_ERROR':
+      // Polling recovers with backoff, so the turn is still alive: surface the
+      // error without closing the streaming assistant message.
+      return {
+        ...state,
+        errorMessage: action.message,
+        credentialErrorCode: action.credentialErrorCode ?? null,
+      };
+    case 'CANCEL_FAILURE':
+      return {
+        ...state,
+        errorMessage: action.message,
       };
     case 'STREAM_IMAGE':
       return {
@@ -335,7 +350,7 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
       return {
         ...state,
         isStreaming: false,
-        messages: removeEmptyStreamingAssistant(markAssistantStreamClosed(state.messages)),
+        messages: removeEmptyStreamingAssistant(markAssistantStreamClosed(closeStreamingThinking(state.messages))),
       };
     default:
       return state;

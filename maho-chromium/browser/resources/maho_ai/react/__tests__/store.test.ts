@@ -964,6 +964,17 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
       expect(clear).toHaveBeenCalledWith({kind: 'new_task'});
     });
 
+    it('consumes sent attachments after an accepted submitPrompt', async () => {
+      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue({accepted: true});
+      await store.resumeSession('test-session-123', false);
+      store.setComposerPrompt('use this tab');
+      store.addAttachment({id: 'tab:1', kind: 'tab', label: 'Tab 1', tabId: 1, url: 'http://a.com'});
+
+      await store.submitPrompt();
+
+      expect(store.getSnapshot().composer.attachments).toEqual([]);
+    });
+
     it('normal submitPrompt passes kFreeform intent', async () => {
       vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue({accepted: true});
       await store.resumeSession('test-session-123', false);

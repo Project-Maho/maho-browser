@@ -109,10 +109,21 @@ MahoAiVoiceSession::~MahoAiVoiceSession() {
 }
 
 void MahoAiVoiceSession::Start(ReadyCallback on_ready) {
-  if (active_ || engine_) {
+  if (active_ || starting_) {
     std::move(on_ready).Run(false);
     return;
   }
+  if (engine_) {
+    // The engine stays loaded across utterances; later push-to-talk sessions
+    // reuse it. A pending transcription of the previous utterance is safe to
+    // overlap: both run in order on |stt_runner_| and the new audio is
+    // buffered separately in |pcm_|.
+    pcm_.clear();
+    active_ = true;
+    std::move(on_ready).Run(true);
+    return;
+  }
+  starting_ = true;
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&MahoAiVoiceSession::CheckModelOnWorker, model_path_),
@@ -212,6 +223,7 @@ void MahoAiVoiceSession::OnModelChecked(ReadyCallback on_ready,
 
 void MahoAiVoiceSession::StartDownload(ReadyCallback on_ready) {
   if (!url_loader_factory_) {
+    starting_ = false;
     on_error_.Run("Voice model unavailable");
     std::move(on_ready).Run(false);
     return;
@@ -252,6 +264,7 @@ void MahoAiVoiceSession::OnDownloaded(ReadyCallback on_ready,
                                       base::FilePath temp_path) {
   loader_.reset();
   if (temp_path.empty()) {
+    starting_ = false;
     on_error_.Run("Voice model download failed");
     std::move(on_ready).Run(false);
     return;
@@ -266,6 +279,7 @@ void MahoAiVoiceSession::OnDownloaded(ReadyCallback on_ready,
 
 void MahoAiVoiceSession::OnDownloadVerified(ReadyCallback on_ready, bool ok) {
   if (!ok) {
+    starting_ = false;
     on_error_.Run("Voice model verification failed");
     std::move(on_ready).Run(false);
     return;
@@ -283,7 +297,9 @@ void MahoAiVoiceSession::CreateEngine(ReadyCallback on_ready) {
 
 void MahoAiVoiceSession::OnEngineCreated(ReadyCallback on_ready,
                                          MahoSttSession* engine) {
+  starting_ = false;
   engine_ = engine;
+  pcm_.clear();
   active_ = engine != nullptr;
   if (!active_) {
     on_error_.Run("Voice engine failed to initialize");

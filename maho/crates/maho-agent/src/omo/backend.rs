@@ -329,33 +329,6 @@ async fn browser_mcp_tools(
     tools
 }
 
-/// Mirrors `CapabilityLeavesBrowserBoundary` in
-/// `maho-chromium/browser/ai/maho_browser_action_contract.h`.
-///
-/// Browser manipulation is full access by policy; only capabilities that leave the
-/// browser boundary are approval-gated. Keep both copies in step.
-fn capability_leaves_browser_boundary(canonical_id: &str) -> bool {
-    const OFF_BROWSER_PREFIXES: [&str; 10] = [
-        "mail.", "mail_",
-        "vault.", "vault_",
-        "routines.", "routines_",
-        "control.", "control_",
-        "policy.", "policy_",
-    ];
-
-    OFF_BROWSER_PREFIXES
-        .iter()
-        .any(|prefix| canonical_id.starts_with(prefix))
-        || canonical_id == "artifact.export"
-        || canonical_id == "artifact_export"
-        || canonical_id == "browser_file_upload_select"
-        || canonical_id == "browser.file_upload_select"
-        || canonical_id == "input.file_upload_select"
-        || canonical_id == "input_file_upload_select"
-        || canonical_id == "browser.visual_click"
-        || canonical_id == "browser_visual_click"
-}
-
 fn parse_mcp_tools(message: &serde_json::Value) -> Option<Vec<ToolDefinition>> {
     let listed = message.get("result")?.get("tools")?.as_array()?;
     Some(
@@ -374,12 +347,11 @@ fn parse_mcp_tools(message: &serde_json::Value) -> Option<Vec<ToolDefinition>> {
                         .cloned()
                         .unwrap_or_else(|| serde_json::json!({ "type": "object" })),
                     provenance: maho_types::tool::ToolProvenance::BuiltinBrowser,
-                    sensitive: capability_leaves_browser_boundary(&name),
-                    permission: if capability_leaves_browser_boundary(&name) {
-                        maho_types::tool::ToolPermission::AlwaysAsk
-                    } else {
-                        maho_types::tool::ToolPermission::AutoApprove
-                    },
+                    // Agent-driven browser control is full access: no Maho
+                    // browser capability (file upload, OS-level click, mail,
+                    // vault, routines, control, policy) asks the user first.
+                    sensitive: false,
+                    permission: maho_types::tool::ToolPermission::AutoApprove,
                     name,
                 })
             })
@@ -2163,16 +2135,16 @@ mod tests {
         assert!(!nav.sensitive);
 
         let upload = tools.iter().find(|t| t.name == "browser_file_upload_select").unwrap();
-        assert_eq!(upload.permission, maho_types::tool::ToolPermission::AlwaysAsk);
-        assert!(upload.sensitive);
+        assert_eq!(upload.permission, maho_types::tool::ToolPermission::AutoApprove);
+        assert!(!upload.sensitive);
 
         let mail = tools.iter().find(|t| t.name == "mail_send").unwrap();
-        assert_eq!(mail.permission, maho_types::tool::ToolPermission::AlwaysAsk);
-        assert!(mail.sensitive);
+        assert_eq!(mail.permission, maho_types::tool::ToolPermission::AutoApprove);
+        assert!(!mail.sensitive);
 
         let vault = tools.iter().find(|t| t.name == "vault_get_password").unwrap();
-        assert_eq!(vault.permission, maho_types::tool::ToolPermission::AlwaysAsk);
-        assert!(vault.sensitive);
+        assert_eq!(vault.permission, maho_types::tool::ToolPermission::AutoApprove);
+        assert!(!vault.sensitive);
     }
 
     #[tokio::test]
@@ -2193,7 +2165,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_manipulation_never_asks_but_boundary_capabilities_do() {
+    fn browser_capabilities_never_ask_wherever_they_sit() {
         let message = serde_json::json!({
             "id": 2,
             "result": { "tools": [
@@ -2222,25 +2194,16 @@ mod tests {
             tools
                 .iter()
                 .find(|t| t.name == name)
-                .map(|t| t.permission.clone())
+                .map(|t| t.permission)
                 .expect("tool present")
         };
 
-        for inside in [
+        for name in [
             "input.locator_click",
             "browser.navigate",
             "browser.snapshot",
             "browser_tab_list",
             "browser_page_content",
-        ] {
-            assert_eq!(
-                permission(inside),
-                maho_types::tool::ToolPermission::AutoApprove,
-                "browser manipulation must never ask for approval: {inside}"
-            );
-        }
-
-        for boundary in [
             "mail.send",
             "mail_send",
             "vault.read",
@@ -2255,9 +2218,17 @@ mod tests {
             "browser_visual_click",
         ] {
             assert_eq!(
-                permission(boundary),
-                maho_types::tool::ToolPermission::AlwaysAsk,
-                "boundary capability must ask for approval: {boundary}"
+                permission(name),
+                maho_types::tool::ToolPermission::AutoApprove,
+                "agent-driven browser control must never ask for approval: {name}"
+            );
+            assert!(
+                !tools
+                    .iter()
+                    .find(|t| t.name == name)
+                    .expect("tool present")
+                    .sensitive,
+                "no browser capability is sensitive any more: {name}"
             );
         }
     }

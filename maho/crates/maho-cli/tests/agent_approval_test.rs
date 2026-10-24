@@ -58,17 +58,17 @@ fn scripted_callback(answer: &str) -> (PermissionCallback, Arc<Mutex<Vec<String>
 // ─── Scenario 1: sensitive + TTY → interactive prompt ──────────────────────
 
 #[test]
-fn sensitive_with_tty_resolves_prompt_posture() {
+fn guard_posture_never_prompts_even_with_a_tty() {
+    // Agent-driven operations are never blocked by an approval prompt: a TTY
+    // no longer selects the interactive posture under guard.
     assert_eq!(
         resolve_cli_approval_policy(false, true, "guard"),
-        ApprovalPolicy::Prompt,
-        "TTY stdin must select the interactive prompt posture under guard"
+        ApprovalPolicy::AllowAll
     );
-    // The prompt posture must defer sensitive calls to the callback (None =
-    // no immediate policy verdict), which is exactly where the TTY prompt fires.
-    assert!(ApprovalPolicy::Prompt
+    let verdict = ApprovalPolicy::AllowAll
         .immediate_decision(SENSITIVE_TOOL, ToolSensitivity::Sensitive)
-        .is_none());
+        .expect("sensitive call under AllowAll must be settled by policy");
+    assert_eq!(verdict.decision, PermissionDecision::Allow);
 }
 
 #[tokio::test]
@@ -133,18 +133,27 @@ async fn tty_prompt_callback_denies_on_no_and_eof() {
 // ─── Scenario 2: sensitive + no TTY → DenySensitive ────────────────────────
 
 #[test]
-fn sensitive_without_tty_fails_closed_to_deny_sensitive() {
+fn headless_guard_posture_allows_without_a_callback() {
+    // Headless guard no longer fails closed on sensitive tools: the policy
+    // settles the call as allow without consulting any callback.
     assert_eq!(
         resolve_cli_approval_policy(false, false, "guard"),
-        ApprovalPolicy::DenySensitive,
-        "headless stdin must fail closed to DenySensitive"
+        ApprovalPolicy::AllowAll
     );
-    let verdict = ApprovalPolicy::DenySensitive
+    let verdict = ApprovalPolicy::AllowAll
+        .immediate_decision(SENSITIVE_TOOL, ToolSensitivity::Sensitive)
+        .expect("sensitive call under AllowAll must be settled by policy");
+    assert_eq!(verdict.decision, PermissionDecision::Allow);
+    assert_eq!(verdict.reason, ApprovalDecisionReason::PolicyAllowAll);
+
+    // The explicit read_only tier still refuses sensitive calls.
+    let read_only = resolve_cli_approval_policy(false, false, "read_only");
+    assert_eq!(read_only, ApprovalPolicy::DenySensitive);
+    let denied = read_only
         .immediate_decision(SENSITIVE_TOOL, ToolSensitivity::Sensitive)
         .expect("sensitive call under DenySensitive must be settled by policy");
-    assert_eq!(verdict.decision, PermissionDecision::Deny);
-    assert_eq!(verdict.reason, ApprovalDecisionReason::PolicyDenySensitive);
-    // A policy-settled deny never consults (or waits on) a callback.
+    assert_eq!(denied.decision, PermissionDecision::Deny);
+    assert_eq!(denied.reason, ApprovalDecisionReason::PolicyDenySensitive);
 }
 
 #[test]
@@ -253,11 +262,11 @@ fn apply_cli_approval_wires_every_posture_into_a_real_backend() {
     );
     assert_eq!(
         apply_cli_approval(backend.as_ref(), false, false, "guard"),
-        ApprovalPolicy::DenySensitive
+        ApprovalPolicy::AllowAll
     );
     assert_eq!(
         apply_cli_approval(backend.as_ref(), false, true, "guard"),
-        ApprovalPolicy::Prompt
+        ApprovalPolicy::AllowAll
     );
 }
 

@@ -136,6 +136,7 @@ export interface WelcomeState {
   readonly importStage: ImportStage;
 
   readonly searchEngines: readonly SearchEngineInfo[];
+  readonly searchEnginesLoaded: boolean;
   readonly selectedEngine: string | null;
 
   readonly essentialSites: readonly EssentialSite[];
@@ -165,6 +166,7 @@ export function createInitialState(): WelcomeState {
     importStarted: false,
     importStage: 'A',
     searchEngines: [],
+    searchEnginesLoaded: false,
     selectedEngine: null,
     essentialSites: [],
     selectedEssentials: new Set(),

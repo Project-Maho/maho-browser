@@ -164,13 +164,13 @@ export function ImportSummaryPanel(
   return (
     <ManagedSettingRow
       controlClassName={SETTING_CONTROL_STACKED_CLASS}
-      description={`${state.sourceLabel} finished with one terminal import result.`}
+      description={`Imported ${state.committed} ${state.committed === 1 ? 'item' : 'items'} from ${state.sourceLabel}.${
+          state.failed > 0 ? ` ${state.failed} ${state.failed === 1 ? 'item' : 'items'} could not be imported.` : ''}`}
       title="Imported passwords">
       <div className="grid w-full gap-4">
         <div className={COUNT_GRID_CLASS}>
-          <CountTile label="Committed" value={state.committed} />
+          <CountTile label="Imported" value={state.committed} />
           <CountTile label="Failed" value={state.failed} />
-          <CountTile label="Terminal results" value={state.terminalResultCount} />
         </div>
         <div className={SETTING_ACTIONS_CLASS}>
           <Button type="button" onClick={onDone}>Done</Button>

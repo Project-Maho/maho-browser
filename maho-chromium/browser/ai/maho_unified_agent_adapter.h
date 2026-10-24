@@ -133,7 +133,6 @@ struct BrowserToolPreflightState {
   std::string error;
   std::string error_code;
   bool error_retryable = false;
-  bool requires_approval = false;
 };
 
 // ABI v2 Agent Event Kind
@@ -527,8 +526,7 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
       uint64_t generation,
       std::string tool_name,
       std::string args_json,
-      std::shared_ptr<BrowserToolCallState> state,
-      bool browser_action_preapproved);
+      std::shared_ptr<BrowserToolCallState> state);
   static base::OnceClosure CreateBrowserToolPreflightTask(
       base::WeakPtr<MahoUnifiedAgentAdapter> adapter,
       uint64_t generation,
@@ -544,8 +542,7 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
       void* user_data,
       const std::string& tool_name,
       const std::string& args_json,
-      std::shared_ptr<BrowserToolCallState> state,
-      bool browser_action_preapproved = false);
+      std::shared_ptr<BrowserToolCallState> state);
   void DeliverQueuedTokenForTesting(uint64_t generation, std::string token) {
     OnTokenOnSequence(generation, std::move(token));
   }
@@ -600,14 +597,6 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
 
   std::string permission_extension_id_;
   std::set<std::string> session_grants_;
-  // Test seam: when set, ShowPermissionPromptOnUIThread resolves synchronously
-  // with this decision instead of showing the interactive dialog widget.
-  base::RepeatingCallback<PromptDecision(const std::string&, const std::string&)>
-      permission_prompt_override_for_testing_;
-  void ShowPermissionPromptOnUIThread(
-      const std::string& extension_id,
-      const std::string& tool_name,
-      base::OnceCallback<void(PromptDecision)> callback);
   // Synchronous permission decision (policy, auto-allowed page tools, extension
   // gate, persistent + session grants). Runs on the owning sequence because it
   // reads PrefService. Returns nullopt when a user dialog is required.
@@ -621,17 +610,15 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
                                   std::shared_ptr<PermissionCallState> state,
                                   bool page_derived_justification = false,
                                   std::string consequence = "unknown");
-  // Test-only: drives DecidePermissionOnUiThread synchronously (paired with
-  // permission_prompt_override_for_testing_) and returns the resolved decision.
+  // Test-only: drives DecidePermissionOnUiThread synchronously and returns the
+  // resolved decision.
   MahoAgentPermissionDecision RunPermissionDialogForTest(
       const std::string& tool,
       const std::string& extension_id);
 
-  // Canonical WebUI approval broker. When a live runtime event consumer exists,
-  // a decision that needs the user is published as a kApprovalRequest event and
-  // its PermissionCallState parked here keyed by an unguessable approval id;
-  // RespondToApproval resolves and erases it exactly once. The native Views
-  // dialog is used only as a fallback when no event consumer is attached.
+  // Approval broker transport. Nothing parks a permission decision any more
+  // (agent-driven control is full access), so this map is only exercised by
+  // RequestBoundaryApproval, which no production path calls.
   std::unordered_map<std::string, std::shared_ptr<PermissionCallState>>
       pending_approvals_;
   // Active human-in-the-loop help request (browser_request_help). Empty while

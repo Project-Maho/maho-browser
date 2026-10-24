@@ -26,6 +26,34 @@ export function OnboardingScreen() {
   const bridge = useBridge();
   const route = useHashRoute();
   const [step, setStep] = useState<OnboardingStep>(() => initialStep(route.params.step));
+  // Re-auth (from a credential error) only needs the sign-in card: it can be
+  // dismissed and returns to the previous screen once signed in.
+  const reauth = route.params.mode === 'reauth';
+  const [signedIn, setSignedIn] = useState(false);
+  const [footerBusy, setFooterBusy] = useState(false);
+  const [footerError, setFooterError] = useState<string | null>(null);
+
+  const finishAuth = () => {
+    setSignedIn(true);
+    if (reauth) {
+      window.history.back();
+      return;
+    }
+    setStep('theme');
+  };
+
+  const runFooterAction = async (action: () => Promise<void>, fallback: string) => {
+    if (footerBusy) return;
+    setFooterBusy(true);
+    setFooterError(null);
+    try {
+      await action();
+    } catch (err: unknown) {
+      setFooterError(err instanceof Error && err.message ? err.message : fallback);
+    } finally {
+      setFooterBusy(false);
+    }
+  };
 
   const safeAreaTop = route.params.safeAreaTop ? parseFloat(route.params.safeAreaTop) : 0;
   const safeAreaBottom = route.params.safeAreaBottom ? parseFloat(route.params.safeAreaBottom) : 0;
@@ -113,14 +141,14 @@ export function OnboardingScreen() {
       if (authMode === 'login') {
         const res = await bridge.relaySignIn(email, password);
         if (res.ok) {
-          setStep('theme');
+          finishAuth();
         } else {
           setAuthError(res.error || 'Failed to sign in.');
         }
       } else {
         const res = await bridge.relaySignUp(email, password, displayName);
         if (res.ok) {
-          setStep('theme');
+          finishAuth();
         } else {
           setAuthError(res.error || 'Failed to sign up.');
         }
@@ -139,7 +167,7 @@ export function OnboardingScreen() {
     try {
       const res = await bridge.relaySignInWithGoogle();
       if (res.ok) {
-        setStep('theme');
+        finishAuth();
       } else if (!res.cancelled) {
         setAuthError(res.error || 'Failed to sign in with Google.');
       }
@@ -307,17 +335,28 @@ export function OnboardingScreen() {
               <span>Continue with Google</span>
             </button>
 
-            <button
-              type="button"
-              class="onboarding-btn-text"
-              disabled={authLoading}
-              onClick={() => {
-                setAuthError(null);
-                setStep('theme');
-              }}
-            >
-              Continue without an account
-            </button>
+            {reauth ? (
+              <button
+                type="button"
+                class="onboarding-btn-text"
+                disabled={authLoading}
+                onClick={() => window.history.back()}
+              >
+                Cancel
+              </button>
+            ) : (
+              <button
+                type="button"
+                class="onboarding-btn-text"
+                disabled={authLoading}
+                onClick={() => {
+                  setAuthError(null);
+                  setStep('theme');
+                }}
+              >
+                Continue without an account
+              </button>
+            )}
           </div>
         )}
 
@@ -378,11 +417,17 @@ export function OnboardingScreen() {
 
       <footer class="onboarding-footer">
         <div class="onboarding-footer-inner">
-          {renderDots()}
+          {!reauth && renderDots()}
+          {footerError && (
+            <div class="onboarding-error-banner" role="alert">
+              <Icon name="circle-alert" size={16} />
+              <span>{footerError}</span>
+            </div>
+          )}
 
           {step !== 'auth' && (
             <div class="onboarding-footer-actions">
-              {['theme', 'default_browser'].includes(step) && (
+              {((step === 'theme' && !signedIn) || step === 'default_browser') && (
                 <button
                   type="button"
                   class="onboarding-btn-text"
@@ -415,16 +460,17 @@ export function OnboardingScreen() {
 
               {step === 'default_browser' && (
                 <div class="onboarding-btn-group">
-                  <button type="button" class="onboarding-btn-text" onClick={() => setStep('completion')}>
+                  <button type="button" class="onboarding-btn-text" disabled={footerBusy} onClick={() => setStep('completion')}>
                     Maybe later
                   </button>
                   <button
                     type="button"
                     class="onboarding-btn-primary"
-                    onClick={async () => {
+                    disabled={footerBusy}
+                    onClick={() => void runFooterAction(async () => {
                       await bridge.openDefaultBrowserSettings();
                       setStep('completion');
-                    }}
+                    }, "Couldn't open default browser settings. Try again.")}
                   >
                     Set as default
                   </button>
@@ -435,9 +481,11 @@ export function OnboardingScreen() {
                 <button
                   type="button"
                   class="onboarding-btn-primary onboarding-btn-completion"
-                  onClick={async () => {
-                    await bridge.completeOnboarding();
-                  }}
+                  disabled={footerBusy}
+                  onClick={() => void runFooterAction(
+                    () => bridge.completeOnboarding(),
+                    "Couldn't finish setup. Try again.",
+                  )}
                 >
                   <span>Dive in!</span>
                 </button>

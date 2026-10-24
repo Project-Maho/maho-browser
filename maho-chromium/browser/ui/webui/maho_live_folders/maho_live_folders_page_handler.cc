@@ -369,9 +369,7 @@ void MahoLiveFolderPageHandler::FetchGoogleCalendarEvents(
   std::string cal = calendar_id ? *calendar_id : "primary";
 
   std::string url =
-      "https://www.googleapis.com/calendar/v3/calendars/" + cal +
-      "/events?maxResults=20&orderBy=startTime&singleEvents=true"
-      "&timeMin=2026-01-01T00:00:00Z";
+      maho::LiveFolderGoogleCalendarEventsUrl(cal, base::Time::Now());
 
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = GURL(url);

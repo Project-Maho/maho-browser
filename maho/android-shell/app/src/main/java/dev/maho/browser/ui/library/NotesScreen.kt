@@ -2,6 +2,8 @@
 
 package dev.maho.browser.ui.library
 
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -41,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeNotes
@@ -59,6 +62,21 @@ fun NotesScreen(
     var isLoading by remember { mutableStateOf(true) }
     var showCreateSheet by remember { mutableStateOf(false) }
     var editingNote by remember { mutableStateOf<NoteViewModel?>(null) }
+    val context = LocalContext.current
+
+    fun exportNotes() {
+        val exported = BridgeNotes.exportAllNotes()
+        if (exported.isNullOrBlank()) {
+            Toast.makeText(context, "Couldn't export notes", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Maho Notes")
+            putExtra(Intent.EXTRA_TEXT, exported)
+        }
+        context.startActivity(Intent.createChooser(sendIntent, "Export Notes"))
+    }
 
     fun reload() {
         notes = if (searchQuery.isBlank()) {
@@ -85,10 +103,10 @@ fun NotesScreen(
                 },
                 actions = {
                     IconButton(
-                        onClick = { BridgeNotes.exportAllNotes() },
+                        onClick = { exportNotes() },
                         enabled = notes.isNotEmpty(),
                     ) {
-                        Icon(painter = painterResource(id = MahoIcon.Notes.drawableRes), contentDescription = "Export")
+                        Icon(painter = painterResource(id = MahoIcon.Share.drawableRes), contentDescription = "Export")
                     }
                 },
             )

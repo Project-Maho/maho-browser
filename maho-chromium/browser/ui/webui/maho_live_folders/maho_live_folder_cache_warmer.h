@@ -7,17 +7,17 @@ class Profile;
 
 namespace maho {
 
-// Reads live folder prefs at browser startup and fires network fetches to
-// populate LiveFolderItemCache before the user opens chrome://maho-live-folders.
-// This ensures inline expand/collapse in the sidebar shows cached children
-// immediately.
+// Reads live folder prefs and fires network fetches to populate
+// LiveFolderItemCache before the user opens chrome://maho-live-folders, so
+// inline expand/collapse in the sidebar shows cached children immediately.
 //
-// Designed to be called once per profile from MahoSidebarView construction.
-// Self-destructs after all fetches complete (or fail).
+// Called from MahoSidebarView construction. The first call for a profile also
+// starts a profile-owned refresh timer that refetches stale folders for as
+// long as the profile lives. Each fetch batch self-destructs when done.
 class LiveFolderCacheWarmer {
  public:
-  // Kicks off cache warming. Caller does not own the returned pointer —
-  // the warmer self-destructs when all fetches finish.
+  // Fetches every configured folder whose cached items are missing or stale,
+  // and ensures the periodic refresh for |profile| is running.
   static void WarmCache(Profile* profile);
 
  private:

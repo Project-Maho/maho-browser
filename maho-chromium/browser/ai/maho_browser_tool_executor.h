@@ -39,41 +39,12 @@ class WebContents;
 
 class MahoBrowserToolExecutor {
  public:
-  struct BrowserActionAuthorization {
-    BrowserActionAuthorization();
-    BrowserActionAuthorization(const BrowserActionAuthorization&);
-    BrowserActionAuthorization(BrowserActionAuthorization&&);
-    BrowserActionAuthorization& operator=(const BrowserActionAuthorization&);
-    BrowserActionAuthorization& operator=(BrowserActionAuthorization&&);
-    ~BrowserActionAuthorization();
-
-    std::string tool_name;
-    std::string kind;
-    std::string sensitivity;
-    bool requires_approval = false;
-    bool requires_lease = false;
-    std::string domain_policy;
-    std::string empty_allowlist_policy;
-    std::string active_origin;
-    std::string destination_origin;
-    bool page_derived_justification = false;
-  };
-
-  struct BrowserActionApprovalDecision {
-    bool approved = false;
-    std::string error;
-  };
-
   using ToolResultCallback = base::OnceCallback<void(base::DictValue result)>;
-  using BrowserActionApprovalCallback = base::RepeatingCallback<
-      BrowserActionApprovalDecision(const BrowserActionAuthorization& metadata)>;
 
   explicit MahoBrowserToolExecutor(
       Browser* browser,
       bool browser_tools_v1_enabled = true,
       base::RepeatingCallback<bool()> ai_gate = base::RepeatingCallback<bool()>(),
-      BrowserActionApprovalCallback action_approval_callback =
-          BrowserActionApprovalCallback(),
       maho::MahoMcpBrowserDelegate* browser_action_delegate_for_testing =
           nullptr,
       maho::MahoMcpLeaseRegistry* browser_action_lease_registry_for_testing =
@@ -119,10 +90,6 @@ class MahoBrowserToolExecutor {
   void ExecuteMailTool(const std::string& tool_name,
                        const base::DictValue& arguments,
                        ToolResultCallback callback);
-  // Runs the agent approval callback for a mail write tool. Returns true when
-  // approved; on denial (or when no approval callback is wired) fills *error
-  // and returns false.
-  bool ApproveMailWrite(const std::string& tool_name, std::string* error);
   // Serializes structured mail-compose tool arguments into the JSON request
   // string the mail broker expects. Returns std::nullopt with *error set when
   // required fields are missing or an attachment is malformed.
@@ -246,22 +213,11 @@ class MahoBrowserToolExecutor {
   bool EnsureBrowserActionLease(const maho::ai::BrowserActionContract& contract,
                                 int tab_id,
                                 std::string& error);
-  // Runs the action approval callback for a broker-mandated ask (tier file
-  // ask, final-confirm gate) on a tool whose contract carries no approval
-  // handshake of its own. Returns true when approved; on denial (or when no
-  // callback is wired) fills *error and returns false.
-  bool RunBrokerApprovalAsk(const std::string& tool_name,
-                            const std::string& kind,
-                            const std::string& sensitivity,
-                            const std::string& active_origin,
-                            std::string* error);
-
   SEQUENCE_CHECKER(sequence_checker_);
 
   raw_ptr<Browser> browser_;
   bool browser_tools_v1_enabled_ = true;
   base::RepeatingCallback<bool()> ai_gate_;
-  BrowserActionApprovalCallback action_approval_callback_;
   raw_ptr<maho::MahoMcpBrowserDelegate> browser_action_delegate_for_testing_;
   raw_ptr<maho::MahoMcpLeaseRegistry>
       browser_action_lease_registry_for_testing_;

@@ -84,7 +84,6 @@ export function ImportPasswordsSection({onCommitted, store}: ImportPasswordsSect
     try {
       const {filePath} = await handler.selectPasswordImportFile(option.sourceFormat);
       if (!filePath) {
-        setStatus({message: 'File selection was cancelled.', tone: 'danger'});
         return;
       }
       const {result} = await handler.previewPasswordImport(option.sourceFormat, filePath);

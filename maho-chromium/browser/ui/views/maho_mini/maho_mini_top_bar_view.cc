@@ -43,6 +43,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/base/accelerators/accelerator.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -100,6 +101,16 @@ constexpr int kAddressFieldMinWidth = 72;
 constexpr int kAddressControlGap = 6;
 constexpr int kAddressFieldHeight = 26;
 constexpr int kMinimumPersistedWindowSize = 320;
+
+// Cmd+O on macOS, Ctrl+O elsewhere. Single source for both the registered
+// accelerator and the shortcut hint shown on the promote button.
+ui::Accelerator PromoteAccelerator() {
+  return ui::Accelerator(ui::VKEY_O, ui::EF_PLATFORM_ACCELERATOR);
+}
+
+std::u16string PromoteButtonLabel(const std::u16string& base) {
+  return base + u"  " + PromoteAccelerator().GetShortcutText();
+}
 
 class MahoMiniAddressField : public views::Textfield {
  public:
@@ -180,7 +191,7 @@ class MahoMiniPromoteButton : public views::View,
     main_button_ = AddChildView(std::make_unique<views::MdTextButton>(
         base::BindRepeating(&MahoMiniPromoteButton::OnMainPressed,
                             base::Unretained(this)),
-        u"Open in Space  ⌘O"));
+        PromoteButtonLabel(u"Open in Space")));
     main_button_->SetCustomPadding(gfx::Insets::VH(0, 7));
     main_button_->SetMinSize(gfx::Size(0, kPromoteButtonHeight - 2));
     main_button_->SetBgColorOverrideDeprecated(SK_ColorTRANSPARENT);
@@ -295,7 +306,8 @@ class MahoMiniPromoteButton : public views::View,
     target_space_name_ =
         space_name.empty() ? base::UTF8ToUTF16(space_id) : space_name;
     has_explicit_target_ = has_explicit_target_ || explicit_selection;
-    main_button_->SetText(u"Open in " + target_space_name_ + u"  ⌘O");
+    main_button_->SetText(
+        PromoteButtonLabel(u"Open in " + target_space_name_));
     main_button_->SetAccessibleName(u"Open in " + target_space_name_);
     PreferredSizeChanged();
   }
@@ -429,7 +441,7 @@ void MahoMiniTopBarView::OnPaint(gfx::Canvas* canvas) {
 }
 
 void MahoMiniTopBarView::AddedToWidget() {
-  AddAccelerator(ui::Accelerator(ui::VKEY_O, ui::EF_COMMAND_DOWN));
+  AddAccelerator(PromoteAccelerator());
   if (GetWidget() && !widget_observation_.IsObserving()) {
     widget_observation_.Observe(GetWidget());
     last_widget_size_ = GetWidget()->GetWindowBoundsInScreen().size();
@@ -440,14 +452,14 @@ void MahoMiniTopBarView::AddedToWidget() {
 }
 
 void MahoMiniTopBarView::RemovedFromWidget() {
-  RemoveAccelerator(ui::Accelerator(ui::VKEY_O, ui::EF_COMMAND_DOWN));
+  RemoveAccelerator(PromoteAccelerator());
   widget_observation_.Reset();
   can_persist_widget_size_ = false;
 }
 
 bool MahoMiniTopBarView::AcceleratorPressed(
     const ui::Accelerator& accelerator) {
-  if (accelerator.key_code() == ui::VKEY_O && accelerator.IsCmdDown()) {
+  if (accelerator == PromoteAccelerator()) {
     if (promote_button_) {
       const std::string target = promote_button_->EffectiveTargetSpaceId();
       if (!target.empty()) {

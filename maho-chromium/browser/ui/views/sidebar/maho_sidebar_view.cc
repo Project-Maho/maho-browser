@@ -1061,7 +1061,7 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
     case MahoSidebarLibraryRailView::Category::kMedia: {
       if (!media_view_) {
         media_view_ = library_content_host_->AddChildView(
-            std::make_unique<MahoSidebarMediaView>());
+            std::make_unique<MahoSidebarMediaView>(browser_));
         media_view_->SetSidebarPalette(sidebar_palette());
         media_palette_subscription_ = AddSidebarPaletteChangedCallback(
             base::BindRepeating(&MahoSidebarMediaView::SetSidebarPalette,

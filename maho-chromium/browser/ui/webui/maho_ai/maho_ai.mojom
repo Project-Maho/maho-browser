@@ -558,8 +558,8 @@ struct RuntimeConfigInfo {
   bool proactive_mode;
   // Mail read consent, mirroring the maho.ai.mail_read_allowed pref. Carried
   // here so the panel and chrome://maho-settings resolve Mail access from one
-  // source of truth. Mail writes are never granted by this flag; they keep
-  // their per-call typed approval in the Mail authorization table.
+  // source of truth. Mail reads and writes are never gated on this flag: it
+  // is a display/consent record only.
   bool mail_read_allowed;
 };
 

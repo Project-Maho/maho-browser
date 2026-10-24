@@ -49,35 +49,6 @@ struct BrowserActionContract {
   BrowserActionEmptyAllowlistPolicy empty_allowlist_policy;
 };
 
-// Stable public-contract reason codes for generic typing into credential-class
-// fields. Keep these strings synchronized with maho-agent permission.rs and the
-// website Agent/MCP documentation. allow_credentials requests this gate; it is
-// never evidence that the user approved it.
-inline constexpr std::string_view kCredentialTypingApprovalRequired =
-    "credential_typing_approval_required";
-inline constexpr std::string_view kCredentialTypingDenied =
-    "credential_typing_denied";
-
-enum class CredentialTypingAuthorizationAction {
-  kAllow,
-  kRequireApproval,
-};
-
-struct CredentialTypingAuthorizationDecision {
-  CredentialTypingAuthorizationAction action =
-      CredentialTypingAuthorizationAction::kAllow;
-  std::string_view reason_code;
-};
-
-constexpr CredentialTypingAuthorizationDecision AuthorizeCredentialTyping(
-    bool allow_credentials_requested) {
-  if (!allow_credentials_requested) {
-    return {CredentialTypingAuthorizationAction::kAllow, {}};
-  }
-  return {CredentialTypingAuthorizationAction::kRequireApproval,
-          kCredentialTypingApprovalRequired};
-}
-
 inline constexpr bool IsSensitive(const BrowserActionContract& contract) {
   return contract.sensitivity == BrowserActionSensitivity::kSensitive;
 }
@@ -86,21 +57,21 @@ inline constexpr bool RequiresApproval(const BrowserActionContract& contract) {
   return contract.approval == BrowserActionApproval::kRequired;
 }
 
-// Product policy: driving the browser is full access. Clicking, typing,
-// scrolling, navigating, reading a page, and managing tabs or leases never ask
-// the user for permission, no matter which controller issues the call. An
-// approval gate exists only where a capability leaves the browser:
-//
-//   * another resource broker:            mail.*, vault.*, routines.*
-//   * the consent/authority plane itself: control.*, policy.*
-//   * the local filesystem:               artifact.export,
-//                                         input.file_upload_select
-//   * OS-level (computer use) input:      browser.visual_click
-//
-// Caller identity never decides this; only the capability does. The predicate
-// is keyed on the canonical capability id so that both descriptor flavors
-// (maho::ai::CapabilityDescriptor and
-// MahoBrowserToolRegistry::CapabilityDescriptor) share one policy source.
+inline constexpr bool RequiresLease(const BrowserActionContract& contract) {
+  return contract.lease == BrowserActionLease::kRequired;
+}
+
+inline constexpr bool EmptyAllowlistFailsClosed(
+    const BrowserActionContract& contract) {
+  return contract.empty_allowlist_policy ==
+         BrowserActionEmptyAllowlistPolicy::kFailClosed;
+}
+
+// Descriptive classification only: true for capabilities whose work leaves the
+// browser (another resource broker, the consent plane, the local filesystem,
+// OS-level input). It is reported in receipts and activity metadata and never
+// gates anything — agent-driven control is full access, so no capability waits
+// on a user approval whichever surface or controller issues the call.
 inline constexpr bool CapabilityLeavesBrowserBoundary(
     std::string_view canonical_id) {
   constexpr std::string_view kOffBrowserPrefixes[] = {
@@ -112,16 +83,6 @@ inline constexpr bool CapabilityLeavesBrowserBoundary(
     }
   }
   return canonical_id == "artifact.export";
-}
-
-inline constexpr bool RequiresLease(const BrowserActionContract& contract) {
-  return contract.lease == BrowserActionLease::kRequired;
-}
-
-inline constexpr bool EmptyAllowlistFailsClosed(
-    const BrowserActionContract& contract) {
-  return contract.empty_allowlist_policy ==
-         BrowserActionEmptyAllowlistPolicy::kFailClosed;
 }
 
 inline constexpr std::string_view BrowserActionKindName(

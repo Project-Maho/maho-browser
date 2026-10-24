@@ -62,6 +62,9 @@ class MahoTabControlledBannerOverlay
   void UpdatePosition();
   gfx::Rect ComputeTargetBounds() const;
   void OnStopRequested(int64_t tab_id);
+  // Shows the banner iff the active tab has a live control activity in the
+  // control activity service; hides it otherwise.
+  void UpdateForActiveTab();
 
   const raw_ptr<Browser> browser_;
   std::unique_ptr<views::Widget> widget_;

@@ -149,6 +149,7 @@ export function PasswordGenerator({onUsePassword, store}: PasswordGeneratorProps
           <Button
             aria-label="Copy generated password"
             className="size-7 p-0"
+            disabled={!generatedPassword}
             size="icon"
             type="button"
             variant="ghost"
@@ -300,6 +301,7 @@ export function PasswordGenerator({onUsePassword, store}: PasswordGeneratorProps
       {onUsePassword ? (
         <Button
           className="mt-1 h-8 w-full gap-1.5 bg-primary text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+          disabled={!generatedPassword}
           type="button"
           onClick={() => onUsePassword(generatedPassword)}>
           <Check className="size-3.5" />
@@ -789,7 +791,9 @@ export function EditSavedPasswordDrawer(
       origins: origins.map(o => o.trim()).filter(Boolean),
       password,
       username: username.trim(),
-      notes: notes.trim() || undefined,
+      // Once the existing notes are loaded, send an empty string so clearing
+      // them reaches the Vault; undefined means "keep the stored notes".
+      notes: usernameLoaded ? notes.trim() : undefined,
       totpSecret: totpSecret.trim() || undefined,
     });
     if (!mountedRef.current) {

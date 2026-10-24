@@ -3118,8 +3118,8 @@ void MahoAIPageHandler::SetRuntimeConfig(
   prefs_->SetBoolean(maho::ai_prefs::kFinalConfirm, config->final_confirm);
   prefs_->SetBoolean(maho::ai_prefs::kProactiveMode, config->proactive_mode);
   // Mail read consent shares this pref with chrome://maho-settings, so both
-  // surfaces stay on one source of truth. Mail writes are unaffected: they
-  // keep their per-call typed approval in the Mail authorization table.
+  // surfaces stay on one source of truth. Mail writes are unaffected and are
+  // never gated on it.
   prefs_->SetBoolean(maho::ai_prefs::kMailReadAllowed,
                      config->mail_read_allowed);
   // Also reconcile when the values are unchanged and no pref observer fires.

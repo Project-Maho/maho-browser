@@ -1,4 +1,5 @@
 import type { JSX } from 'preact';
+import { useState } from 'preact/hooks';
 import { Button } from '../../ui/button';
 import { Icon } from '../../ui/icon';
 import { Input } from '../../ui/input';
@@ -43,6 +44,7 @@ function ProviderFields(props: ProviderSettingsProps) {
   const { state } = props;
   const hasStoredKey = getHasStoredKey(state);
   const providerName = getProviderName(state.provider);
+  const [confirmingClear, setConfirmingClear] = useState(false);
   return (
     <section class="ai-settings-section" aria-labelledby="connection-heading">
       <div class="ai-settings-section-heading">
@@ -96,16 +98,40 @@ function ProviderFields(props: ProviderSettingsProps) {
           >
             Save key
           </Button>
-          {hasStoredKey ? (
+          {hasStoredKey && !confirmingClear ? (
             <Button
               variant="ghost"
               class="ai-settings-action"
               disabled={state.pending !== null}
-              onClick={props.onClearApiKey}
+              onClick={() => setConfirmingClear(true)}
               aria-label="Clear API key"
             >
               Clear
             </Button>
+          ) : null}
+          {hasStoredKey && confirmingClear ? (
+            <>
+              <Button
+                variant="danger"
+                class="ai-settings-action"
+                disabled={state.pending !== null}
+                onClick={() => {
+                  setConfirmingClear(false);
+                  props.onClearApiKey();
+                }}
+                aria-label="Confirm removing saved API key"
+              >
+                Remove saved key
+              </Button>
+              <Button
+                variant="ghost"
+                class="ai-settings-action"
+                onClick={() => setConfirmingClear(false)}
+                aria-label="Keep saved API key"
+              >
+                Cancel
+              </Button>
+            </>
           ) : null}
         </div>
         <Input

@@ -1381,13 +1381,6 @@ class MahoUnifiedAgentAdapterTestHelper {
     return MahoUnifiedAgentAdapter::OnAgentPermission(user_data, tool_name, arguments);
   }
 
-  static void SetPromptOverride(MahoUnifiedAgentAdapter* adapter,
-                                PromptDecision decision) {
-    adapter->permission_prompt_override_for_testing_ = base::BindRepeating(
-        [](PromptDecision d, const std::string&, const std::string&) { return d; },
-        decision);
-  }
-
   static MahoAgentPermissionDecision RunDialog(MahoUnifiedAgentAdapter* adapter,
                                                const std::string& tool,
                                                const std::string& ext) {
@@ -1502,48 +1495,19 @@ TEST(MahoUnifiedAgentAdapterTest, NullUserDataDeniesAllTools) {
             MahoAgentPermissionDecision_Deny);
 }
 
-TEST(MahoUnifiedAgentAdapterTest, DialogAllowPersistsGrantToPrefs) {
+// The native approval dialog no longer exists: a permission decision is settled
+// by policy, so no grant is persisted and no per-extension consent is asked.
+TEST(MahoUnifiedAgentAdapterTest, PromptPolicySettlesWithoutPersistingGrants) {
   base::test::TaskEnvironment task_environment;
   TestingPrefServiceSimple prefs;
   prefs.registry()->RegisterStringPref(maho::ai_prefs::kApprovalPolicy, "prompt");
   prefs.registry()->RegisterDictionaryPref(maho::ai_prefs::kAgentToolGrants);
   MahoUnifiedAgentAdapter adapter(&prefs, nullptr);
-  MahoUnifiedAgentAdapterTestHelper::SetPromptOverride(&adapter, PromptDecision::kAllow);
-
-  // #5/#6 dialog path: "kAllow" must persist a durable grant into prefs.
-  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::RunDialog(&adapter, "mytool", "myext"),
-            MahoAgentPermissionDecision_Allow);
-
-  const auto& grants = prefs.GetDict(maho::ai_prefs::kAgentToolGrants);
-  const auto* list = grants.FindList("myext");
-  ASSERT_TRUE(list);
-  bool found = false;
-  for (const auto& item : *list) {
-    if (item.is_string() && item.GetString() == "mytool") {
-      found = true;
-    }
-  }
-  EXPECT_TRUE(found) << "kAllow must persist the grant under the extension id";
-}
-
-TEST(MahoUnifiedAgentAdapterTest, DialogAllowOnceGrantsSessionButNotPersisted) {
-  base::test::TaskEnvironment task_environment;
-  TestingPrefServiceSimple prefs;
-  prefs.registry()->RegisterStringPref(maho::ai_prefs::kApprovalPolicy, "prompt");
-  prefs.registry()->RegisterDictionaryPref(maho::ai_prefs::kAgentToolGrants);
-  MahoUnifiedAgentAdapter adapter(&prefs, nullptr);
-  MahoUnifiedAgentAdapterTestHelper::SetPromptOverride(&adapter, PromptDecision::kAllowOnce);
 
   EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::RunDialog(&adapter, "mytool", "myext"),
             MahoAgentPermissionDecision_Allow);
-
-  // kAllowOnce must NOT persist to prefs...
-  const auto& grants = prefs.GetDict(maho::ai_prefs::kAgentToolGrants);
-  EXPECT_FALSE(grants.FindList("myext"))
-      << "kAllowOnce must not write a durable grant";
-
-  // ...but must grant for the rest of the session, so a re-evaluation resolves
-  // to Allow via session_grants without needing another dialog.
+  EXPECT_FALSE(prefs.GetDict(maho::ai_prefs::kAgentToolGrants).FindList("myext"))
+      << "no approval card exists, so nothing is persisted";
   EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::EvaluateWithExt(&adapter, "mytool", "myext"),
             MahoAgentPermissionDecision_Allow);
 }

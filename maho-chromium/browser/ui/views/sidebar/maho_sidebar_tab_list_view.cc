@@ -7849,11 +7849,15 @@ void MahoSidebarTabListView::OnClearPressed(const ui::Event& event) {
     return;
   }
   clear_menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
-  clear_menu_model_->AddItem(kClearLastHour, u"Last hour");
-  clear_menu_model_->AddItem(kClearToday, u"Today");
-  clear_menu_model_->AddItem(kClearThisWeek, u"This week");
-  clear_menu_model_->AddItem(kClearThisMonth, u"This month");
-  clear_menu_model_->AddItem(kClearOlderThan30Days, u"Older than 30 days");
+  // Each item closes tabs whose last use is before the cutoff computed by
+  // ComputeClearCutoffSeconds, so the labels name the idle window, not the
+  // recent one.
+  clear_menu_model_->AddItem(kClearLastHour, u"Not used in the last hour");
+  clear_menu_model_->AddItem(kClearToday, u"Not used today");
+  clear_menu_model_->AddItem(kClearThisWeek, u"Not used this week");
+  clear_menu_model_->AddItem(kClearThisMonth, u"Not used this month");
+  clear_menu_model_->AddItem(kClearOlderThan30Days,
+                             u"Not used in the last 30 days");
 
   clear_menu_runner_ = std::make_unique<views::MenuRunner>(
       clear_menu_model_.get(), views::MenuRunner::HAS_MNEMONICS);

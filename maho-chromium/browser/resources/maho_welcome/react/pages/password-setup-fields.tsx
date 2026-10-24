@@ -379,8 +379,10 @@ export function VaultCard(props: VaultCardProps) {
                 Master Passphrase
               </Label>
               {needsInitialize && masterPassphrase ? (
-                <span className="text-[10px] text-emerald-500 font-medium">
-                  {masterPassphrase.length >= 8 ? 'Strong passphrase' : 'Entered'}
+                <span className="text-[10px] font-medium text-muted-foreground" aria-live="polite">
+                  {masterPassphrase.length >= MIN_MASTER_PASSPHRASE_LENGTH
+                    ? 'Minimum length met'
+                    : `${MIN_MASTER_PASSPHRASE_LENGTH - masterPassphrase.length} more characters needed`}
                 </span>
               ) : null}
             </div>

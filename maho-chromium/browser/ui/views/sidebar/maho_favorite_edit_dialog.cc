@@ -4,11 +4,14 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/url_formatter/url_fixer.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom.h"
 #include "ui/base/ui_base_types.h"
@@ -17,6 +20,8 @@
 #include "ui/gfx/text_constants.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/controls/textfield/textfield_controller.h"
+#include "url/gurl.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
@@ -33,7 +38,20 @@ constexpr int kFieldHeightDp = 32;
 
 using AcceptCallback = base::OnceCallback<void(std::string url)>;
 
-class FavoriteEditDialogDelegate : public views::DialogDelegate {
+// Normalizes typed input the way the omnibox does ("example.com" becomes
+// "https://example.com/"), returning an invalid GURL for blank or unusable
+// input so the dialog can refuse to save it.
+GURL NormalizeUrlInput(std::u16string_view text) {
+  const std::string trimmed = base::UTF16ToUTF8(
+      base::TrimWhitespace(text, base::TRIM_ALL));
+  if (trimmed.empty()) {
+    return GURL();
+  }
+  return url_formatter::FixupURL(trimmed, std::string());
+}
+
+class FavoriteEditDialogDelegate : public views::DialogDelegate,
+                                   public views::TextfieldController {
  public:
   FavoriteEditDialogDelegate(const std::string& initial_url,
                              AcceptCallback on_accept)
@@ -58,6 +76,7 @@ class FavoriteEditDialogDelegate : public views::DialogDelegate {
 
     url_field_ = BuildUrlField(contents.get(), initial_url);
     SetInitiallyFocusedView(url_field_);
+    UpdateSaveButtonState();
 
     SetContentsView(std::move(contents));
   }
@@ -71,6 +90,12 @@ class FavoriteEditDialogDelegate : public views::DialogDelegate {
     return u"Edit Pinned Page";
   }
 
+  // views::TextfieldController:
+  void ContentsChanged(views::Textfield* sender,
+                       const std::u16string& new_contents) override {
+    UpdateSaveButtonState();
+  }
+
  private:
   views::Textfield* BuildUrlField(views::View* parent,
                                   const std::string& value) {
@@ -81,14 +106,26 @@ class FavoriteEditDialogDelegate : public views::DialogDelegate {
     field->SetText(base::UTF8ToUTF16(value));
     field->SetAccessibleName(u"URL");
     field->SetPreferredSize(gfx::Size(0, kFieldHeightDp));
+    field->set_controller(this);
     return field;
+  }
+
+  // Save stays disabled while the field is blank or not a usable URL, so an
+  // accepted dialog always carries a valid, normalized URL.
+  void UpdateSaveButtonState() {
+    SetButtonEnabled(ui::mojom::DialogButton::kOk,
+                     NormalizeUrlInput(url_field_->GetText()).is_valid());
   }
 
   void OnAccepted() {
     if (!on_accept_) {
       return;
     }
-    std::move(on_accept_).Run(base::UTF16ToUTF8(url_field_->GetText()));
+    const GURL url = NormalizeUrlInput(url_field_->GetText());
+    if (!url.is_valid()) {
+      return;
+    }
+    std::move(on_accept_).Run(url.spec());
   }
 
   AcceptCallback on_accept_;

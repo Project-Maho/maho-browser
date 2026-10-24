@@ -41,7 +41,7 @@ internal fun MainBrowserSummaryShell(
                 stateDescription = if (state is PageSummarizer.State.Result) {
                     "summary shell visible"
                 } else {
-                    "browse for me shell visible"
+                    "page summary shell visible"
                 }
             },
     ) {

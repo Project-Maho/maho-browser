@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.models.SpaceColor
 import dev.maho.browser.models.SpaceViewModel
+import dev.maho.browser.ui.components.ConfirmDialog
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -45,6 +46,7 @@ fun SpaceCard(
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf(space.name) }
     var showColorDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     val spaceColor = Color.hsv(
         space.color.hue.toFloat(),
@@ -91,6 +93,7 @@ fun SpaceCard(
             text = { Text("Rename") },
             onClick = {
                 showMenu = false
+                renameText = space.name
                 showRenameDialog = true
             },
         )
@@ -105,8 +108,21 @@ fun SpaceCard(
             text = { Text("Delete") },
             onClick = {
                 showMenu = false
+                showDeleteConfirm = true
+            },
+        )
+    }
+
+    if (showDeleteConfirm) {
+        ConfirmDialog(
+            title = "Delete Space?",
+            message = "\"${space.name}\" and its tabs will be permanently deleted.",
+            confirmLabel = "Delete",
+            onConfirm = {
+                showDeleteConfirm = false
                 onDelete()
             },
+            onDismiss = { showDeleteConfirm = false },
         )
     }
 
@@ -123,10 +139,13 @@ fun SpaceCard(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    showRenameDialog = false
-                    onRename(renameText)
-                }) {
+                TextButton(
+                    onClick = {
+                        showRenameDialog = false
+                        onRename(renameText.trim())
+                    },
+                    enabled = renameText.isNotBlank(),
+                ) {
                     Text("OK")
                 }
             },

@@ -2448,10 +2448,12 @@ mod tests {
         assert_eq!(decoded[0].name, "browser_click");
         assert_eq!(decoded[0].description, "Click an element");
         assert_eq!(decoded[0].schema_version, 2);
-        assert!(decoded[0].policy.sensitive);
+        // Agent-driven browser control is full access: every Maho browser tool
+        // from the browser socket is auto-approved and never flagged sensitive.
+        assert!(!decoded[0].policy.sensitive);
         assert_eq!(
             decoded[0].policy.permission,
-            maho_types::tool::ToolPermission::AlwaysAsk
+            maho_types::tool::ToolPermission::AutoApprove
         );
 
         assert_eq!(decoded[1].capability_id, "tab.list");
@@ -4968,42 +4970,10 @@ fn decode_browser_descriptors(
             .and_then(|v| v.as_u64())
             .unwrap_or(1) as u32;
 
-        let policy_obj = tool.get("policy").and_then(|v| v.as_object());
-        let sensitive = policy_obj
-            .and_then(|p| p.get("sensitive").and_then(|v| v.as_bool()))
-            .unwrap_or_else(|| {
-                policy_obj
-                    .and_then(|p| p.get("sensitivity").and_then(|v| v.as_str()))
-                    .map_or(false, |s| s != "low")
-            });
-
-        let can_auto_approve = if let Some(perm) =
-            policy_obj.and_then(|p| p.get("permission").and_then(|v| v.as_str()))
-        {
-            perm == "auto_approve"
-        } else if let Some(p) = policy_obj {
-            let is_readonly = p
-                .get("mutability")
-                .and_then(|v| v.as_str())
-                .map_or(false, |m| m == "readonly");
-            let changes_authority = p
-                .get("changesAuthority")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let is_low_sensitivity = p
-                .get("sensitivity")
-                .and_then(|v| v.as_str())
-                .map_or(false, |s| s == "low");
-            is_readonly && !changes_authority && is_low_sensitivity
-        } else {
-            false
-        };
-
-        let permission = if can_auto_approve {
-            maho_types::tool::ToolPermission::AutoApprove
-        } else {
-            maho_types::tool::ToolPermission::AlwaysAsk
-        };
+        // Agent-driven browser control is full access: a Maho browser tool from
+        // the browser socket never asks for approval and is never flagged
+        // sensitive, whatever its policy metadata says.
+        let permission = maho_types::tool::ToolPermission::AutoApprove;
 
         descriptors.push(maho_agent::BrowserToolDescriptor {
             capability_id,
@@ -5012,7 +4982,7 @@ fn decode_browser_descriptors(
             input_schema,
             schema_version,
             policy: maho_types::tool::BrowserToolPolicy {
-                sensitive,
+                sensitive: false,
                 permission,
             },
         });

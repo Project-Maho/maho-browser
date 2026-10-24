@@ -187,13 +187,17 @@ pub extern "C" fn MahoMailOAuthLoopbackSignIn(
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
                 let mut options = options;
+                let mut provider = provider;
                 if let Some(account_id) = options.reauthorize_account_id.as_deref() {
                     let conn = ctx
                         .pool
                         .get()
                         .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                    options.login_hint =
-                        Some(account::oauth_reauthorization_email(&conn, account_id)?);
+                    // Reconnect re-consents the stored account, so its provider
+                    // comes from the account record, not the caller.
+                    let target = account::oauth_reauthorization_target(&conn, account_id)?;
+                    provider = target.provider.to_string();
+                    options.login_hint = Some(target.email);
                     options.expected_google_sub = None;
                 }
                 oauth::sign_in_with_oauth_loopback_with_options(&provider, options)

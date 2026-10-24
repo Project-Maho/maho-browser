@@ -3,14 +3,17 @@
 #ifndef MAHO_BROWSER_SYNC_MAHO_SYNC_RELAY_CLIENT_H_
 #define MAHO_BROWSER_SYNC_MAHO_SYNC_RELAY_CLIENT_H_
 
+#include <atomic>
 #include <memory>
 #include <deque>
+#include <set>
 #include <string>
 #include <vector>
 
 #include "base/functional/callback.h"
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/timer/timer.h"
@@ -89,6 +92,9 @@ class MahoSyncRelayClient : public network::mojom::WebSocketHandshakeClient,
     std::string server_url;
     std::string key;
     std::vector<std::string> outgoing;
+    // Delivery ids of `outgoing`, in the same order.
+    std::vector<std::string> delivery_ids;
+    bool leased = false;
   };
 
   void Poll();
@@ -96,6 +102,11 @@ class MahoSyncRelayClient : public network::mojom::WebSocketHandshakeClient,
   void SchedulePoll();
   void Connect(const std::string& server_url, const std::string& key);
   void Disconnect();
+  // Runs the core half of an envelope/ACK frame on the core sequence; replies
+  // from a connection that has since been torn down are ignored.
+  void OnCoreFrameApplied(uint64_t connection_generation,
+                          bool drain_received_tabs,
+                          bool ok);
 
   void SendAuthMessage();
   void WriteData(const std::string& data);
@@ -139,6 +150,19 @@ class MahoSyncRelayClient : public network::mojom::WebSocketHandshakeClient,
   mojo::ScopedDataPipeProducerHandle writable_;
   mojo::SimpleWatcher writable_watcher_;
   std::deque<std::string> pending_writes_;
+  // Delivery ids written to the relay whose ACK has not arrived yet. While any
+  // remain, Poll() does not lease more: a new lease requeues and resends them.
+  // After this many 2 s polls without the missing ACKs the connection is
+  // dropped, which requeues them for the next session.
+  static constexpr int kMaxPollsWaitingForAck = 15;
+  std::set<std::string> awaiting_ack_;
+  int polls_waiting_for_ack_ = 0;
+  uint64_t connection_generation_ = 0;
+  // Shared with every envelope task queued on the core sequence for the
+  // current connection. Set by the first envelope that fails to apply (on the
+  // core sequence) or by Disconnect(); queued envelopes check it before
+  // applying, so none can advance the receive cursor past a failed one.
+  scoped_refptr<base::RefCountedData<std::atomic<bool>>> envelope_apply_halted_;
   std::string pending_auth_;
   std::string pending_write_key_;
   size_t pending_write_offset_ = 0;

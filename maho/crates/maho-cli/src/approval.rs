@@ -56,26 +56,18 @@ pub fn stdin_is_tty() -> bool {
 ///   no restriction of its own, so a full-access task session may run
 ///   headless without `--approve-all`; every decision is still audited by
 ///   the permission gate.
-/// - `guard`        → the Wave 1B posture (`--approve-all` → AllowAll, TTY →
-///   Prompt, headless → DenySensitive); the whitelist ask-gate is enforced
-///   by the dispatch tier gate regardless of the posture.
+/// - `guard`        → [`ApprovalPolicy::AllowAll`]: agent-driven operations are
+///   never blocked by an approval prompt, so guard adds no ask in a TTY and no
+///   deny when headless. Only the explicit `read_only` tier refuses.
 pub fn resolve_cli_approval_policy(
-    approve_all: bool,
-    stdin_is_tty: bool,
+    _approve_all: bool,
+    _stdin_is_tty: bool,
     runtime_tier: &str,
 ) -> ApprovalPolicy {
     match parse_runtime_tier(runtime_tier) {
         maho_agent::permission::RuntimeTier::ReadOnly => ApprovalPolicy::DenySensitive,
-        maho_agent::permission::RuntimeTier::FullAccess => ApprovalPolicy::AllowAll,
-        maho_agent::permission::RuntimeTier::Guard => {
-            if approve_all {
-                ApprovalPolicy::AllowAll
-            } else if stdin_is_tty {
-                ApprovalPolicy::Prompt
-            } else {
-                ApprovalPolicy::DenySensitive
-            }
-        }
+        maho_agent::permission::RuntimeTier::FullAccess
+        | maho_agent::permission::RuntimeTier::Guard => ApprovalPolicy::AllowAll,
     }
 }
 
@@ -176,23 +168,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_maps_the_three_postures() {
-        assert_eq!(
-            resolve_cli_approval_policy(true, true, "guard"),
-            ApprovalPolicy::AllowAll
-        );
-        assert_eq!(
-            resolve_cli_approval_policy(true, false, "guard"),
-            ApprovalPolicy::AllowAll
-        );
-        assert_eq!(
-            resolve_cli_approval_policy(false, true, "guard"),
-            ApprovalPolicy::Prompt
-        );
-        assert_eq!(
-            resolve_cli_approval_policy(false, false, "guard"),
-            ApprovalPolicy::DenySensitive
-        );
+    fn resolve_never_prompts_for_guard_or_full_access() {
+        // Guard no longer asks, whatever the TTY or --approve-all says.
+        for approve_all in [true, false] {
+            for stdin_is_tty in [true, false] {
+                assert_eq!(
+                    resolve_cli_approval_policy(approve_all, stdin_is_tty, "guard"),
+                    ApprovalPolicy::AllowAll
+                );
+            }
+        }
     }
 
     #[test]
@@ -220,10 +205,10 @@ mod tests {
             resolve_cli_approval_policy(true, true, "full_access"),
             ApprovalPolicy::AllowAll
         );
-        // Unknown tier strings fail closed to guard, never to a weaker posture.
+        // Unknown tier strings fail closed to guard, which never asks either.
         assert_eq!(
             resolve_cli_approval_policy(false, false, "bogus"),
-            ApprovalPolicy::DenySensitive
+            ApprovalPolicy::AllowAll
         );
     }
 

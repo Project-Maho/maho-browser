@@ -47,6 +47,7 @@ export function ArtifactCard(
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus>('idle');
   const [exportUrl, setExportUrl] = useState<string | null>(null);
   const [deletePending, setDeletePending] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [iconFailed, setIconFailed] = useState(false);
   const renameSubmitting = useRef(false);
   const renameMenuClosing = useRef(false);
@@ -130,6 +131,7 @@ export function ArtifactCard(
       return;
     }
     closeFocusTarget.current = 'trigger';
+    setConfirmingDelete(false);
     setDeletePending(true);
     setError(null);
     try {
@@ -276,6 +278,27 @@ export function ArtifactCard(
                 {error ? (
                   <span role="alert" className="text-[11px] text-destructive">{error}</span>
                 ) : null}
+                {confirmingDelete && !deletePending ? (
+                  <div className="mt-1 flex items-center gap-1.5" role="group" aria-label={`Delete ${artifact.displayName}?`}>
+                    <span className="text-[11px] text-foreground">Delete this file?</span>
+                    <button
+                      type="button"
+                      className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      data-confirm-delete
+                      onClick={() => void deleteArtifact()}>
+                      Delete
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      onClick={() => {
+                        setConfirmingDelete(false);
+                        triggerRef.current?.focus();
+                      }}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : null}
               </>
             )}
           </div>
@@ -367,7 +390,11 @@ export function ArtifactCard(
               <ContextMenuItem
                 disabled={deletePending}
                 className="text-destructive focus:bg-destructive/10 focus:text-destructive"
-                onSelect={() => void deleteArtifact()}>
+                onSelect={() => {
+                  closeFocusTarget.current = 'trigger';
+                  setError(null);
+                  setConfirmingDelete(true);
+                }}>
                 <Trash2 className="mr-2 size-3.5" aria-hidden="true" />
                 Delete
               </ContextMenuItem>

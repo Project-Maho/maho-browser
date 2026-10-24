@@ -43,6 +43,11 @@ function menuItem(label: string): HTMLElement {
       .find(item => item.textContent?.trim() === label)!;
 }
 
+function confirmDelete(container: HTMLElement): void {
+  container.querySelector<HTMLButtonElement>('button[data-confirm-delete]')!
+      .dispatchEvent(new MouseEvent('click', {bubbles: true}));
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(next => {
@@ -109,6 +114,9 @@ describe('ArtifactCard', () => {
     await act(async () => {
       menuItem('Delete').dispatchEvent(new MouseEvent('click', {bubbles: true}));
     });
+    // Choosing Delete only asks; nothing is deleted until it is confirmed.
+    expect(onDelete).not.toHaveBeenCalled();
+    await act(async () => confirmDelete(container));
     expect(onDelete).toHaveBeenCalledTimes(1);
     expect(document.activeElement).toBe(trigger);
   });
@@ -175,6 +183,7 @@ describe('ArtifactCard', () => {
     act(() => {
       menuItem('Delete').dispatchEvent(new MouseEvent('click', {bubbles: true}));
     });
+    act(() => confirmDelete(container));
     expect(onDelete).toHaveBeenCalledTimes(1);
     expect(trigger.getAttribute('aria-disabled')).toBe('true');
 
@@ -213,6 +222,7 @@ describe('ArtifactCard', () => {
     await act(async () => {
       menuItem('Delete').dispatchEvent(new MouseEvent('click', {bubbles: true}));
     });
+    await act(async () => confirmDelete(container));
     expect(container.textContent).toContain('plan.html');
     expect(container.querySelector('[role="alert"]')?.textContent).toBe('Delete failed');
   });

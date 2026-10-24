@@ -114,27 +114,27 @@ export const ToolExecutionGroup = React.memo(function ToolExecutionGroup({
             <div className="flex flex-col mt-0.5 pl-0.5">
               {steps.map((step, idx) => (
                 <div key={step.key} className="flex flex-col">
-                  <div className="flex items-center gap-2 py-0.5 text-[12.5px] leading-5 text-zinc-300">
-                    <span className="font-mono text-xs text-zinc-500 select-none shrink-0">&gt;_</span>
+                  <div className="flex items-center gap-2 py-0.5 text-[12.5px] leading-5 text-foreground/90">
+                    <span className="font-mono text-xs text-muted-foreground select-none shrink-0">&gt;_</span>
                     <span className="font-normal truncate flex-1 min-w-0" title={step.text}>
                       {step.text}
                     </span>
                     {step.isError && (
-                      <span className="shrink-0 rounded bg-zinc-800/90 px-1.5 py-0.2 text-[10.5px] font-medium text-zinc-300 border border-zinc-700/60">
+                      <span className="shrink-0 rounded bg-secondary px-1.5 py-0.2 text-[10.5px] font-medium text-foreground/90 border border-border">
                         Error
                       </span>
                     )}
                   </div>
                   {step.isError && (step.errorDetail || step.note) && (
                     <div
-                      className="ml-5 my-1 px-2.5 py-1.5 rounded-lg bg-zinc-900/90 border border-destructive/30 font-mono text-[11px] leading-4 text-destructive/90 select-text whitespace-pre-wrap [overflow-wrap:anywhere]"
+                      className="ml-5 my-1 px-2.5 py-1.5 rounded-lg bg-background/80 border border-destructive/30 font-mono text-[11px] leading-4 text-destructive/90 select-text whitespace-pre-wrap [overflow-wrap:anywhere]"
                       data-testid="tool-step-error-detail"
                     >
                       {step.errorDetail || step.note}
                     </div>
                   )}
                   {idx < steps.length - 1 && (
-                    <div className="ml-[5px] my-0.5 h-2 w-px bg-zinc-700/60" />
+                    <div className="ml-[5px] my-0.5 h-2 w-px bg-border" />
                   )}
                 </div>
               ))}

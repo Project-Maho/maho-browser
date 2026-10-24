@@ -320,8 +320,11 @@ void ExecutePrivateCommandAction(Browser* browser,
     chrome::ReloadBypassingCache(browser, WindowOpenDisposition::CURRENT_TAB);
   } else if (action_id == "copy_url") {
     if (active) {
-      ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
-      writer.WriteText(base::UTF8ToUTF16(active->GetVisibleURL().spec()));
+      {
+        ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+        writer.WriteText(base::UTF8ToUTF16(active->GetVisibleURL().spec()));
+      }
+      ShowLinkCopiedToast(browser);
     }
   } else if (action_id == "toggle_sidebar") {
     // Local-only: must NOT persist sidebar prefs. The container flips its
@@ -872,6 +875,12 @@ void OpenCommandSuggestion(Browser* browser,
     }
 
     CopyTextToClipboard(text_to_copy);
+    // Clipboard writes always confirm with the shared copy toast.
+    if (auto* overlay =
+            MahoNotificationOverlay::GetOrCreateForBrowser(browser)) {
+      overlay->Show(u"Copied to clipboard", base::UTF8ToUTF16(text_to_copy),
+                    base::Seconds(2));
+    }
     return;
   }
 

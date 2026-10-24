@@ -4,7 +4,9 @@ constexpr char kDomScreenshotScript[] = R"MAHO_JS(
 (function() {
   'use strict';
 
-  if (window.__mahoDomScreenshotActive) return;
+  if (window.__mahoDomScreenshotActive && window.__mahoDomScreenshotCleanup) {
+    window.__mahoDomScreenshotCleanup();
+  }
   window.__mahoDomScreenshotActive = true;
 
   var sessionToken = window.__mahoDomScreenshotToken;
@@ -112,7 +114,10 @@ constexpr char kDomScreenshotScript[] = R"MAHO_JS(
     document.documentElement.appendChild(instructionEl);
   }
 
-  function cleanup() {
+  function cleanup(token) {
+    if (token !== undefined && token !== sessionToken) return;
+    if (window.__mahoDomScreenshotCleanup !== cleanup) return;
+    window.__mahoDomScreenshotCleanup = null;
     if (overlay) { overlay.remove(); overlay = null; }
     if (highlightEl) { highlightEl.remove(); highlightEl = null; }
     if (dragRectEl) { dragRectEl.remove(); dragRectEl = null; }
@@ -250,6 +255,7 @@ constexpr char kDomScreenshotScript[] = R"MAHO_JS(
     }
   }
 
+  window.__mahoDomScreenshotCleanup = cleanup;
   createOverlay();
 
   overlay.addEventListener('mousemove', onMouseMove, true);

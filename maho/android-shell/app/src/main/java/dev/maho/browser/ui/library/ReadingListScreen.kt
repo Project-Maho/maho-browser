@@ -194,7 +194,9 @@ private fun ReadingListItemRow(
                 false
             } else if (value == SwipeToDismissBoxValue.StartToEnd) {
                 onToggleRead()
-                true
+                // Toggling keeps the row in the list, so snap it back instead of
+                // leaving it settled off-screen.
+                false
             } else {
                 false
             }
@@ -218,17 +220,30 @@ private fun ReadingListItemRow(
         state = dismissState,
         backgroundContent = {
             val isDeleting = dismissState.targetValue == SwipeToDismissBoxValue.EndToStart
+            val isTogglingRead = dismissState.targetValue == SwipeToDismissBoxValue.StartToEnd
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(
-                        if (isDeleting) MaterialTheme.colorScheme.error else Color.Transparent,
+                        when {
+                            isDeleting -> MaterialTheme.colorScheme.error
+                            isTogglingRead -> MaterialTheme.colorScheme.primary
+                            else -> Color.Transparent
+                        },
                     )
                     .padding(horizontal = 16.dp),
-                contentAlignment = Alignment.CenterEnd,
+                contentAlignment = if (isTogglingRead) Alignment.CenterStart else Alignment.CenterEnd,
             ) {
                 if (isDeleting) {
                     Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes), contentDescription = "Delete", tint = MaterialTheme.colorScheme.onError)
+                } else if (isTogglingRead) {
+                    Icon(
+                        painter = painterResource(
+                            id = if (item.isRead) MahoIcon.EyeOff.drawableRes else MahoIcon.Check.drawableRes,
+                        ),
+                        contentDescription = if (item.isRead) "Mark as unread" else "Mark as read",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                    )
                 }
             }
         },

@@ -386,7 +386,9 @@ function PreviewCanvas(
     const rect = node.getBoundingClientRect();
     const pixelX = event.clientX - rect.left;
     const pixelY = event.clientY - rect.top;
-    store.addStop({x: pixelX, y: pixelY});
+    store.addStop(
+        {x: pixelX, y: pixelY},
+        {width: rect.width, height: rect.height, padding: 20});
   }, [store]);
 
   useEffect(() => {
@@ -524,6 +526,29 @@ function BottomRow(
     updateFromWaveClient(event.clientX);
   }, [updateFromWaveClient]);
 
+  const handleWaveKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = (OPACITY_MAX - OPACITY_MIN) / 20;
+    let next: number | null = null;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowUp') next = opacity + step;
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') next = opacity - step;
+    else if (event.key === 'Home') next = OPACITY_MIN;
+    else if (event.key === 'End') next = OPACITY_MAX;
+    if (next === null) return;
+    event.preventDefault();
+    opacityCallbackRef.current(Math.max(OPACITY_MIN, Math.min(OPACITY_MAX, next)));
+  }, [opacity]);
+
+  const handleDialKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+    let next: number | null = null;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowUp') next = grain + 5;
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') next = grain - 5;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = 100;
+    if (next === null) return;
+    event.preventDefault();
+    grainCallbackRef.current(Math.max(0, Math.min(100, next)));
+  }, [grain]);
+
   const handleDialDown = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     dialDraggingRef.current = true;
     updateFromDialClient(event.clientX, event.clientY);
@@ -545,6 +570,14 @@ function BottomRow(
       <div
         ref={waveRef}
         className="tp-wave-shell"
+        role="slider"
+        tabIndex={0}
+        aria-label="Opacity"
+        aria-valuemin={Math.round(OPACITY_MIN * 100)}
+        aria-valuemax={Math.round(OPACITY_MAX * 100)}
+        aria-valuenow={Math.round(opacity * 100)}
+        aria-valuetext={`${Math.round(opacity * 100)}%`}
+        onKeyDown={handleWaveKeyDown}
         onPointerDown={handleWaveDown}>
         <svg
           className="tp-wave"
@@ -572,7 +605,12 @@ function BottomRow(
         ref={dialRef}
         className="tp-dial"
         data-maho-el="D7"
-        aria-label="Adjust grain"
+        role="slider"
+        aria-label="Grain"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(grain)}
+        onKeyDown={handleDialKeyDown}
         onPointerDown={handleDialDown}>
         <div className="tp-dial-ticks">
           {Array.from({length: 16}).map((_, i) => (

@@ -62,6 +62,17 @@ export function RuntimeConfigCard({store}: {store: MahoAiStore}) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
 
+  // A refusal describes the last attempted change; it must not outlive the
+  // open panel or carry over to another session.
+  useEffect(() => {
+    if (!open) {
+      setStatusMessage(null);
+    }
+  }, [open]);
+  useEffect(() => {
+    setStatusMessage(null);
+  }, [state.currentSessionId]);
+
   useEffect(() => {
     if (!open) {
       return;

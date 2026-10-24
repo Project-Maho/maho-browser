@@ -151,6 +151,18 @@ function InteractionCard(
           className="rounded-lg border border-border/80 bg-background px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
           disabled={!actionable}
           onChange={event => setInstruction(event.target.value)}
+          onKeyDown={event => {
+            if (event.key !== 'Enter' || event.nativeEvent.isComposing || !actionable) {
+              return;
+            }
+            if (record.kind === 'confirmation') {
+              event.preventDefault();
+              confirm();
+            } else if (record.kind === 'question' && trimmed) {
+              event.preventDefault();
+              void respond({answerKind: 'text', text: trimmed});
+            }
+          }}
           placeholder="Add an instruction for the agent"
           type="text"
           value={instruction} />

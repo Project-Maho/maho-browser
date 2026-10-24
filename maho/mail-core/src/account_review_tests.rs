@@ -27,11 +27,14 @@ fn seeded() -> (Connection, [u8; 32]) {
 }
 
 #[test]
-fn acc01_outlook_reauthorization_resolves_existing_email() {
+fn acc01_outlook_reauthorization_resolves_existing_email_and_provider() {
     let (conn, _) = seeded();
     assert_eq!(
-        oauth_reauthorization_email(&conn, "review-account").unwrap(),
-        "user@example.invalid"
+        oauth_reauthorization_target(&conn, "review-account").unwrap(),
+        OAuthReauthorizationTarget {
+            email: "user@example.invalid".to_string(),
+            provider: "outlook",
+        }
     );
 }
 

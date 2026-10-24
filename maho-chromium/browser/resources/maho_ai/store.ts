@@ -77,6 +77,8 @@ type SubmissionRequest = {
   readonly intent: ChatIntent;
   readonly previousBlockedReason: AppState['chatBlockedReason'];
   readonly isQuickAction: boolean;
+  // Composer attachments captured by this request (absent for quick actions).
+  readonly composerAttachmentIds?: readonly string[];
 };
 
 interface ComposerDraftPageHandlerRemote extends ComposerDraftRemote {}
@@ -287,6 +289,7 @@ export class MahoAiStore {
   private selectionRevision = 0;
   private historySearchGeneration = 0;
   private submissionInFlight = false;
+  private readonly approvalDispatchesInFlight = new Set<string>();
   private composerDraftScope: ComposerDraftScope = {kind: 'new_task'};
   private composerDraftRevision = 0;
   private readonly composerDraftRevisionByScope = new Map<string, number>();
@@ -458,6 +461,12 @@ export class MahoAiStore {
     this.composerDraftPersistence?.schedule(this.composerDraftScope, prompt);
   }
 
+  focusComposer() {
+    this.patch(state => {
+      state.composer.focusRequest += 1;
+    });
+  }
+
   async flushComposerDraft(): Promise<void> {
     await this.composerDraftPersistence?.flush(this.composerDraftScope);
   }
@@ -538,13 +547,11 @@ export class MahoAiStore {
   }
 
   async startSession(): Promise<void> {
-    const prompt = this.state.composer.prompt.trim();
-    if (prompt) {
-      await this.startSessionThenSubmit();
-      return;
+    // Starting a session never sends the composer draft; an unsent draft stays
+    // in the composer (and in the new_task draft scope) for the user to send.
+    if (!this.state.composer.prompt.trim()) {
+      await this.composerDraftPersistence?.clear(this.composerDraftScope);
     }
-
-    await this.composerDraftPersistence?.clear(this.composerDraftScope);
     this.composerDraftScope = {kind: 'new_task'};
     const mode = this.state.developerMode ?
         InteractionMode.kDeveloper :
@@ -592,6 +599,7 @@ export class MahoAiStore {
 
       await this.resumeSession(session.sessionId, false, false);
       await this.submitCapturedRequest(session.sessionId, request);
+      this.clearSubmittedAttachments(request);
       await this.promoteAcceptedNewTaskDraft(session.sessionId);
     } catch (error) {
       this.rollbackSubmission(sessionId, request);
@@ -731,7 +739,7 @@ export class MahoAiStore {
         state.openTabs = {
           ...state.openTabs,
           loading: false,
-          loaded: true,
+          loaded: false,
           error: error instanceof Error ? error.message : String(error),
         };
       });
@@ -1097,6 +1105,7 @@ export class MahoAiStore {
         state.turnPendingBySessionId[sessionId] = true;
       });
       await this.submitCapturedRequest(sessionId, request);
+      this.clearSubmittedAttachments(request);
       if (draftScope.kind === 'new_task' &&
           scopeKey(this.composerDraftScope) === scopeKey(draftScope)) {
         await this.promoteAcceptedNewTaskDraft(sessionId);
@@ -1346,6 +1355,7 @@ export class MahoAiStore {
       intent: ChatIntent.kFreeform,
       previousBlockedReason: this.state.chatBlockedReason,
       isQuickAction: false,
+      composerAttachmentIds: composerAttachments.map(attachment => attachment.id),
     };
     this.patch(state => {
       state.composer.prompt = '';
@@ -1368,6 +1378,20 @@ export class MahoAiStore {
     if (result?.accepted === false) {
       throw new Error('Maho AI did not accept the prompt.');
     }
+  }
+
+  // Attachments are consumed by the prompt they were sent with. The "Current
+  // page" toggle is a standing preference, and anything attached while the
+  // request was in flight belongs to the next prompt.
+  private clearSubmittedAttachments(request: SubmissionRequest): void {
+    const submitted = new Set(request.composerAttachmentIds ?? []);
+    if (submitted.size === 0) {
+      return;
+    }
+    this.patch(state => {
+      state.composer.attachments = state.composer.attachments.filter(
+          attachment => attachment.kind === 'currentPage' || !submitted.has(attachment.id));
+    });
   }
 
   private async promoteAcceptedNewTaskDraft(sessionId: string): Promise<void> {
@@ -1447,7 +1471,13 @@ export class MahoAiStore {
       return;
     }
 
-    await this.pageHandler.cancelTurn(sessionId);
+    try {
+      await this.pageHandler.cancelTurn(sessionId);
+    } catch (error) {
+      // The turn is still running: keep it pending and let the caller report it.
+      console.warn('[maho-ai] CancelTurn failed', error);
+      throw error;
+    }
     this.patch(state => {
       state.turnPendingBySessionId[sessionId] = false;
     });
@@ -1463,6 +1493,12 @@ export class MahoAiStore {
       return false;
     }
 
+    // One answer per approval: a second click while the first is in flight
+    // must not dispatch a duplicate or contradictory response.
+    if (this.approvalDispatchesInFlight.has(approvalId)) {
+      return false;
+    }
+    this.approvalDispatchesInFlight.add(approvalId);
     try {
       await this.pageHandler.respondToApproval(sessionId, approvalId, approved);
       return true;
@@ -1470,6 +1506,8 @@ export class MahoAiStore {
       const message = error instanceof Error ? error.message : String(error);
       console.warn('[maho-ai] RespondToApproval failed', message);
       return false;
+    } finally {
+      this.approvalDispatchesInFlight.delete(approvalId);
     }
   }
 
@@ -2053,6 +2091,7 @@ export class MahoAiStore {
       });
     } catch (err) {
       console.warn('[maho-ai] loadAiExtensibility failed', err);
+      toast.error("Couldn't load agent profiles and tools");
     }
   }
 
@@ -2072,6 +2111,7 @@ export class MahoAiStore {
       }
     } catch (err) {
       console.error('[maho-ai] switchWorkspaceProfile failed', err);
+      toast.error('Failed to switch workspace profile');
     }
   }
 
@@ -2103,6 +2143,7 @@ export class MahoAiStore {
       }
     } catch (err) {
       console.error('[maho-ai] importProfileFromToml failed', err);
+      toast.error('Failed to import profile');
     }
   }
 
@@ -2168,6 +2209,7 @@ export class MahoAiStore {
       }
     } catch (err) {
       console.error('[maho-ai] removeCliTool failed', err);
+      toast.error('Failed to remove CLI tool');
     }
   }
 

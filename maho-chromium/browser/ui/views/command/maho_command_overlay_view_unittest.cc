@@ -297,6 +297,27 @@ TEST_F(MahoCommandOverlayViewTest,
             search_first_row->GetTitleLabelForTesting()->GetText());
 }
 
+TEST_F(MahoCommandOverlayViewTest,
+       AskMahoWithEmptyQueryKeepsFirstRowTitleAndNoAskAffordance) {
+  auto* view = CreateView(CommandOverlayMode::kSearch);
+  view->textfield()->SetText(u"ai");
+  ASSERT_TRUE(SendKey(view, ui::VKEY_TAB));
+  ASSERT_EQ(PaletteAction::kAskMaho, view->GetPaletteActionForTesting());
+  view->textfield()->SetText(u"");
+
+  std::vector<CommandSuggestion> results = MakeAskModeSuggestions(2);
+  view->UpdateResultViewsForTesting(results);
+  ASSERT_EQ(2u, view->GetRenderedResultCountForTesting());
+
+  auto* first_row = views::AsViewClass<MahoCommandResultRowView>(
+      view->GetResultsContainerForTesting()->children().front().get());
+  ASSERT_NE(nullptr, first_row);
+  EXPECT_FALSE(first_row->UsesAskGlyphForTesting());
+  EXPECT_EQ(nullptr, first_row->GetAskExplanationLabelForTesting());
+  EXPECT_EQ(base::UTF8ToUTF16(results[0].title),
+            first_row->GetTitleLabelForTesting()->GetText());
+}
+
 TEST_F(MahoCommandOverlayViewTest, NonAiModesNeverShowAskAffordanceOnAnyRow) {
   constexpr CommandOverlayMode kModes[] = {
       CommandOverlayMode::kSearch,

@@ -10,7 +10,7 @@
  */
 import { Fragment, type ComponentChildren } from 'preact';
 import { Suspense, lazy } from 'preact/compat';
-import { useLayoutEffect, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { useHashRoute } from './hooks/use-hash-route';
 import { ChatScreen } from './screens/chat/chat-screen';
 import { Icon } from './ui/icon';
@@ -150,9 +150,30 @@ declare global {
 
 export function App({ onRender = logRenderProfile }: { onRender?: ProfilerOnRenderCallback } = {}) {
   const route = useHashRoute();
+  // Number of in-app hash navigations that can be undone with history.back().
+  // Back returns to the previous SPA screen first and only asks the native
+  // shell to dismiss the web view once the SPA history is exhausted.
+  const inAppDepthRef = useRef(0);
+  const goingBackRef = useRef(false);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      if (goingBackRef.current) {
+        goingBackRef.current = false;
+        inAppDepthRef.current = Math.max(0, inAppDepthRef.current - 1);
+      } else {
+        inAppDepthRef.current += 1;
+      }
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
   const handleBack = () => {
-    if (window.MahoBridgeAndroid?.onBack) {
+    if (inAppDepthRef.current > 0) {
+      goingBackRef.current = true;
+      window.history.back();
+    } else if (window.MahoBridgeAndroid?.onBack) {
       window.MahoBridgeAndroid.onBack();
     } else if (window.webkit?.messageHandlers?.mahoBridgeNav) {
       window.webkit.messageHandlers.mahoBridgeNav.postMessage('back');

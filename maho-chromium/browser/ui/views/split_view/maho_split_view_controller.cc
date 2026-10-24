@@ -430,13 +430,20 @@ bool MahoSplitViewController::SetSplitOrientation(
   if (!split_data || !split_data->visual_data()) {
     return false;
   }
-  split_tabs::SplitTabVisualData visual_data = *split_data->visual_data();
-  if (visual_data.split_layout() == orientation) {
+  if (split_data->visual_data()->split_layout() == orientation) {
     return true;
   }
-  visual_data.set_split_layout(orientation);
-  // No layout tree at this upstream pin: SplitTabVisualData is layout+ratio.
-  *split_data->visual_data() = visual_data;
+  // Route through the model so observers (MultiContentsView layout, session
+  // service) see the change instead of mutating the visual data in place.
+  model->UpdateSplitLayout(*split_id, orientation);
+  if (auto* session_service =
+          SessionServiceFactory::GetForProfile(browser_->GetProfile())) {
+    if (const split_tabs::SplitTabVisualData* visual_data =
+            model->GetSplitData(*split_id)->visual_data()) {
+      session_service->SetSplitTabData(browser_->GetSessionID(), *split_id,
+                                       visual_data);
+    }
+  }
   return true;
 }
 

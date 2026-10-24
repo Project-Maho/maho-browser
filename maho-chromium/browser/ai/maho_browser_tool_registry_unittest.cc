@@ -341,22 +341,12 @@ TEST(MahoBrowserToolRegistryTest, ObserveContractMetadata) {
 TEST(MahoBrowserToolRegistryTest, ObserveDispatchExecutesWithoutApproval) {
   base::test::TaskEnvironment task_environment;
   ObserveStubDelegate delegate;
-  bool approval_requested = false;
-  auto approval_callback = base::BindRepeating(
-      [](bool* requested,
-         const MahoBrowserToolExecutor::BrowserActionAuthorization&) {
-        *requested = true;
-        MahoBrowserToolExecutor::BrowserActionApprovalDecision decision;
-        decision.approved = true;
-        return decision;
-      },
-      &approval_requested);
 
+  // No approval channel exists any more: the executor cannot even ask.
   MahoBrowserToolExecutor executor(
       /*browser=*/nullptr,
       /*browser_tools_v1_enabled=*/true,
       /*ai_gate=*/base::BindRepeating([] { return true; }),
-      /*action_approval_callback=*/std::move(approval_callback),
       /*browser_action_delegate_for_testing=*/&delegate,
       /*browser_action_lease_registry_for_testing=*/nullptr,
       /*browser_action_lease_holder_id=*/"test-session");
@@ -368,7 +358,6 @@ TEST(MahoBrowserToolRegistryTest, ObserveDispatchExecutesWithoutApproval) {
                      outcome = std::move(result);
                    }));
 
-  EXPECT_FALSE(approval_requested);
   EXPECT_TRUE(outcome.FindBool("ok").value_or(false));
   EXPECT_EQ(*outcome.FindString("tool"), "browser_observe");
   EXPECT_EQ(*outcome.FindString("text"), "Observed page text");
@@ -1327,7 +1316,7 @@ TEST(MahoBrowserToolRegistryTest, HybridNative_VisualClickCatalogRegistration) {
             maho::ai::BrowserActionKind::kAction);
   EXPECT_TRUE(desc->browser_action_contract->changes_authority);
   EXPECT_EQ(desc->browser_action_contract->approval,
-            maho::ai::BrowserActionApproval::kRequired);
+            maho::ai::BrowserActionApproval::kNotRequired);
   EXPECT_EQ(desc->browser_action_contract->lease,
             maho::ai::BrowserActionLease::kRequired);
 }

@@ -117,11 +117,16 @@ async function animateSelector(
   await animation.finished.catch(() => undefined);
 }
 
-function resolveVaultLabel(passwordSetup: PasswordSetupState): string {
+function resolveVaultLabel(passwordSetup: PasswordSetupState): string | null {
   if (passwordSetup.passwordManagerSkipped) {
     return 'Passwords set for later';
   }
-  const provider = passwordSetup.providerStatus?.provider;
+  // The default (account escrow) flow never visits PasswordSetup, so there is
+  // no provider choice to report.
+  if (passwordSetup.providerStatus === null) {
+    return null;
+  }
+  const provider = passwordSetup.providerStatus.provider;
   if (provider === PASSWORD_PROVIDER_KIND.Bitwarden) {
     return 'Bitwarden connected';
   }
@@ -171,21 +176,35 @@ export function CompletionContent({store}: {store: MahoWelcomeStore}) {
   const selectedEngine = snapshot.searchEngines.find(
       engine => engine.keyword === snapshot.selectedEngine);
   const engineName = selectedEngine?.name || 'Google';
-  const importedBrowserName = snapshot.availableBrowsers[0]?.name.split(' - ')[0] || '';
-  const browserDetected = getBrowserIconKey(importedBrowserName) !== '';
+  // Only report an import that actually finished; detecting a browser is not
+  // the same as importing from it.
+  const importSucceeded = snapshot.importStarted &&
+      snapshot.importState.phase === 'complete';
+  const importedBrowser = snapshot.importState.browserIndex === null
+    ? undefined
+    : snapshot.availableBrowsers.find(
+        browser => browser.index === snapshot.importState.browserIndex);
+  const importedBrowserName = importedBrowser?.name.split(' - ')[0] || '';
+  const browserDetected = importSucceeded && importedBrowserName !== '' &&
+      getBrowserIconKey(importedBrowserName) !== '';
+  const vaultLabel = resolveVaultLabel(snapshot.passwordSetup);
   const essentialsCount = snapshot.selectedEssentials.size;
 
   const rows = useMemo<CompletionRow[]>(() => {
     const list: CompletionRow[] = [
       {key: 'search', label: `${engineName} search configured`},
-      {key: 'vault', label: resolveVaultLabel(snapshot.passwordSetup)},
     ];
+    if (vaultLabel !== null) {
+      list.push({key: 'vault', label: vaultLabel});
+    }
     if (browserDetected) {
       list.push({key: 'browser', label: `${importedBrowserName} imported`});
     }
-    list.push({key: 'essentials', label: 'Essentials pinned', count: essentialsCount});
+    if (essentialsCount > 0) {
+      list.push({key: 'essentials', label: 'Essentials pinned', count: essentialsCount});
+    }
     return list;
-  }, [engineName, browserDetected, importedBrowserName, essentialsCount, snapshot.passwordSetup]);
+  }, [engineName, browserDetected, importedBrowserName, essentialsCount, vaultLabel]);
 
   const prefersReduced = useMemo(() =>
       typeof window !== 'undefined' && window.matchMedia

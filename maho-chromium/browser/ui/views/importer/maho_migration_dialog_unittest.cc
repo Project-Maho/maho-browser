@@ -14,6 +14,8 @@
 #include "maho/browser/importer/maho_browser_detector.h"
 #include "maho/components/maho_importer/maho_importer_constants.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/events/event.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/test/views_test_base.h"
@@ -306,6 +308,70 @@ TEST_F(MahoMigrationDialogViewTest, DialogPreferredSize720x540) {
   EXPECT_EQ(preferred.height(), 540);
 
   widget->CloseNow();
+}
+
+TEST_F(MahoMigrationDialogViewTest, KeyboardSelectsBrowserCard) {
+  std::vector<DetectedBrowser> browsers;
+
+  DetectedBrowser chrome;
+  chrome.display_name = "Chrome";
+  chrome.type = BrowserType::kChrome;
+  chrome.services_supported = mojom::kImportBookmarks;
+  browsers.push_back(chrome);
+
+  auto dialog_view = std::make_unique<MahoMigrationDialogView>(
+      nullptr, browsers, base::BindOnce([](bool, uint32_t) {}));
+  MahoMigrationDialogView* view_ptr = dialog_view.get();
+
+  views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
+      std::move(dialog_view), GetContext(), gfx::NativeView());
+  widget->Show();
+
+  auto& cards = GetBrowserCards(view_ptr);
+  ASSERT_EQ(cards.size(), 1u);
+  EXPECT_FALSE(view_ptr->import_button_enabled_for_testing());
+
+  ui::KeyEvent space(ui::EventType::kKeyPressed, ui::VKEY_SPACE,
+                     ui::EF_NONE);
+  EXPECT_TRUE(cards[0]->OnKeyPressed(space));
+  EXPECT_TRUE(cards[0]->selected());
+  EXPECT_EQ(view_ptr->selected_browser_index_for_testing(), 0u);
+  EXPECT_TRUE(view_ptr->import_button_enabled_for_testing());
+
+  widget->CloseNow();
+}
+
+TEST_F(MahoMigrationDialogViewTest, CloseAfterSuccessIsNotCancellation) {
+  std::vector<DetectedBrowser> browsers;
+
+  DetectedBrowser chrome;
+  chrome.display_name = "Chrome";
+  chrome.type = BrowserType::kChrome;
+  chrome.services_supported = mojom::kImportBookmarks;
+  browsers.push_back(chrome);
+
+  bool callback_called = false;
+  bool was_cancelled = true;
+  auto dialog_view = std::make_unique<MahoMigrationDialogView>(
+      nullptr, browsers,
+      base::BindOnce(
+          [](bool* called, bool* cancelled, bool was_c, uint32_t) {
+            *called = true;
+            *cancelled = was_c;
+          },
+          &callback_called, &was_cancelled));
+  MahoMigrationDialogView* view_ptr = dialog_view.get();
+
+  views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
+      std::move(dialog_view), GetContext(), gfx::NativeView());
+  widget->Show();
+
+  TransitionTo(view_ptr, MahoMigrationDialogView::DialogState::kSuccess);
+  OnCancelClicked(view_ptr);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(callback_called);
+  EXPECT_FALSE(was_cancelled);
 }
 
 }  // namespace maho

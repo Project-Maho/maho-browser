@@ -36,32 +36,34 @@ export function ShortcutRecordingDialog({
 }: ShortcutRecordingDialogProps) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const resetWatchdog = () => {
+  // The watchdog only runs while the dialog is waiting for keystrokes. Once a
+  // combo or a conflict is on screen the user is deciding, so it must never
+  // dismiss the dialog and discard their input.
+  const awaitingKeys = open && !recordedCombo && !conflictAction;
+  const clearWatchdog = () => {
     if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+  };
+  const resetWatchdog = () => {
+    clearWatchdog();
     timerRef.current = setTimeout(() => {
       onCancel();
     }, 5000);
   };
 
   useEffect(() => {
-    if (open) {
+    if (awaitingKeys) {
       resetWatchdog();
+    } else {
+      clearWatchdog();
     }
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (recordedCombo) {
-      resetWatchdog();
-    }
-  }, [recordedCombo]);
+    return clearWatchdog;
+  }, [awaitingKeys]);
 
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      resetWatchdog();
+      if (awaitingKeys) resetWatchdog();
       if (e.key === 'Escape') {
         e.preventDefault();
         onCancel();
@@ -75,7 +77,7 @@ export function ShortcutRecordingDialog({
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [open, onCancel, onClear]);
+  }, [open, awaitingKeys, onCancel, onClear]);
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onCancel(); }}>
@@ -104,7 +106,9 @@ export function ShortcutRecordingDialog({
             </div>
           ) : (
             <p className="text-sm text-muted-foreground text-center">
-              Press your key combination on your keyboard now... (5s timeout)
+              {recordedCombo
+                ? 'Save this shortcut, or press another key combination.'
+                : 'Press your key combination on your keyboard now... (5s timeout)'}
             </p>
           )}
           <div className="font-mono text-2xl font-bold px-4 py-2 bg-background border rounded-lg min-w-[150px] text-center shadow-inner">
@@ -116,7 +120,8 @@ export function ShortcutRecordingDialog({
           {conflictAction ? (
             <>
               <Button onClick={onSave}>Reassign</Button>
-              <Button variant="secondary" onClick={onTryAgain}>Cancel</Button>
+              <Button variant="secondary" onClick={onTryAgain}>Try again</Button>
+              <Button variant="secondary" onClick={onCancel}>Cancel</Button>
             </>
           ) : (
             <>

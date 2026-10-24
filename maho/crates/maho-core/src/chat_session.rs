@@ -2,8 +2,7 @@
 
 use futures_util::StreamExt;
 use std::ffi::{c_char, c_void, CString};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
@@ -96,8 +95,46 @@ pub struct ChatSession {
     history: Vec<serde_json::Value>,
     active_task: Option<JoinHandle<()>>,
     event_sink: Option<MahoChatEventSink>,
-    /// Bumped on every cancel/new run; a run only emits while its id is current.
-    generation: Arc<AtomicU64>,
+    /// Bumped on every cancel/new run/sink replacement; a run only emits while
+    /// its id is current, and only while holding the gate.
+    gate: Arc<CallbackGate>,
+}
+
+/// Callback quiescence barrier shared by a session and its runs.
+///
+/// A run holds the lock across the generation check *and* the native callback,
+/// so `invalidate` (which takes the same lock to bump the generation) returns
+/// only once no callback is executing, and every later check sees the new
+/// generation. After `invalidate` returns, the outgoing sink's `user_data` is
+/// never touched again and may be freed by the caller.
+///
+/// Contract: sink callbacks must not call back into the owning `ChatSession`
+/// (cancel, send, set_event_sink, free) — that would self-deadlock on this
+/// non-reentrant lock. The Swift and JNI sinks only enqueue into their own
+/// buffer under a leaf lock.
+struct CallbackGate {
+    generation: Mutex<u64>,
+}
+
+impl CallbackGate {
+    fn new() -> Self {
+        Self {
+            generation: Mutex::new(0),
+        }
+    }
+
+    /// Poisoning cannot weaken the barrier: the guarded value is a plain
+    /// counter, so a panicked holder leaves it consistent.
+    fn lock(&self) -> MutexGuard<'_, u64> {
+        self.generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Retires the current generation, waiting out any in-flight callback.
+    fn invalidate(&self) {
+        *self.lock() += 1;
+    }
 }
 
 impl ChatSession {
@@ -115,7 +152,7 @@ impl ChatSession {
             history,
             active_task: None,
             event_sink: None,
-            generation: Arc::new(AtomicU64::new(0)),
+            gate: Arc::new(CallbackGate::new()),
         }
     }
 
@@ -136,6 +173,9 @@ impl ChatSession {
     }
 
     pub fn set_event_sink(&mut self, sink: MahoChatEventSink) {
+        // The in-flight run captured the outgoing sink; quiesce it so the caller
+        // may release the old `user_data` as soon as this returns.
+        self.abort_and_join();
         self.event_sink = Some(sink);
     }
 
@@ -245,10 +285,11 @@ impl ChatSession {
         }
     }
 
+    /// Joins the outgoing run's *callbacks* (not its task): on return no sink
+    /// callback is executing and none will run again. Abort only lands at an
+    /// await point, so the task itself may linger but can no longer emit.
     fn abort_and_join(&mut self) {
-        // Invalidate the outgoing run first: abort only lands at an await point,
-        // so a callback already in flight must not reach the sink afterwards.
-        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.gate.invalidate();
         if let Some(task) = self.active_task.take() {
             task.abort();
         }
@@ -284,10 +325,13 @@ impl ChatSession {
             .collect();
 
         let runtime = get_runtime();
+        // `&mut self` excludes a concurrent invalidate, so this id stays current
+        // until the next cancel/trigger/sink replacement/drop.
+        let run_id = *self.gate.lock();
         let run_sink = RunSink {
             sink,
-            generation: Arc::clone(&self.generation),
-            run_id: self.generation.load(Ordering::SeqCst),
+            gate: Arc::clone(&self.gate),
+            run_id,
         };
         let handle = runtime.spawn(async move {
             run_completion(config, messages, tools, run_sink).await;
@@ -309,42 +353,39 @@ fn get_runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| Runtime::new().expect("Failed to create tokio runtime"))
 }
 
-/// Event sink bound to a single completion run. Every callback is gated on the
-/// session's generation counter so a cancelled/superseded run can never emit
-/// into the run that replaced it.
+/// Event sink bound to a single completion run. Every callback runs under the
+/// session's `CallbackGate` and only while this run's generation is current, so
+/// a cancelled/superseded/dropped run can never emit, and invalidation waits for
+/// an emission already in progress.
 struct RunSink {
     sink: MahoChatEventSink,
-    generation: Arc<AtomicU64>,
+    gate: Arc<CallbackGate>,
     run_id: u64,
 }
 
 impl RunSink {
-    fn is_current(&self) -> bool {
-        self.generation.load(Ordering::SeqCst) == self.run_id
+    fn emit(&self, deliver: impl FnOnce(&MahoChatEventSink)) {
+        let generation = self.gate.lock();
+        if *generation == self.run_id {
+            deliver(&self.sink);
+        }
+        drop(generation);
     }
 
     fn on_token(&self, token: &str) {
-        if self.is_current() {
-            self.sink.on_token(token);
-        }
+        self.emit(|sink| sink.on_token(token));
     }
 
     fn on_thinking(&self, thinking: &str) {
-        if self.is_current() {
-            self.sink.on_thinking(thinking);
-        }
+        self.emit(|sink| sink.on_thinking(thinking));
     }
 
     fn on_complete(&self, full_text: &str, tool_calls_json: &str) {
-        if self.is_current() {
-            self.sink.on_complete(full_text, tool_calls_json);
-        }
+        self.emit(|sink| sink.on_complete(full_text, tool_calls_json));
     }
 
     fn on_error(&self, error: String) {
-        if self.is_current() {
-            self.sink.on_error(error);
-        }
+        self.emit(|sink| sink.on_error(error));
     }
 }
 
@@ -352,7 +393,7 @@ impl From<MahoChatEventSink> for RunSink {
     fn from(sink: MahoChatEventSink) -> Self {
         Self {
             sink,
-            generation: Arc::new(AtomicU64::new(0)),
+            gate: Arc::new(CallbackGate::new()),
             run_id: 0,
         }
     }
@@ -1364,13 +1405,71 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::channel();
         let state = Box::new(CallbackState { events: Mutex::new(Vec::new()), event_tx });
         let sink = MahoChatEventSink { on_token: Some(on_token), on_thinking: None, on_complete: Some(on_complete), on_error: Some(on_error), user_data: (&*state as *const CallbackState).cast_mut().cast() };
-        let generation = Arc::new(AtomicU64::new(1));
-        let run = RunSink { sink, generation: Arc::clone(&generation), run_id: 1 };
+        let gate = Arc::new(CallbackGate::new());
+        let run = RunSink { sink, gate: Arc::clone(&gate), run_id: 0 };
         run.on_token("live");
-        generation.fetch_add(1, Ordering::SeqCst);
+        gate.invalidate();
         run.on_token("stale");
         run.on_error("stale".into());
         run.on_complete("stale", "");
         assert_eq!(*state.events.lock().unwrap(), vec![CallbackEvent::Token("live".into())]);
+    }
+
+    #[test]
+    fn review_sink_replacement_retires_the_outgoing_run() {
+        let (event_tx, _event_rx) = mpsc::channel();
+        let state = Box::new(CallbackState { events: Mutex::new(Vec::new()), event_tx });
+        let sink = MahoChatEventSink { on_token: Some(on_token), on_thinking: None, on_complete: Some(on_complete), on_error: Some(on_error), user_data: (&*state as *const CallbackState).cast_mut().cast() };
+        let mut session = ChatSession::new(ChatConfig { api_key: String::new(), endpoint: String::new(), model: String::new(), system_instruction: String::new() });
+        session.set_event_sink(sink.clone());
+        let run = RunSink { sink: sink.clone(), gate: Arc::clone(&session.gate), run_id: *session.gate.lock() };
+        run.on_token("live");
+        session.set_event_sink(sink);
+        run.on_token("stale");
+        drop(session);
+        run.on_complete("stale", "");
+        assert_eq!(*state.events.lock().unwrap(), vec![CallbackEvent::Token("live".into())]);
+    }
+
+    /// Callback context that parks inside `on_token` until released, recording
+    /// whether the callback is still executing.
+    struct BlockingState {
+        entered_tx: mpsc::Sender<()>,
+        release_rx: Mutex<mpsc::Receiver<()>>,
+        exited: std::sync::atomic::AtomicBool,
+    }
+
+    unsafe extern "C" fn blocking_on_token(user_data: *mut c_void, _token: *const c_char) {
+        let state = &*(user_data.cast::<BlockingState>());
+        let _ = state.entered_tx.send(());
+        let _ = state.release_rx.lock().unwrap().recv_timeout(TEST_TIMEOUT);
+        state.exited.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[test]
+    fn review_cancel_waits_for_in_flight_callback() {
+        let server = TestServer::spawn();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let state = Arc::new(BlockingState { entered_tx, release_rx: Mutex::new(release_rx), exited: std::sync::atomic::AtomicBool::new(false) });
+        let mut session = ChatSession::new(ChatConfig { api_key: String::new(), endpoint: server.endpoint(), model: "test".into(), system_instruction: String::new() });
+        session.set_event_sink(MahoChatEventSink { on_token: Some(blocking_on_token), on_thinking: None, on_complete: None, on_error: None, user_data: Arc::as_ptr(&state).cast_mut().cast() });
+        assert!(session.send_user_turn("hi"));
+        let _request = server.captured_request();
+        entered_rx.recv_timeout(TEST_TIMEOUT).expect("callback entered");
+
+        // The in-flight callback holds the gate, so invalidation cannot pass it.
+        assert!(matches!(session.gate.generation.try_lock(), Err(std::sync::TryLockError::WouldBlock)));
+
+        let observer = Arc::clone(&state);
+        let canceller = thread::spawn(move || {
+            session.cancel();
+            // Freeing the context is safe only if the callback already returned.
+            let exited = observer.exited.load(std::sync::atomic::Ordering::SeqCst);
+            drop(session);
+            exited
+        });
+        release_tx.send(()).expect("release callback");
+        assert!(canceller.join().expect("canceller did not panic"), "cancel returned while a callback was executing");
     }
 }

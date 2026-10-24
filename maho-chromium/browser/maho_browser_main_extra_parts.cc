@@ -1863,113 +1863,12 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
     return vault_credential_handles_.size() + vault_credential_grants_.size();
   }
 
-std::string FormatMailActionDetails(const std::string& action_name,
-                                    const std::string& request_json) {
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(request_json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) {
-    return request_json;
-  }
-  const base::DictValue& dict = parsed->GetDict();
-  std::string formatted;
-
-  if (action_name == "Add Mail Account") {
-    if (const std::string* email = dict.FindString("email")) {
-      formatted += "• Account: " + *email + "\n";
-    }
-    if (const std::string* name = dict.FindString("display_name")) {
-      formatted += "• Name: " + *name + "\n";
-    }
-    if (const std::string* host = dict.FindString("imap_host")) {
-      formatted += "• IMAP: " + *host;
-      if (std::optional<int> port = dict.FindInt("imap_port")) {
-        formatted += ":" + base::NumberToString(*port);
-      }
-      formatted += "\n";
-    }
-    if (const std::string* host = dict.FindString("smtp_host")) {
-      formatted += "• SMTP: " + *host;
-      if (std::optional<int> port = dict.FindInt("smtp_port")) {
-        formatted += ":" + base::NumberToString(*port);
-      }
-      formatted += "\n";
-    }
-    if (dict.FindString("password")) {
-      formatted += "• Password: ••••••••\n";
-    }
-  } else if (action_name == "Send Email" || action_name == "Save Mail Draft" || action_name == "Queue Email") {
-    if (const std::string* to = dict.FindString("to")) {
-      formatted += "• To: " + *to + "\n";
-    }
-    if (const std::string* subject = dict.FindString("subject")) {
-      formatted += "• Subject: " + *subject + "\n";
-    }
-  }
-
-  if (formatted.empty()) {
-    base::DictValue sanitized = dict.Clone();
-    if (sanitized.FindString("password")) {
-      sanitized.Set("password", "••••••••");
-    }
-    if (sanitized.FindString("oauth2_access_token")) {
-      sanitized.Set("oauth2_access_token", "[REDACTED]");
-    }
-    if (sanitized.FindString("oauth2_refresh_token")) {
-      sanitized.Set("oauth2_refresh_token", "[REDACTED]");
-    }
-    base::JSONWriter::WriteWithOptions(
-        sanitized, base::JSONWriter::OPTIONS_PRETTY_PRINT, &formatted);
-  }
-
-  return formatted;
-}
-
   base::RepeatingCallback<Profile*()> mail_profile_resolver_for_testing_;
-  base::RepeatingCallback<bool(const std::string&, const std::string&)>
-      mail_approval_presenter_for_testing_;
 
   Profile* GetMailProfile() {
     return mail_profile_resolver_for_testing_
                ? mail_profile_resolver_for_testing_.Run()
                : GetProfile();
-  }
-
-  bool ConfirmMailWriteAction(const std::string& action_name,
-                              const std::string& details) {
-    if (mail_approval_presenter_for_testing_) {
-      return mail_approval_presenter_for_testing_.Run(action_name, details);
-    }
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-    Profile* profile = GetMailProfile();
-    auto* adapter = profile
-                        ? MahoUnifiedAgentAdapter::FindForPrefs(profile->GetPrefs())
-                        : nullptr;
-    if (!adapter) {
-      VLOG(1) << "[maho-approval] denied without chat listener: " << action_name;
-      return false;
-    }
-    base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
-    struct Decision {
-      bool approved = false;
-      base::OnceClosure quit;
-    };
-    auto decision = std::make_shared<Decision>();
-    decision->quit = run_loop.QuitClosure();
-    adapter->RequestBoundaryApproval(
-        action_name, "Approve this boundary action: " + action_name,
-        base::BindOnce([](std::shared_ptr<Decision> decision, bool approved) {
-          decision->approved = approved;
-          if (decision->quit) {
-            std::move(decision->quit).Run();
-          }
-        }, decision));
-    base::OneShotTimer timeout;
-    timeout.Start(FROM_HERE, base::Seconds(120), run_loop.QuitClosure());
-    run_loop.Run();
-    decision->quit.Reset();
-    VLOG(1) << "[maho-approval] " << action_name
-            << " approved=" << decision->approved;
-    return decision->approved;
   }
 
   maho::ai::MailAuthorizationContext GetMailAuthorizationContext() override {
@@ -1997,32 +1896,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
                                 ? maho::ai::MailGlobalPolicy::kAllow
                                 : maho::ai::MailGlobalPolicy::kPrompt;
     return context;
-  }
-
-  bool ConfirmMailToolApproval(std::string_view tool_name,
-                               std::string_view redacted_arguments) override {
-    return ConfirmMailWriteAction(std::string(tool_name),
-                                  std::string(redacted_arguments));
-  }
-
-  bool ConfirmCredentialTypingApproval(
-      std::string_view tool_name,
-      const maho::ResolvedMahoMcpTarget& target) override {
-    const bool approved = ConfirmMailWriteAction(
-        std::string(tool_name), "Use credentials in the selected browser tab.");
-    VLOG(1) << "[maho-approval] credential typing approved=" << approved
-            << " browser: " << target.browser_id << " tab: " << target.tab_id;
-    return approved;
-  }
-
-  bool ConfirmBrowserActionApproval(
-      std::string_view tool_name,
-      const maho::ResolvedMahoMcpTarget& target) override {
-    const bool approved = ConfirmMailWriteAction(
-        std::string(tool_name), "Perform the requested browser boundary action.");
-    VLOG(1) << "[maho-approval] boundary action approved=" << approved
-            << " browser: " << target.browser_id << " tab: " << target.tab_id;
-    return approved;
   }
 
   maho::MahoMcpFeatureGates GetFeatureGates() override {
@@ -2341,11 +2214,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailAddAccount(
       const std::string& request_json,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Add Mail Account",
-                                FormatMailActionDetails("Add Mail Account", request_json))) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2368,11 +2236,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailDeleteAccount(
       const std::string& account_id,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Delete Mail Account",
-                                "Account ID: " + account_id)) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2410,11 +2273,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailReconnectAccount(
       const std::string& account_id,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Reconnect Mail Account",
-                                "Account ID: " + account_id)) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2426,11 +2284,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailImportMigrationArchive(
       const std::string& archive_json,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Import Migration Archive",
-                                "Archive JSON: " + archive_json)) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2457,14 +2310,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
 
   void MailSendEmail(
       const std::string& request_json,
-      bool already_authorized,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!already_authorized &&
-        !ConfirmMailWriteAction("Send Email",
-                                FormatMailActionDetails("Send Email", request_json))) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2475,14 +2321,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
 
   void MailSaveDraft(
       const std::string& request_json,
-      bool already_authorized,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!already_authorized &&
-        !ConfirmMailWriteAction("Save Mail Draft",
-                                FormatMailActionDetails("Save Mail Draft", request_json))) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2494,15 +2333,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailUpdateDraft(
       const std::string& draft_id,
       const std::string& request_json,
-      bool already_authorized,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!already_authorized &&
-        !ConfirmMailWriteAction(
-            "Update Mail Draft",
-            "Draft ID: " + draft_id + "\nRequest JSON: " + request_json)) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2514,11 +2345,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailQueueEmail(
       const std::string& request_json,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Queue Email",
-                                FormatMailActionDetails("Queue Email", request_json))) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -6334,13 +6160,10 @@ MahoMcpBrowserDelegateImpl* GetMcpBrowserDelegate() {
 
 std::unique_ptr<maho::MahoMcpBrowserDelegate>
 maho::CreateMailDelegateForTesting(
-    base::RepeatingCallback<Profile*()> profile_resolver,
-    base::RepeatingCallback<bool(const std::string&, const std::string&)>
-        approval_presenter) {
+    base::RepeatingCallback<Profile*()> profile_resolver) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   auto delegate = std::make_unique<MahoMcpBrowserDelegateImpl>();
   delegate->mail_profile_resolver_for_testing_ = std::move(profile_resolver);
-  delegate->mail_approval_presenter_for_testing_ = std::move(approval_presenter);
   return delegate;
 }
 

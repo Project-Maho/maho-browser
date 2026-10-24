@@ -30,7 +30,6 @@ class MdTextButton;
 class ScrollView;
 class ImageButton;
 class MenuRunner;
-class ImageView;
 }  // namespace views
 
 class MahoSpaceContextMenu;
@@ -66,9 +65,11 @@ class MahoSpacesOverlayColumnView : public views::View {
   gfx::Size GetMinimumSize() const override;
 
   bool OnMousePressed(const ui::MouseEvent& event) override;
+  bool OnKeyPressed(const ui::KeyEvent& event) override;
   ui::Cursor GetCursor(const ui::MouseEvent& event) override;
 
   std::u16string GetTitleTextForTesting() const;
+  // Accessible names of the rendered tab sections, in order.
   std::vector<std::u16string> GetSectionTitlesForTesting() const;
 
  private:
@@ -93,13 +94,10 @@ class MahoSpacesOverlayColumnView : public views::View {
   raw_ptr<views::Label> empty_state_label_ = nullptr;
   std::vector<raw_ptr<MahoSpacesOverlayTabRowView>> tab_row_views_;
 
-  raw_ptr<views::ImageView> clear_arrow_ = nullptr;
-  raw_ptr<views::Label> clear_label_ = nullptr;
+  std::vector<std::u16string> section_names_;
 
-  raw_ptr<views::Label> tag_chip_ = nullptr;
   raw_ptr<views::ImageButton> edit_button_ = nullptr;
   raw_ptr<views::ImageButton> menu_button_ = nullptr;
-  raw_ptr<views::ImageView> drag_handle_ = nullptr;
 
   MahoSidebarPalette palette_;
 

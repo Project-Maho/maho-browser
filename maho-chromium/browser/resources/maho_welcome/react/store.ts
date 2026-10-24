@@ -48,6 +48,7 @@ interface MutableWelcomeState {
   importStarted: boolean;
   importStage: ImportStage;
   searchEngines: SearchEngineInfo[];
+  searchEnginesLoaded: boolean;
   selectedEngine: string | null;
   essentialSites: EssentialSite[];
   selectedEssentials: Set<string>;
@@ -72,6 +73,9 @@ export class MahoWelcomeStore {
   private readonly pageHandler = new PageHandlerRemote();
   private state: WelcomeState = createInitialState();
   private authReturnPage: WelcomePage | null = null;
+  // Page the user advanced to Completion from; Back returns there instead of
+  // the numerically previous page, which may never have been visited.
+  private completionReturnPage: WelcomePage | null = null;
   // Generation of the latest BYOK readiness operation; only the newest
   // operation may apply its result.
   private byokCheckGeneration = 0;
@@ -87,12 +91,17 @@ export class MahoWelcomeStore {
           void type;
           void itemsImported;
           this.patch(draft => {
+            const failed = complete && error !== '';
             draft.importState = {
-              phase: complete ? 'complete' : 'running',
+              phase: failed ? 'error' : complete ? 'complete' : 'running',
               statusMessage: error,
               browserIndex: draft.importState.browserIndex,
             };
-            if (complete) {
+            // A failed import stays on ImportProgress, which renders the error
+            // with Try again / Back. Only a successful import advances, and
+            // only if the user is still on the progress page.
+            if (complete && !failed &&
+                draft.currentPage === WelcomePage.ImportProgress) {
               draft.currentPage = WelcomePage.SourceSelect;
               draft.importStage = 'B';
               draft.direction = 'forward';
@@ -132,6 +141,7 @@ export class MahoWelcomeStore {
 
       this.patch(draft => {
         draft.searchEngines = engines;
+        draft.searchEnginesLoaded = true;
         draft.selectedEngine = engines.find(e => e.isDefault)?.keyword ?? null;
         draft.essentialSites = sites;
         draft.availableBrowsers = browsers;
@@ -200,6 +210,20 @@ export class MahoWelcomeStore {
   }
 
   nextPage(): void {
+    if (this.state.currentPage === WelcomePage.ImportProgress) {
+      // Import progress is transient: it is left only by the native import
+      // result (success) or by Try again / Back after a failure.
+      return;
+    }
+
+    if (this.state.currentPage === WelcomePage.SourceSelect &&
+        this.state.importStage === 'A') {
+      // Advancing past the import choice without importing is a skip; never
+      // land on the transient ImportProgress page.
+      this.skipImport();
+      return;
+    }
+
     if (this.state.currentPage === WelcomePage.Auth) {
       if (this.state.auth.status !== 'success') {
         return;
@@ -261,7 +285,44 @@ export class MahoWelcomeStore {
   }
 
   prevPage(): void {
+    if (this.state.currentPage === WelcomePage.ImportProgress &&
+        this.state.importState.phase === 'running') {
+      return;
+    }
     this.patch(draft => {
+      if (draft.currentPage === WelcomePage.ImportProgress) {
+        draft.currentPage = WelcomePage.SourceSelect;
+        draft.importStage = 'A';
+        draft.importState = {
+          phase: 'idle',
+          statusMessage: '',
+          browserIndex: draft.importState.browserIndex,
+        };
+        draft.direction = 'backward';
+        return;
+      }
+      if (draft.currentPage === WelcomePage.SearchEngine) {
+        // ImportProgress is transient; Back from SearchEngine returns to the
+        // default-browser stage of SourceSelect.
+        draft.currentPage = WelcomePage.SourceSelect;
+        draft.importStage = 'B';
+        draft.direction = 'backward';
+        return;
+      }
+      if (draft.currentPage === WelcomePage.Completion) {
+        const origin = this.completionReturnPage;
+        // PasswordSetup / SyncKeyBackup are one-shot ceremonies whose secrets
+        // are scrubbed on completion, so Back skips over them.
+        draft.currentPage =
+            origin !== null && origin !== WelcomePage.PasswordSetup &&
+                origin !== WelcomePage.SyncKeyBackup ?
+            origin :
+            draft.aiSetup.provider === 'maho-managed' ?
+            WelcomePage.PlanSelect :
+            WelcomePage.AIProvider;
+        draft.direction = 'backward';
+        return;
+      }
       if (draft.currentPage === WelcomePage.PlanSelect) {
         draft.currentPage = WelcomePage.AIProvider;
         draft.direction = 'backward';
@@ -295,6 +356,13 @@ export class MahoWelcomeStore {
           (current & itemFlag) ? (current & ~itemFlag) : (current | itemFlag);
       draft.importItemSelections.set(browserIndex, next);
     });
+  }
+
+  retryImport(): void {
+    const {browserIndex} = this.state.importState;
+    if (browserIndex !== null) {
+      this.startImport(browserIndex);
+    }
   }
 
   startImport(browserIndex: number): void {
@@ -1102,6 +1170,10 @@ export class MahoWelcomeStore {
   private patch(mutator: (draft: MutableWelcomeState) => void): void {
     const draft = makeMutableState(this.state);
     mutator(draft);
+    if (draft.currentPage === WelcomePage.Completion &&
+        this.state.currentPage !== WelcomePage.Completion) {
+      this.completionReturnPage = this.state.currentPage;
+    }
     this.state = freezeMutableState(draft);
     this.notify();
   }
@@ -1120,6 +1192,7 @@ function makeMutableState(state: WelcomeState): MutableWelcomeState {
     importStarted: state.importStarted,
     importStage: state.importStage,
     searchEngines: [...state.searchEngines],
+    searchEnginesLoaded: state.searchEnginesLoaded,
     selectedEngine: state.selectedEngine,
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),
@@ -1147,6 +1220,7 @@ function freezeMutableState(state: MutableWelcomeState): WelcomeState {
     importStarted: state.importStarted,
     importStage: state.importStage,
     searchEngines: [...state.searchEngines],
+    searchEnginesLoaded: state.searchEnginesLoaded,
     selectedEngine: state.selectedEngine,
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),

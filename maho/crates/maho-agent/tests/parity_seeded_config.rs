@@ -24,7 +24,7 @@
 use maho_agent::permission::{
     authorize_final_confirm, authorize_kernel_tool_request, authorize_tier_fs_request,
     default_fs_whitelist_roots, kernel_fs_request, parse_runtime_tier, FinalConfirmDecision,
-    KernelTierDecision, TierFileDecision, FINAL_CONFIRM_REQUIRED, PERMISSION_TIER_DENIED_READ,
+    KernelTierDecision, TierFileDecision, PERMISSION_TIER_DENIED_READ,
     PERMISSION_TIER_DENIED_WRITE,
 };
 use maho_agent::{ApprovalDecisionReason, ApprovalPolicy, PermissionDecision, ToolSensitivity};
@@ -397,7 +397,7 @@ fn read_only_seed_denies_the_write_class_and_outside_reads_on_both_surfaces() {
 }
 
 #[test]
-fn guard_seed_ask_gates_outside_whitelist_and_is_inert_inside_on_both_surfaces() {
+fn guard_seed_never_asks_inside_or_outside_the_whitelist_on_both_surfaces() {
     for surface in [Surface::Cli, Surface::Panel] {
         let (_, passes) = run_gate(surface, SCENARIOS[1]);
         let by_label = |label: &str| -> &GatePass {
@@ -415,15 +415,10 @@ fn guard_seed_ask_gates_outside_whitelist_and_is_inert_inside_on_both_surfaces()
         // Not file-scoped: the tier is inert, the approval policy stays
         // authoritative for shell_exec.
         assert_eq!(by_label("shell_exec").kernel, Verdict::Allow);
-        // Outside the whitelist every file operation ask-gates.
-        assert_eq!(
-            by_label("fs_write outside whitelist").kernel,
-            Verdict::RequireApproval
-        );
-        assert_eq!(
-            by_label("fs_read outside whitelist").kernel,
-            Verdict::RequireApproval
-        );
+        // Outside the whitelist guard adds no ask either: agent-driven control
+        // is full access. Only read_only refuses.
+        assert_eq!(by_label("fs_write outside whitelist").kernel, Verdict::Allow);
+        assert_eq!(by_label("fs_read outside whitelist").kernel, Verdict::Allow);
     }
 }
 
@@ -623,17 +618,16 @@ fn tier_cap_beats_every_policy_in_both_directions_with_pinned_outcomes() {
         );
     }
 
-    // guard: the ask-gate forces the prompt path EVEN under AllowAll (a
-    // policy can never silently auto-allow outside the whitelist), and the
-    // policy stays authoritative inside it.
+    // guard: the tier adds no ask anywhere — outside the whitelist an AllowAll
+    // posture allows, and the policy stays authoritative inside it too.
     assert_eq!(
         compose_outcome(
             gate("guard", fs_write_out),
             ApprovalPolicy::AllowAll,
             fs_write_out
         ),
-        Outcome::Prompted,
-        "guard ask-gate overrides AllowAll outside the whitelist"
+        Outcome::Allowed(ApprovalDecisionReason::PolicyAllowAll.as_str()),
+        "guard never forces a prompt, inside or outside the whitelist"
     );
     assert_eq!(
         compose_outcome(
@@ -682,13 +676,14 @@ fn tier_cap_beats_every_policy_in_both_directions_with_pinned_outcomes() {
     );
 }
 
-// ─── 5. final_confirm dimension: same seeded flag → same gate verdicts ─────
+// ─── 5. final_confirm dimension: no verdict ever gates ─────
 
 #[test]
-fn seeded_final_confirm_gates_identically_on_both_surfaces() {
-    // Probes outside the kernel battery: the final-confirm gate's two
-    // classification paths (browser-action consequences + mail writes) plus
-    // a kernel tool that must stay free. Same seeded flag → same verdicts.
+fn seeded_final_confirm_never_gates_on_either_surface() {
+    // Probes outside the kernel battery: the classes the final-confirm gate
+    // used to gate (browser-action consequences + mail writes) plus a kernel
+    // tool that was always free. Same seeded flag → same verdicts, and the
+    // verdict is always Allow: agent-driven control is full access.
     let probes: &[(&str, &str)] = &[
         (
             "browser_click",
@@ -716,41 +711,19 @@ fn seeded_final_confirm_gates_identically_on_both_surfaces() {
         }
         assert_eq!(
             per_surface[0].1, per_surface[1].1,
-            "seeded final_confirm={} must gate identically on both surfaces",
+            "seeded final_confirm={} must decide identically on both surfaces",
             config.final_confirm
         );
 
-        // Pinned semantics (not merely cross-surface equality): with the
-        // flag ON, externally visible/irreversible requests gate with the
-        // public reason code; with it OFF the gate is inert. Kernel tools
-        // and read-class actions stay free either way.
-        let expect_gated = config.final_confirm;
-        let click = per_surface[0].1[0].1;
-        let mail = per_surface[0].1[1].1;
-        let fs_read = per_surface[0].1[2].1;
-        let web_search = per_surface[0].1[3].1;
-        if expect_gated {
+        // Pinned semantics (not merely cross-surface equality): no class is
+        // ever gated, whatever the seeded flag says.
+        for (tool, verdict) in &per_surface[0].1 {
             assert_eq!(
-                click,
-                FinalConfirmDecision::RequireApproval(FINAL_CONFIRM_REQUIRED)
+                *verdict,
+                FinalConfirmDecision::Allow,
+                "{tool} must never be gated (final_confirm={})",
+                config.final_confirm
             );
-            assert_eq!(
-                mail,
-                FinalConfirmDecision::RequireApproval(FINAL_CONFIRM_REQUIRED)
-            );
-        } else {
-            assert_eq!(click, FinalConfirmDecision::Allow);
-            assert_eq!(mail, FinalConfirmDecision::Allow);
         }
-        assert_eq!(
-            fs_read,
-            FinalConfirmDecision::Allow,
-            "kernel reads stay outside the consequence scope"
-        );
-        assert_eq!(
-            web_search,
-            FinalConfirmDecision::Allow,
-            "non-action tools stay outside the consequence scope"
-        );
     }
 }

@@ -26,11 +26,9 @@ namespace maho {
 class MahoMcpBrowserDelegate;
 
 // Instantiates the production delegate, replacing only Mail's active-profile
-// lookup and native approval UI. Callbacks run on the owning UI sequence.
+// lookup. The callback runs on the owning UI sequence.
 std::unique_ptr<MahoMcpBrowserDelegate> CreateMailDelegateForTesting(
-    base::RepeatingCallback<Profile*()> profile_resolver,
-    base::RepeatingCallback<bool(const std::string&, const std::string&)>
-        approval_presenter);
+    base::RepeatingCallback<Profile*()> profile_resolver);
 
 class MahoMcpSocketServer;
 class MahoMcpPipeServer;

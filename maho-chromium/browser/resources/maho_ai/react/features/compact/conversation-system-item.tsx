@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useState} from 'react';
 import {formatTimestamp} from '../../lib/format-timestamp.js';
 import {cn} from '@lib/utils';
 import {Button} from '@ui/button';
@@ -33,13 +33,21 @@ export function ConversationSystemItem(
     }: {
       item: ConversationItem;
       onOpenSettings: (paneKey: string) => void;
-      onRespondToApproval: (approvalId: string, approved: boolean) => void;
+      onRespondToApproval: (approvalId: string, approved: boolean) => void | Promise<unknown>;
       onRetry?: () => void;
       readOnly: boolean;
     }) {
   const approval = item.approval;
   const isApproval = item.kind === 'approval' && approval;
   const isPendingApproval = approval?.status === 'pending';
+  // Both answers lock while one is being sent, so a second click cannot
+  // dispatch a duplicate or contradictory response.
+  const [responding, setResponding] = useState(false);
+  const respond = (approvalId: string, approved: boolean) => {
+    setResponding(true);
+    void Promise.resolve(onRespondToApproval(approvalId, approved))
+        .finally(() => setResponding(false));
+  };
   const toneClassName = isApproval ?
     approval.status === 'approved' ? 'border-success/60' :
     approval.status === 'denied' ? 'border-destructive/60' : 'border-warning/60' :
@@ -136,18 +144,18 @@ export function ConversationSystemItem(
                 <>
                   <Button
                     className="border-warning/40 bg-warning/10 text-warning hover:bg-warning/20"
-                    disabled={readOnly}
+                    disabled={readOnly || responding}
                     size="sm"
                     title="Approves this request only. Maho will ask again next time."
                     variant="outline"
-                    onClick={() => onRespondToApproval(approval.approvalId, true)}>
+                    onClick={() => respond(approval.approvalId, true)}>
                     Allow once
                   </Button>
                   <Button
-                    disabled={readOnly}
+                    disabled={readOnly || responding}
                     size="sm"
                     variant="destructive"
-                    onClick={() => onRespondToApproval(approval.approvalId, false)}>
+                    onClick={() => respond(approval.approvalId, false)}>
                     Reject
                   </Button>
                 </>

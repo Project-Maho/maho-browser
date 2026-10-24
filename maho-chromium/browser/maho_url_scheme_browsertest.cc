@@ -349,7 +349,7 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeTrustedInputBrowserTest,
 
   // This factory returns the production delegate; only unused Mail callbacks
   // are replaceable. Resolve the hosted target from its real MCP inventory.
-  auto delegate = CreateMailDelegateForTesting({}, {});
+  auto delegate = CreateMailDelegateForTesting({});
   int tab_id = 0;
   for (const auto& tab : delegate->GetTabList()) {
     if (tab.url == contents->GetLastCommittedURL().spec()) {
@@ -1235,7 +1235,7 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeByokBrowserTest,
     })()
   )JS", content::EXECUTE_SCRIPT_NO_USER_GESTURE));
 
-  auto delegate = CreateMailDelegateForTesting({}, {});
+  auto delegate = CreateMailDelegateForTesting({});
   int tab_id = 0;
   for (const auto& tab : delegate->GetTabList()) {
     if (tab.url == contents->GetLastCommittedURL().spec()) {
@@ -1343,7 +1343,7 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeByokBrowserTest,
   auto* contents = MahoWelcomeWindow::GetByokSettingsDialogWebContents();
   ASSERT_TRUE(contents);
   ASSERT_TRUE(content::WaitForLoadStop(contents));
-  auto delegate = CreateMailDelegateForTesting({}, {});
+  auto delegate = CreateMailDelegateForTesting({});
   int tab_id = 0;
   for (const auto& tab : delegate->GetTabList()) {
     if (tab.url == contents->GetLastCommittedURL().spec()) {

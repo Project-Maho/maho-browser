@@ -18,6 +18,8 @@ interface ConversationThreadProps {
   scrollRef: RefObject<HTMLDivElement>;
   onScroll: () => void;
   onShareArtifact: (artifactId: string) => Promise<boolean>;
+  /** False when the bridge cannot deliver interaction answers on this platform. */
+  interactionAnswersSupported?: boolean;
   onAnswerInteraction: (
     requestId: string,
     answer: AgentInteractionAnswer,
@@ -33,6 +35,7 @@ export function ConversationThread({
   scrollRef,
   onScroll,
   onShareArtifact,
+  interactionAnswersSupported = true,
   onAnswerInteraction,
 }: ConversationThreadProps) {
   return (
@@ -50,6 +53,7 @@ export function ConversationThread({
             key={message.id}
             message={message}
             onShareArtifact={onShareArtifact}
+            interactionAnswersSupported={interactionAnswersSupported}
             onAnswerInteraction={onAnswerInteraction}
           />
         ))}
@@ -65,6 +69,7 @@ export function ConversationThread({
 interface ConversationMessageProps {
   readonly message: AgentMessage;
   readonly onShareArtifact: (artifactId: string) => Promise<boolean>;
+  readonly interactionAnswersSupported: boolean;
   readonly onAnswerInteraction: (
     requestId: string,
     answer: AgentInteractionAnswer,
@@ -72,7 +77,7 @@ interface ConversationMessageProps {
   ) => Promise<void>;
 }
 
-function ConversationMessage({ message, onShareArtifact, onAnswerInteraction }: ConversationMessageProps) {
+function ConversationMessage({ message, onShareArtifact, interactionAnswersSupported, onAnswerInteraction }: ConversationMessageProps) {
   const isUser = message.role === 'user';
   const label = isUser ? 'You' : 'Maho';
 
@@ -117,6 +122,7 @@ function ConversationMessage({ message, onShareArtifact, onAnswerInteraction }: 
                   name={block.name}
                   args={block.args}
                   result={block.result ?? undefined}
+                  stopped={block.status === 'stopped'}
                   durationMs={block.durationMs}
                 />
               );
@@ -140,6 +146,7 @@ function ConversationMessage({ message, onShareArtifact, onAnswerInteraction }: 
                     answerLabel: block.answerLabel,
                     handle: block.handle,
                   }}
+                  answerable={interactionAnswersSupported}
                   onAnswer={onAnswerInteraction}
                 />
               );
@@ -214,22 +221,26 @@ interface ToolExecutionProps {
   readonly name: string;
   readonly args: string;
   readonly result?: string;
+  readonly stopped?: boolean;
   readonly durationMs: number | null;
 }
 
-function ToolExecution({ name, args, result, durationMs }: ToolExecutionProps) {
+function ToolExecution({ name, args, result, stopped = false, durationMs }: ToolExecutionProps) {
   const [expanded, setExpanded] = useState(false);
-  const status = result !== undefined ? 'completed' : 'running';
+  const status = result !== undefined ? 'completed' : stopped ? 'stopped' : 'running';
   const durationStr = formatDuration(durationMs);
 
   const title = status === 'completed'
     ? `Used ${name}${durationStr ? ` · ${durationStr}` : ''}`
-    : `Using ${name}`;
+    : status === 'stopped'
+      ? `Stopped ${name}`
+      : `Using ${name}`;
 
   return (
     <div
-      class={clsx('agent-tool-call', status === 'completed' && 'agent-tool-call-completed')}
+      class={clsx('agent-tool-call', status !== 'running' && 'agent-tool-call-completed')}
       data-testid="agent-tool-call-block"
+      data-status={status}
     >
       <button
         type="button"
@@ -238,7 +249,7 @@ function ToolExecution({ name, args, result, durationMs }: ToolExecutionProps) {
         aria-expanded={expanded}
       >
         <Icon
-          name={status === 'completed' ? 'arrow-right' : 'loader'}
+          name={status === 'completed' ? 'arrow-right' : status === 'stopped' ? 'circle-alert' : 'loader'}
           size={14}
           class={clsx('agent-tool-call-icon', status === 'running' && 'agent-tool-call-icon-spin')}
           aria-hidden
