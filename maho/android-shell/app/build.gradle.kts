@@ -57,6 +57,15 @@ android {
         )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Maho ships to real phones only, so the two device ABIs are the whole supported set.
+        // Declaring it here is what keeps a stray directory under src/main/jniLibs from being
+        // packaged: without it Gradle silently bundles every ABI it finds, which is how a stale
+        // 35 MB x86_64 libmaho_jni.so was riding along in release bundles while the OpenSSL
+        // SM3/SM4 assembly kept that target from ever being rebuilt.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     signingConfigs {
