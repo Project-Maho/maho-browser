@@ -9,6 +9,34 @@ val defaultGoogleOauthServerClientId =
 val googleOauthServerClientId = providers.gradleProperty("MAHO_GOOGLE_OAUTH_SERVER_CLIENT_ID")
     .orElse(defaultGoogleOauthServerClientId)
 
+// Release signing is supplied entirely from the environment, so no key material is ever committed.
+// All four values must be present together; a partially-set environment is treated as unset rather
+// than producing a half-configured signing block.
+val releaseKeystorePath = providers.environmentVariable("MAHO_ANDROID_KEYSTORE_PATH").orNull
+val releaseKeystorePassword = providers.environmentVariable("MAHO_ANDROID_KEYSTORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("MAHO_ANDROID_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("MAHO_ANDROID_KEY_PASSWORD").orNull
+val releaseSigningConfigured = listOf(
+    releaseKeystorePath,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
+// Building a release artifact without a signing key would produce an unsigned bundle, which the Play
+// Console rejects at upload time - far too late to be useful. Fail at configuration instead, and say
+// exactly what is missing. Debug builds are unaffected.
+gradle.taskGraph.whenReady {
+    val wantsReleaseArtifact = allTasks.any { task ->
+        task.name.startsWith("assemble") || task.name.startsWith("bundle")
+    } && allTasks.any { task -> task.name.contains("Release") }
+    check(!wantsReleaseArtifact || releaseSigningConfigured) {
+        "Release signing is not configured. Set MAHO_ANDROID_KEYSTORE_PATH, " +
+            "MAHO_ANDROID_KEYSTORE_PASSWORD, MAHO_ANDROID_KEY_ALIAS and " +
+            "MAHO_ANDROID_KEY_PASSWORD (all four) before building a release artifact."
+    }
+}
+
 android {
     namespace = "dev.maho.browser"
     compileSdk = 35
@@ -17,8 +45,11 @@ android {
         applicationId = "dev.maho.browser"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 20260919
-        versionName = "2026.9.19"
+        // Keep these in step with maho/version.txt, which is the canonical product version used by
+        // the desktop builds. A mismatch ships a mobile release that claims to be older than the
+        // desktop build of the same commit.
+        versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 20261014
+        versionName = "2026.10.14"
         buildConfigField(
             "String",
             "GOOGLE_OAUTH_SERVER_CLIENT_ID",
@@ -28,8 +59,20 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -81,6 +124,10 @@ dependencies {
     // Core
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.activity:activity-compose:1.8.2")
+    // Declared explicitly, not left transitive: androidx.activity's
+    // InvalidFragmentVersionForActivityResult lint check fails the release build when it cannot see a
+    // concrete fragment version, and registerForActivityResult is used in MahoAppUpdateManager.
+    implementation("androidx.fragment:fragment:1.6.2")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")

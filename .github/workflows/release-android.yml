@@ -1,0 +1,106 @@
+name: Release Android
+
+# Separate from ci.yml because ci.yml runs on fork PRs and must never reference
+# secrets. Required repository secrets:
+#   ANDROID_KEYSTORE_BASE64   base64 of the upload keystore (.jks)
+#   ANDROID_KEYSTORE_PASSWORD password for both the keystore and the key
+#   ANDROID_KEY_ALIAS         key alias inside the keystore
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for the artifact name (defaults to maho/version.txt)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    name: Build signed AAB
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Rust Android targets
+        run: |
+          rustup target add aarch64-linux-android armv7-linux-androideabi
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            maho/target
+          key: android-rust-${{ hashFiles('maho/Cargo.lock') }}
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build JNI libraries
+        working-directory: maho
+        run: |
+          cargo ndk -t arm64-v8a -t armeabi-v7a \
+            -o android-shell/app/src/main/jniLibs \
+            build --release -p maho-jni
+
+      - name: Decode keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set; cannot sign a release bundle."
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+
+      - name: Build signed bundle
+        working-directory: maho/android-shell
+        env:
+          MAHO_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload.jks
+          MAHO_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MAHO_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          MAHO_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew bundleRelease --no-daemon
+
+      - name: Verify the bundle is signed
+        working-directory: maho/android-shell
+        run: |
+          AAB=app/build/outputs/bundle/release/app-release.aab
+          if ! jarsigner -verify "$AAB" > /dev/null 2>&1; then
+            echo "::error::The produced bundle is not signed."
+            exit 1
+          fi
+          echo "Signed bundle verified: $(du -h "$AAB" | cut -f1)"
+
+      - name: Read version
+        id: version
+        run: echo "value=$(cat maho/version.txt)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maho-android-${{ inputs.version || steps.version.outputs.value }}
+          path: maho/android-shell/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+
+      - name: Clean up keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks"
