@@ -1,8 +1,11 @@
 # Auto-written by scripts/pin-ffi.sh — do not edit by hand.
-source_commit=9cf12a0aa4af10d629584debdf2b7cd4da490560
-header_sha256=5ec792ace3b5cab8853f45f50ef4a8a5b15943f154dc0da8edf0fed4d525bc0c
+source_commit=9806ce1ee78716aedd9e0f4c9966523db558b951
+core_source_sha256=58682f9038f9763b8465e4bcd692ae2d80a678ac6167ca3428c7bc7053dda291
+header_sha256=ea163396c84dbd6bef8c75157bfb4e185645bbf047403f5e45791106ffab7365
+lib_sha256_ios=00adbea35336bf79bbc3b55b4e63ed8e7c646b244b75f1193492aee124f9182d
+lib_sha256_sim=b04387d33ae67be8373d4e127a4a5661e2f51a31ce050fd6fe0dc6ec624aa208
 cbindgen_config=cbindgen.toml
 rust_targets=aarch64-apple-ios,aarch64-apple-ios-sim
 ios_deployment_target=17.0
-pinned_at=2026-10-19T23:37:55Z
-allow_dirty=1
+pinned_at=2026-10-25T01:09:52Z
+allow_dirty=0
