@@ -58,8 +58,8 @@ targets:
       path: Info.plist
       properties:
         UILaunchScreen: {}
-        CFBundleVersion: "20260919"
-        CFBundleShortVersionString: "2026.9.19"
+        CFBundleVersion: "20261014"
+        CFBundleShortVersionString: "2026.10.14"
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations: {}

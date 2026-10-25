@@ -19,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2026.9.19</string>
+	<string>2026.10.14</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -33,7 +33,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>20260919</string>
+	<string>20261014</string>
 	<key>MahoGoogleClientID</key>
 	<string>650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com</string>
 	<key>MahoGoogleRedirectScheme</key>
