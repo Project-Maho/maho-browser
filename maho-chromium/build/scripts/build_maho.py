@@ -998,6 +998,26 @@ def read_maho_version() -> str:
         return f.read().strip()
 
 
+def verify_compiled_product_version(out_dir: str, version: str) -> None:
+    """Fail when the version compiled into the browser differs from version.txt.
+
+    kMahoProductVersion feeds the Settings page, the update-notification key and
+    the changelog opener, while the bundle plist feeds Sparkle. Reading
+    version.txt through a different checkout shipped 2026.10.19 with a compiled
+    2026.10.14; the header is the only place that is visible before shipping.
+    """
+    header = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'gen', 'maho', 'browser',
+                          'updates', 'maho_product_version.h')
+    with open(header, encoding='utf-8') as f:
+        match = re.search(r'kMahoProductVersion\[\] = "([^"]+)"', f.read())
+    if not match:
+        raise RuntimeError(f'no kMahoProductVersion found in {header}')
+    if match.group(1) != version:
+        raise RuntimeError(
+            f'compiled kMahoProductVersion is {match.group(1)} but '
+            f'maho/version.txt is {version} ({header})')
+
+
 _DMG_CONTENT_SIZE = (664, 400)
 _DMG_TITLE_BAR_HEIGHT = 28
 _DMG_WINDOW_XY = (100, 100)
@@ -1797,6 +1817,8 @@ def build_chromium_app(out_dir, targets, extra_args):
     command += [*targets, *extra_args]
     print(f"Building Chromium targets {' '.join(targets)} with autoninja...")
     subprocess.run(command, cwd=_CHROMIUM_SRC_ROOT, check=True, env=env)
+    if 'chrome' in targets:
+        verify_compiled_product_version(out_dir, read_maho_version())
 
 
 def apply_tracked_chromium_overrides(platform):

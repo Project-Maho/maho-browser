@@ -122,6 +122,7 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
      uint64_t startup_generation_ = 0;
     int startup_attempts_ = 0;
     base::CallbackListSubscription core_health_subscription_;
+    base::CallbackListSubscription core_ready_accelerator_subscription_;
 
     std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
     std::unique_ptr<maho::MahoMailNotificationCoordinatorRegistry>

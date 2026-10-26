@@ -84,6 +84,8 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"  // nogncheck
+#include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"  // nogncheck
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
@@ -6496,6 +6498,40 @@ MahoMcpBrowserDelegateImpl* GetMcpBrowserDelegate() {
   return mcp_delegate.get();
 }
 
+#if BUILDFLAG(IS_MAC)
+// Core-ready handler: registers the full Maho accelerator set on every open
+// normal window. BrowserView::AddedToWidget() ran before core was ready and
+// registered only the Ctrl+1..9 fallback (see MahoShortcutInterceptor::
+// RegisterMissingAccelerators). Idempotent, so windows created after core is
+// ready (which already registered everything) are left alone.
+void RegisterMahoAcceleratorsOnOpenWindows() {
+  const std::vector<ui::Accelerator> accelerators =
+      maho::MahoShortcutInterceptor::GetRegisteredAccelerators();
+  if (accelerators.empty()) {
+    return;
+  }
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&accelerators](BrowserWindowInterface* browser) {
+        if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
+          return true;
+        }
+        BrowserView* browser_view =
+            BrowserView::GetBrowserViewForBrowser(browser);
+        if (!browser_view || !browser_view->GetWidget()) {
+          return true;
+        }
+        const size_t added =
+            maho::MahoShortcutInterceptor::RegisterMissingAccelerators(
+                browser_view->GetFocusManager(), browser_view, accelerators);
+        if (added > 0) {
+          LOG(INFO) << "[maho-shortcut] registered " << added
+                    << " accelerators after core ready";
+        }
+        return true;
+      });
+}
+#endif  // BUILDFLAG(IS_MAC)
+
 }  // namespace
 
 std::unique_ptr<maho::MahoMcpBrowserDelegate>
@@ -6821,6 +6857,14 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
   // registers the bootstrap service so MachPortRendezvousClient::GetInstance()
   // in the child resolves instead of returning null (invalid endpoint).
   base::MachPortRendezvousServerMac::GetInstance();
+
+  // BrowserView registers the Maho accelerators once, in AddedToWidget(),
+  // and the first window is created ~1s before maho-core is ready. An empty
+  // registry there leaves only Ctrl+1..9 registered, so Cmd+T falls through
+  // to the native IDC_NEW_TAB menu path and opens a blank tab. Register the
+  // full set once core is ready, for windows that already exist.
+  core_ready_accelerator_subscription_ = maho::AddCoreReadyCallback(
+      base::BindRepeating(&RegisterMahoAcceleratorsOnOpenWindows));
 #endif
 
   LOG(INFO) << "MAHO_INIT_AUDIT: class=regular, decision=allow, "
