@@ -372,6 +372,24 @@ def effective_cargo_target_dir(default_crate_dir, rust_target) -> str:
     return os.path.join(default_crate_dir, 'target', rust_target)
 
 
+def effective_cargo_build_release_dir(crate_dir, rust_target, env=None) -> str:
+    """Return the release dir holding build-script outputs (build/<crate>/...).
+
+    cargo's `build.build-dir` (config or CARGO_BUILD_BUILD_DIR) moves
+    intermediate artifacts, including vendored OpenSSL/SQLCipher static libs,
+    out of the target dir while the final staticlib stays in target/. Searching
+    only target/ finds no bundled C libs, skips their privatization, and the
+    mail helper then collides with Chromium's BoringSSL at link time.
+    """
+    result = subprocess.run(
+        ['cargo', 'metadata', '--format-version', '1', '--no-deps'],
+        cwd=crate_dir, env=env, check=True, capture_output=True, text=True)
+    metadata = json.loads(result.stdout)
+    # Older cargo has no build_directory: intermediates live in the target dir.
+    build_dir = metadata.get('build_directory') or metadata['target_directory']
+    return os.path.join(build_dir, rust_target, 'release')
+
+
 def build_stt_ffi_prebuilt(rust_target, cpu_dir):
     """Build the maho-stt-ffi static lib and copy it to prebuilt/.
 
@@ -398,7 +416,10 @@ def build_stt_ffi_prebuilt(rust_target, cpu_dir):
     # the weak personality emitted by _mac_abort_std(); objcopy cannot rewrite
     # that symbol because compact-unwind relocations pin it.
     private_prefix = 'mahostt'
-    _atomic_place_lib(src_lib, dst_lib, release_dir, private_prefix)
+    _atomic_place_lib(
+        src_lib, dst_lib,
+        effective_cargo_build_release_dir(MAHO_ROOT, rust_target),
+        private_prefix)
     print(f'Copied {src_lib} -> {dst_lib}')
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 
@@ -438,7 +459,9 @@ def build_mail_ffi_prebuilt(rust_target, cpu_dir):
         sys.exit(f'Build artifact not found: {src_lib}')
     private_prefix = 'mahomail'
     _atomic_place_lib(
-        src_lib, dst_lib, os.path.dirname(src_lib), private_prefix)
+        src_lib, dst_lib,
+        effective_cargo_build_release_dir(crate_dir, rust_target, cargo_env),
+        private_prefix)
     print(f'Copied {src_lib} -> {dst_lib}')
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 
@@ -706,7 +729,9 @@ def build_rust_prebuilt(target=None, incremental=False, is_release=False):
 
     private_prefix = 'mahoffi'
     _atomic_place_lib(
-        src_lib, dst_lib, os.path.dirname(src_lib), private_prefix)
+        src_lib, dst_lib,
+        effective_cargo_build_release_dir(MAHO_ROOT, rust_target, cargo_env),
+        private_prefix)
     print(f'Copied {src_lib} -> {dst_lib}')
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 

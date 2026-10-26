@@ -224,15 +224,47 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
                      _module, 'chromium_linux_toolchain_env',
                      return_value={}), \
                  patch.object(
+                     _module, 'effective_cargo_build_release_dir',
+                     return_value='/cargo-build-dir/release') as build_dir, \
+                 patch.object(
                      _module, '_atomic_place_lib', side_effect=place) as place_lib:
                 _module.build_mail_ffi_prebuilt(target, 'arm64')
 
+        build_dir.assert_called_once_with(str(crate_dir), target, {})
         place_lib.assert_called_once_with(
             str(source),
             str(prebuilt_dir / 'arm64' / 'libmaho_mail_ffi.a'),
-            str(release_dir),
+            '/cargo-build-dir/release',
             'mahomail',
         )
+
+    def test_build_release_dir_follows_cargo_build_directory(self):
+        # cargo build.build-dir keeps the staticlib in target/ but moves
+        # build-script outputs (vendored libcrypto.a) elsewhere; privatization
+        # must search there or the OpenSSL symbols stay unprefixed.
+        metadata = json.dumps({
+            'target_directory': '/crate/target',
+            'build_directory': '/mnt/build/ws/crate',
+        })
+        with patch.object(_module.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=metadata)) as run:
+            release_dir = _module.effective_cargo_build_release_dir(
+                '/crate', 'x86_64-unknown-linux-gnu', {'K': 'V'})
+
+        self.assertEqual(
+            release_dir, '/mnt/build/ws/crate/x86_64-unknown-linux-gnu/release')
+        self.assertEqual(run.call_args.kwargs['cwd'], '/crate')
+        self.assertEqual(run.call_args.kwargs['env'], {'K': 'V'})
+
+    def test_build_release_dir_falls_back_to_target_directory(self):
+        metadata = json.dumps({'target_directory': '/crate/target'})
+        with patch.object(_module.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=metadata)):
+            release_dir = _module.effective_cargo_build_release_dir(
+                '/crate', 'aarch64-apple-darwin')
+
+        self.assertEqual(
+            release_dir, '/crate/target/aarch64-apple-darwin/release')
 
     def test_main_prebuilt_uses_shared_linux_chromium_toolchain_env(self):
         target = 'x86_64-unknown-linux-gnu'

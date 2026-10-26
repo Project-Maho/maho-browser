@@ -1377,6 +1377,18 @@ class TestMainFlags(unittest.TestCase):
             ['chrome', 'maho_mail_helper', 'mini_installer'],
         )
 
+    def test_linux_release_builds_every_packaged_runtime_binary(self):
+        self._run_main(
+            ['--skip-rust', '--release', '--no-launch'],
+            platform='linux',
+        )
+
+        self.assertEqual(
+            self.mock_build_chromium.call_args.args[1],
+            ['chrome', 'maho_mail_helper', 'chrome_sandbox',
+             'chrome_management_service'],
+        )
+
     def test_codesign_identity_overrides_autodetect(self):
         mock_lock_cm = MagicMock()
         mock_lock_cm.__enter__ = MagicMock(return_value=None)

@@ -2160,6 +2160,13 @@ def main():
             if not args.ninja_target and 'chrome' in targets:
                 if platform in ('mac', 'win') and 'maho_mail_helper' not in targets:
                     targets.append('maho_mail_helper')
+                # build_maho_linux_packages.py ships these next to chrome; chrome
+                # does not depend on them, so a release build must ask for them.
+                if platform == 'linux' and args.release:
+                    for linux_target in ('maho_mail_helper', 'chrome_sandbox',
+                                         'chrome_management_service'):
+                        if linux_target not in targets:
+                            targets.append(linux_target)
                 # A release build IS the bundle: the Windows installer artifact
                 # is the mini_installer target, so build it in the same pass.
                 if (platform == 'win' and (args.release or args.dmg)
