@@ -383,7 +383,8 @@ def effective_cargo_build_release_dir(crate_dir, rust_target, env=None) -> str:
     """
     result = subprocess.run(
         ['cargo', 'metadata', '--format-version', '1', '--no-deps'],
-        cwd=crate_dir, env=env, check=True, capture_output=True, text=True)
+        cwd=crate_dir, env=env, check=True, capture_output=True,
+        encoding='utf-8')
     metadata = json.loads(result.stdout)
     # Older cargo has no build_directory: intermediates live in the target dir.
     build_dir = metadata.get('build_directory') or metadata['target_directory']

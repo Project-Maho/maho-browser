@@ -255,6 +255,9 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
             release_dir, '/mnt/build/ws/crate/x86_64-unknown-linux-gnu/release')
         self.assertEqual(run.call_args.kwargs['cwd'], '/crate')
         self.assertEqual(run.call_args.kwargs['env'], {'K': 'V'})
+        # cargo prints UTF-8; the Windows console code page (cp949) cannot
+        # decode it, which left stdout None and broke the Windows release build.
+        self.assertEqual(run.call_args.kwargs['encoding'], 'utf-8')
 
     def test_build_release_dir_falls_back_to_target_directory(self):
         metadata = json.dumps({'target_directory': '/crate/target'})
