@@ -15,7 +15,7 @@ the user profile and away from OneDrive sync.
 | `C:\src\depot_tools` | depot_tools |
 | `C:\src\maho-browser` | git clone of `Project-Maho/maho-browser` (the workspace root) |
 | `C:\src\maho-browser\chromium` | NTFS junction to `C:\src\chromium` |
-| `C:\src\chromium\src` | Chromium, pinned to the revision named by `maho-chromium/build/chromium_base_patches/<rev>` |
+| `C:\src\chromium\src` | Chromium, pinned to the revision in `maho-chromium/build/CHROMIUM_REVISION` (patches under `chromium_base_patches/<rev>`) |
 | `C:\src\chromium\src\maho` | junction to `C:\src\maho-browser\maho-chromium` |
 | `C:\src\maho-browser\node_modules` | junction to `website\node_modules` (Tailwind resolves `@import "tailwindcss"` upward from the overlay sources) |
 | `C:\src\maho` | junction to `C:\src\maho-browser\maho`; GN reaches it as `//../../maho` (e.g. `version.txt`) |

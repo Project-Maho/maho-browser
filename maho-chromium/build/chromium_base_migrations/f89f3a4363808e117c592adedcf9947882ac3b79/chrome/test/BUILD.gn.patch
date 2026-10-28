@@ -1,0 +1,10 @@
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -6582,6 +6582,7 @@ test("unit_tests") {
+       "//maho/browser:maho_ai_runtime_router_unittests",
+       "//maho/browser:maho_ai_llm_client_unittests",
+       "//maho/browser/net:maho_ad_block_tab_helper_unittests",
++      "//maho/browser/net:maho_translate_injection_handler_unittests",
+       "//maho/browser/ui/site_control:maho_site_control_unittests",
+       "//chrome/browser/ui/views/tabs/glic",
+       "//chrome/browser/ui/views/tabs/groups:unit_tests",

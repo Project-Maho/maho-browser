@@ -53,10 +53,10 @@ index b6c3e9dacf530d158636154b95c67967351d9d2d..8158578b0c9f8ffd2d8cb65897aa487f
 -      l10n_util::GetStringFUTF16(
 -          IDS_CONTENT_CONTEXT_TRANSLATE,
 -          GetTargetLanguageDisplayName(/*is_full_page_translation=*/true)),
-+      // Maho: fixed, discoverable page-translate label surfaced in the
-+      // page context menu (English-only build). Command id and the
-+      // ExecTranslate() -> BrowserView::ShowTranslateBubble path are
-+      // unchanged, so this reuses the existing working translate bubble.
++      // Maho: fixed, discoverable label for on-device page translation (the
++      // stock label names the target language). The command id is unchanged,
++      // but ExecTranslate() now calls maho::TranslatePageViaOnDevice(), which
++      // resolves the same target language as the pane header.
 +      IDC_CONTENT_CONTEXT_TRANSLATE, u"Translate this page",
        ui::ImageModel::FromVectorIcon(vector_icons::kGTranslateIcon,
                                       ui::kColorMenuIcon, kTabMenuIconSize));

@@ -1651,6 +1651,46 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
                 target.read_text(encoding="utf-8"), output
             )
 
+    def test_translate_injection_handler_unittests_join_unit_tests(self):
+        replacements = [
+            replacement
+            for replacement in REPLACEMENTS["chrome/test/BUILD.gn"]
+            if replacement.guard
+            and "maho_translate_injection_handler_unittests" in replacement.guard
+        ]
+        self.assertEqual(len(replacements), 1)
+        # The anchor is the ad-block unit-test dep line, which an earlier
+        # replacement (or a base patch) adds; one pass must append the
+        # translate handler tests exactly once.
+        source = (
+            '      "//maho/browser:maho_ai_llm_client_unittests",\n'
+            '      "//maho/browser/net:maho_ad_block_tab_helper_unittests",\n'
+            '      "//maho/browser/ui/site_control:maho_site_control_unittests",\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "BUILD.gn"
+            target.write_text(source, encoding="utf-8")
+            changed, _ = apply_replacements(
+                target,
+                replacements,
+                relative_path="chrome/test/BUILD.gn",
+            )
+            self.assertTrue(changed)
+            output = target.read_text(encoding="utf-8")
+            self.assertEqual(
+                output.count(
+                    '"//maho/browser/net:maho_translate_injection_handler_unittests"'
+                ),
+                1,
+            )
+            changed_again, _ = apply_replacements(
+                target,
+                replacements,
+                relative_path="chrome/test/BUILD.gn",
+            )
+            self.assertFalse(changed_again)
+            self.assertEqual(target.read_text(encoding="utf-8"), output)
+
     def test_app_controller_header_queue_anchors_apply(self):
         source = (
             '#include "components/sessions/core/tab_restore_service_observer.h"\n'
@@ -3267,6 +3307,61 @@ class MahoToolbarViewArcRegistrationTest(unittest.TestCase):
         gate = install[install.index("    if (") + len("    if ("):
                        install.index(") {\n      maho_toolbar_button_provider_")]
         self.assertEqual(self._tokens(gate), self._tokens(condition))
+
+
+
+class MahoCanonicalRevisionPinTest(unittest.TestCase):
+    """build/CHROMIUM_REVISION is the single builder pin and stays consistent
+    with the base-patch layer and the migration registrations."""
+
+    def test_pin_names_existing_base_patch_layer(self):
+        from apply_chromium_src_overrides import (
+            base_patch_dir,
+            canonical_chromium_revision,
+        )
+
+        revision = canonical_chromium_revision()
+        self.assertRegex(revision, r"^[0-9a-f]{40}$")
+        directory = base_patch_dir(revision)
+        self.assertIsNotNone(directory)
+        self.assertTrue(any(directory.rglob("*.patch")))
+
+    def test_migration_revision_matches_pin(self):
+        from apply_chromium_src_overrides import (
+            _UPDATED154_REVISION,
+            canonical_chromium_revision,
+        )
+
+        self.assertEqual(_UPDATED154_REVISION, canonical_chromium_revision())
+
+    def test_legacy_anchor_revisions_have_no_base_patch_layer(self):
+        from apply_chromium_src_overrides import (
+            _PINNED_CHROMIUM_REVISIONS,
+            base_patch_dir,
+            canonical_chromium_revision,
+        )
+
+        self.assertNotIn(canonical_chromium_revision(), _PINNED_CHROMIUM_REVISIONS)
+        for revision in _PINNED_CHROMIUM_REVISIONS:
+            self.assertIsNone(base_patch_dir(revision))
+
+    def test_malformed_or_unbacked_pin_is_rejected(self):
+        from unittest.mock import patch
+        import apply_chromium_src_overrides as module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "build").mkdir()
+            pin = root / "build" / "CHROMIUM_REVISION"
+            with patch.object(module, "repo_root", return_value=root):
+                pin.write_text("not-a-revision\n")
+                with self.assertRaises(RuntimeError):
+                    module.canonical_chromium_revision()
+                pin.write_text("a" * 40 + "\n")
+                with self.assertRaises(RuntimeError):
+                    module.canonical_chromium_revision()
+                (root / "build" / "chromium_base_patches" / ("a" * 40)).mkdir(parents=True)
+                self.assertEqual(module.canonical_chromium_revision(), "a" * 40)
 
 
 if __name__ == "__main__":

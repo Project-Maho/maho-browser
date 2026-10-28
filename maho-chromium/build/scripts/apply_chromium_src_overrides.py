@@ -390,6 +390,9 @@ _MAHO_LEGACY_CTRL_ACCELERATOR_COMMENT: Final[str] = (
 )
 
 
+# Legacy anchor-only trees (no chromium_base_patches/<rev> directory). They are
+# still accepted by the REPLACEMENTS path, but the canonical build revision is
+# the one named in build/CHROMIUM_REVISION (see canonical_chromium_revision()).
 _PINNED_CHROMIUM_REVISIONS: Final[tuple[str, ...]] = (
     "ee4bd9e95294a95c855ef51dfa26f0576f192e69",
     "72f18f12ad47a8d6dbfb4282a2ef8e507ae65428",
@@ -8606,6 +8609,19 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard='"//maho/browser/net:maho_ad_block_tab_helper_unittests"',
         ),
         Replacement(
+            old='      "//maho/browser/net:maho_ad_block_tab_helper_unittests",\n',
+            new=(
+                '      "//maho/browser/net:maho_ad_block_tab_helper_unittests",\n'
+                '      "//maho/browser/net:maho_translate_injection_handler_unittests",\n'
+            ),
+            description=(
+                "Include Maho translate injection handler state-machine unit "
+                "tests in Chromium unit_tests"
+            ),
+            idempotent=True,
+            guard='"//maho/browser/net:maho_translate_injection_handler_unittests"',
+        ),
+        Replacement(
             old='      "//chrome/browser/ui/views/toolbar:browser_tests",\n',
             new=(
                 '      "//maho/browser/mcp:browser_tests",\n'
@@ -10238,10 +10254,10 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '          GetTargetLanguageDisplayName(/*is_full_page_translation=*/true)),\n'
             ),
             new=(
-                '      // Maho: fixed, discoverable page-translate label surfaced in the\n'
-                '      // page context menu (English-only build). Command id and the\n'
-                '      // ExecTranslate() -> BrowserView::ShowTranslateBubble path are\n'
-                '      // unchanged, so this reuses the existing working translate bubble.\n'
+                '      // Maho: fixed, discoverable label for on-device page translation (the\n'
+                '      // stock label names the target language). The command id is unchanged,\n'
+                '      // but ExecTranslate() now calls maho::TranslatePageViaOnDevice(), which\n'
+                '      // resolves the same target language as the pane header.\n'
                 '      IDC_CONTENT_CONTEXT_TRANSLATE, u"Translate this page",\n'
             ),
             description=(
@@ -12182,6 +12198,21 @@ def base_patch_dir(revision: str) -> Path | None:
     return directory if directory.is_dir() else None
 
 
+def canonical_chromium_revision() -> str:
+    """The single Chromium revision every builder checks out.
+
+    Read from build/CHROMIUM_REVISION; it must name an existing
+    chromium_base_patches/<rev> directory.
+    """
+    path = repo_root() / "build" / "CHROMIUM_REVISION"
+    revision = path.read_text().strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise RuntimeError(f"{path} must hold one 40-hex revision, got {revision!r}")
+    if base_patch_dir(revision) is None:
+        raise RuntimeError(f"{path} names {revision} but chromium_base_patches/{revision} is missing")
+    return revision
+
+
 def base_patch_targets(directory: Path) -> dict[str, Path]:
     return {
         patch.relative_to(directory).as_posix()[: -len(".patch")]: patch
@@ -12241,6 +12272,8 @@ _UPDATED154_OLD_SHA256: Final[dict[str, str]] = {
         "7122ce6b00ed03da190d3d840de6ad404d229e799aa3818d23385b5582ceb44e",
     "chrome/browser/device_reauth/chrome_device_authenticator_factory.cc":
         "8099af6de9b39c325a4f196b3109748e31350d53b8866e890ddb78d8172d2b3d",
+    "chrome/test/BUILD.gn":
+        "dcd0aaa871f5a85e11dcd00e1cc92e410fd87643fb1e8345a473fa497920c72d",
 }
 
 

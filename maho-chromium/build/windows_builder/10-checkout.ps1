@@ -8,7 +8,7 @@
     C:\src\maho-browser                git clone of Project-Maho/maho-browser (workspace root)
     C:\src\maho-browser\chromium      NTFS junction -> C:\src\chromium
     C:\src\chromium\src               Chromium checkout pinned to the revision in
-                                       maho-chromium/build/chromium_base_patches/<rev>
+                                       maho-chromium/build/CHROMIUM_REVISION
     C:\src\chromium\src\maho          junction -> C:\src\maho-browser\maho-chromium (made by build_maho.py)
 
   build_maho.py resolves chromium/src relative to the workspace root, so the
@@ -61,10 +61,15 @@ git -C $repo -c advice.detachedHead=false checkout --detach $Ref
 if ($LASTEXITCODE -ne 0) { throw "checkout of $Ref failed" }
 Log ("maho-browser at " + (git -C $repo rev-parse HEAD))
 
-# Chromium revision = the single pinned base-patch directory name.
-$rev = (Get-ChildItem (Join-Path $repo 'maho-chromium\build\chromium_base_patches') -Directory |
-        Where-Object Name -match '^[0-9a-f]{40}$' | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name
+# Chromium revision = the explicit pin in maho-chromium/build/CHROMIUM_REVISION
+# (never inferred from base-patch directory mtimes; several revisions coexist).
+$revFile = Join-Path $repo 'maho-chromium\build\CHROMIUM_REVISION'
+$rev = (Get-Content -Path $revFile -TotalCount 1).Trim()
 if ($env:MAHO_CHROMIUM_REVISION) { $rev = $env:MAHO_CHROMIUM_REVISION }
+if ($rev -notmatch '^[0-9a-f]{40}$') { throw "invalid Chromium revision '$rev' (from $revFile)" }
+if (-not (Test-Path (Join-Path $repo "maho-chromium\build\chromium_base_patches\$rev") -PathType Container)) {
+  throw "no chromium_base_patches directory for Chromium revision $rev"
+}
 Log "Chromium revision $rev"
 
 $chromium = Join-Path $Root 'chromium'

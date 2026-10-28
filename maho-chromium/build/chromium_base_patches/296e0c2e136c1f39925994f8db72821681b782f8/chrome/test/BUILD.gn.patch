@@ -1,5 +1,5 @@
 diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
-index 6c8d52d2f8b56d37e4205b223c2402c92fe0388a..572d72a7d35786e04d1556c4a9e27f8177899815 100644
+index 6c8d52d2f8b56d37e4205b223c2402c92fe0388a..0aa8c7d5c1e3d2528658cedadc476674a776748b 100644
 --- a/chrome/test/BUILD.gn
 +++ b/chrome/test/BUILD.gn
 @@ -2930,6 +2930,9 @@ if (!is_android) {
@@ -37,7 +37,7 @@ index 6c8d52d2f8b56d37e4205b223c2402c92fe0388a..572d72a7d35786e04d1556c4a9e27f81
        "//chrome/browser/ui/passwords:test_support_ui",
        "//chrome/browser/ui/passwords/bubble_controllers:unit_tests",
        "//chrome/browser/ui/passwords/bubble_controllers/password_change",
-@@ -8558,6 +8562,18 @@ test("unit_tests") {
+@@ -8558,6 +8562,19 @@ test("unit_tests") {
        "//chrome/browser/ui/views/glic",
        "//chrome/browser/ui/views/page_action:test_support",
        "//chrome/browser/ui/views/page_action:unit_tests",
@@ -52,11 +52,12 @@ index 6c8d52d2f8b56d37e4205b223c2402c92fe0388a..572d72a7d35786e04d1556c4a9e27f81
 +      "//maho/browser:maho_ai_runtime_router_unittests",
 +      "//maho/browser:maho_ai_llm_client_unittests",
 +      "//maho/browser/net:maho_ad_block_tab_helper_unittests",
++      "//maho/browser/net:maho_translate_injection_handler_unittests",
 +      "//maho/browser/ui/site_control:maho_site_control_unittests",
        "//chrome/browser/ui/views/tabs/glic",
        "//chrome/browser/ui/views/tabs/vertical:unit_tests",
        "//chrome/browser/ui/views/toolbar:unit_tests",
-@@ -11121,8 +11137,8 @@ if (!is_android) {
+@@ -11121,8 +11138,8 @@ if (!is_android) {
          "//ui/ozone",
          "//ui/platform_window/common",
          "//ui/resources:ui_test_pak",
@@ -67,7 +68,7 @@ index 6c8d52d2f8b56d37e4205b223c2402c92fe0388a..572d72a7d35786e04d1556c4a9e27f81
  
        if (enable_extensions) {
          deps += [
-@@ -11320,6 +11336,7 @@ if (!is_android && !is_chromeos_device) {
+@@ -11320,6 +11337,7 @@ if (!is_android && !is_chromeos_device) {
        "//chrome/browser/devtools",
        "//chrome/browser/devtools:test_support",
        "//chrome/browser/feedback:feedback_impl",
@@ -75,7 +76,7 @@ index 6c8d52d2f8b56d37e4205b223c2402c92fe0388a..572d72a7d35786e04d1556c4a9e27f81
        "//chrome/browser/file_system_access",
        "//chrome/browser/gcm",
        "//chrome/browser/glic/browser_ui",
-@@ -11539,6 +11556,14 @@ if (!is_android && !is_chromeos_device) {
+@@ -11539,6 +11557,14 @@ if (!is_android && !is_chromeos_device) {
        "//ui/strings:ui_strings_grit",
        "//ui/views",
        "//ui/web_dialogs:test_support",
