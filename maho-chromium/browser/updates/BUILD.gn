@@ -156,4 +156,12 @@ source_set("maho_updates_unittests") {
     "//components/version_info",
     "//testing/gtest",
   ]
+  if (is_linux) {
+    deps += [
+      "//net",
+      "//services/network:test_support",
+      "//services/network/public/cpp",
+      "//third_party/boringssl",
+    ]
+  }
 }

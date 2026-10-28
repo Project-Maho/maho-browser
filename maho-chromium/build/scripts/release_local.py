@@ -11,6 +11,10 @@ WSL) and the one release accumulates every artifact.
   Windows -> MahoSetup-<v>.exe + update-win.json
   Linux   -> maho-<v>-x86_64.tar.gz + maho_<v>_amd64.deb + maho-<v>-1.*.rpm (+ .sig)
 
+appcast.xml and the Linux envelope (also uploaded as linux-update-manifest.json)
+are static release assets, so releases/latest/download/<name> serves as the
+clients' fallback feed when the relay is unreachable. Signatures are unchanged.
+
 The release is created on first run and reused afterwards, so machine order does
 not matter. Uploads use --clobber so re-runs replace prior assets. Keep the
 release draft while every platform uploads; run the final platform invocation
@@ -35,6 +39,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -78,6 +83,9 @@ _FINAL_RELEASE_ASSETS = (
     'maho_{version}_amd64.deb.sig',
     'maho-{version}-1.x86_64.rpm',
     'maho-{version}-1.x86_64.rpm.sig',
+    # Static fallback feed for the Linux update check (appcast.xml above is
+    # the macOS one); finalizing without it would leave the fallback dangling.
+    'linux-update-manifest.json',
 )
 
 
@@ -555,10 +563,36 @@ def ensure_release(tag, repo, version, dry_run):
          '--notes', f'Maho {version} release.'], dry_run)
 
 
+# Static fallback feed asset names. Clients fetch them from
+# https://github.com/<repo>/releases/latest/download/<name> when the relay feed
+# fails; see maho_update_server_url.h.
+STATIC_LINUX_MANIFEST_ASSET = 'linux-update-manifest.json'
+
+
+def static_feed_assets(artifacts, dry_run):
+    """Return the extra static fallback-feed copies to upload.
+
+    appcast.xml already uploads under its static name. The Linux envelope is
+    copied byte-for-byte to linux-update-manifest.json so its Ed25519
+    signature stays valid.
+    """
+    extra = []
+    for a in artifacts:
+        if os.path.basename(a) == 'update-linux.json':
+            static = os.path.join(os.path.dirname(a), STATIC_LINUX_MANIFEST_ASSET)
+            if dry_run:
+                print(f'+ cp {a} {static}')
+            else:
+                shutil.copyfile(a, static)
+            extra.append(static)
+    return extra
+
+
 def publish(tag, repo, artifacts, dry_run):
     artifacts = [a for a in artifacts if a]
     if not dry_run:
         artifacts = [a for a in artifacts if require(a)]
+    artifacts = artifacts + static_feed_assets(artifacts, dry_run)
     run(['gh', 'release', 'upload', tag, '--repo', repo, '--clobber', *artifacts], dry_run)
 
 
@@ -900,7 +934,10 @@ def main():
         '--rollout-threshold',
         type=int,
         default=100,
-        help='Relay rollout threshold percentage (always 100 for immediate rollout).',
+        help='macOS phased rollout percentage, 0-100 (default 100): buckets '
+        'below it get this release from the relay appcast, the rest keep the '
+        'newest fully rolled out release, 0 halts. Windows rollout comes from '
+        'the signed manifest and Linux ignores it.',
     )
     p.add_argument(
         '--version-code',
@@ -919,6 +956,8 @@ def main():
         help='Run manifest verification and tampered fixture self-test suite and exit.',
     )
     args = p.parse_args()
+    if not 0 <= args.rollout_threshold <= 100:
+        p.error('--rollout-threshold must be between 0 and 100')
 
     if args.self_test:
         return run_self_test()

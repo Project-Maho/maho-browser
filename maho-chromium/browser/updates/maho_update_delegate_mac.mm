@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/updates/maho_update_manager.h"
+#include "maho/browser/updates/maho_update_server_url.h"
 #include "maho/browser/updates/platform_updater_delegate.h"
 #include "maho/browser/updates/platform_updater_error_mapping.h"
 
@@ -30,6 +31,12 @@ class PlatformUpdaterDelegateMac;
     : NSObject <SPUUpdaterDelegate, SPUStandardUserDriverDelegate>
 @property(nonatomic, strong) NSURL* testFeedURL;
 @property(nonatomic, copy) NSString* channelName;
+// Set for exactly one update cycle after the relay appcast fetch failed, so
+// feedURLStringForUpdater: hands Sparkle the static GitHub Release appcast.
+// The static appcast carries the same sparkle:edSignature values, and Sparkle
+// still verifies them against SUPublicEDKey, so the fallback does not weaken
+// update authentication.
+@property(nonatomic, assign) BOOL useStaticFallbackFeed;
 // Non-owning back-pointer: the C++ delegate owns this Objective-C object and
 // outlives it.
 @property(nonatomic, assign) maho::PlatformUpdaterDelegateMac* owner;
@@ -107,6 +114,21 @@ class PlatformUpdaterDelegateMac : public PlatformUpdaterDelegate {
     }
   }
 
+  // Re-runs the check once against the static fallback appcast. Called after a
+  // relay-feed failure; the retry is posted so Sparkle finishes its current
+  // update cycle first.
+  void RetryWithStaticFallbackFeed(bool manual_check) {
+    delegate_.useStaticFallbackFeed = YES;
+    SPUStandardUpdaterController* controller = controller_;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (manual_check) {
+        [controller checkForUpdates:nil];
+      } else {
+        [controller.updater checkForUpdatesInBackground];
+      }
+    });
+  }
+
  private:
   bool StartUpdaterIfNeeded() {
     if (updater_started_) {
@@ -142,6 +164,7 @@ std::unique_ptr<PlatformUpdaterDelegate> CreatePlatformUpdaterDelegate() {
 
 @synthesize testFeedURL;
 @synthesize channelName;
+@synthesize useStaticFallbackFeed;
 @synthesize owner;
 
 // Sparkle's standard user driver offers a "Version History" button when a
@@ -165,6 +188,11 @@ std::unique_ptr<PlatformUpdaterDelegate> CreatePlatformUpdaterDelegate() {
 - (NSString *)feedURLStringForUpdater:(SPUUpdater *)updater {
   if (self.testFeedURL) {
     return [self.testFeedURL absoluteString];
+  }
+  if (self.useStaticFallbackFeed) {
+    return [NSString
+        stringWithUTF8String:maho::updates::GetStaticMacAppcastFallbackUrl()
+                                 .c_str()];
   }
 
   int bucket = maho::MahoUpdateManager::GetInstance()->GetRolloutBucket();
@@ -214,10 +242,23 @@ std::unique_ptr<PlatformUpdaterDelegate> CreatePlatformUpdaterDelegate() {
 - (void)updater:(SPUUpdater *)updater
     didFinishUpdateCycleForUpdateCheck:(SPUUpdateCheck)updateCheck
                                  error:(NSError *)error {
+  const BOOL was_static_fallback = self.useStaticFallbackFeed;
+  self.useStaticFallbackFeed = NO;
   if (!error) {
     return;
   }
   const bool is_sparkle = [error.domain isEqualToString:SUSparkleErrorDomain];
+  // SUAppcastError means the appcast itself could not be fetched (relay down,
+  // DNS/TLS failure, HTTP 5xx). Retry once against the static release copy;
+  // parse and signature errors are not outages and are reported as-is.
+  if (is_sparkle && error.code == SUAppcastError && !was_static_fallback &&
+      !self.testFeedURL && self.owner) {
+    LOG(WARNING) << "Maho: relay appcast unreachable; retrying the static "
+                    "fallback appcast.";
+    self.owner->RetryWithStaticFallbackFeed(updateCheck ==
+                                            SPUUpdateCheckUpdates);
+    return;
+  }
   switch (maho::updates::ClassifyUpdateCycleError(is_sparkle,
                                                   (int)error.code)) {
     case maho::updates::UpdateCycleOutcome::kNoUpdateFound:

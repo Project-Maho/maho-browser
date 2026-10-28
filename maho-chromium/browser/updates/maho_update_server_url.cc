@@ -74,5 +74,13 @@ std::string ResolveUpdateServerBaseUrl(const Profile* profile) {
   return std::string(kMahoUpdateServerDefaultUrl);
 }
 
+std::string GetStaticMacAppcastFallbackUrl() {
+  return std::string(kMahoStaticMacAppcastFallbackUrl);
+}
+
+std::string GetStaticLinuxManifestFallbackUrl() {
+  return std::string(kMahoStaticLinuxManifestFallbackUrl);
+}
+
 }  // namespace updates
 }  // namespace maho
