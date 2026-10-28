@@ -16,6 +16,7 @@
 #include "base/task/cancelable_task_tracker.h"
 #include "base/scoped_observation.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
+#include "maho/browser/ui/views/command/maho_command_attachment_model.h"
 #include "url/gurl.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/window_open_disposition.h"
@@ -26,6 +27,11 @@
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget_observer.h"
+#include "ui/menus/simple_menu_model.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
+#include "ui/shell_dialogs/selected_file_info.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
+#include "maho/browser/ai/maho_ai_file_attachment_registry.h"
 
 class Browser;
 
@@ -36,6 +42,7 @@ struct FaviconImageResult;
 namespace views {
 class ImageView;
 class Label;
+class MenuRunner;
 class ScrollView;
 class Separator;
 class View;
@@ -46,13 +53,16 @@ class Widget;
 namespace maho {
 
 class MahoCommandActionSelectorView;
+class MahoCommandAttachmentModel;
 
 class MahoCommandModel;
 struct CommandSuggestion;
 
 class MahoCommandOverlayView : public views::View,
                                public views::TextfieldController,
-                               public views::WidgetObserver {
+                               public views::WidgetObserver,
+                               public ui::SelectFileDialog::Listener,
+                               public ui::SimpleMenuModel::Delegate {
   METADATA_HEADER(MahoCommandOverlayView, views::View)
 
  public:
@@ -147,6 +157,9 @@ class MahoCommandOverlayView : public views::View,
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
   gfx::Size GetMinimumSize() const override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
+  void FileSelectionCanceled() override;
+  void ExecuteCommand(int command_id, int event_flags) override;
 
   static constexpr int kPopupWidthDp = 744;
   static constexpr int kPopupMinHeightDp = 48;
@@ -198,11 +211,18 @@ class MahoCommandOverlayView : public views::View,
   void ApplyPlaceholderForMode();
   void UpdateModeChipVisibility();
   void UpdateModeChip();
+  void RebuildAttachmentChips();
+  void OnAddTabPressed();
+  void OnAddFilePressed();
+  void OnRemoveAttachment(size_t index);
+  void OnToggleInteractionMode();
+  void ShowOpenTabMenu();
 
   raw_ptr<Browser> browser_;
   CommandOverlayMode mode_;
   MahoPrivateContextClass context_class_ = MahoPrivateContextClass::kNull;
   std::unique_ptr<MahoCommandModel> model_;
+  std::unique_ptr<MahoCommandAttachmentModel> attachment_model_;
   DismissCallback dismiss_callback_;
   ResizeCallback resize_callback_;
 
@@ -221,8 +241,20 @@ class MahoCommandOverlayView : public views::View,
   raw_ptr<views::Label> hint_label_ = nullptr;
   raw_ptr<views::Label> mode_label_ = nullptr;
   raw_ptr<views::Label> trailing_accessory_label_ = nullptr;
+  raw_ptr<views::View> attachment_row_ = nullptr;
+  raw_ptr<views::View> attachment_chips_container_ = nullptr;
+  raw_ptr<views::MdTextButton> add_tab_button_ = nullptr;
+  raw_ptr<views::MdTextButton> add_file_button_ = nullptr;
+  raw_ptr<views::MdTextButton> interaction_mode_button_ = nullptr;
   raw_ptr<MahoCommandActionSelectorView> action_selector_ = nullptr;
   PaletteAction palette_action_ = PaletteAction::kSearch;
+  maho_ai::mojom::InteractionMode interaction_mode_ =
+      maho_ai::mojom::InteractionMode::kAssistant;
+  scoped_refptr<ui::SelectFileDialog> attachment_file_dialog_;
+  std::unique_ptr<ui::SimpleMenuModel> attachment_tab_menu_model_;
+  std::unique_ptr<views::MenuRunner> attachment_tab_menu_runner_;
+  std::vector<int> attachment_tab_ids_;
+  raw_ptr<maho::ai::MahoAiFileAttachmentRegistry> file_registry_ = nullptr;
 
   std::string site_search_prefix_;
   std::string site_search_engine_name_;

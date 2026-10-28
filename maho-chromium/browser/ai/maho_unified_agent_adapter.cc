@@ -21,6 +21,7 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
@@ -297,6 +298,10 @@ bool maho_agent_resolve_model(MahoAgentSession* session,
                               const char* preference_opt_json,
                               const char* available_opt_json,
                               char** out_json);
+bool maho_agent_stage_user_image(MahoAgentSession* session,
+                                 const char* mime,
+                                 const uint8_t* data,
+                                 uint32_t len);
 void maho_agent_set_runtime_config(MahoAgentSession* session,
                                    const char* permission_tier,
                                    bool final_confirm,
@@ -304,6 +309,9 @@ void maho_agent_set_runtime_config(MahoAgentSession* session,
 }
 
 namespace {
+// Mirrors MAX_STAGED_USER_IMAGE_BYTES in maho-ffi.
+constexpr size_t kMaxStagedUserImageBytes = 10 * 1024 * 1024;
+
 const MahoAgentFfi kProductionFfi = {
     &maho_agent_create_session_leased,
     &maho_agent_set_approval_policy,
@@ -326,7 +334,20 @@ const MahoAgentFfi kProductionFfi = {
     &maho_agent_wait_register,
     &maho_agent_wait_wake,
     &maho_agent_resolve_model,
+    &maho_agent_stage_user_image,
+    &maho_core_free_string,
 };
+
+void FreeAgentFfiString(const MahoAgentFfi* ffi, char* s) {
+  if (!s) {
+    return;
+  }
+  if (ffi && ffi->free_string) {
+    ffi->free_string(s);
+  } else {
+    maho_core_free_string(s);
+  }
+}
 }  // namespace
 
 const MahoAgentFfi* GetProductionMahoAgentFfi() {
@@ -656,8 +677,9 @@ MahoUnifiedAgentAdapter::MahoUnifiedAgentAdapter(
   Profile* profile = bound_browser ? bound_browser->GetProfile() : nullptr;
   api_broker_ =
       std::make_unique<maho::ai::MahoAuthenticatedServiceApiBroker>(profile);
-  channel_gateway_ =
-      std::make_unique<maho::ai::MahoAgentChannelGateway>(nullptr, api_broker_.get());
+  channel_gateway_ = std::make_unique<maho::ai::MahoAgentChannelGateway>(
+      nullptr, api_broker_.get());
+  channel_gateway_->ConfigureProductionTransports(profile);
 }
 
 bool MahoUnifiedAgentAdapter::IsAiAllowed() {
@@ -777,6 +799,9 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
     maho_ai::mojom::InteractionMode mode,
     RuntimeEventCallback on_event) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  std::optional<std::vector<uint8_t>> user_image =
+      std::exchange(pending_user_image_, std::nullopt);
 
   if (active_turn_) {
     if (agent_session_ && agent_ffi_->turn_submit) {
@@ -1055,7 +1080,7 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
         agent_session_, category, nullptr, nullptr, &out_json);
     if (ok && out_json) {
       std::string res_json(out_json);
-      maho_core_free_string(out_json);
+      FreeAgentFfiString(agent_ffi_, out_json);
       std::optional<base::DictValue> parsed =
           base::JSONReader::ReadDict(res_json, base::JSON_PARSE_RFC);
       if (parsed) {
@@ -1082,6 +1107,16 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
   auto* turn_release_data = new std::shared_ptr<TurnFfiResources>(resources);
   resources->callback_handle->HandOffToProducer();
   std::string shaped_message = ShapeOutboundMessage(message, chat_intent);
+  if (user_image &&
+      (!agent_ffi_->stage_user_image ||
+       !agent_ffi_->stage_user_image(
+           agent_session_, "image/png", user_image->data(),
+           base::checked_cast<uint32_t>(user_image->size())))) {
+    ReleaseTurnFfiResources(turn_release_data);
+    TransitionToErrorForGeneration(generation,
+                                   "The captured image could not be attached.");
+    return;
+  }
   bool success = agent_ffi_->send_message_leased(
       agent_session_, shaped_message.c_str(),
       &MahoUnifiedAgentAdapter::OnAgentToken,
@@ -1115,6 +1150,18 @@ void MahoUnifiedAgentAdapter::CancelCurrentTurn() {
   // A2: Clear the atomic generation so session-level callbacks arriving after
   // cancel do not adopt a future turn.
   active_generation_atomic_->store(0, std::memory_order_release);
+}
+
+bool MahoUnifiedAgentAdapter::StageUserImage(std::vector<uint8_t> png_bytes) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // A running turn would turn the next SubmitMessage into a text-only
+  // follow-up; refuse instead of silently dropping the image.
+  if (active_turn_ || png_bytes.empty() ||
+      png_bytes.size() > kMaxStagedUserImageBytes) {
+    return false;
+  }
+  pending_user_image_ = std::move(png_bytes);
+  return true;
 }
 
 // static
@@ -3384,7 +3431,7 @@ bool MahoUnifiedAgentAdapter::ReplayAfter(const std::string& run_id,
   }
 
   std::string json_str(out_json);
-  maho_core_free_string(out_json);
+  FreeAgentFfiString(agent_ffi_, out_json);
 
   std::optional<base::DictValue> parsed =
       base::JSONReader::ReadDict(json_str, base::JSON_PARSE_RFC);
@@ -3559,7 +3606,7 @@ std::string MahoUnifiedAgentAdapter::RegisterWait(
     return "";
   }
   std::string handle(handle_c);
-  maho_core_free_string(handle_c);
+  FreeAgentFfiString(agent_ffi_, handle_c);
   return handle;
 }
 

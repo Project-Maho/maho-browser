@@ -34,6 +34,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/trace_event/trace_event.h"
@@ -41,7 +42,11 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "maho/browser/maho_private_context_policy.h"
+#include "maho/browser/ui/views/sidebar/maho_core_recovery_policy.h"
+#include "chrome/browser/lifetime/application_lifetime.h"
 #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
+
+#include "maho/browser/mcp/maho_mcp_controller_pairing.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "maho/browser/mcp/maho_mcp_pipe_server_win.h"
@@ -56,6 +61,7 @@
 #include "base/containers/span.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
+#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/browser_process.h"
@@ -78,6 +84,8 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"  // nogncheck
+#include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"  // nogncheck
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
@@ -85,6 +93,7 @@
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
@@ -101,11 +110,13 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
+#include "maho/browser/ai/maho_agent_channel_service.h"
 #include "maho/browser/ai/maho_ai_settings_migration.h"
 #include "maho/browser/ai/maho_artifact_registry.h"
 #include "maho/browser/ai/maho_control_activity_service.h"
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/ui/views/sidebar/maho_core_recovery_policy.h"
 #include "maho/browser/maho_routines_scheduler.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
@@ -802,6 +813,7 @@ void MahoBrowserMainExtraParts::PostEarlyInitialization() {
   // ChromeBrowserMainExtraPartsProfiles::PreProfileInit() seals the topology.
   maho::ai::EnsureMahoArtifactRegistryFactoryBuilt();
   maho::ai::EnsureMahoControlActivityServiceFactoryBuilt();
+  maho::ai::EnsureMahoAgentChannelServiceFactoryBuilt();
   maho::InstallMahoMailNotificationPermissionCallbacks();
 
   base::FilePath user_data_dir;
@@ -4348,6 +4360,126 @@ std::string FormatMailActionDetails(const std::string& action_name,
     }
   }
 
+  void CaptureViewportPngBase64(
+      int tab_id,
+      base::OnceCallback<void(maho::MahoMcpScreenshotResult)> done) override {
+    content::WebContents* wc =
+        tab_id == 0 ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    content::RenderWidgetHostView* view =
+        wc ? wc->GetRenderWidgetHostView() : nullptr;
+    if (!view) {
+      std::move(done).Run({{}, maho::MahoMcpScreenshotError::kCaptureFailed});
+      return;
+    }
+    CaptureAreaPngBase64(
+        tab_id, gfx::Rect(view->GetVisibleViewportSize()), std::move(done));
+  }
+
+  void CaptureAreaPngBase64(
+      int tab_id,
+      const gfx::Rect& area,
+      base::OnceCallback<void(maho::MahoMcpScreenshotResult)> done) override {
+    content::WebContents* wc =
+        tab_id == 0 ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    if (!wc) {
+      std::move(done).Run({{}, maho::MahoMcpScreenshotError::kCaptureFailed});
+      return;
+    }
+    content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
+    if (!view || !view->IsSurfaceAvailableForCopy()) {
+      std::move(done).Run({{}, maho::MahoMcpScreenshotError::kCaptureFailed});
+      return;
+    }
+    if (!area.IsEmpty() && !maho::IsValidScreenshotArea(area)) {
+      std::move(done).Run({{}, maho::MahoMcpScreenshotError::kEmptyArea});
+      return;
+    }
+    gfx::Rect capture_bounds;
+    if (!area.IsEmpty()) {
+      maho::MahoMcpScreenshotError error;
+      if (!maho::ValidateAndClampScreenshotArea(
+              maho::MahoMcpScreenshotMode::kArea, &area,
+              view->GetVisibleViewportSize(), &capture_bounds, &error)) {
+        std::move(done).Run({{}, error});
+        return;
+      }
+    }
+    const bool was_hidden = wc->GetVisibility() == content::Visibility::HIDDEN;
+    if (was_hidden) {
+      wc->WasShown();
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(&MahoMcpBrowserDelegateImpl::CaptureAreaPngBase64,
+                         weak_factory_.GetWeakPtr(), tab_id, area,
+                         std::move(done)),
+          base::Milliseconds(300));
+      return;
+    }
+    view->CopyFromSurface(
+        capture_bounds, gfx::Size(), base::Seconds(5),
+        base::BindOnce(
+            [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate,
+               int tab_id, bool was_hidden, gfx::Rect area,
+              base::OnceCallback<void(maho::MahoMcpScreenshotResult)> done,
+               const content::CopyFromSurfaceResult& result) {
+              if (was_hidden) {
+                if (content::WebContents* wc =
+                        delegate ? delegate->GetWebContentsForTabId(tab_id)
+                                 : nullptr) {
+                  wc->WasHidden();
+                }
+              }
+              if (!delegate || !result.has_value() ||
+                  result.value().bitmap.drawsNothing()) {
+                std::move(done).Run(
+                    {{}, maho::MahoMcpScreenshotError::kCaptureFailed});
+                return;
+              }
+              content::WebContents* wc = delegate->GetWebContentsForTabId(tab_id);
+              ui::AXTreeUpdate update;
+              if (wc) {
+                update = delegate->SnapshotAXTree(wc);
+              }
+              ui::AXTree tree;
+              const ui::AXTree* ax_tree =
+                  tree.Unserialize(update) ? &tree : nullptr;
+              if (area.IsEmpty()) {
+                maho::MahoMcpScreenshotHandler::CaptureViewport(
+                    result.value().bitmap, ax_tree,
+                    base::BindOnce(
+                        [](base::OnceCallback<void(maho::MahoMcpScreenshotResult)> done,
+                           std::vector<uint8_t> bytes) {
+                          std::move(done).Run({
+                              bytes.empty()
+                                  ? std::string()
+                                  : base::Base64Encode(
+                                        base::span<const uint8_t>(bytes)),
+                              bytes.empty()
+                                  ? std::optional<maho::MahoMcpScreenshotError>(
+                                        maho::MahoMcpScreenshotError::kCaptureFailed)
+                                  : std::nullopt});
+                        }, std::move(done)));
+                return;
+              }
+              maho::MahoMcpScreenshotHandler::CaptureArea(
+                  result.value().bitmap, ax_tree, area,
+                  base::BindOnce(
+                      [](base::OnceCallback<void(maho::MahoMcpScreenshotResult)> done,
+                         std::vector<uint8_t> bytes) {
+                        std::move(done).Run({
+                            bytes.empty()
+                                ? std::string()
+                                : base::Base64Encode(
+                                      base::span<const uint8_t>(bytes)),
+                            bytes.empty()
+                                ? std::optional<maho::MahoMcpScreenshotError>(
+                                      maho::MahoMcpScreenshotError::kCaptureFailed)
+                                : std::nullopt});
+                      }, std::move(done)), true);
+            }, weak_factory_.GetWeakPtr(), tab_id, was_hidden, capture_bounds,
+            std::move(done)));
+  }
+
   void CaptureVisibleViewFromTabForElement(
       int tab_id,
       bool was_hidden,
@@ -6325,10 +6457,80 @@ std::string FormatMailActionDetails(const std::string& action_name,
   base::WeakPtrFactory<MahoMcpBrowserDelegateImpl> weak_factory_{this};
 };
 
+// Asks the user to approve a local MCP controller. Uses a native question
+// box parented to the last active browser window so it works without an open
+// AI panel; the coordinator times the request out after 120 s.
+void PresentMcpControllerPairingApproval(
+    const std::string& kind,
+    const std::string& name,
+    base::OnceCallback<void(bool)> decision) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  BrowserWindowInterface* last_active = nullptr;
+  if (GlobalBrowserCollection* collection =
+          GlobalBrowserCollection::GetInstance()) {
+    last_active = collection->GetLastActiveBrowser();
+  }
+  Browser* browser = static_cast<Browser*>(last_active);
+  if (!browser || !browser->GetWindow()) {
+    // No window to ask in: fail closed.
+    std::move(decision).Run(false);
+    return;
+  }
+  const std::u16string message = base::UTF8ToUTF16(base::StrCat(
+      {"\"", name, "\" (", kind,
+       ") wants to control Maho on this computer: open tabs, click, type and "
+       "read pages. Allow it? You can revoke it later with "
+       "\"maho controllers revoke\"."}));
+  chrome::ShowQuestionMessageBoxAsync(
+      browser->GetWindow()->GetNativeWindow(), u"Allow local controller?",
+      message,
+      base::BindOnce(
+          [](base::OnceCallback<void(bool)> decision,
+             chrome::MessageBoxResult result) {
+            std::move(decision).Run(result ==
+                                    chrome::MESSAGE_BOX_RESULT_YES);
+          },
+          std::move(decision)));
+}
+
 MahoMcpBrowserDelegateImpl* GetMcpBrowserDelegate() {
   static base::NoDestructor<MahoMcpBrowserDelegateImpl> mcp_delegate;
   return mcp_delegate.get();
 }
+
+#if BUILDFLAG(IS_MAC)
+// Core-ready handler: registers the full Maho accelerator set on every open
+// normal window. BrowserView::AddedToWidget() ran before core was ready and
+// registered only the Ctrl+1..9 fallback (see MahoShortcutInterceptor::
+// RegisterMissingAccelerators). Idempotent, so windows created after core is
+// ready (which already registered everything) are left alone.
+void RegisterMahoAcceleratorsOnOpenWindows() {
+  const std::vector<ui::Accelerator> accelerators =
+      maho::MahoShortcutInterceptor::GetRegisteredAccelerators();
+  if (accelerators.empty()) {
+    return;
+  }
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&accelerators](BrowserWindowInterface* browser) {
+        if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
+          return true;
+        }
+        BrowserView* browser_view =
+            BrowserView::GetBrowserViewForBrowser(browser);
+        if (!browser_view || !browser_view->GetWidget()) {
+          return true;
+        }
+        const size_t added =
+            maho::MahoShortcutInterceptor::RegisterMissingAccelerators(
+                browser_view->GetFocusManager(), browser_view, accelerators);
+        if (added > 0) {
+          LOG(INFO) << "[maho-shortcut] registered " << added
+                    << " accelerators after core ready";
+        }
+        return true;
+      });
+}
+#endif  // BUILDFLAG(IS_MAC)
 
 }  // namespace
 
@@ -6445,6 +6647,7 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
 }
 
 void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
+  maho::MahoMcpPairingCoordinator::Get()->Reset();
 #if BUILDFLAG(IS_WIN)
   if (mcp_pipe_server_) {
     content::GetIOThreadTaskRunner({})->PostTask(
@@ -6629,8 +6832,18 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
     return;
   }
   startup_state_ = StartupState::kLoading;
+  maho::PublishCoreRecoveryState(maho::CoreRecoveryBannerState::kHidden);
+  startup_attempts_ = 0;
   ++startup_generation_;
   EnsureMailNotificationCoordinator(profile);
+  core_health_subscription_ = maho::AddCoreHealthCallback(base::BindRepeating(
+      [](base::WeakPtr<MahoBrowserMainExtraParts>, maho::CoreHealth health) {
+        maho::PublishCoreRecoveryState(
+            health == maho::CoreHealth::kDegraded
+                ? maho::CoreRecoveryBannerState::kDegraded
+                : maho::CoreRecoveryBannerState::kHidden);
+      },
+      weak_factory_.GetWeakPtr()));
 
   // Core initialization remains one-time; notification ownership is per
   // regular profile and is established independently above.
@@ -6644,16 +6857,34 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
   // registers the bootstrap service so MachPortRendezvousClient::GetInstance()
   // in the child resolves instead of returning null (invalid endpoint).
   base::MachPortRendezvousServerMac::GetInstance();
+
+  // BrowserView registers the Maho accelerators once, in AddedToWidget(),
+  // and the first window is created ~1s before maho-core is ready. An empty
+  // registry there leaves only Ctrl+1..9 registered, so Cmd+T falls through
+  // to the native IDC_NEW_TAB menu path and opens a blank tab. Register the
+  // full set once core is ready, for windows that already exist.
+  core_ready_accelerator_subscription_ = maho::AddCoreReadyCallback(
+      base::BindRepeating(&RegisterMahoAcceleratorsOnOpenWindows));
 #endif
 
   LOG(INFO) << "MAHO_INIT_AUDIT: class=regular, decision=allow, "
                "stage=core_init_begin";
 
+  StartCoreStartupAttempt(profile->GetWeakPtr(), 0);
+}
+
+void MahoBrowserMainExtraParts::StartCoreStartupAttempt(
+    base::WeakPtr<Profile> profile,
+    int completed_attempts) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  startup_state_ = StartupState::kLoading;
+  startup_attempts_ = completed_attempts;
+  ++startup_generation_;
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&CreateDirectoryOnThreadPool, storage_path_),
       base::BindOnce(&MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady,
-                     weak_factory_.GetWeakPtr(), profile->GetWeakPtr()));
+                     weak_factory_.GetWeakPtr(), profile));
 }
 
 void MahoBrowserMainExtraParts::EnsureMailNotificationCoordinator(
@@ -6699,12 +6930,14 @@ void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
   }
   if (!profile || !profile->IsRegularProfile()) {
     startup_state_ = StartupState::kFailed;
+    ScheduleCoreStartupRetry(profile, startup_attempts_);
     return;
   }
   if (!storage_directory_ready) {
     LOG(WARNING) << "Maho storage directory creation failed: "
                  << storage_path_.value();
     startup_state_ = StartupState::kFailed;
+    ScheduleCoreStartupRetry(profile, startup_attempts_);
     return;
   }
 
@@ -6742,6 +6975,7 @@ void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
     startup_state_ = StartupState::kFailed;
     LOG(ERROR) << "Maho storage key derivation/setting failed; password "
                   "manager/persistent storage will be disabled.";
+    ScheduleCoreStartupRetry(profile, startup_attempts_);
     return;
   }
 
@@ -6803,7 +7037,34 @@ void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
   if (!posted) {
     startup_state_ = StartupState::kFailed;
     LOG(ERROR) << "Maho core startup task admission failed";
+    ScheduleCoreStartupRetry(profile, startup_attempts_);
   }
+}
+
+void MahoBrowserMainExtraParts::ScheduleCoreStartupRetry(
+    base::WeakPtr<Profile> profile,
+    int completed_attempts) {
+  const auto decision = maho::DecideCoreStartupRetry(completed_attempts);
+  if (!decision.retry || !profile) {
+    startup_state_ = StartupState::kFailed;
+    maho::PublishCoreRecoveryState(
+        maho::CoreRecoveryBannerState::kFailedWithRetry);
+    return;
+  }
+  startup_state_ = StartupState::kFailed;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](base::WeakPtr<MahoBrowserMainExtraParts> parts,
+             base::WeakPtr<Profile> profile, int attempt) {
+            if (!parts || !profile ||
+                parts->startup_state_ != StartupState::kFailed) {
+              return;
+            }
+            parts->StartCoreStartupAttempt(profile, attempt);
+          },
+          weak_factory_.GetWeakPtr(), profile, decision.attempt),
+      decision.delay);
 }
 
 void MahoBrowserMainExtraParts::OnCoreStartupComplete(
@@ -6815,10 +7076,13 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
       generation != startup_generation_) {
     return;
   }
+  const bool retry_profile_alive = static_cast<bool>(weak_profile);
   Profile* profile = weak_profile.get();
-  if (!profile || !result->error.empty() || !result->core || !result->spaces) {
+  if (!retry_profile_alive || !result->error.empty() || !result->core ||
+      !result->spaces) {
     startup_state_ = StartupState::kFailed;
     LOG(ERROR) << "Maho core initialization failed: " << result->error;
+    ScheduleCoreStartupRetry(weak_profile, startup_attempts_);
     return;
   }
   auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
@@ -6826,12 +7090,15 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
                                    std::move(*result->spaces))) {
     startup_state_ = StartupState::kFailed;
     LOG(ERROR) << "Maho core startup snapshot publication failed";
+    maho::PublishCoreRecoveryState(
+        maho::CoreRecoveryBannerState::kFailedWithRetry);
     return;
   }
   const auto changed_spaces =
       MahoSpaceThemeState::UpdateFromSnapshot(result->spaces_json);
   core_ = result->core.release();
   startup_state_ = StartupState::kReady;
+  maho::PublishCoreRecoveryState(maho::CoreRecoveryBannerState::kHidden);
   {
     maho::SetCoreForProfile(core_, profile, std::move(result->tab_facts));
     maho::core::InstallLogCallback();
@@ -6997,6 +7264,8 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
   sync_relay_client_->StartPolling();
 
   maho::MigrateAiSettings(profile);
+  // Restores configured external channels; a profile with none stays idle.
+  maho::ai::MahoAgentChannelService::GetForProfile(profile);
 
   maho::MahoTabIdSessionHelper::GetForProfile(profile);
 
@@ -7028,15 +7297,35 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
         profile, SessionStartupPref(SessionStartupPref::LAST));
   }
 
+  // MCP controller pairing (todo 67): local controllers other than the
+  // browser's own agent must be approved once by the user. Tokens live under
+  // <user-data-dir>/controllers/<kind>/ where maho-browser-mcp looks for them.
+  {
+    base::FilePath pairing_user_data_dir;
+    if (g_browser_process && g_browser_process->local_state() &&
+        base::PathService::Get(chrome::DIR_USER_DATA,
+                               &pairing_user_data_dir)) {
+      maho::MahoMcpPairingCoordinator::Get()->Configure(
+          g_browser_process->local_state(), pairing_user_data_dir,
+          base::BindRepeating(&PresentMcpControllerPairingApproval));
+    }
+  }
+
   // MCP server
 #if BUILDFLAG(IS_WIN)
   mcp_session_token_ = maho::MahoMcpSessionToken::Create();
   if (mcp_session_token_) {
-    base::FilePath token_path =
-        maho::MahoMcpSessionToken::GetSessionTokenPath();
-    if (!token_path.empty()) {
-      mcp_session_token_->WriteEncryptedToDisk(token_path);
-    }
+    base::ThreadPool::PostTask(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(
+            [](maho::MahoMcpSessionToken* token) {
+              base::FilePath token_path =
+                  maho::MahoMcpSessionToken::GetSessionTokenPath();
+              if (!token_path.empty()) {
+                token->WriteEncryptedToDisk(token_path);
+              }
+            },
+            base::Unretained(mcp_session_token_.get())));
   }
   mcp_pipe_server_ =
       std::make_unique<maho::MahoMcpPipeServer>(mcp_session_token_.get());

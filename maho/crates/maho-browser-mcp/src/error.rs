@@ -32,6 +32,14 @@ pub enum McpBridgeError {
         data: Option<serde_json::Value>,
     },
 
+    /// This controller has not completed browser pairing.
+    #[error("This controller is not paired. Approve it in Maho (a card appeared), then retry.")]
+    ControllerNotPaired,
+
+    /// This controller's pairing has been revoked by the browser.
+    #[error("This controller pairing has been revoked. Pair it again in Maho.")]
+    ControllerPairingRevoked,
+
     /// The initialize handshake response did not match expectations.
     #[error("handshake mismatch: expected {expected:?}, got {got:?}")]
     HandshakeMismatch {

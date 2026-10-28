@@ -128,7 +128,7 @@ use crate::vault_manager::{
 };
 use crate::vault_runtime::VaultRuntime;
 
-mod vault_items;
+pub mod vault_items;
 
 fn private_tab_ids_from_tabs<'a, I>(tabs: I) -> HashSet<TabId>
 where
@@ -2677,6 +2677,10 @@ pub struct MahoCore {
     #[cfg(test)]
     profile_lmdb_persist_fault: bool,
     active_chat_sessions: Arc<Mutex<HashMap<String, usize>>>,
+    /// Remote SiteSession records accepted by sync for opted-in origins of the
+    /// active profile, waiting for the browser to apply them (keyed by origin,
+    /// so a newer record for the same origin replaces an unapplied older one).
+    pending_site_session_applies: HashMap<String, crate::sync_models::SiteSessionRecord>,
 }
 
 impl Default for MahoCore {
@@ -3045,6 +3049,7 @@ impl MahoCore {
             #[cfg(test)]
             test_device_protector: None,
             vault_device_secret_path: None,
+            pending_site_session_applies: HashMap::new(),
             #[cfg(test)]
             profile_sqlite_persist_fault: false,
             #[cfg(test)]
@@ -8134,6 +8139,18 @@ impl MahoCore {
 
     // === Profile Methods ===
 
+    /// Test seam: makes `profile` this core's only, active profile so two
+    /// in-process cores can stand in for two devices of the same profile.
+    #[doc(hidden)]
+    pub fn adopt_profile_for_sync_test(&mut self, profile: maho_types::profile::ProfileConfig) {
+        let id = profile.id.clone();
+        self.profile_manager
+            .restore_profiles(vec![profile], Some(id.clone()));
+        if let Some(sm) = self.sync_manager.as_mut() {
+            sm.set_active_profile_id(Some(id.to_string()));
+        }
+    }
+
     pub fn list_profiles(&self) -> &[maho_types::profile::ProfileConfig] {
         self.profile_manager.list_profiles()
     }
@@ -9701,6 +9718,45 @@ impl MahoCore {
         self.content_blocker.is_site_excepted(origin)
     }
 
+    pub fn test_content_blocker_request(
+        &self,
+        url: &str,
+        source_url: &str,
+        request_type: &str,
+    ) -> crate::content_blocker::TestRequestResult {
+        self.content_blocker
+            .test_request(url, source_url, request_type)
+    }
+
+    pub fn get_custom_filter_rules(&self) -> String {
+        self.content_blocker.custom_rules().to_string()
+    }
+
+    /// Persists only after the core accepted the rules; a rejected save leaves
+    /// both memory and storage unchanged.
+    pub fn set_custom_filter_rules(
+        &mut self,
+        rules: &str,
+    ) -> Result<(), maho_types::content_blocking::ContentBlockingError> {
+        self.content_blocker.set_custom_rules(rules)?;
+        self.persist_content_blocker_snapshot();
+        let state_change = self.content_blocker_state_change(None);
+        self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+        Ok(())
+    }
+
+    pub fn import_local_filter_list(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<String, maho_types::content_blocking::ContentBlockingError> {
+        let id = self.content_blocker.import_local_list(name, bytes)?;
+        self.persist_content_blocker_snapshot();
+        let state_change = self.content_blocker_state_change(None);
+        self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+        Ok(id)
+    }
+
     pub fn update_filter_list_content(&mut self, id: &str, content: String) -> bool {
         if let Err(err) = self.content_blocker.update_filter_list_content(id, content) {
             eprintln!("[MahoCore] update_filter_list_content rejected for {id}: {err}");
@@ -9730,6 +9786,16 @@ impl MahoCore {
         url: &str,
     ) -> crate::content_blocker::CosmeticResourcesResponse {
         self.content_blocker.get_cosmetic_resources(url)
+    }
+
+    pub fn get_hidden_class_id_selectors(
+        &self,
+        classes: &[String],
+        ids: &[String],
+        exceptions: &[String],
+    ) -> Vec<String> {
+        self.content_blocker
+            .hidden_class_id_selectors(classes, ids, exceptions)
     }
 
     pub fn rebuild_content_rules(&mut self) {
@@ -10930,6 +10996,7 @@ impl MahoCore {
             autofill: None,
             advanced: None,
             notifications: None,
+            episodic_memory: None,
         });
     }
 
@@ -10951,6 +11018,7 @@ impl MahoCore {
             autofill: None,
             advanced: None,
             notifications: None,
+            episodic_memory: None,
         });
     }
 
@@ -10974,6 +11042,7 @@ impl MahoCore {
             autofill: None,
             advanced: None,
             notifications: None,
+            episodic_memory: None,
         });
         Ok(())
     }
@@ -10994,6 +11063,7 @@ impl MahoCore {
             autofill: None,
             advanced: None,
             notifications: None,
+            episodic_memory: None,
         });
     }
 
@@ -12470,6 +12540,17 @@ impl MahoCore {
         }
         entities.insert("SharedCollection".to_string(), shared_collections);
 
+        // SiteSession: only the latest stored record of each origin the active
+        // profile has opted in. Opted-out origins are never emitted.
+        let mut site_sessions = Vec::new();
+        if !is_disabled(SyncEntityType::SiteSession) {
+            for entity in self.local_site_session_entities() {
+                hlc_ts_ceiling = hlc_ts_ceiling.max(entity.version);
+                site_sessions.push(entity);
+            }
+        }
+        entities.insert("SiteSession".to_string(), site_sessions);
+
         snap.hlc_ts_ceiling = hlc_ts_ceiling;
         snap.entities = entities;
         Ok(snap)
@@ -12504,6 +12585,189 @@ impl MahoCore {
         }
     }
 
+    fn site_session_opt_in_key(&self) -> Option<String> {
+        let profile = self.profile_manager.get_active_profile_id()?;
+        Some(format!("site_session_opted_origins:{profile}"))
+    }
+
+    /// Origins the active profile opted into SiteSession sync. Empty by
+    /// default; nothing is ever opted in automatically.
+    pub fn site_session_opted_origins(&self) -> crate::sync_models::SiteSessionOriginSet {
+        let (Some(storage), Some(key)) = (self.storage.as_ref(), self.site_session_opt_in_key())
+        else {
+            return Default::default();
+        };
+        storage
+            .get_setting(&key)
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default()
+    }
+
+    /// Replaces the active profile's opted-in origins. Every origin must be a
+    /// valid https origin; the whole update is rejected otherwise. Origins that
+    /// are no longer opted in get a tombstone so other devices drop them, and
+    /// their pending applies are discarded.
+    pub fn set_site_session_opted_origins(&mut self, origins: &[String]) -> Result<(), String> {
+        let key = self
+            .site_session_opt_in_key()
+            .ok_or_else(|| "no active profile".to_string())?;
+        let mut next = crate::sync_models::SiteSessionOriginSet::default();
+        for origin in origins {
+            next.insert(origin).map_err(|e| format!("{origin}: {e}"))?;
+        }
+        let previous = self.site_session_opted_origins();
+        let storage = self.storage.as_ref().ok_or("storage is not open")?;
+        storage
+            .set_setting(
+                &key,
+                &serde_json::to_string(&next).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+        let removed: Vec<String> = previous
+            .origins()
+            .filter(|origin| !next.contains(origin).unwrap_or(false))
+            .map(str::to_string)
+            .collect();
+        for origin in removed {
+            self.pending_site_session_applies.remove(&origin);
+            self.push_sync_entity(SyncEntityType::SiteSession, origin, String::new(), true);
+        }
+        Ok(())
+    }
+
+    /// Records the browser-collected cookies/localStorage of one opted-in
+    /// origin as a local SiteSession change. Non-opted origins are rejected.
+    pub fn record_site_session(
+        &mut self,
+        record: crate::sync_models::SiteSessionRecord,
+    ) -> Result<(), String> {
+        let record = crate::sync_models::SiteSessionRecord::new(
+            &record.origin,
+            record.cookies,
+            record.local_storage,
+        )
+        .map_err(|e| e.to_string())?;
+        if !self
+            .site_session_opted_origins()
+            .contains(&record.origin)
+            .unwrap_or(false)
+        {
+            return Err(format!("{} is not opted in", record.origin));
+        }
+        record.validate_size().map_err(|e| e.to_string())?;
+        let payload = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+        self.push_sync_entity(SyncEntityType::SiteSession, record.origin, payload, false);
+        Ok(())
+    }
+
+    /// Origins whose site data the browser must collect for the next sync
+    /// upload: exactly the active profile's opted-in origins.
+    pub fn site_session_origins_for_export(&self) -> Vec<String> {
+        let mut origins: Vec<String> = self
+            .site_session_opted_origins()
+            .origins()
+            .map(str::to_string)
+            .collect();
+        origins.sort();
+        origins
+    }
+
+    fn local_site_session_entities(&self) -> Vec<crate::sync_models::SyncEntity> {
+        let (Some(storage), Some(profile)) = (
+            self.storage.as_ref(),
+            self.profile_manager.get_active_profile_id(),
+        ) else {
+            return Vec::new();
+        };
+        let opted = self.site_session_opted_origins();
+        let prefix = format!("{profile}:");
+        let Ok(rows) = storage.load_entity_versions_of_type(SyncEntityType::SiteSession.as_str())
+        else {
+            return Vec::new();
+        };
+        let mut entities = Vec::new();
+        for (storage_id, version, device_id, payload) in rows {
+            let Some(origin) = storage_id.strip_prefix(&prefix) else {
+                continue;
+            };
+            let Some(payload) = payload else { continue };
+            let Ok(record) =
+                serde_json::from_str::<crate::sync_models::SiteSessionRecord>(&payload)
+            else {
+                continue;
+            };
+            if record.origin != origin || !opted.contains(origin).unwrap_or(false) {
+                continue;
+            }
+            entities.push(crate::sync_models::SyncEntity {
+                entity_type: SyncEntityType::SiteSession,
+                entity_id: origin.to_string(),
+                version,
+                device_id,
+                schema_version: 1,
+                modified_at: chrono::Utc::now().timestamp(),
+                fields_hlc_json: crate::sync_models::build_fields_hlc(&payload, version, device_id),
+                payload_json: payload,
+                deleted: false,
+                queue_row_id: None,
+                profile_id: Some(profile.to_string()),
+            });
+        }
+        entities.sort_by(|a, b| a.entity_id.cmp(&b.entity_id));
+        entities
+    }
+
+    fn queue_site_session_apply(&mut self, entity: &crate::sync_models::SyncEntity) {
+        let active = self
+            .profile_manager
+            .get_active_profile_id()
+            .map(|p| p.to_string());
+        if entity.profile_scope() != active || active.is_none() {
+            return;
+        }
+        if entity.deleted {
+            self.pending_site_session_applies.remove(&entity.entity_id);
+            return;
+        }
+        let Ok(record) =
+            serde_json::from_str::<crate::sync_models::SiteSessionRecord>(&entity.payload_json)
+        else {
+            eprintln!(
+                "[sync] Rejected malformed site session {}",
+                entity.entity_id
+            );
+            return;
+        };
+        let Ok(canonical) = crate::sync_models::canonical_site_session_origin(&record.origin)
+        else {
+            eprintln!("[sync] Rejected site session with invalid origin");
+            return;
+        };
+        if canonical != entity.entity_id
+            || record.validate_size().is_err()
+            || !self
+                .site_session_opted_origins()
+                .contains(&canonical)
+                .unwrap_or(false)
+        {
+            return;
+        }
+        self.pending_site_session_applies.insert(canonical, record);
+    }
+
+    /// Hands the accepted remote site sessions to the browser exactly once.
+    pub fn take_site_session_applies(&mut self) -> Vec<crate::sync_models::SiteSessionRecord> {
+        let mut records: Vec<_> = self
+            .pending_site_session_applies
+            .drain()
+            .map(|(_, r)| r)
+            .collect();
+        records.sort_by(|a, b| a.origin.cmp(&b.origin));
+        records
+    }
+
     pub fn export_sync_snapshot(&self) -> Result<String, String> {
         let snap = self.build_wire_snapshot()?;
         let ceiling = snap.hlc_ts_ceiling;
@@ -12535,33 +12799,43 @@ impl MahoCore {
             self.sync_manager = Some(crate::sync_manager::SyncManager::new(config));
         }
 
-        let snap: crate::snapshot::Snapshot =
-            if let Ok(parsed) = serde_json::from_str::<crate::snapshot::Snapshot>(snapshot_json) {
-                parsed
-            } else if let Ok(val) = serde_json::from_str::<serde_json::Value>(snapshot_json) {
-                let blob_str = val
-                    .get("blob")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(snapshot_json);
-                use base64::Engine;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(blob_str)
-                    .map_err(|e| e.to_string())?;
-                let sync_key_opt = self
-                    .sync_manager
-                    .as_ref()
-                    .and_then(|sm| sm.encryption_key.as_ref());
-                let decrypted = match sync_key_opt {
-                    Some(key) => match crate::sync_crypto::decrypt_update(&bytes, key) {
-                        Ok(d) => d,
-                        Err(_) => bytes,
-                    },
-                    None => bytes,
-                };
-                serde_json::from_slice(&decrypted).map_err(|e| e.to_string())?
-            } else {
-                return Err("invalid snapshot JSON".to_string());
+        let sync_key_configured = self
+            .sync_manager
+            .as_ref()
+            .is_some_and(|sm| sm.encryption_key.is_some());
+
+        // With a sync key configured, only an AES-GCM-authenticated envelope is
+        // accepted: raw Snapshot JSON and bytes that fail authentication are
+        // rejected instead of being applied as plaintext.
+        let raw_snapshot = if sync_key_configured {
+            None
+        } else {
+            serde_json::from_str::<crate::snapshot::Snapshot>(snapshot_json).ok()
+        };
+        let snap: crate::snapshot::Snapshot = if let Some(parsed) = raw_snapshot {
+            parsed
+        } else if let Ok(val) = serde_json::from_str::<serde_json::Value>(snapshot_json) {
+            let blob_str = val
+                .get("blob")
+                .and_then(|v| v.as_str())
+                .unwrap_or(snapshot_json);
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(blob_str)
+                .map_err(|e| e.to_string())?;
+            let sync_key_opt = self
+                .sync_manager
+                .as_ref()
+                .and_then(|sm| sm.encryption_key.as_ref());
+            let decrypted = match sync_key_opt {
+                Some(key) => crate::sync_crypto::decrypt_update(&bytes, key)
+                    .map_err(|_| "snapshot authentication failed".to_string())?,
+                None => bytes,
             };
+            serde_json::from_slice(&decrypted).map_err(|e| e.to_string())?
+        } else {
+            return Err("invalid snapshot JSON".to_string());
+        };
 
         let mut ordered_entities = Vec::new();
 
@@ -12587,6 +12861,7 @@ impl MahoCore {
             "Settings",
             "SharedCollection",
             "VaultItem",
+            "SiteSession",
         ];
 
         for key in type_keys {
@@ -12650,6 +12925,7 @@ impl MahoCore {
             "Settings",
             "SharedCollection",
             "VaultItem",
+            "SiteSession",
         ];
 
         for key in type_keys {
@@ -13572,6 +13848,10 @@ impl MahoCore {
                             .insert((entity.entity_type.clone(), entity.entity_id.clone()));
                     }
                 }
+                // Site sessions have no core-side store: the sync manager keeps
+                // the record and the browser applies cookies/localStorage for
+                // opted-in origins (taken via take_site_session_applies).
+                SyncEntityType::SiteSession => self.queue_site_session_apply(entity),
             }
         }
 

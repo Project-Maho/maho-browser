@@ -1,6 +1,6 @@
 {
   "catalogDiagnostics": {
-    "canonicalCount": 92,
+    "canonicalCount": 94,
     "catalogHash": "AED6EE2798F029F1143B9D37136E5F227FED99BD6C80E1FCC4C4C042CFBB3D9F",
     "catalogVersion": 1,
     "gates": {
@@ -65,7 +65,7 @@
         ]
       },
       "cliGeneric": {
-        "count": 58,
+        "count": 60,
         "ids": [
           "bookmarks.create",
           "bookmarks.search",
@@ -76,8 +76,10 @@
           "capture.network_get_har",
           "capture.network_start",
           "capture.network_stop",
+          "capture.screenshot_area",
           "capture.screenshot_element",
           "capture.screenshot_full",
+          "capture.screenshot_viewport",
           "history.search",
           "input.click",
           "input.file_upload_select",
@@ -204,7 +206,7 @@
         ]
       },
       "publicMcp": {
-        "count": 58,
+        "count": 60,
         "ids": [
           "bookmarks.create",
           "bookmarks.search",
@@ -215,8 +217,10 @@
           "capture.network_get_har",
           "capture.network_start",
           "capture.network_stop",
+          "capture.screenshot_area",
           "capture.screenshot_element",
           "capture.screenshot_full",
+          "capture.screenshot_viewport",
           "history.search",
           "input.click",
           "input.file_upload_select",
@@ -1208,6 +1212,81 @@
         "type": "object"
       },
       "capabilityId": "capture.screenshot_element",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "changesAuthority": false,
+        "featureGate": "always",
+        "missingPolicy": "fail_closed",
+        "mutability": "read_only",
+        "requiredBoundary": "tab",
+        "requiredBroker": "browser",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "name": "browser_screenshot_viewport",
+      "description": "Capture a redacted screenshot of the visible viewport.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "description": "Browser tab id. Mutations require it explicitly (-32013 without it); read-only tools fall back to the active tab when omitted.",
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "capabilityId": "capture.screenshot_viewport",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "changesAuthority": false,
+        "featureGate": "always",
+        "missingPolicy": "fail_closed",
+        "mutability": "read_only",
+        "requiredBoundary": "tab",
+        "requiredBroker": "browser",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "name": "browser_screenshot_area",
+      "description": "Capture a redacted viewport area using x, y, width, and height in CSS viewport pixels at 100% zoom; coordinates are relative to the visible viewport's top-left and clamp to its bounds.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "description": "Area height in CSS viewport pixels at 100% zoom.",
+            "type": "integer"
+          },
+          "tab_id": {
+            "description": "Browser tab id. Mutations require it explicitly (-32013 without it); read-only tools fall back to the active tab when omitted.",
+            "type": "integer"
+          },
+          "width": {
+            "description": "Area width in CSS viewport pixels at 100% zoom.",
+            "type": "integer"
+          },
+          "x": {
+            "description": "Area origin x in CSS viewport pixels at 100% zoom, relative to the visible viewport's top-left.",
+            "type": "integer"
+          },
+          "y": {
+            "description": "Area origin y in CSS viewport pixels at 100% zoom, relative to the visible viewport's top-left.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "capabilityId": "capture.screenshot_area",
       "schemaVersion": 1,
       "resultVersion": 1,
       "policy": {

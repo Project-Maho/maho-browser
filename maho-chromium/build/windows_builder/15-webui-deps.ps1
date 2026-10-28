@@ -8,15 +8,19 @@
   import from ../../../../website/node_modules. The website package lives in
   the private maho-cloud repo, so the builder only needs its package.json +
   bun.lock (copied into C:\src\maho-win-builder\website\) to install the
-  exact locked dependency set. Installs into C:\src\maho-browser\website
-  (kept out of git via .git/info/exclude).
+  exact locked dependency set. Installs into <Repo>\website (kept out of git
+  via .git/info/exclude). -Repo defaults to the shared checkout; step 55 passes
+  its own release checkout so a release never depends on a shared folder.
 #>
+param([string]$Repo = 'C:\src\maho-browser')
 $ErrorActionPreference = 'Continue'
-$Root = 'C:\src'; $State = Join-Path $Root 'maho-win-builder'
-$repo = Join-Path $Root 'maho-browser'
+$State = 'C:\src\maho-win-builder'
+$repo = $Repo
 $srcDir = Join-Path $State 'website'
 $dst = Join-Path $repo 'website'
 foreach ($f in 'package.json','bun.lock','bunfig.toml') { if (-not (Test-Path (Join-Path $srcDir $f)) -and $f -ne 'bunfig.toml') { throw "missing $srcDir\$f" } }
+# A junction here (an older layout) would install into someone else's tree.
+if ((Test-Path $dst) -and (Get-Item $dst).LinkType) { cmd /c rmdir "$dst" | Out-Null }
 New-Item -ItemType Directory -Force -Path $dst | Out-Null
 Copy-Item (Join-Path $srcDir '*') $dst -Force
 $exclude = Join-Path $repo '.git\info\exclude'
@@ -50,6 +54,7 @@ try {
 # (maho-chromium\browser\resources\...), so the workspace root needs a
 # node_modules, exactly like the dev Mac's maho-browser/node_modules symlink.
 $rootModules = Join-Path $repo 'node_modules'
+if ((Test-Path $rootModules) -and (Get-Item $rootModules).Target -ne "$dst\node_modules") { cmd /c rmdir "$rootModules" | Out-Null }
 if (-not (Test-Path $rootModules)) { cmd /c mklink /J "$rootModules" "$dst\node_modules" | Out-Null }
 if (-not (Select-String -Path $exclude -SimpleMatch '/node_modules' -Quiet)) { Add-Content -Path $exclude -Value '/node_modules' }
 foreach ($m in 'esbuild\lib\main.js','tailwindcss\package.json','sonner\package.json','codemirror\package.json','tw-animate-css\package.json') { if (-not (Test-Path (Join-Path $dst "node_modules\$m"))) { throw "missing node_modules\$m" } }

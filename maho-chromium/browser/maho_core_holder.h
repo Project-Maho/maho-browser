@@ -19,6 +19,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "maho/browser/maho_core_watchdog_policy.h"
 #include "maho/third_party/maho/maho_bridge.h"
 
 struct MahoCore;
@@ -119,6 +120,18 @@ bool NotifyVaultLockStateChanged(bool locked);
 // true before any publication so a subscriber that queries before the first
 // tick fails closed.
 bool IsVaultLockedForUi();
+
+// Core watchdog. Callers bracket work they want deadline-tracked with
+// BeginWatchedCoreTask/EndWatchedCoreTask (any thread). EvaluateCoreWatchdog
+// runs on the UI thread from a periodic tick and notifies subscribers once per
+// healthy/degraded transition. Nothing is ever cancelled or restarted.
+uint64_t BeginWatchedCoreTask(CoreOperationClass operation);
+void EndWatchedCoreTask(uint64_t task_id);
+void EvaluateCoreWatchdog(base::TimeTicks now);
+using CoreHealthCallbackList =
+    base::RepeatingCallbackList<void(CoreHealth health)>;
+[[nodiscard]] base::CallbackListSubscription AddCoreHealthCallback(
+    base::RepeatingCallback<void(CoreHealth health)> callback);
 
 maho::core::VaultBackendSession CreateVaultBackendSession();
 maho::core::VaultBackendSession CreateVaultBackendSessionForProfile(

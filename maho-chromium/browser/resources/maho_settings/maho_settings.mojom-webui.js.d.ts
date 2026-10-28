@@ -639,6 +639,10 @@ export interface FilterListInfo {
   lastAttemptTimestamp: bigint | null;
   lastSuccessTimestamp: bigint | null;
   failureCount: number;
+  acceptedNetworkRuleCount: number;
+  acceptedCosmeticRuleCount: number;
+  rejectedRuleCount: number;
+  rejectedRuleSamples: string[];
   lastStatus: number | null;
   lastError: string | null;
   nextRetryTimestamp: bigint | null;
@@ -663,6 +667,18 @@ export interface AgentActionJournalEntry {
   origin: string;
   summary: string;
   outcome: string;
+}
+
+export interface ContentBlockerTestResult {
+  validRequest: boolean;
+  nativeMode: boolean;
+  siteExcepted: boolean;
+  blocked: boolean;
+  important: boolean;
+  matchedFilter: string | null;
+  exception: string | null;
+  listId: string | null;
+  redirect: string | null;
 }
 
 export interface ContentBlockerMutationResult {
@@ -782,6 +798,12 @@ export class PageCallbackRouter {
 }
 
 export class PageHandlerRemote {
+  listAgentChannels(): Promise<{json: string}>;
+  sendAgentChannelReply(id: string, replyId: string): Promise<{json: string}>;
+  configureAgentChannel(configJson: string): Promise<{json: string}>;
+  removeAgentChannel(id: string): Promise<{json: string}>;
+  approveAgentChannelPairing(id: string, sender: string, code: string): Promise<{json: string}>;
+  revokeAgentChannelPairing(id: string, sender: string): Promise<{json: string}>;
   $: {
     bindNewPipeAndPassReceiver(): unknown;
   };
@@ -873,6 +895,8 @@ export class PageHandlerRemote {
   exportShortcuts(): Promise<{jsonData: string}>;
   importShortcuts(jsonData: string): Promise<{success: boolean}>;
   getSyncStatus(): Promise<{status: SyncStatus}>;
+  getSiteSessionOptedOrigins(): Promise<{origins: string[]}>;
+  setSiteSessionOptedOrigins(origins: string[]): Promise<{success: boolean; errorMessage: string}>;
   getSyncDevices(): Promise<{devices: SyncDeviceInfo[]}>;
   generateSyncKey(): Promise<{keyInfo: SyncKeyInfo}>;
   configureSyncEncryption(recoveryPhrase: string): Promise<{status: SyncStatus}>;
@@ -1012,6 +1036,11 @@ export class PageHandlerRemote {
       cardholderName: string): Promise<{payment?: AutofillPayment | null}>;
   deleteAutofillPayment(id: string): Promise<{success: boolean}>;
   getFilterLists(): Promise<{lists: FilterListInfo[]}>;
+  setEpisodicMemory(
+      enabled: boolean,
+      paused: boolean,
+      excludedDomains: string[]): Promise<{success: boolean}>;
+  forgetEpisodeSite(site: string): Promise<{deletedCount: bigint}>;
   addFilterList(id: string, name: string, url: string): Promise<{
     success: boolean;
     mutation: ContentBlockerMutationResult;
@@ -1021,6 +1050,17 @@ export class PageHandlerRemote {
     mutation: ContentBlockerMutationResult;
   }>;
   removeFilterList(id: string): Promise<{
+    success: boolean;
+    mutation: ContentBlockerMutationResult;
+  }>;
+  testContentBlockerRequest(url: string, sourceUrl: string, requestType: string):
+      Promise<{result: ContentBlockerTestResult}>;
+  getCustomFilterRules(): Promise<{rules: string}>;
+  saveCustomFilterRules(rules: string): Promise<{
+    success: boolean;
+    mutation: ContentBlockerMutationResult;
+  }>;
+  importLocalFilterList(name: string, content: string): Promise<{
     success: boolean;
     mutation: ContentBlockerMutationResult;
   }>;

@@ -1,8 +1,8 @@
 diff --git c/chrome/browser/ui/BUILD.gn w/chrome/browser/ui/BUILD.gn
-index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70b3f467bb 100644
+index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..59476cd83e33ce1a4552b73bd43ab3daeb7655a2 100644
 --- c/chrome/browser/ui/BUILD.gn
 +++ w/chrome/browser/ui/BUILD.gn
-@@ -31,6 +31,16 @@
+@@ -31,6 +31,16 @@ import("//ui/views/features.gni")
  assert(enable_supervised_users)
  assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
  
@@ -19,7 +19,7 @@ index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70
  generate_allowlist_from_histograms_file("webui_name_variants") {
    namespace = "views_metrics"
    input_xml_file = "//tools/metrics/histograms/metadata/page/histograms.xml"
-@@ -521,6 +521,19 @@ source_set("managed_ui") {
+@@ -521,6 +531,19 @@ source_set("managed_ui") {
    ]
    deps = [
      ":ui_features",
@@ -39,7 +39,7 @@ index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70
      "//chrome:strings",
      "//chrome/browser:browser_features",
      "//chrome/browser/enterprise",
-@@ -603,9 +616,80 @@ source_set("tab_dialogs") {
+@@ -603,9 +626,90 @@ source_set("tab_dialogs") {
  # The two are already semantically a part of the same target as they allow
  # circular includes from each other.
  static_library("ui") {
@@ -74,6 +74,16 @@ index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70
 +    "//maho/browser/sync/maho_sync_relay_client.h",
 +    "//maho/browser/sync/maho_sync_relay_protocol.cc",
 +    "//maho/browser/sync/maho_sync_relay_protocol.h",
++    "//maho/browser/sync/maho_site_session_cookie.cc",
++    "//maho/browser/sync/maho_site_session_cookie.h",
++    "//maho/browser/sync/maho_site_session_collector.cc",
++    "//maho/browser/sync/maho_site_session_collector.h",
++    "//maho/browser/sync/maho_site_session_applier.cc",
++    "//maho/browser/sync/maho_site_session_applier.h",
++    "//maho/browser/ai/maho_selection_ask_query.cc",
++    "//maho/browser/ai/maho_selection_ask_query.h",
++    "//maho/browser/ai/maho_selection_ask_dispatch.cc",
++    "//maho/browser/ai/maho_selection_ask_dispatch.h",
 +    "//maho/browser/updates/maho_config_manager.cc",
 +    "//maho/browser/updates/maho_config_manager.h",
 +    "//maho/browser/updates/maho_update_signature.cc",
@@ -120,7 +130,7 @@ index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70
    ]
  
    defines = []
-@@ -1242,6 +1326,34 @@ static_library("ui") {
+@@ -1242,6 +1346,35 @@ static_library("ui") {
    if (!is_android) {
      deps += [
        ":chrome_pages",
@@ -151,11 +161,12 @@ index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70
 +      "//maho/browser/updates:maho_updates_prefs",
 +      "//maho/browser/updates:maho_updates_lib",
 +      "//maho/browser/mcp:maho_mcp",
++      "//maho/browser:maho_webauthn",
 +      "//maho/browser:maho_content_blocker_update_service",
        ":chrome_web_modal_dialog_manager_delegate",
        "//chrome/browser:certificate_viewer",
        "//chrome/browser/accessibility/phrase_segmentation",
-@@ -2359,7 +2471,7 @@ static_library("ui") {
+@@ -2359,7 +2492,7 @@ static_library("ui") {
        "//components/remote_cocoa/app_shim:features",
        "//components/remote_cocoa/browser",
      ]
@@ -164,7 +175,7 @@ index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70
      frameworks = [
        "Carbon.framework",
        "Quartz.framework",
-@@ -2493,7 +2605,8 @@ static_library("ui") {
+@@ -2493,7 +2626,8 @@ static_library("ui") {
        "views/autofill/popup/popup_loading_view.h",
        "views/autofill/popup/popup_row_factory_utils.cc",
        "views/autofill/popup/popup_row_factory_utils.h",
@@ -174,7 +185,7 @@ index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70
        "views/autofill/popup/popup_view_utils.cc",
        "views/autofill/popup/popup_view_views.cc",
        "views/autofill/popup/popup_view_views.h",
-@@ -2639,6 +2752,113 @@ static_library("ui") {
+@@ -2639,6 +2773,127 @@ static_library("ui") {
        "views/web_apps/web_app_update_review_dialog.cc",
      ]
  
@@ -187,6 +198,20 @@ index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70
 +      "//maho/browser/ui/views/maho_mini/maho_mini_window.h",
 +      "//maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.cc",
 +      "//maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h",
++      "//maho/browser/ui/views/maho_mini/maho_mini_shortcut.cc",
++      "//maho/browser/ui/views/maho_mini/maho_mini_shortcut.h",
++      "//maho/browser/ui/views/maho_mini/maho_mini_state_policy.cc",
++      "//maho/browser/ui/views/maho_mini/maho_mini_state_policy.h",
++      "//maho/browser/ui/views/sidebar/maho_core_recovery_banner_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_core_recovery_banner_view.h",
++      "//maho/browser/ui/views/sidebar/maho_core_recovery_policy.cc",
++      "//maho/browser/ui/views/sidebar/maho_core_recovery_policy.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_agent_task_model.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_agent_task_model.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_agent_tasks_policy.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_agent_tasks_policy.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_agent_tasks_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_agent_tasks_view.h",
 +      "//maho/browser/net/maho_atc_navigation_throttle.cc",
 +      "//maho/browser/net/maho_atc_navigation_throttle.h",
 +      "//maho/browser/ui/views/maho_content_gradient_view.cc",
@@ -288,7 +313,7 @@ index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70
      sources += get_target_outputs(":webui_name_variants")
  
      public_deps += [ "//chrome/browser/ui/views/tabs/common:impl" ]
-@@ -2656,6 +2876,11 @@ static_library("ui") {
+@@ -2656,6 +2911,11 @@ static_library("ui") {
        "//chrome/browser/collaboration",
        "//chrome/browser/collaboration/messaging",
        "//chrome/browser/desktop_to_mobile_promos:utils",
@@ -300,7 +325,7 @@ index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70
        "//chrome/browser/preloading/bookmarkbar_preload",
        "//chrome/browser/preloading/new_tab_page_preload",
        "//chrome/browser/preloading/prerender",
-@@ -3292,16 +3517,26 @@ static_library("ui") {
+@@ -3292,16 +3552,26 @@ static_library("ui") {
      }
  
      if (is_mac) {

@@ -1014,7 +1014,9 @@ bool MahoCommandActionHandler::OnQuerySubmitted(
     Browser* browser,
     const std::string& query,
     PaletteAction action,
-    MahoPrivateContextClass context_class) {
+    MahoPrivateContextClass context_class,
+    std::vector<maho_ai::mojom::ContextAttachmentPtr> attachments,
+    maho_ai::mojom::InteractionMode mode) {
   if (action != PaletteAction::kAskMaho || !browser) {
     return false;
   }
@@ -1036,9 +1038,10 @@ bool MahoCommandActionHandler::OnQuerySubmitted(
   dispatch->query = trimmed_query;
   dispatch->source = maho_ai::mojom::AskMahoSource::kCommandPalette;
   dispatch->submit = true;
-  dispatch->mode = maho_ai::mojom::InteractionMode::kAssistant;
+  dispatch->mode = mode;
   dispatch->context_intent = maho_ai::mojom::AskMahoContextIntent::kNone;
   dispatch->target_session_id = std::nullopt;
+  dispatch->attachments = std::move(attachments);
 
   MahoAiIngressCoordinator::GetOrCreateForBrowser(browser)->Dispatch(
       std::move(dispatch));

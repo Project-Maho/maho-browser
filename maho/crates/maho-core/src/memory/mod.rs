@@ -2,6 +2,7 @@
 
 pub mod consolidation;
 pub mod engine;
+pub mod episodic;
 pub mod retrieval;
 pub mod snapshot;
 pub mod tier;

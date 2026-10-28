@@ -94,6 +94,37 @@ class TestSetAppProductVersion(unittest.TestCase):
             self.assertEqual(updated.get('CFBundleVersion'), '2026.9.27')
 
 
+class TestVerifyCompiledProductVersion(unittest.TestCase):
+
+    def _write_header(self, root, version):
+        gen = os.path.join(root, 'out', 'Default', 'gen', 'maho', 'browser',
+                           'updates')
+        os.makedirs(gen)
+        with open(os.path.join(gen, 'maho_product_version.h'), 'w') as fp:
+            fp.write(f'inline constexpr char kMahoProductVersion[] = "{version}";\n')
+
+    def test_matching_version_passes(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_header(root, '2026.10.20')
+            with patch.object(_bm, '_CHROMIUM_SRC_ROOT', root):
+                _bm.verify_compiled_product_version('out/Default', '2026.10.20')
+
+    def test_stale_compiled_version_fails(self):
+        # The 2026.10.19 macOS release compiled 2026.10.14 because version.txt
+        # was read through another checkout.
+        with tempfile.TemporaryDirectory() as root:
+            self._write_header(root, '2026.10.14')
+            with patch.object(_bm, '_CHROMIUM_SRC_ROOT', root):
+                with self.assertRaisesRegex(RuntimeError, '2026.10.14.*2026.10.20'):
+                    _bm.verify_compiled_product_version('out/Default', '2026.10.20')
+
+    def test_missing_header_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(_bm, '_CHROMIUM_SRC_ROOT', root):
+                with self.assertRaises(FileNotFoundError):
+                    _bm.verify_compiled_product_version('out/Default', '2026.10.20')
+
+
 class TestFindCodesignIdentity(unittest.TestCase):
 
     def _make_result(self, stdout):
@@ -505,6 +536,7 @@ class TestBuildMahoCliArtifactPath(unittest.TestCase):
              patch.object(core, '_is_apple_target', create=True, return_value=False), \
              patch.object(core, 'effective_cargo_target_dir', create=True,
                           side_effect=effective_cargo_target_dir), \
+             patch.object(core, '_place_windows_openssl_pdbs', create=True), \
              patch.object(_bm.subprocess, 'run'):
             return _bm.build_maho_cli('x86_64-pc-windows-msvc')
 
@@ -713,6 +745,25 @@ class TestArgsTemplateSelection(unittest.TestCase):
                 self.assertIn('symbol_level = 1', config)
                 self.assertIn('blink_symbol_level = 0', config)
                 self.assertIn('strip_debug_info = true', config)
+
+    def test_every_template_disables_clang_modules_for_sccache(self):
+        # sccache treats -fmodules-cache-path (added by use_clang_modules) as
+        # non-cacheable, so a template that leaves modules on silently builds
+        # with zero cache hits.
+        config_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'config',
+        )
+        templates = sorted(
+            name for name in os.listdir(config_dir)
+            if name.startswith('args_') and name.endswith('.gn')
+        )
+        self.assertTrue(templates)
+        for name in templates:
+            with self.subTest(template=name):
+                with open(os.path.join(config_dir, name), encoding='utf-8') as f:
+                    config = f.read()
+                self.assertRegex(config, r'(?m)^use_clang_modules = false$')
 
     def test_release_syncs_local_google_api_key_into_default_args(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1355,6 +1406,18 @@ class TestMainFlags(unittest.TestCase):
         self.assertEqual(
             self.mock_build_chromium.call_args.args[1],
             ['chrome', 'maho_mail_helper', 'mini_installer'],
+        )
+
+    def test_linux_release_builds_every_packaged_runtime_binary(self):
+        self._run_main(
+            ['--skip-rust', '--release', '--no-launch'],
+            platform='linux',
+        )
+
+        self.assertEqual(
+            self.mock_build_chromium.call_args.args[1],
+            ['chrome', 'maho_mail_helper', 'chrome_sandbox',
+             'chrome_management_service'],
         )
 
     def test_codesign_identity_overrides_autodetect(self):

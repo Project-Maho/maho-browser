@@ -11,6 +11,7 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
+#include "ui/gfx/codec/png_codec.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_tree.h"
@@ -275,6 +276,165 @@ TEST(MahoMcpScreenshotHandlerTest, EncodePng_EmptyBitmap_ReturnsEmpty) {
   SkBitmap empty;
   std::vector<uint8_t> result = MahoMcpScreenshotHandler::EncodePng(empty);
   EXPECT_TRUE(result.empty());
+}
+
+TEST(MahoMcpScreenshotHandlerTest, ValidateArea_DefaultModesRemainValid) {
+  gfx::Rect area(1, 2, 3, 4);
+  gfx::Rect result;
+  const gfx::Size viewport(100, 80);
+  EXPECT_TRUE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kFullPage, nullptr, viewport, &result));
+  EXPECT_TRUE(result.IsEmpty());
+  EXPECT_TRUE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kElement, nullptr, viewport, &result));
+  EXPECT_TRUE(result.IsEmpty());
+  EXPECT_TRUE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kViewport, nullptr, viewport, &result));
+  EXPECT_EQ(result, gfx::Rect(100, 80));
+  EXPECT_TRUE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, &area, viewport, &result));
+  EXPECT_EQ(result, area);
+}
+
+TEST(MahoMcpScreenshotHandlerTest, ValidateArea_RejectsInvalidInputs) {
+  gfx::Rect result;
+  const gfx::Size viewport(100, 80);
+  const gfx::Rect zero_area(10, 10, 0, 5);
+  const gfx::Rect negative_area(10, 10, -1, 5);
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, nullptr, viewport, &result));
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, &zero_area, viewport, &result));
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, &negative_area, viewport, &result));
+  MahoMcpScreenshotError error = MahoMcpScreenshotError::kInvalidMode;
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, nullptr, viewport, &result, &error));
+  EXPECT_EQ(error, MahoMcpScreenshotError::kMissingArea);
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, &zero_area, viewport, &result, &error));
+  EXPECT_EQ(error, MahoMcpScreenshotError::kEmptyArea);
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, nullptr, viewport, &result,
+      nullptr));
+  const gfx::Rect outside_area(200, 200, 5, 5);
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, &outside_area, viewport,
+      &result));
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, &outside_area, viewport, &result,
+      &error));
+  EXPECT_EQ(error, MahoMcpScreenshotError::kOutsideViewport);
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      static_cast<MahoMcpScreenshotMode>(99), nullptr, viewport, &result));
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      static_cast<MahoMcpScreenshotMode>(99), nullptr, viewport, &result,
+      &error));
+  EXPECT_EQ(error, MahoMcpScreenshotError::kInvalidMode);
+  const gfx::Rect valid_area(1, 1, 2, 2);
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, &valid_area, gfx::Size(), &result));
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, &valid_area, gfx::Size(), &result,
+      &error));
+  EXPECT_EQ(error, MahoMcpScreenshotError::kInvalidViewport);
+  EXPECT_FALSE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, &valid_area, viewport, nullptr));
+}
+
+TEST(MahoMcpScreenshotHandlerTest, ValidateArea_ClampsToViewport) {
+  const gfx::Rect requested(90, 70, 30, 30);
+  gfx::Rect result;
+  ASSERT_TRUE(ValidateAndClampScreenshotArea(
+      MahoMcpScreenshotMode::kArea, &requested, gfx::Size(100, 80), &result));
+  EXPECT_EQ(result, gfx::Rect(90, 70, 10, 10));
+}
+
+TEST(MahoMcpScreenshotHandlerTest, ValidateAreaRejectsFullyOutsideViewport) {
+  EXPECT_FALSE(IsScreenshotAreaWithinViewport(gfx::Rect(100, 10, 5, 5),
+                                              gfx::Size(100, 100)));
+  EXPECT_FALSE(IsScreenshotAreaWithinViewport(gfx::Rect(10, 100, 5, 5),
+                                              gfx::Size(100, 100)));
+  EXPECT_TRUE(IsScreenshotAreaWithinViewport(gfx::Rect(99, 99, 5, 5),
+                                             gfx::Size(100, 100)));
+}
+
+TEST(MahoMcpScreenshotHandlerTest, CaptureArea_RedactsPasswordField) {
+  SkBitmap bitmap = MakeTestBitmap(100, 100, SK_ColorWHITE);
+  ui::AXTreeUpdate update = MakeTreeWithPasswordField(20, 20, 20, 20);
+  ui::AXTree tree(update);
+  std::vector<uint8_t> result_png;
+  ASSERT_TRUE(MahoMcpScreenshotHandler::CaptureArea(
+      bitmap, &tree, gfx::Rect(10, 10, 50, 50),
+      base::BindOnce(
+          [](std::vector<uint8_t>* out, std::vector<uint8_t> png) {
+            *out = std::move(png);
+          },
+          &result_png)));
+  ASSERT_GE(result_png.size(), 8u);
+  const SkBitmap decoded = gfx::PNGCodec::Decode(result_png);
+  ASSERT_FALSE(decoded.isNull());
+  EXPECT_EQ(decoded.width(), 50);
+  EXPECT_EQ(decoded.height(), 50);
+  EXPECT_EQ(decoded.getColor(15, 15), SK_ColorBLACK);
+  EXPECT_EQ(decoded.getColor(0, 0), SK_ColorWHITE);
+}
+
+TEST(MahoMcpScreenshotHandlerTest, CaptureArea_CroppedBitmapKeepsViewportRedaction) {
+  SkBitmap bitmap = MakeTestBitmap(20, 20, SK_ColorWHITE);
+  ui::AXTreeUpdate update = MakeTreeWithPasswordField(20, 20, 10, 10);
+  ui::AXTree tree(update);
+  std::vector<uint8_t> result_png;
+  ASSERT_TRUE(MahoMcpScreenshotHandler::CaptureArea(
+      bitmap, &tree, gfx::Rect(20, 20, 20, 20),
+      base::BindOnce(
+          [](std::vector<uint8_t>* out, std::vector<uint8_t> png) {
+            *out = std::move(png);
+          },
+          &result_png),
+      true));
+  const SkBitmap decoded = gfx::PNGCodec::Decode(result_png);
+  ASSERT_FALSE(decoded.isNull());
+  EXPECT_EQ(decoded.width(), 20);
+  EXPECT_EQ(decoded.height(), 20);
+  EXPECT_EQ(decoded.getColor(0, 0), SK_ColorBLACK);
+}
+
+TEST(MahoMcpScreenshotHandlerTest, CaptureViewport_RedactsPasswordField) {
+  SkBitmap bitmap = MakeTestBitmap(100, 100, SK_ColorWHITE);
+  ui::AXTreeUpdate update = MakeTreeWithPasswordField(20, 20, 20, 20);
+  ui::AXTree tree(update);
+  std::vector<uint8_t> result_png;
+  MahoMcpScreenshotHandler::CaptureViewport(
+      bitmap, &tree,
+      base::BindOnce(
+          [](std::vector<uint8_t>* out, std::vector<uint8_t> png) {
+            *out = std::move(png);
+          },
+          &result_png));
+  ASSERT_FALSE(result_png.empty());
+  const SkBitmap decoded = gfx::PNGCodec::Decode(result_png);
+  ASSERT_FALSE(decoded.isNull());
+  EXPECT_EQ(decoded.width(), 100);
+  EXPECT_EQ(decoded.height(), 100);
+  EXPECT_EQ(decoded.getColor(30, 30), SK_ColorBLACK);
+  EXPECT_EQ(decoded.getColor(0, 0), SK_ColorWHITE);
+}
+
+TEST(MahoMcpScreenshotHandlerTest, CaptureArea_ReportsInvalidGeometry) {
+  SkBitmap bitmap = MakeTestBitmap(100, 100, SK_ColorWHITE);
+  std::vector<uint8_t> result_png;
+  MahoMcpScreenshotError error = MahoMcpScreenshotError::kNone;
+  EXPECT_FALSE(MahoMcpScreenshotHandler::CaptureArea(
+      bitmap, nullptr, gfx::Rect(110, 10, 5, 5),
+      base::BindOnce(
+          [](std::vector<uint8_t>* out, std::vector<uint8_t> png) {
+            *out = std::move(png);
+          },
+          &result_png),
+      false, &error));
+  EXPECT_TRUE(result_png.empty());
+  EXPECT_EQ(error, MahoMcpScreenshotError::kOutsideViewport);
 }
 
 }  // namespace

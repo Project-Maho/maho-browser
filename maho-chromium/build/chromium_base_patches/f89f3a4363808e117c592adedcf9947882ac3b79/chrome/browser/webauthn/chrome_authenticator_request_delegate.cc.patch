@@ -1,0 +1,29 @@
+diff --git c/chrome/browser/webauthn/chrome_authenticator_request_delegate.cc w/chrome/browser/webauthn/chrome_authenticator_request_delegate.cc
+index e3db47f1bacb3cbe0e19056379ad9791318c8ba2..6552cb389edfec47fb999906243ff33788e8e120 100644
+--- c/chrome/browser/webauthn/chrome_authenticator_request_delegate.cc
++++ w/chrome/browser/webauthn/chrome_authenticator_request_delegate.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
++#include "maho/browser/webauthn/maho_vault_passkey_discovery.h"
+ 
+ #include <algorithm>
+ #include <array>
+@@ -330,6 +331,16 @@ ChromeAuthenticatorRequestDelegate::enclave_controller_for_testing() const {
+   return enclave_controller_.get();
+ }
+ 
++std::vector<std::unique_ptr<device::FidoDiscoveryBase>>
++ChromeAuthenticatorRequestDelegate::CreatePlatformDiscoveries() {
++  std::vector<std::unique_ptr<device::FidoDiscoveryBase>> discoveries;
++  auto* rfh = GetRenderFrameHost();
++  if (rfh && !rfh->GetBrowserContext()->IsOffTheRecord()) {
++    discoveries = maho::CreateVaultPasskeyDiscoveries(rfh);
++  }
++  return discoveries;
++}
++
+ void ChromeAuthenticatorRequestDelegate::SetRelyingPartyId(
+     const std::string& rp_id) {
+   dialog_model_->relying_party_id = rp_id;

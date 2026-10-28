@@ -21,6 +21,11 @@ enum ContextSourceKind {
   kHistory,
   kBookmark,
   kFile,
+  kLocalFile,
+  // An image the browser captured for this message (the screenshot dialog's
+  // "Ask Maho"). |file_token| carries a single-use browser-issued token for
+  // the PNG; the bytes never cross the renderer.
+  kCapturedImage,
 };
 
 // A single browser history item returned by SearchHistory.
@@ -95,6 +100,7 @@ struct ContextAttachment {
   string label;
   // URL associated with this attachment. May be empty for non-tab sources.
   string url;
+  string? file_token;
 };
 
 enum ChatIntent {
@@ -129,6 +135,7 @@ struct AskMahoDispatch {
   InteractionMode mode;
   AskMahoContextIntent context_intent;
   string? target_session_id;
+  array<ContextAttachment> attachments;
 };
 
 enum ViewMode {

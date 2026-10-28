@@ -21,6 +21,8 @@
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
 #include "services/network/public/mojom/websocket.mojom.h"
+#include "maho/browser/sync/maho_site_session_collector.h"
+#include "maho/browser/sync/maho_site_session_applier.h"
 
 class Profile;
 
@@ -109,6 +111,9 @@ class MahoSyncRelayClient : public network::mojom::WebSocketHandshakeClient,
 
   void PublishSnapshotIfNeeded();
   void UploadSnapshot(std::string snapshot);
+  void CollectSiteSessionsAndPublish();
+  void ApplyPendingSiteSessions();
+  void ApplySiteSessionRecords(std::vector<std::string> records, size_t index);
 
   const raw_ptr<Profile> profile_;
   State state_ = State::kDisconnected;
@@ -126,6 +131,9 @@ class MahoSyncRelayClient : public network::mojom::WebSocketHandshakeClient,
 
   std::string last_published_snapshot_;
   bool snapshot_in_flight_ = false;
+  bool site_sessions_collecting_ = false;
+  std::unique_ptr<MahoSiteSessionCollector> site_session_collector_;
+  std::unique_ptr<MahoSiteSessionApplier> site_session_applier_;
 
   std::vector<uint8_t> pending_read_data_;
   size_t pending_read_data_index_ = 0;

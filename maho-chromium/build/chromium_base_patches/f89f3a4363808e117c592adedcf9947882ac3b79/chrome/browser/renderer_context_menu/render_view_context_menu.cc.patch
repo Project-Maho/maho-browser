@@ -1,18 +1,36 @@
 diff --git c/chrome/browser/renderer_context_menu/render_view_context_menu.cc w/chrome/browser/renderer_context_menu/render_view_context_menu.cc
-index b6c3e9dacf530d158636154b95c67967351d9d2d..8158578b0c9f8ffd2d8cb65897aa487f821dbee5 100644
+index b6c3e9dacf530d158636154b95c67967351d9d2d..8875ee625c49ff35d74e873147326cd4316e7b2c 100644
 --- c/chrome/browser/renderer_context_menu/render_view_context_menu.cc
 +++ w/chrome/browser/renderer_context_menu/render_view_context_menu.cc
-@@ -3,6 +3,9 @@
+@@ -3,6 +3,10 @@
  // found in the LICENSE file.
  
  #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 +#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
 +#include "maho/browser/net/maho_translate_injection_handler.h"
 +#include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
++#include "maho/browser/ai/maho_selection_ask_dispatch.h"
  
  #include <stddef.h>
  
-@@ -1640,6 +1643,15 @@ std::u16string RenderViewContextMenu::GetImageSearchProviderName(
+@@ -1362,6 +1366,16 @@ void RenderViewContextMenu::InitMenu() {
+ 
+   AppendGlicItems();
+ 
++  if (!params_.selection_text.empty() &&
++      !params_.is_editable && params_.page_url.is_valid()) {
++    menu_model_.AddItem(
++        IDC_MAHO_ASK_ABOUT_SELECTION,
++        u"Ask Maho about \u201c" +
++            gfx::TruncateString(params_.selection_text, 32,
++                                gfx::CHARACTER_BREAK) +
++            u"\u201d");
++  }
++
+   if (use_simplified_menu_for_text_selection &&
+       !(params_.has_image_contents && !params_.link_url.is_empty())) {
+     AppendRevisedTextSelectionSection();
+@@ -1640,6 +1654,15 @@ std::u16string RenderViewContextMenu::GetImageSearchProviderName(
  }
  
  void RenderViewContextMenu::RecordUsedItem(int id) {
@@ -28,7 +46,7 @@ index b6c3e9dacf530d158636154b95c67967351d9d2d..8158578b0c9f8ffd2d8cb65897aa487f
    // Log general ID.
  
    int enum_id =
-@@ -1977,6 +1989,7 @@ void RenderViewContextMenu::AppendLinkItems() {
+@@ -1977,6 +2000,7 @@ void RenderViewContextMenu::AppendLinkItems() {
            IDC_CONTENT_CONTEXT_OPENLINKNEWTAB,
            in_app ? IDS_CONTENT_CONTEXT_OPENLINKNEWTAB_INAPP
                   : IDS_CONTENT_CONTEXT_OPENLINKNEWTAB);
@@ -36,7 +54,7 @@ index b6c3e9dacf530d158636154b95c67967351d9d2d..8158578b0c9f8ffd2d8cb65897aa487f
      }
  
      if (show_open_in_new_window) {
-@@ -2694,7 +2707,7 @@ void RenderViewContextMenu::AppendPageItems() {
+@@ -2694,7 +2718,7 @@ void RenderViewContextMenu::AppendPageItems() {
      menu_model_.AddSeparator(ui::NORMAL_SEPARATOR);
    }
  
@@ -45,7 +63,7 @@ index b6c3e9dacf530d158636154b95c67967351d9d2d..8158578b0c9f8ffd2d8cb65897aa487f
      AppendTranslateItem();
    }
  }
-@@ -2833,10 +2846,11 @@ void RenderViewContextMenu::AppendTranslateItem() {
+@@ -2833,10 +2857,11 @@ void RenderViewContextMenu::AppendTranslateItem() {
    }
  
    menu_model_.AddItemWithIcon(
@@ -61,7 +79,7 @@ index b6c3e9dacf530d158636154b95c67967351d9d2d..8158578b0c9f8ffd2d8cb65897aa487f
        ui::ImageModel::FromVectorIcon(vector_icons::kGTranslateIcon,
                                       ui::kColorMenuIcon, kTabMenuIconSize));
  }
-@@ -3447,7 +3461,8 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
+@@ -3447,7 +3472,8 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
        return IsDevCommandEnabled(id);
  
      case IDC_CONTENT_CONTEXT_TRANSLATE:
@@ -71,17 +89,20 @@ index b6c3e9dacf530d158636154b95c67967351d9d2d..8158578b0c9f8ffd2d8cb65897aa487f
  
      case IDC_CONTENT_CONTEXT_PARTIAL_TRANSLATE:
        return navigation_allowed;
-@@ -3463,6 +3478,9 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
+@@ -3463,6 +3489,12 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
        return navigation_allowed && params_.link_url.is_valid() &&
               params_.link_url.IsStandard() &&
               IsOpenLinkAllowedByDlp(params_.link_url);
++    case IDC_MAHO_ASK_ABOUT_SELECTION:
++      return params_.page_url.is_valid() &&
++             !params_.selection_text.empty() && !params_.is_editable;
 +    case IDC_MAHO_LINK_OPEN_MAHO_MINI:
 +      return navigation_allowed && params_.link_url.is_valid() &&
 +             IsOpenLinkAllowedByDlp(params_.link_url);
  
      case IDC_CONTENT_CONTEXT_COPYLINKLOCATION:
        return params_.unfiltered_link_url.is_valid();
-@@ -3840,6 +3858,9 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
+@@ -3840,6 +3872,9 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
        OpenLinkInSplitView(split_tabs::SplitTabLayout::kSideBySide);
  #endif  // !BUILDFLAG(IS_ANDROID)
        break;
@@ -91,7 +112,19 @@ index b6c3e9dacf530d158636154b95c67967351d9d2d..8158578b0c9f8ffd2d8cb65897aa487f
      case IDC_CONTENT_CONTEXT_SAVELINKAS:
        CheckSupervisedUserURLFilterAndSaveLinkAs();
        break;
-@@ -5511,17 +5532,7 @@ void RenderViewContextMenu::ExecRouteMedia() {
+@@ -4111,6 +4146,11 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
+       ExecInspectElement();
+       break;
+ 
++    case IDC_MAHO_ASK_ABOUT_SELECTION:
++      maho::AskMahoAboutSelection(
++          GetBrowser(), embedder_web_contents_, params_.page_url,
++          params_.selection_text);
++      break;
+     case IDC_CONTENT_CONTEXT_TRANSLATE:
+       ExecTranslate();
+       break;
+@@ -5511,17 +5551,7 @@ void RenderViewContextMenu::ExecRouteMedia() {
  }
  
  void RenderViewContextMenu::ExecTranslate() {

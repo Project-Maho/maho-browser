@@ -415,6 +415,10 @@ def build_maho_cli(target: str | None) -> str:
         cwd=os.path.join(_WORKSPACE_ROOT, 'maho'),
         check=True,
     )
+    target_dir = build_maho_core.effective_cargo_target_dir(
+        os.path.join(_WORKSPACE_ROOT, 'maho'), rust_target)
+    build_maho_core._place_windows_openssl_pdbs(
+        os.path.join(target_dir, 'release'))
     cli_path = os.path.join(
         build_maho_core.effective_cargo_target_dir(
             os.path.join(_WORKSPACE_ROOT, 'maho'), rust_target),
@@ -992,6 +996,26 @@ def read_maho_version() -> str:
     """
     with open(_VERSION_TXT) as f:
         return f.read().strip()
+
+
+def verify_compiled_product_version(out_dir: str, version: str) -> None:
+    """Fail when the version compiled into the browser differs from version.txt.
+
+    kMahoProductVersion feeds the Settings page, the update-notification key and
+    the changelog opener, while the bundle plist feeds Sparkle. Reading
+    version.txt through a different checkout shipped 2026.10.19 with a compiled
+    2026.10.14; the header is the only place that is visible before shipping.
+    """
+    header = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'gen', 'maho', 'browser',
+                          'updates', 'maho_product_version.h')
+    with open(header, encoding='utf-8') as f:
+        match = re.search(r'kMahoProductVersion\[\] = "([^"]+)"', f.read())
+    if not match:
+        raise RuntimeError(f'no kMahoProductVersion found in {header}')
+    if match.group(1) != version:
+        raise RuntimeError(
+            f'compiled kMahoProductVersion is {match.group(1)} but '
+            f'maho/version.txt is {version} ({header})')
 
 
 _DMG_CONTENT_SIZE = (664, 400)
@@ -1793,6 +1817,8 @@ def build_chromium_app(out_dir, targets, extra_args):
     command += [*targets, *extra_args]
     print(f"Building Chromium targets {' '.join(targets)} with autoninja...")
     subprocess.run(command, cwd=_CHROMIUM_SRC_ROOT, check=True, env=env)
+    if 'chrome' in targets:
+        verify_compiled_product_version(out_dir, read_maho_version())
 
 
 def apply_tracked_chromium_overrides(platform):
@@ -2120,7 +2146,11 @@ def main():
         ensure_webui_dependencies(_WORKSPACE_ROOT)
         # Narrow builds link the existing Rust prebuilt; only full builds rebuild it.
         if not args.skip_rust and build_class != 'narrow':
-            build_maho_core.build_rust_prebuilt(args.target, incremental=not args.release)
+            build_maho_core.build_rust_prebuilt(
+                args.target,
+                incremental=not args.release,
+                is_release=args.release,
+            )
         if not args.skip_chromium:
             ensure_overlay_mount(_CHROMIUM_SRC_ROOT, args.skip_overlay_mount)
             ensure_args_gn(
@@ -2152,6 +2182,13 @@ def main():
             if not args.ninja_target and 'chrome' in targets:
                 if platform in ('mac', 'win') and 'maho_mail_helper' not in targets:
                     targets.append('maho_mail_helper')
+                # build_maho_linux_packages.py ships these next to chrome; chrome
+                # does not depend on them, so a release build must ask for them.
+                if platform == 'linux' and args.release:
+                    for linux_target in ('maho_mail_helper', 'chrome_sandbox',
+                                         'chrome_management_service'):
+                        if linux_target not in targets:
+                            targets.append(linux_target)
                 # A release build IS the bundle: the Windows installer artifact
                 # is the mini_installer target, so build it in the same pass.
                 if (platform == 'win' and (args.release or args.dmg)

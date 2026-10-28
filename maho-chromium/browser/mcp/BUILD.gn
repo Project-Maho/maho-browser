@@ -11,6 +11,8 @@ source_set("maho_mcp") {
     "maho_mcp_accessibility_handler.h",
     "maho_mcp_capability_registry.cc",
     "maho_mcp_capability_registry.h",
+    "maho_mcp_controller_pairing.cc",
+    "maho_mcp_controller_pairing.h",
     "maho_mcp_firewall.cc",
     "maho_mcp_firewall.h",
     "maho_mcp_json_rpc.cc",
@@ -25,6 +27,8 @@ source_set("maho_mcp") {
     "maho_mcp_screenshot_handler.h",
     "maho_mcp_session.cc",
     "maho_mcp_session.h",
+    "maho_mcp_text_insertion_policy.cc",
+    "maho_mcp_text_insertion_policy.h",
   ]
 
   if (!is_win) {
@@ -45,6 +49,7 @@ source_set("maho_mcp") {
 
   deps = [
     "//base",
+    "//components/prefs",
     "//content/public/browser",
     "//crypto",
     "//maho/browser:maho_browser_tool_registry",
@@ -123,14 +128,21 @@ test("maho_mcp_firewall_test") {
 test("maho_mcp_session_test") {
   sources = [
     "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_controller_pairing_unittest.cc",
     "maho_mcp_session_unittest.cc",
   ]
   deps = [
     ":maho_mcp",
     "//base",
     "//base/test:test_support",
+    # maho_mcp_integration links the action-marker service, which calls
+    # into chrome/browser/ui; pull it in the way maho_mcp_input_synthesizer_test
+    # does. The session test also prints gfx::Rect values.
+    "//chrome/test:test_support",
+    "//components/prefs:test_support",
     "//maho/browser:maho_mcp_integration",
     "//testing/gtest",
+    "//ui/gfx:test_support",
   ]
 }
 
@@ -160,6 +172,8 @@ test("maho_mcp_accessibility_handler_test") {
     "//base/test:test_support",
     "//testing/gtest",
     "//ui/accessibility",
+    "//ui/gfx/codec",
+    "//ui/gfx/geometry",
   ]
 }
 
@@ -172,9 +186,16 @@ test("maho_mcp_screenshot_handler_test") {
     ":maho_mcp",
     "//base",
     "//base/test:test_support",
+    # :maho_mcp's session code calls into the input synthesizer and the core
+    # holder; link them the same way maho_mcp_session_test does.
+    "//maho/browser:maho_mcp_integration",
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//chrome/test:test_support",
     "//skia",
     "//testing/gtest",
     "//ui/accessibility",
+    "//ui/gfx:test_support",
     "//ui/gfx/codec",
     "//ui/gfx/geometry",
   ]
@@ -218,6 +239,7 @@ test("maho_mcp_input_synthesizer_test") {
   sources = [
     "maho_mcp_firewall_test_main.cc",
     "maho_mcp_input_synthesizer_unittest.cc",
+    "maho_mcp_text_insertion_policy_unittest.cc",
   ]
   deps = [
     "//maho/browser:maho_mcp_integration",
