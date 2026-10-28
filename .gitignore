@@ -19,3 +19,20 @@ __pycache__/
 # Local secrets & state (never commit)
 .secrets/
 *.env
+
+# Local workspace links and the build lock. Symlinks are files, so the dir/
+# patterns above do not match them.
+/chromium
+/website
+/node_modules
+/.secrets
+/.build.lock
+
+# Per-crate cargo output and the agent runtime state crate tests write
+target/
+.maho/
+
+# Android Gradle outputs
+maho/android-shell/.gradle/
+maho/android-shell/build/
+maho/android-shell/app/build/
