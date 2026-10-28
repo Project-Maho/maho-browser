@@ -327,9 +327,9 @@ MahoTabWakeHelper::MahoTabWakeHelper(content::WebContents* web_contents,
       GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents));
   if (browser) {
     BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-    if (browser_view && browser_view->contents_web_view()) {
-      auto overlay = std::make_unique<MahoTabWakeOverlay>(bitmap, browser_view->contents_web_view());
-      overlay_ = browser_view->contents_web_view()->AddChildView(std::move(overlay));
+    if (browser_view && browser_view->GetContentsView()) {
+      auto overlay = std::make_unique<MahoTabWakeOverlay>(bitmap, browser_view->GetContentsView());
+      overlay_ = browser_view->GetContentsView()->AddChildView(std::move(overlay));
     }
   }
 
