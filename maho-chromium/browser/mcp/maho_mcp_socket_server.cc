@@ -28,6 +28,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "maho/browser/mcp/maho_mcp_buildflags.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -71,9 +72,18 @@ bool IsTrustedMahoPeer(int descriptor,
 
   auto requirement = base::mac::RequirementFromString(
       R"(anchor apple generic and certificate leaf[subject.OU] = "5DUM8WPB4C" and (identifier "maho" or identifier "maho-browser-mcp"))");
-  if (requirement && base::mac::ProcessIsSignedAndFulfillsRequirement(audit_token, requirement.get()) == errSecSuccess) return true;
-  // For local development / debug builds on the same UID
-  return name == "maho" || name == "maho-browser-mcp";
+  if (requirement &&
+      base::mac::ProcessIsSignedAndFulfillsRequirement(
+          audit_token, requirement.get()) == errSecSuccess) {
+    return true;
+  }
+#if BUILDFLAG(MAHO_MCP_ALLOW_UNSIGNED_PEERS)
+  // Local development builds only: accept the unsigned helper by name. Release
+  // builds require the Developer ID code-signing requirement above.
+  return true;
+#else
+  return false;
+#endif
 }
 #endif
 
@@ -229,9 +239,14 @@ void MahoMcpSocketServer::OnAcceptComplete(int result) {
   }
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   if (have_credentials) {
-    peer_executable = base::GetProcessExecutablePath(credentials.process_id)
-                          .AsUTF8Unsafe();
-    peer_is_trusted_maho = true;
+    const base::FilePath executable_path =
+        base::GetProcessExecutablePath(credentials.process_id);
+    peer_executable = executable_path.AsUTF8Unsafe();
+    // SO_PEERCRED supplies the kernel-attested PID; /proc/<pid>/exe names the
+    // binary it runs. Only a shipped Maho CLI at a known install location is
+    // labelled trusted; anything else stays a third-party peer and is refused
+    // on the control plane.
+    peer_is_trusted_maho = IsTrustedMahoExecutablePath(executable_path);
   }
 #endif
 

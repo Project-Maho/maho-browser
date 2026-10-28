@@ -21,6 +21,7 @@
 #include <string>
 #include <utility>
 
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
@@ -329,9 +330,17 @@ void MahoMcpPipeServer::OnClientConnected() {
   conn->pipe_handle = std::move(listen_handle_);
   const std::string peer_executable =
       GetPipeClientExecutable(conn->pipe_handle.get());
+  // The pipe DACL admits only the current user's SID; the client image path
+  // (QueryFullProcessImageNameW on the kernel-reported client PID) decides
+  // whether the peer is labelled as a shipped Maho CLI. Unknown executables
+  // stay third-party and are refused on the control plane.
+  const bool peer_is_trusted_maho =
+      !peer_executable.empty() &&
+      IsTrustedMahoExecutablePath(
+          base::FilePath::FromUTF8Unsafe(peer_executable));
   conn->session = std::shared_ptr<MahoMcpSession>(
       new MahoMcpSession(session_token_, lease_registry_.get(), peer_executable,
-                         true),
+                         peer_is_trusted_maho),
       [registry = lease_registry_](MahoMcpSession* session) {
         content::GetUIThreadTaskRunner({})->PostTask(
             FROM_HERE, base::BindOnce(

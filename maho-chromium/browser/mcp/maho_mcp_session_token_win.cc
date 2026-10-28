@@ -146,10 +146,13 @@ bool MahoMcpSessionToken::WriteEncryptedToDisk(const base::FilePath& path) {
     return false;
   }
 
-  // Restrict ACL to current user only.
+  // Restrict ACL to current user only. A token file readable by other
+  // principals defeats the token, so failure is fatal: delete the file and
+  // report the write as failed.
   if (!SetFileCurrentUserOnly(path)) {
-    // Non-fatal but concerning — log and continue.
-    LOG(WARNING) << "MCP token: Failed to restrict file ACL";
+    LOG(ERROR) << "MCP token: Failed to restrict file ACL; removing token file";
+    base::DeleteFile(path);
+    return false;
   }
 
   return true;

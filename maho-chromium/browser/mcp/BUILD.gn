@@ -2,8 +2,20 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/buildflag_header.gni")
 import("//build/config/features.gni")
 import("//testing/test.gni")
+
+declare_args() {
+  # Accept unsigned maho / maho-browser-mcp helpers on macOS by name. Local
+  # development only; release builds require the Developer ID signature.
+  maho_mcp_allow_unsigned_peers = is_debug
+}
+
+buildflag_header("maho_mcp_buildflags") {
+  header = "maho_mcp_buildflags.h"
+  flags = [ "MAHO_MCP_ALLOW_UNSIGNED_PEERS=$maho_mcp_allow_unsigned_peers" ]
+}
 
 source_set("maho_mcp") {
   sources = [
@@ -44,6 +56,7 @@ source_set("maho_mcp") {
   }
 
   deps = [
+    ":maho_mcp_buildflags",
     "//base",
     "//content/public/browser",
     "//crypto",

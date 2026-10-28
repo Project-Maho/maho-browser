@@ -5,6 +5,7 @@
 #include "maho/browser/mcp/maho_mcp_session.h"
 
 #include "build/build_config.h"
+#include "maho/browser/ai/maho_agent_site_policy.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
 #include "maho/browser/ai/maho_browser_tool_registry.h"
 #include "maho/browser/mcp/maho_mcp_capability_registry.h"
@@ -196,6 +197,108 @@ MahoMcpBrowserDelegate::GetAccessibilitySnapshotV2(
   return result;
 }
 
+namespace {
+
+#if !BUILDFLAG(IS_APPLE)
+bool IsTrustedMahoExecutableName(std::string_view name) {
+#if BUILDFLAG(IS_WIN)
+  return name == "maho.exe" || name == "maho-browser-mcp.exe";
+#else
+  return name == "maho" || name == "maho-browser-mcp";
+#endif
+}
+#endif
+
+#if BUILDFLAG(IS_WIN)
+// Store (MSIX) installs live at
+// C:\Program Files\WindowsApps\<PackageName>_<version>_<arch>__<hash>\ with
+// maho.exe staged at the package root (see package_windows_msix.py). Only the
+// shipped package name is trusted and only direct children of the package
+// root qualify.
+constexpr char kWindowsAppsPrefix[] = "c:\\program files\\windowsapps\\";
+constexpr char kMahoMsixPackageName[] = "projectmaho.mahobrowser_";
+
+bool IsTrustedMsixExecutablePath(std::string_view normalized) {
+  if (!base::StartsWith(normalized, kWindowsAppsPrefix)) {
+    return false;
+  }
+  std::string_view rest = normalized.substr(sizeof(kWindowsAppsPrefix) - 1);
+  if (!base::StartsWith(rest, kMahoMsixPackageName)) {
+    return false;
+  }
+  const size_t separator = rest.find('\\');
+  if (separator == std::string_view::npos ||
+      separator == sizeof(kMahoMsixPackageName) - 1) {
+    return false;
+  }
+  const std::string_view name = rest.substr(separator + 1);
+  return name.find('\\') == std::string_view::npos &&
+         IsTrustedMahoExecutableName(name);
+}
+#endif
+
+}  // namespace
+
+bool IsTrustedMahoExecutablePath(
+    const base::FilePath& executable,
+    const base::FilePath& self_contained_install_dir) {
+  if (!executable.IsAbsolute() || executable.ReferencesParent()) {
+    return false;
+  }
+  const std::string normalized =
+      base::ToLowerASCII(executable.NormalizePathSeparators().AsUTF8Unsafe());
+#if BUILDFLAG(IS_WIN)
+  return ((base::StartsWith(normalized, "c:\\program files\\maho\\") ||
+           base::StartsWith(normalized,
+                            "c:\\program files (x86)\\maho\\")) &&
+          (base::EndsWith(normalized, "\\maho.exe") ||
+           base::EndsWith(normalized, "\\maho-browser-mcp.exe"))) ||
+         IsTrustedMsixExecutablePath(normalized);
+#elif BUILDFLAG(IS_APPLE)
+  return base::EndsWith(normalized, "/maho.app/contents/helpers/maho") ||
+         base::EndsWith(normalized,
+                        "/maho.app/contents/helpers/maho-browser-mcp");
+#else
+  if (normalized == "/usr/bin/maho" ||
+      normalized == "/usr/bin/maho-browser-mcp" ||
+      normalized == "/opt/maho/maho" ||
+      normalized == "/usr/lib/maho/maho" ||
+      normalized == "/usr/lib64/maho/maho" ||
+      normalized == "/opt/maho/bin/maho" ||
+      normalized == "/opt/maho/bin/maho-browser-mcp") {
+    return true;
+  }
+  // Self-contained (.tar.gz) installs unpack into an arbitrary user-chosen
+  // directory with the CLI beside the browser binary. Trust exactly the CLI
+  // binaries that sit directly in that directory. The browser resolves the
+  // directory at startup via updates::DetectLinuxInstallKind() and hands it in
+  // only when the running browser is itself a self-contained install.
+  if (self_contained_install_dir.empty() ||
+      !self_contained_install_dir.IsAbsolute()) {
+    return false;
+  }
+  return executable.DirName() ==
+             self_contained_install_dir.StripTrailingSeparators() &&
+         IsTrustedMahoExecutableName(executable.BaseName().value());
+#endif
+}
+
+namespace {
+base::FilePath& TrustedSelfContainedInstallDir() {
+  static base::NoDestructor<base::FilePath> dir;
+  return *dir;
+}
+}  // namespace
+
+void SetTrustedSelfContainedInstallDir(const base::FilePath& dir) {
+  TrustedSelfContainedInstallDir() = dir;
+}
+
+bool IsTrustedMahoExecutablePath(const base::FilePath& executable) {
+  return IsTrustedMahoExecutablePath(executable,
+                                     TrustedSelfContainedInstallDir());
+}
+
 class MahoMcpControllerState
     : public base::RefCountedThreadSafe<MahoMcpControllerState> {
  public:
@@ -274,33 +377,6 @@ std::string MakeVisualFrameToken(const std::string& png_b64) {
       base::NumberToString(
           base::TimeTicks::Now().since_origin().InMicroseconds());
   return base::HexEncode(base::SHA1HashString(material));
-}
-
-bool IsTrustedMahoExecutablePath(const base::FilePath& executable) {
-  if (!executable.IsAbsolute()) {
-    return false;
-  }
-  const std::string normalized =
-      base::ToLowerASCII(executable.NormalizePathSeparators().AsUTF8Unsafe());
-#if BUILDFLAG(IS_WIN)
-  return (base::StartsWith(normalized, "c:\\program files\\maho\\") ||
-          base::StartsWith(normalized,
-                           "c:\\program files (x86)\\maho\\")) &&
-         (base::EndsWith(normalized, "\\maho.exe") ||
-          base::EndsWith(normalized, "\\maho-browser-mcp.exe"));
-#elif BUILDFLAG(IS_APPLE)
-  return base::EndsWith(normalized, "/maho.app/contents/helpers/maho") ||
-         base::EndsWith(normalized,
-                        "/maho.app/contents/helpers/maho-browser-mcp");
-#else
-  return normalized == "/usr/bin/maho" ||
-         normalized == "/usr/bin/maho-browser-mcp" ||
-         normalized == "/opt/maho/maho" ||
-         normalized == "/usr/lib/maho/maho" ||
-         normalized == "/usr/lib64/maho/maho" ||
-         normalized == "/opt/maho/bin/maho" ||
-         normalized == "/opt/maho/bin/maho-browser-mcp";
-#endif
 }
 
 ControllerIdentity ClassifyController(std::string_view hint,
@@ -554,7 +630,8 @@ MahoMcpSession::DeferredResponseSender MakeTerminalAwareSender(
     const MahoBrowserToolRegistry::CapabilityDescriptor* descriptor,
     std::string controller_type,
     std::shared_ptr<std::string> approval,
-    double started_at_seconds) {
+    double started_at_seconds,
+    base::DictValue journal_arguments) {
   auto terminal_published = std::make_shared<std::atomic_bool>(false);
   return base::BindRepeating(
       [](MahoMcpSession::DeferredResponseSender sender, std::string activity_id,
@@ -568,6 +645,7 @@ MahoMcpSession::DeferredResponseSender MakeTerminalAwareSender(
          std::string controller_type, std::shared_ptr<std::string> approval,
          double started_at_seconds,
          std::shared_ptr<std::atomic_bool> terminal_published,
+         const base::DictValue& journal_arguments,
          std::string line) {
         if (controller_state->is_revoked()) {
           line = BuildRevokedControllerErrorLine(line);
@@ -598,6 +676,11 @@ MahoMcpSession::DeferredResponseSender MakeTerminalAwareSender(
               failed ? MahoMcpActivityPhase::kFailed
                      : MahoMcpActivityPhase::kCompleted,
               terminal_revision);
+          if (descriptor) {
+            g_browser_delegate->RecordAgentAction(
+                activity_id, controller_session_id, controller_type, target,
+                std::string(descriptor->tool_name), journal_arguments, failed);
+          }
         }
         sender.Run(std::move(line));
       },
@@ -605,7 +688,8 @@ MahoMcpSession::DeferredResponseSender MakeTerminalAwareSender(
       std::move(controller_session_id), std::move(controller_state),
       std::move(controller_label), target, category, sensitivity,
       terminal_revision, descriptor, std::move(controller_type),
-      std::move(approval), started_at_seconds, std::move(terminal_published));
+      std::move(approval), started_at_seconds, std::move(terminal_published),
+      std::move(journal_arguments));
 }
 
 // T8: build the completion for an async mail read. On broker failure it emits a
@@ -844,6 +928,20 @@ bool TabExists(int tab_id,
 // R-8: tools that operate on a specific tab. Their target is resolved once,
 // before dispatch, through the private-context boundary so OTR/ineligible
 // targets are rejected with a uniform non-revealing error.
+// Current committed URL of |tab_id| as reported by the browser delegate, or
+// empty when the tab is unknown. Used by the GAP-6 credential origin binding.
+std::string CurrentTabUrlForCredentialBinding(int tab_id) {
+  if (!g_browser_delegate) {
+    return std::string();
+  }
+  for (const auto& t : g_browser_delegate->GetTabList()) {
+    if (t.id == tab_id || (tab_id == 0 && t.is_active)) {
+      return t.url;
+    }
+  }
+  return std::string();
+}
+
 bool IsTabTargetTool(std::string_view tool_name) {
   static constexpr std::string_view kTabTargetTools[] = {
       "browser_tab_get",
@@ -2246,7 +2344,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
           std::shared_ptr<std::string> approval,
           double started_at_seconds,
           uint64_t terminal_revision, std::vector<std::string>* responses,
-          size_t response_count_before) {
+          size_t response_count_before, base::DictValue journal_arguments) {
         if (responses->size() == response_count_before) {
           return;
         }
@@ -2265,13 +2363,19 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
               failed ? MahoMcpActivityPhase::kFailed
                      : MahoMcpActivityPhase::kCompleted,
               terminal_revision);
+          if (descriptor) {
+            g_browser_delegate->RecordAgentAction(
+                activity_id, controller_session_id, controller_type, *target,
+                std::string(descriptor->tool_name), journal_arguments, failed);
+          }
         }
       },
       activity_id, session_id_, controller_display_label_,
       &last_resolved_target_, descriptor->category, descriptor->sensitivity,
       descriptor, ReceiptControllerType(controller_kind_), approval_outcome,
       activity_started_at_seconds, terminal_revision, &responses,
-      response_count_before));
+      response_count_before,
+      arguments ? arguments->Clone() : base::DictValue()));
 
   // R-8: resolve the tool's target once, before any delegate work, and reject
   // OTR/ineligible targets with a uniform non-revealing error. Never fall back
@@ -2320,7 +2424,8 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
         controller_display_label_, last_resolved_target_, descriptor->category,
         descriptor->sensitivity, terminal_revision, descriptor,
         ReceiptControllerType(controller_kind_), approval_outcome,
-        activity_started_at_seconds);
+        activity_started_at_seconds,
+        arguments ? arguments->Clone() : base::DictValue());
   }
 
   // R-8: once the gate has resolved a tab-target tool against a production
@@ -2456,66 +2561,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
 
   const ai::MailToolClass mail_tool_class = ai::ClassifyMailTool(*tool_name);
 
-  const bool credential_typing_requested =
-      *tool_name == "browser_type" && arguments &&
-      arguments->FindBool("allow_credentials").value_or(false);
-  const ai::CredentialTypingAuthorizationDecision credential_authorization =
-      ai::AuthorizeCredentialTyping(credential_typing_requested);
-  bool credential_typing_approval_satisfied = false;
-  if (credential_authorization.action ==
-      ai::CredentialTypingAuthorizationAction::kRequireApproval) {
-    if (!g_browser_delegate) {
-      responses.push_back(framer_.BuildErrorResponse(
-          msg.id, -32008,
-          std::string(ai::kCredentialTypingApprovalRequired)));
-      return;
-    }
-    if (!g_browser_delegate->ConfirmCredentialTypingApproval(
-            *tool_name, last_resolved_target_)) {
-      *approval_outcome = "denied";
-      responses.push_back(framer_.BuildErrorResponse(
-          msg.id, -32008, std::string(ai::kCredentialTypingDenied)));
-      return;
-    }
-    credential_typing_approval_satisfied = true;
-    *approval_outcome = "approved";
-  }
-
-  // Driving the browser is full access: an authority-changing capability only
-  // prompts when it leaves the browser boundary (vault, routines, or the
-  // consent/authority plane). Clicking, typing, navigating, closing a tab or
-  // taking a lease never asks, whichever controller issues the call.
-  if (g_browser_delegate && descriptor->changes_authority &&
-      !descriptor->browser_action_contract &&
-      mail_tool_class == ai::MailToolClass::kNotMail &&
-      ai::CapabilityLeavesBrowserBoundary(descriptor->canonical_id)) {
-    if (!g_browser_delegate->ConfirmBrowserActionApproval(
-            *tool_name, last_resolved_target_)) {
-      *approval_outcome = "denied";
-      responses.push_back(framer_.BuildErrorResponse(
-          msg.id, kMahoMcpErrorApprovalDenied,
-          "authority_change_approval_denied"));
-      return;
-    }
-    *approval_outcome = "approved";
-  }
-
-  // A boundary gate is a property of the capability, not of the caller: the
-  // internal CLI reaches the local filesystem and OS-level input through the
-  // same prompt every other controller does.
-  if (g_browser_delegate && descriptor->browser_action_contract &&
-      ai::RequiresApproval(*descriptor->browser_action_contract)) {
-    if (!credential_typing_approval_satisfied &&
-        !g_browser_delegate->ConfirmBrowserActionApproval(
-            *tool_name, last_resolved_target_)) {
-      *approval_outcome = "denied";
-      responses.push_back(framer_.BuildErrorResponse(
-          msg.id, kMahoMcpErrorApprovalDenied,
-          "browser_action_approval_denied"));
-      return;
-    }
-    *approval_outcome = "approved";
-  }
+  // Agent-driven control is full access: no capability, whichever controller
+  // issues it, waits on a user approval prompt (file upload, origin grants,
+  // credential typing, Vault/Mail/Routines, OS-level input included).
 
   auto reject_invalid_mail_params = [&](std::string message) {
     responses.push_back(framer_.BuildErrorResponse(msg.id, -32602, message));
@@ -2552,29 +2600,6 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
           msg.id, -32008, std::string(authorization.reason_code)));
       return;
     }
-    if (authorization.action == ai::MailAuthorizationAction::kRequireApproval) {
-      const std::string safe_metadata =
-          BuildSafeMailApprovalMetadata(arguments);
-      if (!g_browser_delegate || !g_browser_delegate->ConfirmMailToolApproval(
-                                     *tool_name, safe_metadata)) {
-        *approval_outcome = "denied";
-        responses.push_back(framer_.BuildErrorResponse(
-            msg.id, -32008, "mail_typed_approval_denied"));
-        return;
-      }
-      const ai::MailAuthorizationDecision recheck =
-          g_browser_delegate
-              ? ai::AuthorizeMailTool(
-                    *tool_name,
-                    g_browser_delegate->GetMailAuthorizationContext())
-              : ai::MailAuthorizationDecision{};
-      if (recheck.action == ai::MailAuthorizationAction::kDeny) {
-        responses.push_back(framer_.BuildErrorResponse(
-            msg.id, -32008, std::string(recheck.reason_code)));
-        return;
-      }
-      *approval_outcome = "approved";
-    }
   }
 
   if (has_stale_ref()) {
@@ -2582,6 +2607,37 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
         msg.id, kMahoMcpErrorStaleReference,
         kMahoMcpMessageStaleReference));
     return;
+  }
+
+  // Per-site agent deny list (GAP-6): a deterministic refusal chosen by the
+  // user, never an approval gate. Applies to every tool that targets a tab
+  // (the tab's current origin) and to navigation destinations.
+  if (g_browser_delegate) {
+    const std::vector<std::string> denied_origins =
+        g_browser_delegate->GetAgentDeniedOrigins();
+    if (!denied_origins.empty()) {
+      bool site_denied = false;
+      const std::string* destination_url =
+          arguments ? arguments->FindString("url") : nullptr;
+      if (destination_url) {
+        // URL-bearing tools (navigate / new tab) are judged by destination,
+        // so the agent can still navigate away from a denied site.
+        site_denied = ai::AgentOriginDenied(denied_origins, *destination_url);
+      } else if (IsTabTargetTool(*tool_name) ||
+                 IsRefConsumingTool(*tool_name) ||
+                 base::StartsWith(*tool_name, "vault_")) {
+        // Page-acting tools are judged by the target tab's current origin.
+        site_denied = ai::AgentOriginDenied(
+            denied_origins,
+            CurrentTabUrlForCredentialBinding(current_target_tab));
+      }
+      if (site_denied) {
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, kMahoMcpErrorApprovalDenied,
+            std::string(ai::kAgentSiteDeniedReason)));
+        return;
+      }
+    }
   }
 
   if (controller_state_->is_revoked()) {
@@ -2716,58 +2772,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       return;
     }
 
-    // 2. Untrusted origin check
-    std::string active_origin;
-    if (g_browser_delegate) {
-      for (const auto& t : g_browser_delegate->GetTabList()) {
-        if (t.id == target_tab_id) {
-          active_origin = url::Origin::Create(GURL(t.url)).Serialize();
-          break;
-        }
-      }
-    } else {
-      for (const auto& t : tabs_) {
-        if (t.id == target_tab_id) {
-          active_origin = url::Origin::Create(GURL(t.url)).Serialize();
-          break;
-        }
-      }
-    }
-
-    const std::string* arg_origin =
-        arguments ? arguments->FindString("origin") : nullptr;
-    if (!arg_origin && arguments) {
-      arg_origin = arguments->FindString("expected_origin");
-    }
-
-    bool origin_untrusted = false;
-    if (arg_origin && !arg_origin->empty()) {
-      if (!active_origin.empty() && *arg_origin != active_origin) {
-        origin_untrusted = true;
-      }
-      if (capability_registry_ &&
-          !capability_registry_->IsOriginGranted(
-              url::Origin::Create(GURL(*arg_origin)))) {
-        origin_untrusted = true;
-      }
-    }
-    if (capability_registry_ &&
-        !capability_registry_->ListGrantedOrigins().empty()) {
-      if (!active_origin.empty() &&
-          !capability_registry_->IsOriginGranted(
-              url::Origin::Create(GURL(active_origin)))) {
-        origin_untrusted = true;
-      }
-    }
-
-    if (origin_untrusted) {
-      responses.push_back(framer_.BuildErrorResponse(
-          msg.id, -32009,
-          "Untrusted or unverified origin for visual action"));
-      return;
-    }
-
-    // 3. Lease authorization
+    // 2. Lease authorization
     uint64_t live_lease_epoch = 1;
     if (lease_registry_) {
       if (!lease_registry_->IsHeldBy(static_cast<int64_t>(target_tab_id),
@@ -2795,21 +2800,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       }
     }
 
-    // 4. Typed approval
-    // screenshot_cua_approved / any model-supplied consent string is NEVER trusted.
-    if (g_browser_delegate) {
-      if (!g_browser_delegate->ConfirmBrowserActionApproval(
-              *tool_name, last_resolved_target_)) {
-        *approval_outcome = "denied";
-        responses.push_back(framer_.BuildErrorResponse(
-            msg.id, kMahoMcpErrorApprovalDenied,
-            "browser_action_approval_denied"));
-        return;
-      }
-      *approval_outcome = "approved";
-    }
-
-    // 5. Credential field metadata via GetFieldMetadata
+    // 3. Credential field metadata via GetFieldMetadata
     bool is_credential = false;
     if (g_browser_delegate) {
       if (arguments) {
@@ -3190,14 +3181,6 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
           msg.id, -32000,
           "Navigation blocked: scheme not permitted for automated navigation");
       responses.push_back(std::move(err));
-      return;
-    }
-    // Origin grant check bypassed for browser control
-    if (controller_kind_ != MahoMcpControllerKind::kThirdParty &&
-        !capability_registry_->IsOriginGranted(url::Origin::Create(nav_url))) {
-      responses.push_back(framer_.BuildErrorResponse(
-          msg.id, kMahoMcpErrorApprovalDenied,
-          "exact_origin_grant_required"));
       return;
     }
     if (IsHostBlocked(nav_url.host())) {
@@ -3831,7 +3814,6 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     g_browser_delegate->MailSendEmail(
         *request_json,
-        /*already_authorized=*/true,
         make_mail_completion(/*recheck_read_consent=*/false));
     return;
   }
@@ -3848,7 +3830,6 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     g_browser_delegate->MailSaveDraft(
         *request_json,
-        /*already_authorized=*/true,
         make_mail_completion(/*recheck_read_consent=*/false));
     return;
   }
@@ -3868,7 +3849,6 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     g_browser_delegate->MailUpdateDraft(
         *draft_id, *request_json,
-        /*already_authorized=*/true,
         make_mail_completion(/*recheck_read_consent=*/false));
     return;
   }
@@ -3955,6 +3935,15 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
                      : (arguments && arguments->FindInt("tab_id")
                             ? arguments->FindInt("tab_id").value()
                             : active_tab_id_);
+    // Credential origin binding (GAP-6): the vault item origin must match the
+    // target frame origin. Deterministic refusal, never a prompt.
+    if (!ai::CredentialOriginMatches(
+            *origin, CurrentTabUrlForCredentialBinding(tab_id))) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, kMahoMcpErrorApprovalDenied,
+          std::string(ai::kCredentialOriginMismatchReason)));
+      return;
+    }
     std::optional<std::string> grant_handle =
         g_browser_delegate ? g_browser_delegate->VaultRequestCredentialUse(
                                  tab_id, *handle, *origin)
@@ -3964,6 +3953,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
           msg.id, -32000, "Credential grant unavailable"));
       return;
     }
+    vault_grant_origins_[*grant_handle] = *origin;
     base::DictValue result;
     result.Set("grant_handle", *grant_handle);
     result.Set("status", "granted");
@@ -3998,6 +3988,21 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     int tab_id = use_resolved_target
                      ? resolved_tab_id
                      : arguments->FindInt("tab_id").value_or(active_tab_id_);
+    // Credential origin binding (GAP-6), re-checked at fill time: the page may
+    // have navigated since the grant was issued. A grant whose origin this
+    // session did not record is left to the delegate's own exact-origin check.
+    if (auto grant_origin = vault_grant_origins_.find(*grant_handle);
+        grant_origin != vault_grant_origins_.end()) {
+      const std::string bound_origin = grant_origin->second;
+      vault_grant_origins_.erase(grant_origin);
+      if (!ai::CredentialOriginMatches(
+              bound_origin, CurrentTabUrlForCredentialBinding(tab_id))) {
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, kMahoMcpErrorApprovalDenied,
+            std::string(ai::kCredentialOriginMismatchReason)));
+        return;
+      }
+    }
     bool filled = false;
     if (g_browser_delegate) {
       filled = (*tool_name == "vault_fill_totp")
@@ -4518,13 +4523,6 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       responses.push_back(framer_.BuildErrorResponse(
           msg.id, kMahoMcpErrorLeaseRequired,
           "active tab lease required for this mutation"));
-      return;
-    }
-    if (controller_kind_ != MahoMcpControllerKind::kThirdParty &&
-        !capability_registry_->IsOriginGranted(url::Origin::Create(url))) {
-      responses.push_back(framer_.BuildErrorResponse(
-          msg.id, kMahoMcpErrorApprovalDenied,
-          "exact_origin_grant_required"));
       return;
     }
     if (!g_browser_delegate || !deferred_response_sender_) {
@@ -6355,21 +6353,18 @@ void MahoMcpBrowserDelegate::MailExtractOtp(const std::string& account_id,
 }
 
 void MahoMcpBrowserDelegate::MailSendEmail(const std::string& request_json,
-                                           bool /*already_authorized*/,
                                            MailReadCallback callback) {
   std::move(callback).Run(false, "Mail write broker unavailable");
 }
 
 void MahoMcpBrowserDelegate::MailSaveDraft(const std::string& request_json,
-                                           bool /*already_authorized*/,
                                            MailReadCallback callback) {
   std::move(callback).Run(false, "Mail write broker unavailable");
 }
 
 void MahoMcpBrowserDelegate::MailUpdateDraft(const std::string& draft_id,
                                              const std::string& request_json,
-                                             bool /*already_authorized*/,
-                                             MailReadCallback callback) {
+                                               MailReadCallback callback) {
   std::move(callback).Run(false, "Mail write broker unavailable");
 }
 
@@ -6388,22 +6383,8 @@ MahoMcpBrowserDelegate::GetMailAuthorizationContext() {
   return {};
 }
 
-bool MahoMcpBrowserDelegate::ConfirmMailToolApproval(
-    std::string_view tool_name,
-    std::string_view redacted_arguments) {
-  return false;
-}
-
-bool MahoMcpBrowserDelegate::ConfirmCredentialTypingApproval(
-    std::string_view tool_name,
-    const ResolvedMahoMcpTarget& target) {
-  return false;
-}
-
-bool MahoMcpBrowserDelegate::ConfirmBrowserActionApproval(
-    std::string_view tool_name,
-    const ResolvedMahoMcpTarget& target) {
-  return false;
+std::vector<std::string> MahoMcpBrowserDelegate::GetAgentDeniedOrigins() {
+  return {};
 }
 
 MahoMcpFeatureGates MahoMcpBrowserDelegate::GetFeatureGates() {

@@ -6,6 +6,7 @@
 #define MAHO_BROWSER_MCP_MAHO_MCP_SESSION_H_
 
 #include <memory>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -38,6 +39,10 @@
 #include "ui/accessibility/ax_node_id_forward.h"
 
 class GURL;
+
+namespace base {
+class FilePath;
+}
 
 namespace content {
 class WebContents;
@@ -210,6 +215,23 @@ enum class MahoMcpControllerKind {
   kMahoBrowserMcp,
   kThirdParty,
 };
+
+// Returns true when |executable| is a shipped Maho CLI / browser-mcp binary at
+// a known install location: the system package prefixes, the Windows
+// Program Files install, the Store (MSIX) package root under
+// C:\Program Files\WindowsApps\ProjectMaho.MahoBrowser_*\, the macOS bundle
+// Helpers directory, or (Linux) directly inside |self_contained_install_dir|,
+// the directory of a self-contained .tar.gz install. This labels the peer; it
+// is not a defense against same-user malware, which can drive the browser by
+// other means.
+bool IsTrustedMahoExecutablePath(
+    const base::FilePath& executable,
+    const base::FilePath& self_contained_install_dir);
+// Same check using the process-wide self-contained install dir registered via
+// SetTrustedSelfContainedInstallDir() (empty unless the running browser is a
+// self-contained Linux install).
+bool IsTrustedMahoExecutablePath(const base::FilePath& executable);
+void SetTrustedSelfContainedInstallDir(const base::FilePath& dir);
 
 // Per-connection MCP session state machine.
 //
@@ -455,6 +477,9 @@ class MahoMcpSession {
 
   std::unique_ptr<MahoMcpCapabilityRegistry> capability_registry_;
   std::set<std::string> blocked_domains_;
+  // grant_handle -> vault item origin, recorded at vault_request_credential_use
+  // so vault_fill_* can re-check credential origin binding (GAP-6).
+  std::map<std::string, std::string> vault_grant_origins_;
 
   // Per-session ref table for accessibility interactions.
   RefTable ref_to_ax_id_;
@@ -524,6 +549,17 @@ class MahoMcpBrowserDelegate {
       MahoBrowserToolRegistry::Sensitivity sensitivity,
       MahoMcpActivityPhase phase,
       uint64_t revision) {}
+  // Persists a consequential tool execution to the local-only agent action
+  // journal (after-the-fact review; never prompts, never waits).
+  // `arguments` are the tool's MCP arguments (used for submit /
+  // allow_credentials / navigation-url classification).
+  virtual void RecordAgentAction(const std::string& activity_id,
+                                 const std::string& controller_session_id,
+                                 const std::string& controller_type,
+                                 const ResolvedMahoMcpTarget& target,
+                                 const std::string& tool_name,
+                                 const base::DictValue& arguments,
+                                 bool failed) {}
   virtual std::vector<MahoMcpSession::TabInfo> GetTabList() = 0;
   virtual std::vector<MahoMcpSession::ConsoleMessage> GetConsoleMessages(
       int tab_id) = 0;
@@ -907,14 +943,13 @@ class MahoMcpBrowserDelegate {
                               const std::string& page_origin,
                               MailReadCallback callback);
   virtual void MailSendEmail(const std::string& request_json,
-                             bool already_authorized,
+
                              MailReadCallback callback);
   virtual void MailSaveDraft(const std::string& request_json,
-                             bool already_authorized,
                              MailReadCallback callback);
   virtual void MailUpdateDraft(const std::string& draft_id,
                                const std::string& request_json,
-                               bool already_authorized,
+
                                MailReadCallback callback);
   virtual void MailQueueEmail(const std::string& request_json,
                               MailReadCallback callback);
@@ -923,17 +958,12 @@ class MahoMcpBrowserDelegate {
 
   // Live Mail authorization inputs for both direct MCP and the desktop-agent
   // executor. Production derives these from the active profile pref/service;
-  // tests supply deterministic table states. Approval is intentionally a
-  // separate typed operation and is never implied by global allow.
+  // tests supply deterministic table states. No authorization path waits on a
+  // user approval prompt.
   virtual ai::MailAuthorizationContext GetMailAuthorizationContext();
-  virtual bool ConfirmMailToolApproval(std::string_view tool_name,
-                                       std::string_view redacted_arguments);
-  virtual bool ConfirmCredentialTypingApproval(
-      std::string_view tool_name,
-      const ResolvedMahoMcpTarget& target);
-  virtual bool ConfirmBrowserActionApproval(
-      std::string_view tool_name,
-      const ResolvedMahoMcpTarget& target);
+  // Parsed `maho.agent.denied_origins` pref of the active profile (GAP-6).
+  // Default: empty (no site denied).
+  virtual std::vector<std::string> GetAgentDeniedOrigins();
   virtual MahoMcpFeatureGates GetFeatureGates();
 
   // AI Agent goal delegation: delegate a goal/prompt to the browser-owned
