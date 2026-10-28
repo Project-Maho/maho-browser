@@ -1,0 +1,15 @@
+diff --git c/chrome/browser/ui/views/frame/immersive_mode_controller_mac.mm i/chrome/browser/ui/views/frame/immersive_mode_controller_mac.mm
+index 6b50d8b400261d558440ccaccb5925837963fc86..64e832b16eb22e1dbade90d206e8038cb38a802d 100644
+--- c/chrome/browser/ui/views/frame/immersive_mode_controller_mac.mm
++++ i/chrome/browser/ui/views/frame/immersive_mode_controller_mac.mm
+@@ -478,6 +478,10 @@ bool ImmersiveModeControllerMac::ShouldMoveChild(views::Widget* child) {
+ 
+ void ImmersiveModeControllerMac::OnImmersiveModeToolbarRevealChanged(
+     bool is_revealed) {
++  if (browser_view_ && browser_view_->IsMahoArcLayoutActive()) {
++    is_revealed = false;
++  }
++
+   if (is_revealed_ == is_revealed) {
+     return;
+   }

@@ -1,0 +1,31 @@
+diff --git c/content/browser/webui/shared_resources_data_source.cc i/content/browser/webui/shared_resources_data_source.cc
+index 412a077dd22d57653284876465ba8d627e043cd7..076d9c0caf905ea902c1d7b7458f93da570be35a 100644
+--- c/content/browser/webui/shared_resources_data_source.cc
++++ i/content/browser/webui/shared_resources_data_source.cc
+@@ -5,7 +5,10 @@
+ #include "content/browser/webui/shared_resources_data_source.h"
+ 
+ #include <set>
++#include <vector>
+ 
++#include "content/public/browser/content_browser_client.h"
++#include "content/public/common/content_client.h"
+ #include "content/public/browser/web_ui_data_source.h"
+ #include "services/network/public/mojom/content_security_policy.mojom.h"
+ #include "ui/base/webui/web_ui_util.h"
+@@ -59,6 +62,15 @@ void PopulateSharedResourcesDataSource(WebUIDataSource* source) {
+   source->SetAllowAllOrigins(true);
+ 
+   source->AddResourcePaths(kWebuiResources);
++
++  if (auto* content_client = GetContentClient()) {
++    if (auto* browser_client = content_client->browser()) {
++      for (base::span<const webui::ResourcePath> resource_paths :
++           browser_client->GetAdditionalWebUIResourcePaths()) {
++        source->AddResourcePaths(resource_paths);
++      }
++    }
++  }
+ #if BUILDFLAG(IS_CHROMEOS)
+   source->AddResourcePaths(kAshWebuiCommonResources);
+   // Deprecated -lite style mojo bindings.

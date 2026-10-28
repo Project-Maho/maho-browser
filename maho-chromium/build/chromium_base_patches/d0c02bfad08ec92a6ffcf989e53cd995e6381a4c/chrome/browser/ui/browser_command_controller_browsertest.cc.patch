@@ -1,0 +1,36 @@
+diff --git c/chrome/browser/ui/browser_command_controller_browsertest.cc i/chrome/browser/ui/browser_command_controller_browsertest.cc
+index 2bbf49bb1d77d8e5d7de900f1b31a162e7d11ac9..38ae20b24af6eb9775b81e5ea697b738f50c57e3 100644
+--- c/chrome/browser/ui/browser_command_controller_browsertest.cc
++++ i/chrome/browser/ui/browser_command_controller_browsertest.cc
+@@ -40,6 +40,7 @@
+ #include "chrome/browser/translate/translate_test_utils.h"
+ #include "chrome/browser/ui/actions/chrome_action_id.h"
+ #include "chrome/browser/ui/browser_actions.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -1935,4 +1936,23 @@ IN_PROC_BROWSER_TEST_F(BrowserCommandControllerBrowserTestIsolatedTest,
+                                         IDC_RECENT_TABS_SEE_DEVICE_TABS));
+ }
+ 
++
++IN_PROC_BROWSER_TEST_F(BrowserCommandControllerBrowserTest,
++                       SelectTabCommandWaitsForStartupTab) {
++  browser()->GetTabStripModel()->CloseAllTabs();
++  ASSERT_EQ(TabStripModel::kNoTab,
++            browser()->GetTabStripModel()->active_index());
++
++  EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_SELECT_TAB_0));
++  chrome::AddTabAt(browser(), GURL("https://example.com/first"), -1, false);
++  chrome::AddTabAt(browser(), GURL("https://example.com/second"), -1, false);
++  browser()->GetTabStripModel()->ActivateTabAt(1);
++  ASSERT_EQ(1, browser()->GetTabStripModel()->active_index());
++
++  ASSERT_TRUE(base::test::RunUntil([this]() {
++    return browser()->GetTabStripModel()->active_index() == 0;
++  }));
++  EXPECT_EQ(0, browser()->GetTabStripModel()->active_index());
++}
++
+ }  // namespace chrome

@@ -1,0 +1,105 @@
+diff --git c/chrome/browser/ui/chrome_pages.cc i/chrome/browser/ui/chrome_pages.cc
+index e70ee6412075fd190f0591b738804623939635d2..7f9a0ea34e55b0358f1fc8b534bcad165f5d0ef2 100644
+--- c/chrome/browser/ui/chrome_pages.cc
++++ i/chrome/browser/ui/chrome_pages.cc
+@@ -30,6 +30,8 @@
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/signin/account_consistency_mode_manager.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
++#include "maho/browser/ui/maho_settings_navigation.h"
++#include "chrome/browser/ui/navigator/browser_navigator_params_utils.h"
+ #include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+@@ -51,6 +53,7 @@
+ #include "chrome/common/url_constants.h"
+ #include "chrome/common/webui_url_constants.h"
+ #include "chrome/grit/generated_resources.h"
++#include "maho/components/constants/webui_url_constants.h"
+ #include "components/autofill/core/common/autofill_features.h"
+ #include "components/bookmarks/browser/bookmark_model.h"
+ #include "components/bookmarks/browser/bookmark_node.h"
+@@ -464,9 +467,35 @@ bool IsTrustedPopupWindowWithScheme(const BrowserWindowInterface* browser,
+ }
+ 
+ void ShowSettings(BrowserWindowInterface* browser) {
++  // Maho: open Maho's own settings surface instead of
++  // chrome://settings. This is the single choke point for the macOS
++  // app menu Settings item, Cmd+comma, IDC_OPTIONS and
++  // chrome::OpenOptionsWindow.
++  if (browser) {
++    ShowMahoSettings(browser);
++    return;
++  }
+   ShowSettingsSubPage(browser, std::string());
+ }
+ 
++void ShowMahoSettings(BrowserWindowInterface* browser) {
++  if (!browser) {
++    return;
++  }
++
++  if (ActivateMahoSettingsTabIfOpen(browser)) {
++    return;
++  }
++
++  ShowSingletonTabIgnorePathOverwriteNTP(
++      browser, GURL(maho::kMahoSettingsURL));
++}
++
++void ShowMahoSettingsForProfile(Profile* profile) {
++  BrowserWindowInterface* browser = GetOrCreateBrowserForProfile(profile);
++  ShowMahoSettings(browser);
++}
++
+ void ShowSettingsSubPage(BrowserWindowInterface* browser,
+                          std::string_view sub_page) {
+ #if BUILDFLAG(IS_CHROMEOS)
+@@ -498,6 +527,30 @@ void ShowSettingsSubPageInTabbedBrowser(BrowserWindowInterface* browser,
+   ShowSingletonTabIgnorePathOverwriteNTP(browser, GetSettingsUrl(sub_page));
+ }
+ 
++bool ActivateMahoSettingsTabIfOpen(BrowserWindowInterface* browser) {
++  if (!browser) {
++    return false;
++  }
++
++  NavigateParams params(browser, GURL(maho::kMahoSettingsURL),
++                        ui::PAGE_TRANSITION_AUTO_BOOKMARK);
++  params.disposition = WindowOpenDisposition::SINGLETON_TAB;
++
++  auto [existing_browser, tab_index] =
++      GetIndexAndBrowserOfMatchingTab(browser->GetProfile(), params);
++  if (!existing_browser) {
++    return false;
++  }
++
++  existing_browser->GetWindow()->Activate();
++  existing_browser->GetTabStripModel()->ActivateTabAt(tab_index);
++  if (content::WebContents* contents =
++          existing_browser->GetTabStripModel()->GetActiveWebContents()) {
++    contents->Focus();
++  }
++  return true;
++}
++
+ void ShowPageWithPromoForProfile(Profile* profile,
+                                  ShowPromoInPage::Params promo_params) {
+   BrowserWindowInterface* browser = GetOrCreateBrowserForProfile(profile);
+@@ -551,6 +604,16 @@ void ShowClearBrowsingDataDialog(BrowserWindowInterface* browser) {
+ 
+ void ShowPasswordManager(BrowserWindowInterface* bwi) {
+   base::RecordAction(UserMetricsAction("Options_ShowPasswordManager"));
++  // Maho: route every password-manager entry point to Maho's own password
++  // manager instead of chrome://password-manager. This is the single choke
++  // point for the app menu Passwords item (IDC_SHOW_PASSWORD_MANAGER), the
++  // password-field context menu's "Import passwords" entry
++  // (NavigateToManagePasswordsPage), and the saved-password toasts.
++  if (bwi) {
++    ShowSingletonTabIgnorePathOverwriteNTP(
++        bwi, GURL(std::string(maho::kMahoSettingsURL) + "?pane=passwords"));
++    return;
++  }
+   // This code is necessary to fix a bug (crbug.com/40269361) during Password
+   // Manager Shortcut tutorial flow.
+   auto* service =

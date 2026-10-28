@@ -1,0 +1,58 @@
+diff --git c/chrome/browser/ui/views/frame/contents_web_view.cc i/chrome/browser/ui/views/frame/contents_web_view.cc
+index e1d30f930bf7481658fde7320a575ef2ebaec52d..93060839043f1822070f8ad96dc05d7abd037693 100644
+--- c/chrome/browser/ui/views/frame/contents_web_view.cc
++++ i/chrome/browser/ui/views/frame/contents_web_view.cc
+@@ -8,6 +8,8 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
++#include "chrome/browser/profiles/profile.h"
++#include "maho/browser/ui/theme/maho_color_id.h"
+ #include "chrome/browser/ui/views/frame/web_contents_close_handler.h"
+ #include "chrome/browser/ui/views/status_bubble_views.h"
+ #include "components/tabs/public/tab_interface.h"
+@@ -170,6 +172,18 @@ void ContentsWebView::SetWebContents(content::WebContents* web_contents) {
+       .Then(&web_modal::WebContentsModalDialogManager::UpdateDialogHost);
+ }
+ 
++void ContentsWebView::SetMahoBackgroundOverride(
++    std::optional<SkColor> color) {
++  if (color.has_value()) {
++    color = SkColorSetA(color.value(), SK_AlphaOPAQUE);
++  }
++  if (maho_background_override_ == color) {
++    return;
++  }
++  maho_background_override_ = color;
++  UpdateBackgroundColor();
++}
++
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ void ContentsWebView::DidGetUserInteraction(const blink::WebInputEvent& event) {
+   // If the user interacts with the web contents, ensure it is activated.
+@@ -187,9 +201,23 @@ void ContentsWebView::DidGetUserInteraction(const blink::WebInputEvent& event) {
+ #endif
+ 
+ void ContentsWebView::UpdateBackgroundColor() {
+-  const SkColor color = GetColorProvider()->GetColor(
++  ui::ColorId maho_content_bg =
+       is_letterboxing() ? kColorWebContentsBackgroundLetterboxing
+-                        : kColorWebContentsBackground);
++                        : kColorWebContentsBackground;
++  bool maho_is_private = false;
++  if (web_contents()) {
++    Profile* maho_profile =
++        Profile::FromBrowserContext(web_contents()->GetBrowserContext());
++    if (maho_profile && maho_profile->IsIncognitoProfile() &&
++        maho_profile->IsPrimaryOTRProfile()) {
++      maho_content_bg = kMahoColorPrivateSidebarBackground;
++      maho_is_private = true;
++    }
++  }
++  SkColor color = GetColorProvider()->GetColor(maho_content_bg);
++  if (!maho_is_private && maho_background_override_.has_value()) {
++    color = SkColorSetA(maho_background_override_.value(), SK_AlphaOPAQUE);
++  }
+   // `color` must be opaque, see RenderWidgetHostView::SetBackgroundColor() for
+   // details.
+   // TODO(crbug.com/456309057): Update this to be a CHECK.

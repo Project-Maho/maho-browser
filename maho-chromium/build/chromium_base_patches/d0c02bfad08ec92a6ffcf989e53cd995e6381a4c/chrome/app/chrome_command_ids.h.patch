@@ -1,0 +1,36 @@
+diff --git c/chrome/app/chrome_command_ids.h i/chrome/app/chrome_command_ids.h
+index a9f146ad7475522b005ba4aa940f64a7c6b12181..40ef4adeadf2e50d9a961b783f99233145816c75 100644
+--- c/chrome/app/chrome_command_ids.h
++++ i/chrome/app/chrome_command_ids.h
+@@ -633,5 +633,31 @@
+ #define IDC_WRITING_DIRECTION_DEFAULT 57311
+ #define IDC_CONTENT_CONTEXT_CONTEXTUAL_TASKS_SUBMENU 57309
+ 
++// Maho Browser commands (56000–56099).
++#define IDC_MAHO_COMMAND_BAR            56000
++#define IDC_MAHO_AI_PANEL               56001
++#define IDC_MAHO_TOGGLE_SIDEBAR         56002
++
++// Tab operations
++#define IDC_MAHO_PIN_TAB                56003
++#define IDC_MAHO_DUPLICATE_TAB          56004
++#define IDC_MAHO_NEXT_TAB               56005
++#define IDC_MAHO_PREV_TAB               56006
++#define IDC_MAHO_COPY_URL               56007
++
++// Space operations
++#define IDC_MAHO_NEXT_SPACE             56010
++#define IDC_MAHO_PREV_SPACE             56011
++#define IDC_MAHO_NEW_SPACE              56012
++// Window operations
++#define IDC_MAHO_MINI                   56020
++#define IDC_MAHO_ADD_SPLIT              56021
++#define IDC_MAHO_REMOVE_SPLIT           56022
++
++// Feature shortcuts
++#define IDC_MAHO_NEW_NOTE               56030
++#define IDC_MAHO_BOOST_EDITOR           56031
++
++// LINT.ThenChange(//chrome/browser/renderer_context_menu/render_view_context_menu.h:CommandsGatedOnFencedFrameUntrustedNetworkStatus)
+ 
+ #endif  // CHROME_APP_CHROME_COMMAND_IDS_H_

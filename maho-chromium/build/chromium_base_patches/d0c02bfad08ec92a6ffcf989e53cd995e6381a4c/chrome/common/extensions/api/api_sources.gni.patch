@@ -1,0 +1,13 @@
+diff --git c/chrome/common/extensions/api/api_sources.gni i/chrome/common/extensions/api/api_sources.gni
+index 3f933694eafda218d4637bd997ab130dca930e2c..9a01986dda67eb1f3f7b387f7aca764a604b6e54 100644
+--- c/chrome/common/extensions/api/api_sources.gni
++++ i/chrome/common/extensions/api/api_sources.gni
+@@ -65,6 +65,8 @@ uncompiled_sources_ = [
+   "commands.json",
+   "extension.json",
+   "top_sites.json",
++  "maho_split_view.json",
++  "maho_side_panel.json",
+ ]
+ 
+ # Some APIs rely on types and headers from other APIs.

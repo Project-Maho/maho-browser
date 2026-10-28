@@ -1,0 +1,14 @@
+diff --git c/chrome/browser/notifications/notification_handler.h i/chrome/browser/notifications/notification_handler.h
+index 38b83380f64c2ae323fb3aceedd5f64ca506cf5b..dad083ad3c3aee2a309d4efe65fd4dbf5b725095 100644
+--- c/chrome/browser/notifications/notification_handler.h
++++ i/chrome/browser/notifications/notification_handler.h
+@@ -42,7 +42,8 @@ class NotificationHandler {
+     DEFAULT_BROWSER_CHANGED = 11,
+     EXTENSION_REQUEST = 12,
+     GLIC_ACTOR_TASK = 13,
+-    MAX = GLIC_ACTOR_TASK,
++    MAHO_MAIL = 14,
++    MAX = MAHO_MAIL,
+   };
+ 
+   virtual ~NotificationHandler();

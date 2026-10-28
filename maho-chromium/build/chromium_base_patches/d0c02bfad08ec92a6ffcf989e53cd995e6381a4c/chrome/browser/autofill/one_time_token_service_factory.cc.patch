@@ -1,0 +1,33 @@
+diff --git c/chrome/browser/autofill/one_time_token_service_factory.cc i/chrome/browser/autofill/one_time_token_service_factory.cc
+index 03ce56796b6dc626fc0e55b7e6dc8f12b619bf60..a172f6ac22d8caacf179ee955ede7ffb6daa2817 100644
+--- c/chrome/browser/autofill/one_time_token_service_factory.cc
++++ i/chrome/browser/autofill/one_time_token_service_factory.cc
+@@ -13,6 +13,8 @@
+ #include "components/one_time_tokens/core/browser/sms_otp_backend.h"
+ #include "components/one_time_tokens/core/common/one_time_token_features.h"
+ #include "content/public/browser/browser_context.h"
++#include "maho/browser/autofill/maho_otp_backend.h"
++#include "maho/browser/mail_helper/maho_mail_service_factory.h"
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ #include "chrome/browser/autofill/android/android_sms_otp_backend_factory.h"
+@@ -32,6 +34,7 @@ OneTimeTokenServiceFactory::OneTimeTokenServiceFactory()
+   DependsOn(AndroidSmsOtpBackendFactory::GetInstance());
+ #endif  // BUILDFLAG(IS_ANDROID)
+   DependsOn(GmailOtpBackendFactory::GetInstance());
++  DependsOn(maho::MahoMailServiceFactory::GetInstance());
+ }
+ OneTimeTokenServiceFactory::~OneTimeTokenServiceFactory() = default;
+ 
+@@ -61,8 +64,9 @@ OneTimeTokenServiceFactory::BuildServiceInstanceForBrowserContext(
+                 Profile::FromBrowserContext(context))
+           : nullptr;
+ 
+-  return std::make_unique<OneTimeTokenServiceImpl>(sms_otp_backend,
+-                                                   gmail_otp_backend);
++  return maho::autofill::BuildMahoOneTimeTokenService(
++      Profile::FromBrowserContext(context), sms_otp_backend,
++      gmail_otp_backend);
+ }
+ 
+ }  // namespace autofill

@@ -1,0 +1,57 @@
+diff --git c/ui/views/controls/textfield/textfield.cc i/ui/views/controls/textfield/textfield.cc
+index 5405f62d9292c37a3611de36625e7dff6804ce97..86409e9b5b2248ccad46608d9aac4dc0208a742d 100644
+--- c/ui/views/controls/textfield/textfield.cc
++++ i/ui/views/controls/textfield/textfield.cc
+@@ -432,6 +432,10 @@ SkColor Textfield::GetTextColor() const {
+     return GetColorProvider()->GetColor(disabled_text_color_id_.value());
+   }
+ 
++  if (maho_resolved_text_color_) {
++    return *maho_resolved_text_color_;
++  }
++
+   if (text_color_id_.has_value()) {
+     return GetColorProvider()->GetColor(text_color_id_.value());
+   }
+@@ -440,7 +444,23 @@ SkColor Textfield::GetTextColor() const {
+       style::CONTEXT_TEXTFIELD, GetTextStyle()));
+ }
+ 
++void Textfield::SetMahoResolvedTextColor(SkColor color) {
++  maho_resolved_text_color_ = color;
++  text_color_id_.reset();
++  if (GetWidget()) {
++    SetColor(GetTextColor());
++  }
++}
++
++void Textfield::SetMahoResolvedPlaceholderTextColor(SkColor color) {
++  maho_resolved_placeholder_text_color_ = color;
++  placeholder_text_color_id_.reset();
++  OnPropertyChanged(&maho_resolved_placeholder_text_color_,
++                    PropertyEffects::kPaint);
++}
++
+ void Textfield::SetTextColorId(std::optional<ui::ColorId> color_id) {
++  maho_resolved_text_color_.reset();
+   text_color_id_ = color_id;
+   if (GetWidget()) {
+     SetColor(GetTextColor());
+@@ -562,6 +582,9 @@ void Textfield::SetPlaceholderText(std::u16string_view text) {
+ }
+ 
+ SkColor Textfield::GetPlaceholderTextColor() const {
++  if (maho_resolved_placeholder_text_color_) {
++    return *maho_resolved_placeholder_text_color_;
++  }
+   if (placeholder_text_color_id_.has_value()) {
+     return GetColorProvider()->GetColor(placeholder_text_color_id_.value());
+   }
+@@ -571,6 +594,7 @@ SkColor Textfield::GetPlaceholderTextColor() const {
+ }
+ 
+ void Textfield::SetPlaceholderTextColorId(std::optional<ui::ColorId> color_id) {
++  maho_resolved_placeholder_text_color_.reset();
+   placeholder_text_color_id_ = color_id;
+   OnPropertyChanged(&placeholder_text_color_id_, PropertyEffects::kPaint);
+ }

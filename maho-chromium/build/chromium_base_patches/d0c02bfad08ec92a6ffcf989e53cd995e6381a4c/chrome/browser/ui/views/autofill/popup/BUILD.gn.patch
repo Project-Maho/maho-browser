@@ -1,0 +1,22 @@
+diff --git c/chrome/browser/ui/views/autofill/popup/BUILD.gn i/chrome/browser/ui/views/autofill/popup/BUILD.gn
+index cff117dbfef892ce470917a20fd1861b8cca0abd..cbfb3545e9081c2a01a63a6df03d70445e1cffdd 100644
+--- c/chrome/browser/ui/views/autofill/popup/BUILD.gn
++++ i/chrome/browser/ui/views/autofill/popup/BUILD.gn
+@@ -49,7 +49,7 @@ source_set("popup_row_content_view") {
+ source_set("popup_impl") {
+   sources = [
+     "popup_base_view.cc",
+-    "popup_row_view.cc",
++    "//maho/chromium_src/chrome/browser/ui/views/autofill/popup/popup_row_view.cc",
+     "popup_view_utils.cc",
+   ]
+   public_deps = [
+@@ -200,7 +200,7 @@ source_set("popup_view_views_impl") {
+ source_set("popup") {
+   public = [
+     "popup_base_view.h",
+-    "popup_row_view.h",
++    "//maho/chromium_src/chrome/browser/ui/views/autofill/popup/popup_row_view.h",
+     "popup_view_utils.h",
+   ]
+   public_deps = [

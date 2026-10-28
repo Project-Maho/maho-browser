@@ -1,0 +1,17 @@
+diff --git c/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h i/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
+index 462a89218b72ff56237a4cdddfdad9b080bc64aa..981562b60c00326106e7612aea506ecc4fe5b802 100644
+--- c/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
++++ i/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
+@@ -82,6 +82,12 @@ class BrowserViewTabbedLayoutImpl : public BrowserViewLayoutImpl {
+   // area to prevent subpixel seams on fractional displays.
+   int GetVerticalTabStripContentOverlap() const;
+ 
++  // Maho: true when Arc-style left-rail layout is active for this window.
++  bool IsMahoArcLayoutActive() const;
++
++  // Maho: produces the Arc two-pane layout (left rail + contents only).
++  ProposedLayout CalculateMahoArcLayout(
++      const BrowserLayoutParams& params) const;
+   // Returns the current state of the vertical tabstrip.
+   VerticalTabStripCollapsedState GetVerticalTabStripCollapsedState() const;
+ 

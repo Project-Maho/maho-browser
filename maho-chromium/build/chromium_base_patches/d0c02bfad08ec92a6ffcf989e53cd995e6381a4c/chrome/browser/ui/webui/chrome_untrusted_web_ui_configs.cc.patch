@@ -1,0 +1,26 @@
+diff --git c/chrome/browser/ui/webui/chrome_untrusted_web_ui_configs.cc i/chrome/browser/ui/webui/chrome_untrusted_web_ui_configs.cc
+index 861c5c41cf767ef97d6706e16c7232efab6a3233..72bfe49d9f3d99c701def6bb8dfe1302718c21a0 100644
+--- c/chrome/browser/ui/webui/chrome_untrusted_web_ui_configs.cc
++++ i/chrome/browser/ui/webui/chrome_untrusted_web_ui_configs.cc
+@@ -8,6 +8,9 @@
+ #include "build/build_config.h"
+ #include "chrome/common/buildflags.h"
+ #include "content/public/browser/webui_config_map.h"
++#include "maho/browser/ui/webui/maho_boost/maho_boost_ui.h"
++#include "maho/browser/ui/webui/maho_ai/maho_artifact_preview_untrusted_ui.h"
++#include "maho/browser/ui/webui/maho_ai/maho_artifact_export_untrusted_ui.h"
+ #include "printing/buildflags/buildflags.h"
+ 
+ #if defined(TOOLKIT_VIEWS)
+@@ -75,6 +78,11 @@ void RegisterChromeUntrustedWebUIConfigs() {
+   map.AddUntrustedWebUIConfig(
+       std::make_unique<ReadAnythingUIUntrustedConfig>());
+   map.AddUntrustedWebUIConfig(std::make_unique<DataSharingUIConfig>());
++  map.AddUntrustedWebUIConfig(std::make_unique<MahoBoostUIConfig>());
++  map.AddUntrustedWebUIConfig(
++      std::make_unique<MahoArtifactPreviewUntrustedUIConfig>());
++  map.AddUntrustedWebUIConfig(
++      std::make_unique<MahoArtifactExportUntrustedUIConfig>());
+ 
+ #if BUILDFLAG(ENABLE_COMPOSE)
+   map.AddUntrustedWebUIConfig(std::make_unique<ComposeUIUntrustedConfig>());

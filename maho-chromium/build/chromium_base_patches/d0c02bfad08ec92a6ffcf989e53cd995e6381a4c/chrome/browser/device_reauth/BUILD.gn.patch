@@ -1,0 +1,22 @@
+diff --git c/chrome/browser/device_reauth/BUILD.gn i/chrome/browser/device_reauth/BUILD.gn
+index c9098861ab7c6dd7653ef39acb5ae71408f69dc7..c2b954ca774154ac6ad36089b034c0bd59d3320e 100644
+--- c/chrome/browser/device_reauth/BUILD.gn
++++ i/chrome/browser/device_reauth/BUILD.gn
+@@ -12,7 +12,7 @@ source_set("device_reauth") {
+     "//ui/gfx",
+   ]
+ 
+-  if (is_android || is_mac || is_win || is_chromeos) {
++  if (is_android || is_mac || is_win || is_chromeos || is_linux) {
+     public += [ "chrome_device_authenticator_factory.h" ]
+   }
+ 
+@@ -62,7 +62,7 @@ source_set("impl") {
+     "//content/public/browser",
+   ]
+ 
+-  if (is_android || is_mac || is_win || is_chromeos) {
++  if (is_android || is_mac || is_win || is_chromeos || is_linux) {
+     sources += [ "chrome_device_authenticator_factory.cc" ]
+   }
+ 

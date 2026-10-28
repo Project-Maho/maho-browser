@@ -1,0 +1,13 @@
+diff --git c/chrome/browser/prefs/BUILD.gn i/chrome/browser/prefs/BUILD.gn
+index 831aaa964eab5ee4d7fb40c60a101dcb4083478d..9060d1db23fde3a363f6f5e712309cf5ed8b8211 100644
+--- c/chrome/browser/prefs/BUILD.gn
++++ i/chrome/browser/prefs/BUILD.gn
+@@ -90,6 +90,8 @@ source_set("impl") {
+     "//chrome/browser/media/webrtc",
+     "//chrome/browser/memory",
+     "//chrome/browser/metrics",
++    "//maho/browser/ui/webui/maho_ai:maho_ai_prefs",
++    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+     "//chrome/browser/net",
+     "//chrome/browser/new_tab_page/prefs",
+     "//chrome/browser/permissions",

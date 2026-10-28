@@ -1,0 +1,20 @@
+diff --git c/chrome/browser/ui/views/frame/layout/browser_view_layout.h i/chrome/browser/ui/views/frame/layout/browser_view_layout.h
+index c84c47a1190f9acd9602e6cc06badcbf81cf00a2..c266bf0b8b5b78411fcf8f523e7037b001c3654a 100644
+--- c/chrome/browser/ui/views/frame/layout/browser_view_layout.h
++++ i/chrome/browser/ui/views/frame/layout/browser_view_layout.h
+@@ -87,6 +87,15 @@ struct BrowserViewLayoutViews {
+   // overlaid (i.e. no immersive fullscreen).
+   raw_ptr<views::View> top_container_separator = nullptr;
+ 
++  // Maho: BrowserView-owned sidebar host container.
++  raw_ptr<views::View> maho_sidebar_container = nullptr;
++
++  raw_ptr<views::View> maho_create_space_blank_view = nullptr;
++
++  raw_ptr<views::View> maho_mini_top_bar = nullptr;
++
++  raw_ptr<views::View> maho_content_gradient_view = nullptr;
++
+   // LINT.ThenChange(//chrome/browser/ui/views/frame/browser_view.cc:BrowserViewLayoutViews)
+ 
+   // These views are dynamically set.

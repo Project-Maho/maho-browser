@@ -1,0 +1,17 @@
+diff --git c/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc i/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
+index 162cb0487882a40ed6324115d5e58eb3cca97186..4a701f78eac89afa03d91c9471ec128c35e2648e 100644
+--- c/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
++++ i/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
+@@ -53,6 +53,12 @@ BrowserViewLayoutDelegateImpl::~BrowserViewLayoutDelegateImpl() = default;
+ 
+ BrowserViewLayoutDelegate::TabStripType
+ BrowserViewLayoutDelegateImpl::GetTabStripType() const {
++  // Maho Arc layout: suppress all Chromium tab strip types for normal windows.
++  // The left rail provides its own tab presentation.
++  if (browser_view_->IsMahoArcLayoutActive()) {
++    return TabStripType::kNone;
++  }
++
+   // Can there be a tabstrip at all right now?
+   if (!browser_view_->ShouldDrawTabStrip()) {
+     return TabStripType::kNone;

@@ -1,0 +1,26 @@
+diff --git c/ui/views/widget/desktop_aura/desktop_native_widget_aura.cc i/ui/views/widget/desktop_aura/desktop_native_widget_aura.cc
+index 5ee4392dd93fe1206b32e7f804df59aa0036febc..c18fb23cfb8c8feb00fae6cadda40a0ae5f05516 100644
+--- c/ui/views/widget/desktop_aura/desktop_native_widget_aura.cc
++++ i/ui/views/widget/desktop_aura/desktop_native_widget_aura.cc
+@@ -1198,6 +1198,21 @@ void DesktopNativeWidgetAura::CancelDragDropLoop(View* view) {
+   views::CancelDragDropLoop(content_window_);
+ }
+ 
++void DesktopNativeWidgetAura::UpdateDragImage(const gfx::ImageSkia& image,
++                                              const gfx::Vector2d& offset) {
++  if (!content_window_) {
++    return;
++  }
++  aura::Window* root_window = content_window_->GetRootWindow();
++  if (root_window) {
++    aura::client::DragDropClient* client =
++        aura::client::GetDragDropClient(root_window);
++    if (client) {
++      client->UpdateDragImage(image, offset);
++    }
++  }
++}
++
+ void DesktopNativeWidgetAura::SchedulePaintInRect(const gfx::Rect& rect) {
+   if (content_window_) {
+     content_window_->SchedulePaintInRect(rect);

@@ -1,0 +1,18 @@
+diff --git c/chrome/browser/ui/dialogs/outdated_upgrade_bubble.cc i/chrome/browser/ui/dialogs/outdated_upgrade_bubble.cc
+index d08dce0a2bde8d248408329e482986fa8ee176c4..de59a4972020bd9ff99faa4cfa359bf6a1586198 100644
+--- c/chrome/browser/ui/dialogs/outdated_upgrade_bubble.cc
++++ i/chrome/browser/ui/dialogs/outdated_upgrade_bubble.cc
+@@ -96,12 +96,10 @@ const char* GetUpdateUrlChannelSuffix(version_info::Channel channel) {
+ void ShowOutdatedUpgradeBubble(BrowserWindowInterface* browser,
+                                content::PageNavigator* page_navigator,
+                                bool auto_update_enabled) {
+-  if (g_upgrade_bubble_is_showing) {
++  if (browser || g_upgrade_bubble_is_showing) {
+     return;
+   }
+ 
+-  g_upgrade_bubble_is_showing = true;
+-
+   auto update_url = std::string(kUpdateBrowserRedirectUrl) +
+                     GetUpdateUrlChannelSuffix(chrome::GetChannel());
+ 

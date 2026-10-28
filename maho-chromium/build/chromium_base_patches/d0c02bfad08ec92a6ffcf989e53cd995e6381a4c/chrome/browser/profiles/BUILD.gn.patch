@@ -1,0 +1,12 @@
+diff --git c/chrome/browser/profiles/BUILD.gn i/chrome/browser/profiles/BUILD.gn
+index 1c4ee4ac17e827a18dbb363f61aea886b5487bd2..9c2e1c7bf2c964d1b39a9726a01e5a24a73e6ce2 100644
+--- c/chrome/browser/profiles/BUILD.gn
++++ i/chrome/browser/profiles/BUILD.gn
+@@ -558,6 +558,7 @@ source_set("profile_io_data") {
+     "//extensions/buildflags",
+     "//net:buildflags",
+     "//url",
++    "//maho/components/constants",
+   ]
+ 
+   if (is_linux || is_win || is_mac || is_chromeos) {

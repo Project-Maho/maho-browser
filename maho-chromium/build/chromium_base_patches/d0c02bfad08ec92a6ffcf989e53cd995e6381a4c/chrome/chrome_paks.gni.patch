@@ -1,0 +1,55 @@
+diff --git c/chrome/chrome_paks.gni i/chrome/chrome_paks.gni
+index 12a5e53584f9f30117ba8e3e1c444974862dbd09..71f21370f41d72afb19b4824a56149802cf604f8 100644
+--- c/chrome/chrome_paks.gni
++++ i/chrome/chrome_paks.gni
+@@ -171,6 +171,16 @@ template("chrome_extra_paks") {
+ 
+     deps = [
+       "//base/tracing/protos:chrome_track_event_resources",
++      "//maho/browser/resources/maho_ai:resources_grit",
++      "//maho/browser/resources/maho_boost:resources_grit",
++      "//maho/browser/resources/maho_boost_content_script:resources_grit",
++      "//maho/browser/resources/maho_changelog:resources_grit",
++      "//maho/browser/resources/maho_mail:resources_grit",
++      "//maho/browser/resources/maho_settings:resources_grit",
++      "//maho/browser/resources/maho_space_config:resources_grit",
++      "//maho/browser/resources/maho_space_create:resources_grit",
++      "//maho/browser/resources/maho_translate_content_script:resources_grit",
++      "//maho/browser/resources/maho_welcome:resources_grit",
+       "//chrome/app/theme:chrome_unscaled_resources",
+       "//chrome/browser:resources",
+       "//chrome/browser/glic/resources:browser_resources",
+@@ -244,6 +254,16 @@ template("chrome_extra_paks") {
+         "$root_gen_dir/chrome/settings_resources.pak",
+         "$root_gen_dir/chrome/side_panel_bookmarks_resources.pak",
+         "$root_gen_dir/chrome/side_panel_comments_resources.pak",
++        "$root_gen_dir/chrome/maho_common_resources.pak",
++        "$root_gen_dir/chrome/maho_ai_resources.pak",
++        "$root_gen_dir/chrome/maho_settings_resources.pak",
++        "$root_gen_dir/chrome/maho_boost_resources.pak",
++        "$root_gen_dir/chrome/maho_boost_content_script_resources.pak",
++        "$root_gen_dir/chrome/maho_translate_content_script_resources.pak",
++        "$root_gen_dir/chrome/maho_space_config_resources.pak",
++        "$root_gen_dir/chrome/maho_space_create_resources.pak",
++        "$root_gen_dir/chrome/maho_welcome_resources.pak",
++        "$root_gen_dir/chrome/maho_mail_resources.pak",
+         "$root_gen_dir/chrome/side_panel_commerce_resources.pak",
+         "$root_gen_dir/chrome/side_panel_history_clusters_resources.pak",
+         "$root_gen_dir/chrome/side_panel_history_resources.pak",
+@@ -273,6 +293,16 @@ template("chrome_extra_paks") {
+         "//chrome/browser/indigo/resources:browser_resources",
+         "//chrome/browser/resources/contextual_cueing/internals:resources",
+         "//components/headless/command_handler",
++        "//maho/browser/resources/maho_common:resources",
++        "//maho/browser/resources/maho_ai:resources",
++        "//maho/browser/resources/maho_settings:resources",
++        "//maho/browser/resources/maho_boost:resources",
++        "//maho/browser/resources/maho_boost_content_script:resources",
++        "//maho/browser/resources/maho_translate_content_script:resources",
++        "//maho/browser/resources/maho_space_config:resources",
++        "//maho/browser/resources/maho_space_create:resources",
++        "//maho/browser/resources/maho_welcome:resources",
++        "//maho/browser/resources/maho_mail:resources",
+         "//content/browser/tracing:resources",
+       ]
+       if (is_chrome_branded) {

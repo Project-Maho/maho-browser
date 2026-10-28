@@ -1,0 +1,12 @@
+diff --git c/chrome/browser/ui/browser_window/internal/create_browser_window_non_android.cc i/chrome/browser/ui/browser_window/internal/create_browser_window_non_android.cc
+index 3b394efe9f13108a1e259f693b0385dbacaa8492..87e5a13396ee454234ab7c8909a14ed0de468a1a 100644
+--- c/chrome/browser/ui/browser_window/internal/create_browser_window_non_android.cc
++++ i/chrome/browser/ui/browser_window/internal/create_browser_window_non_android.cc
+@@ -23,6 +23,7 @@ BrowserWindowCreateParams BrowserWindowCreateParams::Clone() const {
+   BrowserWindowCreateParams clone(type, *profile, from_user_gesture);
+   clone.initial_bounds = initial_bounds;
+   clone.is_trusted_source = is_trusted_source;
++  clone.is_maho_mini = is_maho_mini;
+   clone.app_name = app_name;
+   clone.initial_show_state = initial_show_state;
+   clone.omit_from_session_restore = omit_from_session_restore;

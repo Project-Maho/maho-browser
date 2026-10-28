@@ -1,0 +1,20 @@
+diff --git c/chrome/browser/ui/views/frame/app_menu_button.cc i/chrome/browser/ui/views/frame/app_menu_button.cc
+index 919a1e094e5197226ede40154f58af7681520428..16e919b7de3f2691cbb4b14f9ba5a34c9e573a8a 100644
+--- c/chrome/browser/ui/views/frame/app_menu_button.cc
++++ i/chrome/browser/ui/views/frame/app_menu_button.cc
+@@ -57,7 +57,14 @@ views::BubbleAnchor AppMenuButton::GetAnchor() {
+   auto* const elements = BrowserElementsViews::From(this);
+   CHECK(elements);
+   auto* const element = elements->GetElement(kFallbackPopupAnchorElementId);
+-  CHECK(element);
++  // Maho: the toolbar is always hidden, so this fallback is the only anchor,
++  // and it is not a shown element until the browser widget is visible. The
++  // startup session-crashed bubble asks for it before that, so return an
++  // empty anchor (accepted by every caller) instead of crashing every launch
++  // after an unclean exit.
++  if (!element) {
++    return views::BubbleAnchor();
++  }
+   return views::BubbleAnchor(element);
+ }
+ 

@@ -1,0 +1,17 @@
+diff --git c/chrome/browser/ui/views/omnibox/omnibox_view_views.cc i/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
+index 6ac205d9963980c284056b3e3b43f660487d8ec0..d49ec532e3fecaf278e76f974d46d15d4eb68dca 100644
+--- c/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
++++ i/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
+@@ -1385,6 +1385,12 @@ void OmniboxViewViews::SetEmphasis(bool emphasize, const gfx::Range& range) {
+   }
+ }
+ 
++void OmniboxViewViews::OnMouseEntered(const ui::MouseEvent& event) {
++  if (location_bar_view_) {
++    location_bar_view_->OnOmniboxHovered(true);
++  }
++}
++
+ void OmniboxViewViews::OnMouseMoved(const ui::MouseEvent& event) {
+   if (location_bar_view_) {
+     location_bar_view_->OnOmniboxHovered(true);

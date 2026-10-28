@@ -1,0 +1,112 @@
+diff --git c/chrome/browser/renderer_context_menu/render_view_context_menu.cc i/chrome/browser/renderer_context_menu/render_view_context_menu.cc
+index abdfdada9bfe7912a0e58ca416ac80b33f6d7de6..8a65cb3794bd4e9bceda588aa88fea98664d0b53 100644
+--- c/chrome/browser/renderer_context_menu/render_view_context_menu.cc
++++ i/chrome/browser/renderer_context_menu/render_view_context_menu.cc
+@@ -3,6 +3,9 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
++#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
++#include "maho/browser/net/maho_translate_injection_handler.h"
++#include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+ 
+ #include <stddef.h>
+ 
+@@ -1656,6 +1659,15 @@ std::u16string RenderViewContextMenu::GetImageSearchProviderName(
+ }
+ 
+ void RenderViewContextMenu::RecordUsedItem(int id) {
++  // Maho: the custom link context-menu commands (e.g. "Open in
++  // Maho Mini") use command ids outside the upstream UMA enum map,
++  // so RecordUsedItem() must skip them; otherwise
++  // FindUMAEnumValueForCommand() returns -1 and the NOTREACHED()
++  // below aborts the browser. See maho_context_menu_ids.h.
++  if (id == IDC_MAHO_LINK_OPEN_MAHO_MINI) {
++    return;
++  }
++
+   // Log general ID.
+ 
+   int enum_id =
+@@ -1992,6 +2004,7 @@ void RenderViewContextMenu::AppendLinkItems() {
+           IDC_CONTENT_CONTEXT_OPENLINKNEWTAB,
+           in_app ? IDS_CONTENT_CONTEXT_OPENLINKNEWTAB_INAPP
+                  : IDS_CONTENT_CONTEXT_OPENLINKNEWTAB);
++      menu_model_.AddItem(IDC_MAHO_LINK_OPEN_MAHO_MINI, u"Open in Maho Mini");
+     }
+ 
+     if (show_open_in_new_window) {
+@@ -2710,7 +2723,7 @@ void RenderViewContextMenu::AppendPageItems() {
+     menu_model_.AddSeparator(ui::NORMAL_SEPARATOR);
+   }
+ 
+-  if (CanTranslate(/*menu_logging=*/true)) {
++  if (maho::CanOnDeviceTranslate(embedder_web_contents_)) {
+     AppendTranslateItem();
+   }
+ }
+@@ -2830,10 +2843,11 @@ void RenderViewContextMenu::AppendTranslateItem() {
+   }
+ 
+   menu_model_.AddItemWithIcon(
+-      IDC_CONTENT_CONTEXT_TRANSLATE,
+-      l10n_util::GetStringFUTF16(
+-          IDS_CONTENT_CONTEXT_TRANSLATE,
+-          GetTargetLanguageDisplayName(/*is_full_page_translation=*/true)),
++      // Maho: fixed, discoverable label for on-device page translation (the
++      // stock label names the target language). The command id is unchanged,
++      // but ExecTranslate() now calls maho::TranslatePageViaOnDevice(), which
++      // resolves the same target language as the pane header.
++      IDC_CONTENT_CONTEXT_TRANSLATE, u"Translate this page",
+       ui::ImageModel::FromVectorIcon(vector_icons::kGTranslateIcon,
+                                      ui::kColorMenuIcon, kTabMenuIconSize));
+ }
+@@ -3492,7 +3506,8 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
+       return IsDevCommandEnabled(id);
+ 
+     case IDC_CONTENT_CONTEXT_TRANSLATE:
+-      return navigation_allowed && IsTranslateEnabled();
++      return navigation_allowed &&
++             maho::CanOnDeviceTranslate(embedder_web_contents_);
+ 
+     case IDC_CONTENT_CONTEXT_PARTIAL_TRANSLATE:
+       return navigation_allowed;
+@@ -3508,6 +3523,9 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
+       return navigation_allowed && params_.link_url.is_valid() &&
+              params_.link_url.IsStandard() &&
+              IsOpenLinkAllowedByDlp(params_.link_url);
++    case IDC_MAHO_LINK_OPEN_MAHO_MINI:
++      return navigation_allowed && params_.link_url.is_valid() &&
++             IsOpenLinkAllowedByDlp(params_.link_url);
+ 
+     case IDC_CONTENT_CONTEXT_COPYLINKLOCATION:
+       return params_.unfiltered_link_url.is_valid();
+@@ -3894,6 +3912,9 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
+       OpenLinkInSplitView(split_tabs::SplitTabLayout::kSideBySide);
+ #endif  // !BUILDFLAG(IS_ANDROID)
+       break;
++    case IDC_MAHO_LINK_OPEN_MAHO_MINI:
++      maho::LaunchMahoMini(browser_context_, maho::MahoMiniRequest{params_.link_url});
++      break;
+     case IDC_CONTENT_CONTEXT_SAVELINKAS:
+       CheckSupervisedUserURLFilterAndSaveLinkAs();
+       break;
+@@ -5623,17 +5644,7 @@ void RenderViewContextMenu::ExecRouteMedia() {
+ }
+ 
+ void RenderViewContextMenu::ExecTranslate() {
+-  ChromeTranslateClient* chrome_translate_client =
+-      ChromeTranslateClient::FromWebContents(embedder_web_contents_);
+-  if (!chrome_translate_client) {
+-    return;
+-  }
+-
+-  translate::TranslateManager* manager =
+-      chrome_translate_client->GetTranslateManager();
+-  DCHECK(manager);
+-  manager->ShowTranslateUI(/*auto_translate=*/true,
+-                           /*triggered_from_menu=*/true);
++  maho::TranslatePageViaOnDevice(embedder_web_contents_);
+ }
+ 
+ void RenderViewContextMenu::ExecPartialTranslate() {

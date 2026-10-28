@@ -1,0 +1,12 @@
+diff --git c/chrome/browser/ui/browser_navigator_params.h i/chrome/browser/ui/browser_navigator_params.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..da7f86442153dabb46b9df9abbe6b8ce3afea2be
+--- /dev/null
++++ i/chrome/browser/ui/browser_navigator_params.h
+@@ -0,0 +1,6 @@
++#ifndef CHROME_BROWSER_UI_BROWSER_NAVIGATOR_PARAMS_H_
++#define CHROME_BROWSER_UI_BROWSER_NAVIGATOR_PARAMS_H_
++
++#include "chrome/browser/ui/navigator/browser_navigator_params.h"
++
++#endif  // CHROME_BROWSER_UI_BROWSER_NAVIGATOR_PARAMS_H_

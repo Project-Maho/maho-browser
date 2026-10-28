@@ -1,0 +1,45 @@
+diff --git c/chrome/browser/ui/views/toolbar/toolbar_view.cc i/chrome/browser/ui/views/toolbar/toolbar_view.cc
+index f9bb38f92374559f70077dfcb24c2010d1b7efba..0896ba1e94958e5629aead37146abf95ce8c4c9e 100644
+--- c/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ i/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -120,6 +120,8 @@
+ #include "chrome/browser/ui/views/zoom/zoom_view_controller.h"
+ #include "chrome/browser/ui/waap/initial_webui_window_metrics_manager.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
++#include "chrome/common/chrome_version.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+ #include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
+ #include "chrome/browser/web_applications/link_capturing_features.h"
+ #include "chrome/common/chrome_features.h"
+@@ -281,6 +283,18 @@ ToolbarView::ToolbarView(BrowserWindowInterface* browser,
+                                       *this);
+   }
+ 
++#if CHROME_VERSION_BUILD > 7795
++  // Maho: in the Arc layout BrowserView's MahoToolbarButtonProvider takes
++  // the browser's ToolbarButtonProvider slot (same predicate as
++  // BrowserView::IsMahoArcLayoutActive()). Like upstream, the choice is
++  // made once per window; a later sidebar-layout pref flip only changes
++  // header visibility, never the registered provider.
++  if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) &&
++      maho::sidebar_prefs::IsSidebarLayoutEnabled(
++          browser_->GetProfile()->GetPrefs())) {
++    scoped_unowned_user_data_.reset();
++  }
++#endif
+   SetID(VIEW_ID_TOOLBAR);
+   SetProperty(views::kElementIdentifierKey, kToolbarElementId);
+ 
+@@ -566,11 +580,7 @@ void ToolbarView::Init() {
+         AddChildView(std::make_unique<PerformanceInterventionButton>(browser_));
+   }
+ 
+-  if (features::IsWebUIMediaButtonEnabled()) {
+-    media_button_ = toolbar_webview_->GetMediaToolbarButton();
+-  } else if (media_button) {
+-    media_button_ = AddChildView(std::move(media_button));
+-  }
++  // Suppressed for Maho sidebar-bottom media controls
+ 
+   if (glic::GlicEnabling::IsProfileEligible(browser_view_->GetProfile())) {
+     if (base::FeatureList::IsEnabled(features::kAiOverlayDialog) &&

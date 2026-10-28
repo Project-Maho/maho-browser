@@ -1,0 +1,47 @@
+diff --git c/chrome/browser/ui/browser.cc i/chrome/browser/ui/browser.cc
+index 07de580deb67c305fdbf25ddb9c168b3cc646a4f..02503ac90047c6ea44bf152ba2c27424e86f34f5 100644
+--- c/chrome/browser/ui/browser.cc
++++ i/chrome/browser/ui/browser.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/browser.h"
++#include "maho/browser/maho_browser_main_extra_parts.h"
+ 
+ #include <stddef.h>
+ 
+@@ -266,6 +267,7 @@ std::unique_ptr<Browser> Browser::DeprecatedCreateOwnedForTesting(
+ 
+ Browser::Browser(BrowserWindowCreateParams params)
+     : type_(params.type),
++      is_maho_mini_(params.is_maho_mini),
+       profile_(&*params.profile),
+       window_(nullptr),
+       tab_strip_model_delegate_(
+@@ -300,6 +302,10 @@ Browser::Browser(BrowserWindowCreateParams params)
+ 
+   ProfileMetrics::LogProfileLaunch(profile_);
+ 
++  if (auto* maho_parts = MahoBrowserMainExtraParts::GetInstance()) {
++    maho_parts->MaybeInitializeForBrowser(this);
++  }
++
+   // BrowserWindowFeatures need to be initialized before browser window
+   // creation, so that the features can be used in creating components
+   // in browser window.
+@@ -623,6 +629,15 @@ void Browser::TabStripEmpty() {
+     return;
+   }
+ 
++  // Maho: normal browser windows support zero-tab state.  Only close the
++  // window when we are already in an explicit close flow (i.e.
++  // UnloadController has already set is_attempting_to_close_browser_ via
++  // TryToCloseWindow / GetBrowserClosingStatus).  For every other browser
++  // type the original behaviour is preserved.
++  if (GetType() == BrowserWindowInterface::Type::TYPE_NORMAL &&
++      !UnloadController::From(this)->is_attempting_to_close_browser()) {
++    return;
++  }
+   // Note: even though the tab strip is empty, the call to Close() may not
+   // result in closing this Browser. This can happen in the case of closing
+   // the last Browser with ongoing downloads.
