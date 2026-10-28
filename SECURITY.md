@@ -26,8 +26,8 @@ If you want an encrypted reply, say so in your first message and we will exchang
 
 **Out of scope**
 
-- The hosted relay / account service, which is not part of this repository and
-  has its own reporting path
+- The hosted relay / account service, which is not part of this repository
+  (report vulnerabilities in it privately to the same address above)
 - Third-party dependencies with their own security process (report upstream;
   tell us so we can track it)
 - Issues that require an already-compromised machine, an unlocked profile with
