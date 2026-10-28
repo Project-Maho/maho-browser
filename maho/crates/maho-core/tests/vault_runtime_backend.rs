@@ -141,7 +141,7 @@ fn vault_backend_range_delete_includes_lower_and_excludes_upper_exact_boundaries
         .expect("delete range");
 
     // Then the lower endpoint is tombstoned and the upper endpoint remains live.
-    assert_eq!(result.tombstoned_ids, vec![from.id.clone()]);
+    assert_eq!(result.tombstoned_ids, vec![from.id]);
     assert_eq!(result.count, 1);
     assert!(core
         .storage_ref()
@@ -209,7 +209,7 @@ fn vault_backend_range_delete_supports_unbounded_and_empty_ranges() {
     assert!(empty.tombstoned_ids.is_empty());
     assert_eq!(
         all.tombstoned_ids,
-        vec![first.id.clone(), second.id.clone()]
+        vec![first.id, second.id]
     );
     assert_eq!(all.count, 2);
     assert_eq!(core.vault_status().item_count, 0);
@@ -246,7 +246,7 @@ fn vault_backend_range_delete_equal_bounds_are_empty() {
     // When the equal-bound half-open range is requested.
     let result = core.vault_delete_created_range(&VaultItemCreatedRange {
         schema_version: VaultSchemaVersion::CURRENT,
-        from_inclusive: Some(item.created_at.clone()),
+        from_inclusive: Some(item.created_at),
         until_exclusive: Some(item.created_at),
     });
 

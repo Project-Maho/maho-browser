@@ -149,6 +149,7 @@ fn every_vault_dto_has_a_stable_golden_wire_shape() {
             failed_unlock_count: 1,
             retry_at: None,
             account_escrowed: false,
+            lock_reason: None,
         }),
         "policy": json(VaultPolicy {
             schema_version: VaultSchemaVersion::V1,

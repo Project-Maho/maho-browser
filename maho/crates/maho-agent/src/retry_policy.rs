@@ -229,14 +229,12 @@ impl RetryPolicy {
         // Guardrail 2: Uncertain mutation is NEVER auto-retried without resolution/confirmation
         if error_class == ErrorClass::UncertainMutation
             || (idempotency == IdempotencyClass::NonIdempotentMutation
-                && error_class != ErrorClass::ContextTooLarge)
+                && error_class != ErrorClass::ContextTooLarge
+                && !self.allow_uncertain_mutation_retry)
         {
-            if !self.allow_uncertain_mutation_retry || error_class == ErrorClass::UncertainMutation
-            {
-                return Err(DoNotRetryReason::NeedsResolution(
-                    "Uncertain mutation requires fresh read verification or explicit user confirmation before retry".to_string(),
-                ));
-            }
+            return Err(DoNotRetryReason::NeedsResolution(
+                "Uncertain mutation requires fresh read verification or explicit user confirmation before retry".to_string(),
+            ));
         }
 
         // Guardrail 3: a non-retryable class fails fast. This precedes the attempt cap so
@@ -353,7 +351,7 @@ mod tests {
         );
         assert!(res1.is_ok());
         if let Ok(RetryDecision::RetryAfter(delay)) = res1 {
-            assert!(delay >= 80 && delay <= 120, "delay was {delay}");
+            assert!((80..=120).contains(&delay), "delay was {delay}");
         } else {
             panic!("Expected RetryAfter");
         }
@@ -368,7 +366,7 @@ mod tests {
         );
         assert!(res2.is_ok());
         if let Ok(RetryDecision::RetryAfter(delay)) = res2 {
-            assert!(delay >= 160 && delay <= 240, "delay was {delay}");
+            assert!((160..=240).contains(&delay), "delay was {delay}");
         } else {
             panic!("Expected RetryAfter");
         }

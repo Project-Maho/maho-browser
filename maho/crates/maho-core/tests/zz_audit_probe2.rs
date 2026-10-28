@@ -87,7 +87,7 @@ fn probe_sort_stability() {
         SyncEntityType::ConversationProject,
         SyncEntityType::Bookmark,
     ];
-    let mut v: Vec<_> = types.iter().cloned().collect();
+    let mut v: Vec<_> = types.to_vec();
     v.sort_by_key(|t| match t {
         SyncEntityType::ConversationProject => 0,
         SyncEntityType::Conversation => 1,

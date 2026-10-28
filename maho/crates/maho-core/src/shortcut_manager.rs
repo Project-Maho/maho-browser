@@ -19,10 +19,8 @@ fn is_reserved_combo(key_combo: &KeyCombo) -> bool {
         has_ctrl
     };
 
-    if is_primary && !has_alt && !has_shift {
-        if key == "q" || key == "h" || key == "m" {
-            return true;
-        }
+    if is_primary && !has_alt && !has_shift && (key == "q" || key == "h" || key == "m") {
+        return true;
     }
     false
 }
@@ -72,6 +70,11 @@ impl ShortcutManager {
     }
 
     pub fn check_conflict(&self, action: &str, key_combo: &KeyCombo) -> Option<ShortcutConflict> {
+        // An empty combo means "unassigned"; it can never collide with another
+        // unassigned binding.
+        if key_combo.key.is_empty() {
+            return None;
+        }
         if is_reserved_combo(key_combo) {
             return Some(ShortcutConflict {
                 key_combo: key_combo.clone(),
@@ -155,6 +158,9 @@ impl ShortcutManager {
     }
 
     pub fn find_binding_by_key_combo(&self, key_combo: &KeyCombo) -> Option<&ShortcutBinding> {
+        if key_combo.key.is_empty() {
+            return None;
+        }
         let normalized = key_combo.to_normalized_string();
         self.bindings
             .iter()
@@ -632,6 +638,17 @@ mod contract_tests {
                 binding.action,
             );
         }
+    }
+
+    #[test]
+    fn clearing_a_second_shortcut_does_not_conflict_with_a_cleared_one() {
+        let mut manager = ShortcutManager::new();
+        let actions: Vec<String> =
+            manager.bindings.iter().take(2).map(|b| b.action.clone()).collect();
+        let empty = KeyCombo { key: String::new(), modifiers: vec![] };
+        assert!(manager.set_shortcut(&actions[0], empty.clone()).is_ok());
+        assert!(manager.set_shortcut(&actions[1], empty.clone()).is_ok());
+        assert!(manager.find_binding_by_key_combo(&empty).is_none());
     }
 
     #[test]

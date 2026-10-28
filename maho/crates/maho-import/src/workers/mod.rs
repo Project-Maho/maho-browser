@@ -91,7 +91,7 @@ static TEST_KEYCHAIN_TIMEOUT_OVERRIDE: std::sync::RwLock<Option<std::time::Durat
 
 /// Test-only hook to inject a KeychainProvider override for automated regression testing.
 #[doc(hidden)]
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", test))]
 pub(crate) fn set_keychain_provider_override_for_test(
     provider: Option<
         std::sync::Arc<dyn crate::decrypt::chromium_keychain::KeychainProvider + Send + Sync>,
@@ -105,7 +105,7 @@ pub(crate) fn set_keychain_provider_override_for_test(
 
 /// Test-only hook to inject a timeout override for automated regression testing.
 #[doc(hidden)]
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", test))]
 pub(crate) fn set_keychain_timeout_override_for_test(timeout: Option<std::time::Duration>) {
     let mut lock = TEST_KEYCHAIN_TIMEOUT_OVERRIDE.write().unwrap();
     *lock = timeout;
@@ -363,6 +363,12 @@ pub mod tests {
         pub favorited: Mutex<Vec<String>>,
         pub active_space: Mutex<Option<String>>,
         next_id: Mutex<u32>,
+    }
+
+    impl Default for MockDestination {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl MockDestination {
@@ -718,10 +724,7 @@ pub mod tests {
 
     #[test]
     fn memory_thread_keychain_timeout_keeps_single_flight() {
-        #[cfg(not(target_os = "macos"))]
-        {
-            return;
-        }
+        // No-op on non-macOS: the keychain boundary under test is macOS-only.
         #[cfg(target_os = "macos")]
         {
             let _serial_lock = TEST_SERIAL_LOCK.lock().unwrap();
@@ -827,10 +830,7 @@ pub mod tests {
 
     #[test]
     fn memory_thread_keychain_different_key_does_not_spawn() {
-        #[cfg(not(target_os = "macos"))]
-        {
-            return;
-        }
+        // No-op on non-macOS: the keychain boundary under test is macOS-only.
         #[cfg(target_os = "macos")]
         {
             let _serial_lock = TEST_SERIAL_LOCK.lock().unwrap();
@@ -911,10 +911,7 @@ pub mod tests {
 
     #[test]
     fn memory_thread_keychain_completion_reopens_slot() {
-        #[cfg(not(target_os = "macos"))]
-        {
-            return;
-        }
+        // No-op on non-macOS: the keychain boundary under test is macOS-only.
         #[cfg(target_os = "macos")]
         {
             let _serial_lock = TEST_SERIAL_LOCK.lock().unwrap();

@@ -120,7 +120,7 @@ fn chat_send_image_with_null_session() {
 #[test]
 fn chat_send_image_with_null_mime() {
     unsafe {
-        let data = vec![0u8; 4];
+        let data = [0u8; 4];
         let _ =
             maho_ffi::maho_chat_send_image(ptr::null_mut(), ptr::null(), data.as_ptr(), data.len());
     }

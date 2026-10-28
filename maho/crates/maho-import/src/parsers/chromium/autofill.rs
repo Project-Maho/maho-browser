@@ -67,10 +67,10 @@ pub fn parse_chromium_autofill(profile_dir: &Path) -> ImportResult<Vec<AutofillE
     }
 
     // Parse local_addresses table
-    parse_table_fields(&conn, "local_addresses", &ADDRESS_EXCLUDES, &mut entries)?;
+    parse_table_fields(&conn, "local_addresses", ADDRESS_EXCLUDES, &mut entries)?;
 
     // Parse local_credit_cards table (excluding encrypted number)
-    parse_table_fields(&conn, "local_credit_cards", &CARD_EXCLUDES, &mut entries)?;
+    parse_table_fields(&conn, "local_credit_cards", CARD_EXCLUDES, &mut entries)?;
 
     Ok(entries)
 }

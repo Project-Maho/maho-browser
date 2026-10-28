@@ -39,7 +39,7 @@ fn test_get_tab_snapshot_by_id_found() {
     assert_eq!(parsed["id"].as_str().unwrap(), tab_id.as_ref());
     assert_eq!(
         parsed["url"].as_str().unwrap(),
-        &format!("https://example.com/2")
+        "https://example.com/2"
     );
     assert_eq!(parsed["title"].as_str().unwrap(), "New Tab");
     assert!(parsed["isPinned"].is_boolean());

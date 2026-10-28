@@ -1,9 +1,10 @@
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ContentBlockingMode {
+    #[default]
     Native,
     Extension,
     Disabled,
@@ -13,12 +14,6 @@ pub enum ContentBlockingMode {
     /// blocking on.
     #[serde(other)]
     Unknown,
-}
-
-impl Default for ContentBlockingMode {
-    fn default() -> Self {
-        Self::Native
-    }
 }
 
 impl ContentBlockingMode {
@@ -219,18 +214,13 @@ impl Serialize for FilterListMetadata {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum FilterHealthStatus {
+    #[default]
     Ok,
     Warning,
     Error,
-}
-
-impl Default for FilterHealthStatus {
-    fn default() -> Self {
-        Self::Ok
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]

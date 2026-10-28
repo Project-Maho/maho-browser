@@ -151,7 +151,9 @@ pub fn recover_from_terminal() -> io::Result<RecoveryUnlockResult> {
 
     // Same file-backed device key the browser uses (next to maho.db). The OS
     // keystore (Keychain / Secret Service / DPAPI) is never touched.
+    // `return` is needed on platforms where a later cfg block still exists.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[allow(clippy::needless_return)]
     {
         let device_key_path = db_path
             .parent()

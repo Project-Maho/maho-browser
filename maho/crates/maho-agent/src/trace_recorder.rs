@@ -57,6 +57,12 @@ pub struct TraceRecorder<F: Fn() -> Instant> {
     pending_hover: PendingHover,
 }
 
+impl Default for TraceRecorder<fn() -> Instant> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TraceRecorder<fn() -> Instant> {
     pub fn new() -> Self {
         TraceRecorder::with_window(DEFAULT_COALESCE_WINDOW_MS)
@@ -282,7 +288,6 @@ mod tests {
 
     #[test]
     fn empty_trace_serializes() {
-        let base = Instant::now();
         let trace = TraceRecorder::<fn() -> Instant>::with_window(400).finish();
         assert!(trace.steps.is_empty());
         let json = trace.to_json().expect("serialize");

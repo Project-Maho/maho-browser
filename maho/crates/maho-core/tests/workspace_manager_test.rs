@@ -213,15 +213,15 @@ sensitive = false
 
     let mcps = manager.storage.list_mcp_servers(&ws.id).unwrap();
     assert_eq!(mcps.len(), 1);
-    assert_eq!(
-        mcps[0].trusted, false,
+    assert!(
+        !mcps[0].trusted,
         "TOML trusted=true MUST be ignored on import"
     );
 
     let clis = manager.storage.list_cli_tools(&ws.id).unwrap();
     assert_eq!(clis.len(), 1);
-    assert_eq!(
-        clis[0].sensitive, true,
+    assert!(
+        clis[0].sensitive,
         "TOML sensitive=false on CLI MUST default to true on import"
     );
 }

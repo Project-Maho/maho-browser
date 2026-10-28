@@ -155,7 +155,7 @@ pub fn decrypt_v10(ciphertext: &[u8], key: &ChromiumKey) -> Result<String, Decry
     }
 
     let encrypted = &ciphertext[3..];
-    if encrypted.is_empty() || encrypted.len() % AES_BLOCK_SIZE != 0 {
+    if encrypted.is_empty() || !encrypted.len().is_multiple_of(AES_BLOCK_SIZE) {
         return Err(DecryptError::InvalidLength);
     }
 
@@ -186,7 +186,7 @@ pub fn decrypt_cookie_v10(
         return Err(DecryptError::MissingPrefix);
     }
     let encrypted = &ciphertext[3..];
-    if encrypted.is_empty() || encrypted.len() % AES_BLOCK_SIZE != 0 {
+    if encrypted.is_empty() || !encrypted.len().is_multiple_of(AES_BLOCK_SIZE) {
         return Err(DecryptError::InvalidLength);
     }
     let mut buf = Zeroizing::new(encrypted.to_vec());

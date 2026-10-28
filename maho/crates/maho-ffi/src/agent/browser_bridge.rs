@@ -15,6 +15,11 @@ pub struct MahoAgentToolResult {
     pub error_retryable: bool,
 }
 
+pub use crate::{
+    maho_agent_artifact_path, maho_agent_list_artifacts, maho_agent_list_tools,
+    maho_agent_set_artifact_root,
+};
+
 #[cfg(test)]
 mod ffi_browser_tool_bridge_tests {
     use super::*;
@@ -389,8 +394,3 @@ mod ffi_browser_tool_bridge_tests {
         assert!(bridge.list_tool_descriptors().await.unwrap().is_empty());
     }
 }
-
-pub use crate::{
-    maho_agent_artifact_path, maho_agent_list_artifacts, maho_agent_list_tools,
-    maho_agent_set_artifact_root,
-};

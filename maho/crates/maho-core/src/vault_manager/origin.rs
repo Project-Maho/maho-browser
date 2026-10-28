@@ -90,6 +90,17 @@ fn subdomain_matches(stored: &CredentialOrigin, requested: &CredentialOrigin) ->
     }
 }
 
+/// Public, string-level entry point for credential origin binding: returns
+/// true only when both origins canonicalize and `requested` matches `stored`
+/// under `policy`. Any canonicalization failure (opaque/non-http origin,
+/// userinfo, path, query) fails closed to `false`.
+pub fn credential_origin_matches(stored: &str, requested: &str, policy: OriginMatchPolicy) -> bool {
+    match (canonicalize_origin(stored), canonicalize_origin(requested)) {
+        (Ok(stored), Ok(requested)) => origin_matches(&stored, &requested, policy),
+        _ => false,
+    }
+}
+
 /// Chromium-style public-suffix (PSL) affiliation: both origins are https,
 /// share a port, differ in host, and share a registrable domain (eTLD+1)
 /// under a known public suffix. IP literals, localhost, and hosts without a

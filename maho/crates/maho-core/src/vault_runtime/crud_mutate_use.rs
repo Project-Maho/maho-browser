@@ -225,7 +225,7 @@ impl VaultRuntime {
             repository,
             VaultSecretUseRequest::new(id, VaultItemKind::Totp),
         )? {
-            VaultSecretResult::Totp { seed, .. } => Ok(seed),
+            VaultSecretResult::Totp { seed } => Ok(seed),
             _ => Err(VaultCrudError::FieldMismatch),
         }
     }
@@ -353,16 +353,10 @@ fn secret_result_from_record(
                 .totp
                 .as_ref()
                 .ok_or(VaultCrudError::MalformedPayload)?;
-            let period_seconds = u64::from(metadata.period_seconds.value());
-            if period_seconds == 0 {
+            if metadata.period_seconds.value() == 0 {
                 return Err(VaultCrudError::MalformedPayload);
             }
-            Ok(VaultSecretResult::Totp {
-                seed,
-                algorithm: metadata.algorithm,
-                digits: u32::from(u8::from(metadata.digits)),
-                period_seconds,
-            })
+            Ok(VaultSecretResult::Totp { seed })
         }
         (LiveSecret::PasskeyPrivateKey(secret), VaultItemKind::Passkey) => {
             Ok(VaultSecretResult::PasskeyPrivateKey(secret))

@@ -144,6 +144,8 @@ pub fn user_data_dir() -> PathBuf {
         .unwrap_or_else(|| app_support.join("Maho"))
 }
 
+/// Returns the Maho user-data directory (`$XDG_CONFIG_HOME/maho`, falling
+/// back to `~/.config/maho`).
 #[cfg(target_os = "linux")]
 pub fn user_data_dir() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {

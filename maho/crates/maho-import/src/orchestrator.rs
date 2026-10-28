@@ -80,10 +80,24 @@ pub enum ImportProgress {
     },
     /// A specific import type completed.
     TypeComplete { import_type: ImportType, count: u32 },
+    /// Non-terminal, user-facing summary line for one import type (e.g.
+    /// "3 cookies need sign-in again"). `count` is the number of affected
+    /// items so a shell can localize the line. Sent by workers before their
+    /// type's `TypeComplete`.
+    Summary {
+        import_type: ImportType,
+        count: u32,
+        message: String,
+    },
     /// All imports are complete. Only the orchestrator sends this (INV-7).
     AllComplete,
-    /// An error occurred.
-    Error { message: String },
+    /// An error occurred. `import_type` is `Some` when a single import type
+    /// failed (the orchestrator continues with the next type and still sends
+    /// `AllComplete`); `None` for a whole-import error such as cancellation.
+    Error {
+        import_type: Option<ImportType>,
+        message: String,
+    },
 }
 
 /// Trait abstracting the destination for imported data.
@@ -118,6 +132,8 @@ pub trait ImportDestination: Send + Sync {
     /// Add a history entry. Returns true on success.
     fn add_history(&self, url: &str, title: &str, visit_time: f64, visit_count: u32) -> bool;
     /// Add a cookie. Returns true on success.
+    // Public trait API implemented by FFI destinations; a params struct would break implementors.
+    #[allow(clippy::too_many_arguments)]
     fn add_cookie(
         &self,
         host: &str,
@@ -202,6 +218,7 @@ impl Orchestrator {
         for import_type in &types_to_import {
             if self.cancelled.load(Ordering::SeqCst) {
                 let _ = progress.send(ImportProgress::Error {
+                    import_type: None,
                     message: "Cancelled".to_string(),
                 });
                 let _ = progress.send(ImportProgress::AllComplete);
@@ -223,6 +240,7 @@ impl Orchestrator {
                 }
                 Err(e) => {
                     let _ = progress.send(ImportProgress::Error {
+                        import_type: Some(*import_type),
                         message: format!("{}: {}", import_type_name(*import_type), e),
                     });
                     // Continue with next type on error (matches C++ behavior).
@@ -417,7 +435,7 @@ mod tests {
         // Should get Error("Cancelled") + AllComplete, nothing else
         assert!(msgs
             .iter()
-            .any(|m| matches!(m, ImportProgress::Error { message } if message == "Cancelled")));
+            .any(|m| matches!(m, ImportProgress::Error { import_type: None, message } if message == "Cancelled")));
         assert_eq!(msgs.last(), Some(&ImportProgress::AllComplete));
         // No Starting events
         assert!(!msgs
@@ -547,6 +565,50 @@ mod tests {
             .filter(|m| matches!(m, ImportProgress::AllComplete))
             .count();
         assert_eq!(all_complete_count, 1, "AllComplete must fire exactly once");
+    }
+
+    #[test]
+    fn test_per_type_error_carries_type_and_import_continues() {
+        let dest = Arc::new(MockDestination::new());
+        let orch = Orchestrator::new(dest);
+        let (tx, rx) = mpsc::channel();
+
+        // Nonexistent profile: both workers fail, each with its own typed error.
+        let browser = make_browser(BrowserType::Chrome, 0xFF);
+        orch.start_import(
+            &browser,
+            ImportServices::HISTORY | ImportServices::BOOKMARKS,
+            tx,
+        )
+        .unwrap();
+
+        let msgs: Vec<_> = rx.try_iter().collect();
+        let typed_errors: Vec<ImportType> = msgs
+            .iter()
+            .filter_map(|m| match m {
+                ImportProgress::Error {
+                    import_type: Some(t),
+                    ..
+                } => Some(*t),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            typed_errors,
+            vec![ImportType::Bookmarks, ImportType::History],
+            "each failing type reports its own typed error: {msgs:?}"
+        );
+        assert!(!msgs
+            .iter()
+            .any(|m| matches!(m, ImportProgress::Error { import_type: None, .. })));
+        // The import continued past the first failure.
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            ImportProgress::Starting {
+                import_type: ImportType::History
+            }
+        )));
+        assert_eq!(msgs.last(), Some(&ImportProgress::AllComplete));
     }
 
     #[test]

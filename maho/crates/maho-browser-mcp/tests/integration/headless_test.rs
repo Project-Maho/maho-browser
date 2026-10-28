@@ -83,7 +83,7 @@ async fn test_headless_no_zombie_processes() {
 #[ignore = "requires running browser"]
 async fn test_keep_alive_flag_leaves_browser_running() {
     // Spawn headless with --keep-alive
-    let mut child = Command::new("maho")
+    let child = Command::new("maho")
         .args([
             "headless",
             "--url",

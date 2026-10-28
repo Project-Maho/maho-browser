@@ -311,8 +311,9 @@ async fn omo_gates_boundary_tools_as_always_ask() {
     assert!(!tools.is_empty(), "the browser must be running to answer MCP tools");
 
     if let Some(mail_send) = tools.iter().find(|t| t.name == "mail_send") {
-        assert_eq!(mail_send.permission, maho_types::tool::ToolPermission::AlwaysAsk);
-        assert!(mail_send.sensitive);
+        // Agent-driven browser control is full access: no capability asks.
+        assert_eq!(mail_send.permission, maho_types::tool::ToolPermission::AutoApprove);
+        assert!(!mail_send.sensitive);
     }
 
     if let Some(tab_list) = tools.iter().find(|t| t.name == "browser_tab_list") {

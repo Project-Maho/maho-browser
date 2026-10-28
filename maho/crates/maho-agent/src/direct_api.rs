@@ -684,6 +684,12 @@ pub struct InMemoryDirectApiTransport {
     sent_requests: Mutex<Vec<TransportRequest>>,
 }
 
+impl Default for InMemoryDirectApiTransport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InMemoryDirectApiTransport {
     pub fn new() -> Self {
         Self {

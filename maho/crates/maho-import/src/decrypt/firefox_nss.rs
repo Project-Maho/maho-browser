@@ -490,14 +490,14 @@ fn pkcs12_derive(
     let s = if salt.is_empty() {
         Vec::new()
     } else {
-        let s_len = BLOCK_LEN * ((salt.len() + BLOCK_LEN - 1) / BLOCK_LEN);
+        let s_len = BLOCK_LEN * salt.len().div_ceil(BLOCK_LEN);
         (0..s_len).map(|i| salt[i % salt.len()]).collect()
     };
 
     let p = if password_bmp.is_empty() {
         Vec::new()
     } else {
-        let p_len = BLOCK_LEN * ((password_bmp.len() + BLOCK_LEN - 1) / BLOCK_LEN);
+        let p_len = BLOCK_LEN * password_bmp.len().div_ceil(BLOCK_LEN);
         (0..p_len)
             .map(|i| password_bmp[i % password_bmp.len()])
             .collect()
@@ -516,7 +516,7 @@ fn pkcs12_derive(
         let mut a = [0u8; HASH_LEN];
         a.copy_from_slice(&Sha1::digest(&a_input));
         for _ in 1..iterations {
-            let hash = Sha1::digest(&a);
+            let hash = Sha1::digest(a);
             a.copy_from_slice(&hash);
         }
 
@@ -872,7 +872,7 @@ fn decrypt_aes256(
             iv.len()
         )));
     }
-    if ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
         return Err(NssError::Crypto(format!(
             "invalid AES ciphertext length: {}",
             ciphertext.len()
@@ -900,7 +900,7 @@ fn decrypt_3des(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Zeroizing<Ve
             iv.len()
         )));
     }
-    if ciphertext.is_empty() || ciphertext.len() % 8 != 0 {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(8) {
         return Err(NssError::Crypto(format!(
             "invalid 3DES ciphertext length: {}",
             ciphertext.len()
@@ -1460,7 +1460,7 @@ mod tests {
     #[test]
     fn malformed_asn1_returns_parse_error() {
         use base64::Engine;
-        let garbage = base64::engine::general_purpose::STANDARD.encode(&[0xFF, 0x01, 0x02]);
+        let garbage = base64::engine::general_purpose::STANDARD.encode([0xFF, 0x01, 0x02]);
         let key = NssMasterKey {
             key: Zeroizing::new(vec![0x42; 32]),
         };

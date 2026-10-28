@@ -88,7 +88,7 @@ fn import_entries(
         } else if !entry.url.is_empty() {
             destination.add_bookmark(&entry.title, &entry.url, folder_path);
             count += 1;
-            if count % 100 == 0 {
+            if count.is_multiple_of(100) {
                 send_update(
                     progress,
                     ImportType::Bookmarks,

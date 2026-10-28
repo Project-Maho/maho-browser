@@ -385,7 +385,7 @@ impl InteractionBroker {
     /// Only returns true if the request is resolved with an accepted answer / confirmation.
     /// Denied, Expired, Cancelled, and Pending requests return false.
     pub fn can_resume(&self, id: &InteractionRequestId) -> bool {
-        self.requests.get(id).map_or(false, |req| match &req.state {
+        self.requests.get(id).is_some_and(|req| match &req.state {
             InteractionState::Resolved(ans) => !ans.is_denied(),
             _ => false,
         })
@@ -393,7 +393,7 @@ impl InteractionBroker {
 
     /// Check if an action confirmation was explicitly confirmed by the user.
     pub fn is_confirmed(&self, id: &InteractionRequestId) -> bool {
-        self.requests.get(id).map_or(false, |req| match &req.state {
+        self.requests.get(id).is_some_and(|req| match &req.state {
             InteractionState::Resolved(ans) => ans.is_confirmed(),
             _ => false,
         })

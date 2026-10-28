@@ -97,7 +97,7 @@ fn device_wrap_aad(binding: &VaultDeviceBinding) -> Vec<u8> {
 }
 
 fn append_aad_component(aad: &mut Vec<u8>, component: &[u8]) {
-    let length = u64::try_from(component.len()).map_or(u64::MAX, |length| length);
+    let length = u64::try_from(component.len()).unwrap_or(u64::MAX);
     aad.extend_from_slice(&length.to_be_bytes());
     aad.extend_from_slice(component);
 }

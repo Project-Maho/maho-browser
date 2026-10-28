@@ -24,7 +24,9 @@ use maho_types::common::Url;
 use maho_types::events::core_update::CoreUpdate;
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{FolderId, ProfileId, SpaceId, TabId};
+use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::Mutex;
 
 use crate::import::{
     MahoImportAutofillCallback, MahoImportCookieCallback, MahoImportFaviconCallback,
@@ -50,6 +52,10 @@ pub struct MahoCoreDestination {
     autofill_cb: Option<MahoImportAutofillCallback>,
     favicon_cb: Option<MahoImportFaviconCallback>,
     user_data: *mut c_void,
+    /// Bookmark folders created by this import, keyed by their full path from
+    /// the root, so every bookmark in the same source folder lands in one
+    /// folder instead of a fresh duplicate.
+    bookmark_folders: Mutex<HashMap<Vec<String>, String>>,
 }
 
 // SAFETY: `MahoCoreDestination` holds three raw pointers that require explicit
@@ -84,6 +90,7 @@ impl MahoCoreDestination {
             autofill_cb: None,
             favicon_cb: None,
             user_data: std::ptr::null_mut(),
+            bookmark_folders: Mutex::new(HashMap::new()),
         }
     }
 
@@ -101,10 +108,40 @@ impl MahoCoreDestination {
             autofill_cb,
             favicon_cb,
             user_data,
+            bookmark_folders: Mutex::new(HashMap::new()),
         }
     }
 
+    /// Returns the bookmark folder for `folder_path` (outermost first),
+    /// creating each missing level under its parent. Empty path = root.
+    fn resolve_bookmark_folder(&self, folder_path: &[String]) -> Option<String> {
+        let mut folders = self
+            .bookmark_folders
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut parent_id: Option<String> = None;
+        for depth in 1..=folder_path.len() {
+            let path = &folder_path[..depth];
+            let id = match folders.get(path) {
+                Some(id) => id.clone(),
+                None => {
+                    let folder = self.core_mut().create_bookmark_folder_persisted(
+                        folder_path[depth - 1].clone(),
+                        parent_id.clone(),
+                    );
+                    folders.insert(path.to_vec(), folder.id.clone());
+                    folder.id
+                }
+            };
+            parent_id = Some(id);
+        }
+        parent_id
+    }
+
     /// Get a mutable reference to the core (unsafe interior).
+    // `ImportDestination` methods take `&self`; exclusivity comes from the
+    // import caller contract, not the borrow checker.
+    #[allow(clippy::mut_from_ref)]
     fn core_mut(&self) -> &mut MahoCore {
         // SAFETY: guaranteed by caller contract (exclusive access during import).
         unsafe { &mut *self.core.0 }
@@ -229,26 +266,22 @@ impl ImportDestination for MahoCoreDestination {
     }
 
     fn add_bookmark(&self, title: &str, url: &str, folder_path: &[String]) -> Option<String> {
-        let folder_id: Option<&str> = if folder_path.is_empty() {
-            None
-        } else {
-            // TODO: Resolve hierarchical folder path to actual folder_id.
-            // For now, import bookmarks at root level.
-            None
-        };
-
-        self.core_mut().add_bookmark(url, title, folder_id);
-
-        // TODO: Expose add_bookmark return value from MahoCore.
-        None
+        if self.core.0.is_null() {
+            return None;
+        }
+        let folder_id = self.resolve_bookmark_folder(folder_path);
+        Some(
+            self.core_mut()
+                .add_imported_bookmark(url, title, folder_id.as_deref()),
+        )
     }
 
-    fn add_history(&self, url: &str, title: &str, _visit_time: f64, _visit_count: u32) -> bool {
-        // MahoCore's add_history_entry doesn't accept visit_time/visit_count.
-        // TODO: Extend MahoCore API to accept visit_time and visit_count for
-        // bulk import scenarios.
-        self.core_mut().add_history_entry(url, title);
-        true
+    fn add_history(&self, url: &str, title: &str, visit_time: f64, visit_count: u32) -> bool {
+        if self.core.0.is_null() {
+            return false;
+        }
+        self.core_mut()
+            .add_imported_history_entry(url, title, visit_time, visit_count)
     }
 
     fn add_cookie(

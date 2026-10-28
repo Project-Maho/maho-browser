@@ -502,6 +502,18 @@ fn private_tabs_are_not_pushed_or_snapshotted_for_sync() {
         .unwrap();
     source.set_sync_status(SyncStatus::Syncing);
 
+    // Going active flushes the offline queue (entities queued when the tabs
+    // were created); it must not carry the private tab either.
+    let seed = maho_core::sync_crypto::decode_recovery_phrase(&phrase).unwrap();
+    let key = maho_core::sync_crypto::derive_encryption_key(&seed).unwrap();
+    for message in source.drain_sync_outgoing() {
+        let maho_core::sync_models::SyncMessage::Encrypted { data } = message else {
+            panic!("outgoing sync message must be encrypted");
+        };
+        let plaintext = maho_core::sync_crypto::decrypt_update(&data, &key).unwrap();
+        assert!(!String::from_utf8_lossy(&plaintext).contains(private_id.as_ref()));
+    }
+
     source.push_tab_sync(&private_id);
     assert!(source.drain_sync_outgoing().is_empty());
     source.push_tab_sync(&normal_id);

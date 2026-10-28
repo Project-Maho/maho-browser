@@ -83,6 +83,21 @@ pub enum SyncTransportError {
     Encrypt { detail: String },
     #[error("serialize error: {detail}")]
     Serialize { detail: String },
+    /// The receive cursor fell behind the relay's retained change log and the
+    /// latest relay snapshot could not be fetched or applied. The cursor and
+    /// local data are left untouched so the next cycle retries.
+    #[error("snapshot recovery failed: {detail}")]
+    SnapshotRecoveryFailed { detail: String },
+}
+
+/// True when the next relay sequence is not contiguous with the receive
+/// cursor and none of the missing sequences are this device's own
+/// acknowledged deliveries: the relay pruned entries the device never applied
+/// (the relay keeps the change log for a bounded retention window but keeps
+/// snapshots), so incremental sync alone would silently lose state.
+pub fn relay_log_gap(cursor: u64, next_relay_seq: u64, own_acked_in_gap: u64) -> bool {
+    let missing = next_relay_seq.saturating_sub(cursor.saturating_add(1));
+    missing > own_acked_in_gap
 }
 
 impl SyncTransportError {
@@ -98,6 +113,7 @@ impl SyncTransportError {
             Self::DatabaseRead { .. } => "database_read_error",
             Self::Encrypt { .. } => "encrypt_failed",
             Self::Serialize { .. } => "serialize_failed",
+            Self::SnapshotRecoveryFailed { .. } => "snapshot_recovery_failed",
         }
     }
 }

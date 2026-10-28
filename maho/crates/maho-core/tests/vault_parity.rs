@@ -214,7 +214,7 @@ fn vault_parity_get_username_returns_unmasked_value() {
     let item = core.vault_add_login(login("alice@example.com", "retained")).unwrap();
     assert_ne!(item.username_hint, "alice@example.com");
     assert_eq!(
-        core.vault_get_username(item.id.clone()).unwrap().as_str(),
+        core.vault_get_username(item.id).unwrap().as_str(),
         "alice@example.com"
     );
     let trashed = core.vault_trash_item(item.id, item.revision).unwrap();

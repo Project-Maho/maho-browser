@@ -7,13 +7,11 @@ pub fn embed(texts: &[String]) -> Result<Vec<Vec<f32>>, CoreError> {
 }
 
 pub fn bytes_to_vec(bytes: &[u8]) -> Result<Vec<f32>, CoreError> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(CoreError::Embedding("invalid byte length".into()));
     }
-    Ok(bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect())
+    let (chunks, _) = bytes.as_chunks::<4>();
+    Ok(chunks.iter().map(|c| f32::from_le_bytes(*c)).collect())
 }
 
 pub fn vec_to_bytes(v: &[f32]) -> Vec<u8> {

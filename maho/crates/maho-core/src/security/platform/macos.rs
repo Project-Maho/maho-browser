@@ -26,6 +26,7 @@ use security_framework::passwords::{
 };
 
 const KEYCHAIN_SERVICE_PREFIX: &str = "com.maho.browser.security";
+#[cfg(target_os = "macos")]
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
 /// macOS implementation of `DeviceKeyStore` integrating Keychain and Secure Enclave.
@@ -157,11 +158,11 @@ impl DeviceKeyStore for MacOsDeviceKeyStore {
                 .lock()
                 .map_err(|_| HardwareSecurityError::BackendFailure("lock poisoned".into()))?;
             let key_id = format!("{}:{}", service, label);
-            if !cache.contains_key(&key_id) {
+            cache.entry(key_id).or_insert_with(|| {
                 let mut secret = Zeroizing::new(vec![0u8; 32]);
                 OsRng.fill_bytes(secret.as_mut_slice());
-                cache.insert(key_id, secret);
-            }
+                secret
+            });
             Ok(DeviceKeyHandle {
                 provider: HardwareProviderKind::MacOsKeychain,
                 opaque_id: label.to_string(),

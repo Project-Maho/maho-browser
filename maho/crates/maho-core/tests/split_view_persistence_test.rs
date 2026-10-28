@@ -99,7 +99,7 @@ fn test_split_view_persistence_ambiguity() {
     let storage_path = temp_dir.path().join("maho-core.lmdb");
 
     // First session: Create two tabs and a split view config
-    let _ = {
+    {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
         let space_id = core.get_active_space_id();
         let w = WindowId::new("window-1");
@@ -134,7 +134,7 @@ fn test_split_view_persistence_ambiguity() {
         });
 
         core.handle_event(ShellEvent::AppWillTerminate);
-    };
+    }
 
     // Hijack LMDB: Parse "tabs" JSON and force identical "created_at" timestamps
     {
@@ -201,7 +201,7 @@ fn test_split_view_persistence_no_match() {
     let storage_path = temp_dir.path().join("maho-core.lmdb");
 
     // First session: Create one tab and a split view config
-    let _ = {
+    {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
         let space_id = core.get_active_space_id();
         let w = WindowId::new("window-1");
@@ -226,7 +226,7 @@ fn test_split_view_persistence_no_match() {
         });
 
         core.handle_event(ShellEvent::AppWillTerminate);
-    };
+    }
 
     // Hijack LMDB: Clear the "tabs" array entirely (simulating deletion/no-match)
     {
@@ -252,7 +252,7 @@ fn test_split_view_persistence_orientation_and_ratio() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let storage_path = temp_dir.path().join("maho-core.lmdb");
 
-    let _ = {
+    {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
         let space_id = core.get_active_space_id();
         let w = WindowId::new("window-1");
@@ -303,7 +303,7 @@ fn test_split_view_persistence_orientation_and_ratio() {
         });
 
         core.handle_event(ShellEvent::AppWillTerminate);
-    };
+    }
 
     // Load state in a fresh instance
     let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);

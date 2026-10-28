@@ -131,6 +131,25 @@ fn profile_metadata_validation_contract_is_closed_and_normalized() {
 }
 
 #[test]
+fn new_profiles_inherit_global_archive_timeout_and_explicit_values_persist() {
+    for profile in [
+        ProfileConfig::new("Work".to_string()),
+        ProfileConfig::new_default("Default".to_string()),
+    ] {
+        assert_eq!(profile.archive_timeout_hours, None);
+        assert_eq!(profile.effective_archive_timeout_hours(24.0), 24.0);
+    }
+
+    let mut explicit = ProfileConfig::new("Explicit".to_string());
+    explicit.archive_timeout_hours = Some(12.0);
+    assert!(is_allowed_profile_archive_timeout(explicit.archive_timeout_hours));
+    let restored: ProfileConfig =
+        serde_json::from_str(&serde_json::to_string(&explicit).unwrap()).unwrap();
+    assert_eq!(restored.archive_timeout_hours, Some(12.0));
+    assert_eq!(restored.effective_archive_timeout_hours(24.0), 12.0);
+}
+
+#[test]
 fn profile_contains_all_entity_arrays() {
     let profile = Profile {
         id: ProfileId::new("p1"),
@@ -708,7 +727,7 @@ fn content_blocking_mode_legacy_boolean_true_deserializes_to_native() {
         privacy.content_blocking_mode,
         maho_types::content_blocking::ContentBlockingMode::Native
     );
-    assert_eq!(privacy.content_blocker_enabled, true);
+    assert!(privacy.content_blocker_enabled);
 }
 
 #[test]
@@ -724,7 +743,7 @@ fn content_blocking_mode_legacy_boolean_false_deserializes_to_disabled() {
         privacy.content_blocking_mode,
         maho_types::content_blocking::ContentBlockingMode::Disabled
     );
-    assert_eq!(privacy.content_blocker_enabled, false);
+    assert!(!privacy.content_blocker_enabled);
 }
 
 #[test]
@@ -741,7 +760,7 @@ fn content_blocking_mode_explicit_extension_wins_over_legacy_bool() {
         privacy.content_blocking_mode,
         maho_types::content_blocking::ContentBlockingMode::Extension
     );
-    assert_eq!(privacy.content_blocker_enabled, false);
+    assert!(!privacy.content_blocker_enabled);
 }
 
 #[test]

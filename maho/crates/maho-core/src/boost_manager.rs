@@ -677,17 +677,7 @@ fn is_safe_zap_selector(selector: &str) -> bool {
 
         while pos < bytes.len() {
             let ch = bytes[pos] as char;
-            if ch == '#' {
-                pos += 1;
-                let start = pos;
-                while pos < bytes.len() && is_safe_ident_char(bytes[pos]) {
-                    pos += 1;
-                }
-                if pos == start {
-                    return false;
-                }
-                term_count += 1;
-            } else if ch == '.' {
+            if ch == '#' || ch == '.' {
                 pos += 1;
                 let start = pos;
                 while pos < bytes.len() && is_safe_ident_char(bytes[pos]) {
@@ -1162,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    fn test_import_accepts_zen_compat_with_autoTheme() {
+    fn test_import_accepts_zen_compat_with_auto_theme() {
         let mut mgr = BoostManager::new();
         let zen_json = r#"{"boostName":"X","dotPos":{"x":0,"y":0},"dotDistance":0,"dotAngleDeg":0,"secondaryDotPos":{"x":0,"y":0},"secondaryDotAngleDegDelta":0,"autoTheme":true,"enableColorBoost":true,"smartInvert":false,"contrast":0.75,"brightness":0.5,"saturation":0.5,"fontFamily":"","textCaseOverride":"none","sizeOverride":1,"zapSelectors":[],"customCSS":"","changeWasMade":true}"#;
         let boost = mgr

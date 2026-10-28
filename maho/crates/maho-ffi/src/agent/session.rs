@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
 use maho_agent::AgentRuntime;
+#[cfg(test)]
 use maho_core::maho_core::MahoCore;
 
 #[cfg(test)]
@@ -186,8 +187,6 @@ impl MahoAgentSession {
             accepted_leased_turns: Arc::new(crate::agent::callback_lease::AcceptedLeasedTurns {
                 current: Mutex::new(None),
             }),
-            permission_callback: None,
-            browser_tool_callback: None,
             session_id: session_id.to_string(),
             active_conversation_registry: Arc::new(Mutex::new(std::collections::HashMap::new())),
             core: core_ptr,

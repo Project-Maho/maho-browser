@@ -10,6 +10,8 @@ use crate::import::{
     MahoImportAutofillCallback, MahoImportCookieCallback, MahoImportFaviconCallback,
 };
 
+// Mirrors the cookie fields of `ImportDestination::add_cookie` one-to-one.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn add_cookie(
     cookie_cb: Option<MahoImportCookieCallback>,
     user_data: *mut c_void,

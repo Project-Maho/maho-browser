@@ -36,10 +36,7 @@ fn raw_setting(core: &MahoCore, key: &str) -> Option<String> {
 fn new_task_scope_maps_to_new_task_key() {
     let core = core();
     assert!(core.set_composer_draft(NEW_TASK_SCOPE, "hello"));
-    assert_eq!(
-        raw_setting(&core, &format!("{COMPOSER_DRAFT_KEY_PREFIX}new_task")).is_some(),
-        true
-    );
+    assert!(raw_setting(&core, &format!("{COMPOSER_DRAFT_KEY_PREFIX}new_task")).is_some());
 }
 
 #[test]

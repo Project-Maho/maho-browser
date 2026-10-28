@@ -94,6 +94,7 @@ pub fn detect_installed_browsers() -> Vec<DetectedBrowser> {
     if let Some(gecko_base) = gecko_base_dir() {
         detect_gecko_browsers(&gecko_base, &mut results);
     }
+    #[cfg(target_os = "macos")]
     detect_safari(&mut results);
 
     results
@@ -190,10 +191,10 @@ fn detect_chromium_browsers(app_support: &Path, results: &mut Vec<DetectedBrowse
             if let Ok(entries) = std::fs::read_dir(&browser_dir) {
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().to_string();
-                    if name == "Default" || name.starts_with("Profile ") {
-                        if entry.path().is_dir() {
-                            dirs.push(entry.path());
-                        }
+                    if (name == "Default" || name.starts_with("Profile "))
+                        && entry.path().is_dir()
+                    {
+                        dirs.push(entry.path());
                     }
                 }
             }
@@ -454,27 +455,25 @@ fn resolve_default_gecko_profile(browser_data_dir: &Path) -> Option<PathBuf> {
         .or_else(|| pick_first_with_places(&all_profile_paths))
 }
 
+#[cfg(target_os = "macos")]
 fn detect_safari(results: &mut Vec<DetectedBrowser>) {
-    #[cfg(target_os = "macos")]
-    {
-        let home = match dirs::home_dir() {
-            Some(h) => h,
-            None => return,
-        };
-        let safari_bookmarks = home.join("Library/Safari/Bookmarks.plist");
-        if safari_bookmarks.exists() {
-            results.push(DetectedBrowser {
-                browser_type: BrowserType::Safari,
-                display_name: "Safari".to_string(),
-                profile_path: safari_bookmarks,
-                services_supported: ImportServices::BOOKMARKS
-                    | ImportServices::HISTORY
-                    | ImportServices::COOKIES
-                    | ImportServices::PASSWORDS
-                    | ImportServices::FAVICONS,
-                requires_full_disk_access: true,
-            });
-        }
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return,
+    };
+    let safari_bookmarks = home.join("Library/Safari/Bookmarks.plist");
+    if safari_bookmarks.exists() {
+        results.push(DetectedBrowser {
+            browser_type: BrowserType::Safari,
+            display_name: "Safari".to_string(),
+            profile_path: safari_bookmarks,
+            services_supported: ImportServices::BOOKMARKS
+                | ImportServices::HISTORY
+                | ImportServices::COOKIES
+                | ImportServices::PASSWORDS
+                | ImportServices::FAVICONS,
+            requires_full_disk_access: true,
+        });
     }
 }
 

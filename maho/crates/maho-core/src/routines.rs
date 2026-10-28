@@ -1,7 +1,7 @@
 //! Maho Routines — recipe automation for Max-tier users.
 //!
 //! This module provides two kinds of browser-automation recipes, both run via
-//! the SwiftideBackend agent and gated to Max tier:
+//! the SwiftideBackend agent and gated to Max tier or a validated BYOK key:
 //!   - Four hardcoded built-in recipes (see `ROUTINES`), and
 //!   - User-configurable recipes persisted in `maho-storage`
 //!     (`custom_routines` table, see `maho_storage::CustomRoutine`).
@@ -43,6 +43,35 @@ pub enum UserTier {
     Max,
 }
 
+/// What gates routine execution: Max tier, or a validated BYOK key (which runs
+/// the routine on the user's own provider, never on managed credits).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoutineEntitlement {
+    pub tier: UserTier,
+    pub has_byok: bool,
+}
+
+impl RoutineEntitlement {
+    pub fn new(tier: UserTier, has_byok: bool) -> Self {
+        Self { tier, has_byok }
+    }
+
+    /// Resolves the entitlement for `tier`, counting a validated BYOK key in `storage`.
+    pub fn resolve(tier: UserTier, storage: &SqliteStorage) -> Self {
+        Self::new(tier, crate::byok::has_byok_key(storage))
+    }
+
+    pub fn allows_routines(&self) -> bool {
+        self.tier == UserTier::Max || self.has_byok
+    }
+}
+
+impl From<UserTier> for RoutineEntitlement {
+    fn from(tier: UserTier) -> Self {
+        Self::new(tier, false)
+    }
+}
+
 /// A hardcoded routine recipe.
 #[derive(Debug, Clone, Serialize)]
 pub struct Routine {
@@ -64,7 +93,7 @@ pub struct RoutineResult {
 /// Errors that can occur when running a routine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoutineError {
-    /// User is not on Max tier.
+    /// User is neither on Max tier nor holding a validated BYOK key.
     TierLockedToMax,
     /// No routine found with the given ID.
     NotFound(String),
@@ -75,7 +104,10 @@ pub enum RoutineError {
 impl std::fmt::Display for RoutineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TierLockedToMax => write!(f, "Routines are available on Max tier only"),
+            Self::TierLockedToMax => write!(
+                f,
+                "Routines are available on Max tier or with your own API key (BYOK)"
+            ),
             Self::NotFound(id) => write!(f, "No routine found with id: {id}"),
             Self::ExecutionFailed(msg) => write!(f, "Routine execution failed: {msg}"),
         }
@@ -289,7 +321,8 @@ pub fn list_routines() -> &'static [Routine] {
 /// Execute a routine by ID.
 ///
 /// # Tier Gate
-/// Returns `RoutineError::TierLockedToMax` if `user_tier` is not `UserTier::Max`.
+/// Returns `RoutineError::TierLockedToMax` unless the entitlement is Max tier
+/// or carries a validated BYOK key.
 ///
 /// # Agent Interaction
 /// The `agent_prompt_runner` closure is called with the constructed prompt string.
@@ -297,7 +330,7 @@ pub fn list_routines() -> &'static [Routine] {
 /// replaced with a mock.
 pub async fn run_routine<F, Fut>(
     id: &str,
-    user_tier: UserTier,
+    entitlement: impl Into<RoutineEntitlement>,
     agent_prompt_runner: F,
 ) -> Result<RoutineResult, RoutineError>
 where
@@ -305,7 +338,7 @@ where
     Fut: std::future::Future<Output = Result<String, String>>,
 {
     // Tier gate
-    if user_tier != UserTier::Max {
+    if !entitlement.into().allows_routines() {
         return Err(RoutineError::TierLockedToMax);
     }
 
@@ -382,7 +415,8 @@ fn build_custom_prompt(routine: &CustomRoutine) -> String {
 }
 
 /// Execute a routine by id, resolving built-ins first and then user-defined
-/// recipes from storage. The Max-tier gate applies to both.
+/// recipes from storage. The Max-or-BYOK gate applies to both; a validated
+/// BYOK key in `storage` unlocks non-Max tiers.
 pub async fn run_routine_resolved<F, Fut>(
     id: &str,
     user_tier: UserTier,
@@ -393,7 +427,7 @@ where
     F: FnOnce(String) -> Fut,
     Fut: std::future::Future<Output = Result<String, String>>,
 {
-    if user_tier != UserTier::Max {
+    if !RoutineEntitlement::resolve(user_tier, storage).allows_routines() {
         return Err(RoutineError::TierLockedToMax);
     }
 
@@ -541,7 +575,7 @@ where
 }
 
 /// Fire every enabled, event-triggered user routine whose configured trigger
-/// matches `event`. Non-Max tiers are a silent no-op (empty result), matching
+/// matches `event`. Non-Max tiers without a validated BYOK key are a silent no-op (empty result), matching
 /// the scheduler's tier behavior. A per-routine agent failure is recorded as a
 /// non-`success` `RoutineResult` rather than aborting the whole batch. Every
 /// result (success or failure) is persisted to the routine inbox with
@@ -598,7 +632,7 @@ where
     F: Fn(String, String) -> Fut,
     Fut: std::future::Future<Output = Result<String, String>>,
 {
-    if user_tier != UserTier::Max {
+    if !RoutineEntitlement::resolve(user_tier, storage).allows_routines() {
         return Ok(Vec::new());
     }
 
@@ -776,19 +810,19 @@ impl CronSchedule {
             Some(d) => d,
             None => return false,
         };
-        let minute_ok = self.minute.value.map_or(true, |v| {
+        let minute_ok = self.minute.value.is_none_or(|v| {
             dt.format("%M").to_string().parse::<u32>().unwrap_or(99) == v
         });
-        let hour_ok = self.hour.value.map_or(true, |v| {
+        let hour_ok = self.hour.value.is_none_or(|v| {
             dt.format("%H").to_string().parse::<u32>().unwrap_or(99) == v
         });
-        let dom_ok = self.day_of_month.value.map_or(true, |v| {
+        let dom_ok = self.day_of_month.value.is_none_or(|v| {
             dt.format("%d").to_string().parse::<u32>().unwrap_or(99) == v
         });
-        let month_ok = self.month.value.map_or(true, |v| {
+        let month_ok = self.month.value.is_none_or(|v| {
             dt.format("%m").to_string().parse::<u32>().unwrap_or(99) == v
         });
-        let dow_ok = self.day_of_week.value.map_or(true, |v| {
+        let dow_ok = self.day_of_week.value.is_none_or(|v| {
             // chrono: Monday=1..Sunday=7; cron: Sunday=0, Monday=1..Saturday=6
             let chrono_dow = dt.format("%u").to_string().parse::<u32>().unwrap_or(99);
             let cron_dow = if chrono_dow == 7 { 0 } else { chrono_dow };
@@ -820,7 +854,8 @@ pub type AgentRunnerFn = Arc<
     dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> + Send + Sync,
 >;
 
-pub type TierProviderFn = Arc<dyn Fn() -> UserTier + Send + Sync>;
+/// Reports the current routine entitlement each tick (tier plus validated BYOK).
+pub type TierProviderFn = Arc<dyn Fn() -> RoutineEntitlement + Send + Sync>;
 
 pub type StorageGetFn = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 pub type StorageSetFn = Arc<dyn Fn(&str, &str) + Send + Sync>;
@@ -895,8 +930,7 @@ impl RoutineScheduler {
     }
 
     pub async fn tick(&self, now: i64) {
-        let tier = (self.tier_provider)();
-        if tier != UserTier::Max {
+        if !(self.tier_provider)().allows_routines() {
             return;
         }
 
@@ -1223,7 +1257,7 @@ mod tests {
             })
         });
 
-        let tier_provider: TierProviderFn = Arc::new(|| UserTier::Max);
+        let tier_provider: TierProviderFn = Arc::new(|| UserTier::Max.into());
         let storage: Arc<std::sync::Mutex<HashMap<String, String>>> =
             Arc::new(std::sync::Mutex::new(HashMap::new()));
 
@@ -1275,7 +1309,7 @@ mod tests {
             })
         });
 
-        let tier_provider: TierProviderFn = Arc::new(|| UserTier::Pro);
+        let tier_provider: TierProviderFn = Arc::new(|| UserTier::Pro.into());
         let storage: Arc<std::sync::Mutex<HashMap<String, String>>> =
             Arc::new(std::sync::Mutex::new(HashMap::new()));
 
@@ -1308,6 +1342,38 @@ mod tests {
 
         let captured = prompts.lock().await;
         assert_eq!(captured.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_runs_for_free_tier_with_byok() {
+        let prompts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let prompts_clone = prompts.clone();
+        let agent: AgentRunnerFn = Arc::new(move |prompt: String| {
+            let pc = prompts_clone.clone();
+            Box::pin(async move {
+                pc.lock().await.push(prompt);
+                Ok("done".to_string())
+            })
+        });
+        let tier_provider: TierProviderFn =
+            Arc::new(|| RoutineEntitlement::new(UserTier::Free, true));
+        let storage_get: StorageGetFn = Arc::new(|_: &str| None);
+        let storage_set: StorageSetFn = Arc::new(|_: &str, _: &str| {});
+        let scheduler = RoutineScheduler::new(agent, tier_provider, storage_get, storage_set);
+        {
+            let mut lr = scheduler.last_runs.lock().await;
+            for r in ROUTINES {
+                lr.insert(r.id, 0);
+            }
+        }
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 6, 15)
+            .unwrap()
+            .and_hms_opt(8, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        scheduler.tick(now).await;
+        assert!(!prompts.lock().await.is_empty());
     }
 
     // === User-defined routines (P2.3) ===
@@ -1467,6 +1533,70 @@ mod tests {
             0,
             "a tier-locked (never-ran) routine must not be recorded"
         );
+    }
+
+    #[tokio::test]
+    async fn test_free_tier_with_validated_byok_runs_routine() {
+        test_init();
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        storage.set_setting("byok:openai", "sk-test-1234567890").unwrap();
+        crate::byok::mark_validated(&storage, "openai", "sk-test-1234567890").unwrap();
+        let result = run_routine_and_record(
+            "morning_briefing",
+            UserTier::Free,
+            &storage,
+            RoutineRunSource::Manual,
+            |_| async { Ok("byok ran".to_string()) },
+        )
+        .await
+        .expect("free + validated BYOK is entitled");
+        assert!(result.success);
+        assert_eq!(result.content, "byok ran");
+        assert_eq!(storage.list_routine_results(10).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_free_tier_without_byok_is_tier_locked() {
+        test_init();
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        let err = run_routine_and_record(
+            "morning_briefing",
+            UserTier::Free,
+            &storage,
+            RoutineRunSource::Manual,
+            |_| async { Ok("nope".to_string()) },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, RoutineError::TierLockedToMax);
+    }
+
+    #[tokio::test]
+    async fn test_free_tier_with_unvalidated_byok_is_tier_locked() {
+        test_init();
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        storage.set_setting("byok:openai", "sk-test-1234567890").unwrap();
+        let err = run_routine_and_record(
+            "morning_briefing",
+            UserTier::Free,
+            &storage,
+            RoutineRunSource::Manual,
+            |_| async { Ok("nope".to_string()) },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, RoutineError::TierLockedToMax);
+    }
+
+    #[tokio::test]
+    async fn test_run_routine_entitlement_byok_allows_free() {
+        let result = run_routine(
+            "morning_briefing",
+            RoutineEntitlement::new(UserTier::Free, true),
+            |_| async { Ok("ok".to_string()) },
+        )
+        .await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
@@ -1682,7 +1812,7 @@ mod tests {
                 Ok("done".to_string())
             })
         });
-        let tier_provider: TierProviderFn = Arc::new(|| UserTier::Max);
+        let tier_provider: TierProviderFn = Arc::new(|| UserTier::Max.into());
         let storage: Arc<std::sync::Mutex<HashMap<String, String>>> =
             Arc::new(std::sync::Mutex::new(HashMap::new()));
         let sg = storage.clone();

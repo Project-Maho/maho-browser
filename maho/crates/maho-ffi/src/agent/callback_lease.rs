@@ -152,6 +152,7 @@ pub(crate) struct AcceptedLeasedTurns {
 }
 
 impl AcceptedLeasedTurns {
+    #[cfg(test)]
     pub(crate) fn accept(self: &Arc<Self>) -> AcceptedLeasedTurn {
         let latch = Arc::new(AtomicBool::new(false));
         let mut current = self
@@ -177,6 +178,7 @@ impl AcceptedLeasedTurns {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn clear_if_current(&self, latch: &Arc<AtomicBool>) {
         let mut current = self
             .current
@@ -191,17 +193,22 @@ impl AcceptedLeasedTurns {
     }
 }
 
+// Only the lib tests drive accepted turns today; the FFI turn path signals
+// through `AcceptedLeasedTurns::signal_current`.
+#[cfg(test)]
 pub(crate) struct AcceptedLeasedTurn {
     pub(crate) owner: Arc<AcceptedLeasedTurns>,
     pub(crate) latch: Arc<AtomicBool>,
 }
 
+#[cfg(test)]
 impl AcceptedLeasedTurn {
     pub(crate) fn latch(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.latch)
     }
 }
 
+#[cfg(test)]
 impl Drop for AcceptedLeasedTurn {
     fn drop(&mut self) {
         self.owner.clear_if_current(&self.latch);

@@ -449,8 +449,10 @@ mod tests {
     use super::*;
     use crate::error::DEEP_LINK_FDA;
 
+    #[cfg(target_os = "macos")]
     struct TempTestDir(std::path::PathBuf);
 
+    #[cfg(target_os = "macos")]
     impl TempTestDir {
         fn new() -> Self {
             let unique = format!(
@@ -471,6 +473,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     impl Drop for TempTestDir {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);

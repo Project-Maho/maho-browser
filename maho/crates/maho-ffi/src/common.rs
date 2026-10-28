@@ -1,10 +1,13 @@
+// Shared helpers for the split-out FFI modules (core.rs, tabs.rs, ...), which
+// reference `crate::common::*` but are not compiled into the crate yet; until
+// they are wired in, several items here have no caller.
+#![allow(dead_code)]
+
 use std::cell::{Cell, RefCell};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc as FfiArc, Condvar as FfiCondvar, Mutex as FfiMutex, MutexGuard};
-
-use crate::ffi_safe;
 
 pub const MAHO_ABI_VERSION: u32 = 2;
 
@@ -289,4 +292,58 @@ pub(crate) unsafe fn maho_core_free_string(s: *mut c_char) {
 pub(crate) fn dispatch_split_callbacks_for_updates(
     _updates: &[maho_types::events::core_update::CoreUpdate],
 ) {
+}
+
+/// Routine entitlement for `tier`, counting a validated BYOK key in `storage`.
+pub(crate) fn routine_entitlement(
+    tier: maho_core::routines::UserTier,
+    storage: &maho_storage::sqlite::SqliteStorage,
+) -> maho_core::routines::RoutineEntitlement {
+    maho_core::routines::RoutineEntitlement::resolve(tier, storage)
+}
+
+/// Converts the account tier reported by `MahoCore` into the routines tier.
+pub(crate) fn routines_tier(
+    tier: Option<maho_types::account::UserTier>,
+) -> maho_core::routines::UserTier {
+    match tier {
+        Some(maho_types::account::UserTier::Max) => maho_core::routines::UserTier::Max,
+        Some(maho_types::account::UserTier::Pro) => maho_core::routines::UserTier::Pro,
+        _ => maho_core::routines::UserTier::Free,
+    }
+}
+
+/// Binds a routine runtime to the user's validated BYOK provider when the run
+/// is BYOK-entitled (non-Max tier). Max-tier runs keep managed routing. A
+/// non-Max run without usable BYOK credentials is refused so it can never fall
+/// through to Maho-managed credits.
+pub(crate) fn bind_routine_provider(
+    runtime: &FfiArc<dyn maho_agent::AgentRuntime>,
+    tier: maho_core::routines::UserTier,
+    storage: &maho_storage::sqlite::SqliteStorage,
+) -> Result<(), String> {
+    if tier == maho_core::routines::UserTier::Max {
+        return Ok(());
+    }
+    let refused = || maho_core::routines::RoutineError::TierLockedToMax.to_string();
+    let creds = maho_core::byok::validated_credentials(storage).ok_or_else(refused)?;
+    let (base_url, model) =
+        maho_core::byok::provider_endpoint(&creds.provider).ok_or_else(refused)?;
+    let provider = creds.provider.clone();
+    let key = creds.key;
+    runtime.set_preferred_provider(Some(provider.clone()));
+    runtime
+        .set_secure_storage_callback(Box::new(move |requested: &str| {
+            if requested != provider {
+                return Err(maho_agent::AgentError::ExecutionError(format!(
+                    "BYOK routine is bound to provider {provider}, not {requested}"
+                )));
+            }
+            Ok(maho_agent::SecureKeyBundle {
+                key: maho_agent::ZeroizedString::new(key.clone()),
+                base_url: Some(base_url.to_string()),
+                model: Some(model.to_string()),
+            })
+        }))
+        .map_err(|error| error.to_string())
 }

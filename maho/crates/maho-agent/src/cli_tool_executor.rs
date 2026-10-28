@@ -13,7 +13,7 @@ pub struct CliToolExecutor {
 
 impl CliToolExecutor {
     pub fn new(tool: AiCliTool, working_dir: Option<PathBuf>) -> Self {
-        let working_dir = working_dir.unwrap_or_else(|| std::env::temp_dir());
+        let working_dir = working_dir.unwrap_or_else(std::env::temp_dir);
         Self { tool, working_dir }
     }
 
@@ -192,13 +192,11 @@ impl CliToolExecutor {
                                                 ));
                                             }
                                         }
-                                        "object" => {
-                                            if !val.is_object() {
-                                                return Err(anyhow!(
-                                                    "Parameter {} must be an object",
-                                                    key
-                                                ));
-                                            }
+                                        "object" if !val.is_object() => {
+                                            return Err(anyhow!(
+                                                "Parameter {} must be an object",
+                                                key
+                                            ));
                                         }
                                         _ => {}
                                     }

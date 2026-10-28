@@ -17,7 +17,7 @@ use tokio::net::UnixListener;
 
 /// Process-global test state: `MAHO_DB_PATH` mutations AND the process-wide
 /// SQLCipher key injection performed by fixture seeding — `set_sqlcipher_key`
-/// + `SqliteStorage::open` pairs must never interleave between tests, or a
+/// and `SqliteStorage::open` pairs must never interleave between tests, or a
 /// fixture DB gets encrypted with another test's key (same pattern as
 /// `paths.rs` tests).
 static GLOBAL_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -393,6 +393,9 @@ async fn default_frozen_binary_lists_but_refuses_dispatch() {
 }
 
 #[tokio::test]
+// GLOBAL_STATE_LOCK is held across connect on purpose: it is a std Mutex shared
+// with the synchronous fixture seeding, serializing process-global env/key state.
+#[allow(clippy::await_holding_lock)]
 async fn explicit_broker_fixture_allows_mutation_over_mcp_transport() {
     let browser = FakeBrowser::start().await;
     let decisions = Arc::new(Mutex::new(Vec::new()));

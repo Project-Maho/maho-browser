@@ -275,10 +275,13 @@ async fn tab_info_fails_when_no_browser() {
 
 // ─── Tab Navigate lease path ─────────────────────────────────────────────────
 
+/// Reply for a recorded `(method, name)` request: a result or an RPC error.
+type RecordingReply = fn(&str, &str) -> Result<Value, (i64, &'static str)>;
+
 /// Serves initialize, then answers each request with `reply(method, name)` and
 /// records "<method> <name>" so tests can assert the exact call sequence.
 async fn make_recording_server(
-    reply: fn(&str, &str) -> Result<Value, (i64, &'static str)>,
+    reply: RecordingReply,
 ) -> (
     tempfile::TempDir,
     PathBuf,

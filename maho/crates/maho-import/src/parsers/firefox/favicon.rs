@@ -207,8 +207,7 @@ mod tests {
         .unwrap();
 
         let mut next_icon_id = 1i64;
-        let mut next_page_id = 1i64;
-        for (icon_url, data, page_url) in rows {
+        for (page_id, (icon_url, data, page_url)) in (1i64..).zip(rows) {
             let icon_id: i64 = match conn.query_row(
                 "SELECT id FROM moz_icons WHERE icon_url = ?1",
                 [icon_url],
@@ -227,8 +226,6 @@ mod tests {
                 }
             };
 
-            let page_id = next_page_id;
-            next_page_id += 1;
             conn.execute(
                 "INSERT INTO moz_pages_w_icons (id, page_url) VALUES (?1, ?2)",
                 rusqlite::params![page_id, page_url],

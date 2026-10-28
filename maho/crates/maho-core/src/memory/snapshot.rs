@@ -126,6 +126,8 @@ pub fn load_snapshot(path: &Path) -> Result<MemoryIndexSnapshot, CoreError> {
 }
 
 /// Save snapshot atomically using a temporary file.
+// Public signature mirrors the snapshot fields; bundling them is an API change.
+#[allow(clippy::too_many_arguments)]
 pub fn save_snapshot(
     path: &Path,
     model_id: &str,

@@ -346,12 +346,12 @@ mod tests {
                 Some("  Focus  ".to_string()),
                 Some("#4a90d9".to_string()),
                 None,
-                Some(None),
+                Some(Some(12.0)),
             )
             .unwrap();
         assert_eq!(updated.name, "Focus");
         assert_eq!(updated.avatar_color, "#4A90D9");
-        assert_eq!(updated.archive_timeout_hours, None);
+        assert_eq!(updated.archive_timeout_hours, Some(12.0));
 
         assert!(matches!(
             manager.update_profile(&work_id, Some("   ".to_string()), None, None, None),
@@ -373,6 +373,7 @@ mod tests {
         let unchanged = manager.get_profile(&work_id).unwrap();
         assert_eq!(unchanged.name, "Focus");
         assert_eq!(unchanged.avatar_color, "#4A90D9");
+        assert_eq!(unchanged.archive_timeout_hours, Some(12.0));
         assert_eq!(manager.get_active_profile_id(), Some(&default_id));
     }
 
@@ -380,6 +381,7 @@ mod tests {
     fn test_update_profile_accepts_all_supported_archive_timeouts() {
         let mut manager = ProfileManager::new();
         let id = manager.list_profiles()[0].id.clone();
+        assert_eq!(manager.list_profiles()[0].archive_timeout_hours, None);
 
         for hours in maho_types::profile::ALLOWED_PROFILE_ARCHIVE_TIMEOUT_HOURS {
             let updated = manager
@@ -387,6 +389,34 @@ mod tests {
                 .unwrap();
             assert_eq!(updated.archive_timeout_hours, Some(*hours));
         }
+
+        let cleared = manager
+            .update_profile(&id, None, None, None, Some(None))
+            .unwrap();
+        assert_eq!(cleared.archive_timeout_hours, None);
+    }
+
+    #[test]
+    fn test_new_profiles_inherit_global_archive_timeout() {
+        let global = crate::settings_manager::SettingsManager::new()
+            .get_settings()
+            .general
+            .archive_timeout_hours;
+        assert_eq!(global, 24.0);
+
+        let mut manager = ProfileManager::new();
+        let default_profile = manager.list_profiles()[0].clone();
+        let created = manager.create_profile("Work".to_string()).unwrap().clone();
+        for profile in [&default_profile, &created] {
+            assert_eq!(profile.archive_timeout_hours, None);
+            assert_eq!(profile.effective_archive_timeout_hours(global), 24.0);
+        }
+
+        let explicit = manager
+            .update_profile(&created.id, None, None, None, Some(Some(12.0)))
+            .unwrap();
+        assert_eq!(explicit.archive_timeout_hours, Some(12.0));
+        assert_eq!(explicit.effective_archive_timeout_hours(global), 12.0);
     }
 
     #[test]

@@ -206,6 +206,10 @@ fn field(row: &[String], idx: usize) -> &str {
     row.get(idx).map(String::as_str).unwrap_or("")
 }
 
+fn missing_required(label: &str, column: &str) -> ImportError {
+    ImportError::Parse(format!("missing required {label} column: {column}"))
+}
+
 #[cfg(test)]
 mod review_tests {
     use super::*;
@@ -228,8 +232,4 @@ mod review_tests {
             assert_eq!(parsed.credentials[1].password.as_str(), "   ");
         }
     }
-}
-
-fn missing_required(label: &str, column: &str) -> ImportError {
-    ImportError::Parse(format!("missing required {label} column: {column}"))
 }

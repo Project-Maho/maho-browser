@@ -531,9 +531,11 @@ fn file_format_token(file_format: maho_import::PasswordImportFileFormat) -> &'st
 /// Progress callback type invoked from the import background thread.
 ///
 /// Parameters:
-///  - `kind`:  0=Starting, 1=Update, 2=TypeComplete, 3=AllComplete, 4=Error
+///  - `kind`:  0=Starting, 1=Update, 2=TypeComplete, 3=AllComplete, 4=Error,
+///    5=Summary (non-terminal user-facing line for one type, e.g.
+///    "3 cookies need sign-in again"; `count` = affected items)
 ///  - `import_type`: bitmask bit identifying the import type
-///       (1=History, 2=Bookmarks, 4=Passwords, 8=Autofill, 16=Cookies, 32=Workspaces, 64=Favicons, 128=Essential)
+///    (1=History, 2=Bookmarks, 4=Passwords, 8=Autofill, 16=Cookies, 32=Workspaces, 64=Favicons, 128=Essential)
 ///  - `count`: item count (for Update/TypeComplete) or 0
 ///  - `message`: null-terminated status message or NULL
 ///  - `user_data`: opaque pointer passed back unchanged
@@ -720,10 +722,7 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
                     }
                     match rx.recv_timeout(std::time::Duration::from_millis(100)) {
                         Ok(progress) => {
-                            if matches!(
-                                progress,
-                                ImportProgress::AllComplete | ImportProgress::Error { .. }
-                            ) {
+                            if is_terminal_progress(&progress) {
                                 // Terminal progress is held back: the gate must
                                 // be released BEFORE the caller learns the import
                                 // ended, or its very next FFI call is rejected.
@@ -738,10 +737,7 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
                             // Drain remaining events and exit
                             let mut terminal = None;
                             for progress in rx.try_iter() {
-                                if matches!(
-                                    progress,
-                                    ImportProgress::AllComplete | ImportProgress::Error { .. }
-                                ) {
+                                if is_terminal_progress(&progress) {
                                     terminal = Some(progress);
                                 } else {
                                     ctx.forward_progress(&progress);
@@ -906,12 +902,54 @@ impl CallbackContext {
             ImportProgress::AllComplete => {
                 self.invoke(3, 0, 0, ptr::null());
             }
-            ImportProgress::Error { message } => {
+            ImportProgress::Summary {
+                import_type,
+                count,
+                message,
+            } => {
                 let msg = CString::new(message.as_str()).ok();
                 let msg_ptr = msg.as_ref().map(|m| m.as_ptr()).unwrap_or(ptr::null());
-                self.invoke(4, 0, 0, msg_ptr);
+                self.invoke(
+                    5,
+                    import_type_to_bit(*import_type),
+                    i32::try_from(*count).unwrap_or(i32::MAX),
+                    msg_ptr,
+                );
+            }
+            ImportProgress::Error {
+                import_type,
+                message,
+            } => {
+                let msg = CString::new(message.as_str()).ok();
+                let msg_ptr = msg.as_ref().map(|m| m.as_ptr()).unwrap_or(ptr::null());
+                // A typed error reports one failed import type (non-terminal);
+                // type 0 is a whole-import error (terminal).
+                self.invoke(4, import_type.map_or(0, import_type_to_bit), 0, msg_ptr);
             }
         }
+    }
+}
+
+/// Whether `progress` ends the import session. A per-type error (typed) does
+/// not: the orchestrator continues with the next type and sends `AllComplete`
+/// afterwards. Only `AllComplete` and untyped whole-import errors are terminal.
+fn is_terminal_progress(progress: &ImportProgress) -> bool {
+    matches!(
+        progress,
+        ImportProgress::AllComplete | ImportProgress::Error { import_type: None, .. }
+    )
+}
+
+fn import_type_to_bit(t: ImportType) -> u32 {
+    match t {
+        ImportType::History => ImportServices::HISTORY,
+        ImportType::Bookmarks => ImportServices::BOOKMARKS,
+        ImportType::Passwords => ImportServices::PASSWORDS,
+        ImportType::Cookies => ImportServices::COOKIES,
+        ImportType::Autofill => ImportServices::AUTOFILL,
+        ImportType::Favicons => ImportServices::FAVICONS,
+        ImportType::Workspaces => ImportServices::WORKSPACES,
+        ImportType::Essential => IMPORT_ESSENTIAL_BIT,
     }
 }
 
@@ -921,6 +959,8 @@ mod review_tests {
 
     #[test]
     fn review_terminal_import_callback_releases_gate() {
+        // Raises the process-global import gate; exclude every gate-idle test.
+        let _gate = crate::common::import_gate_exclusive();
         unsafe extern "C" fn progress(kind: u32, _: u32, _: i32, _: *const c_char, data: *mut c_void) {
             if kind == 3 || kind == 4 {
                 let tx = &*data.cast::<mpsc::Sender<bool>>();
@@ -945,17 +985,88 @@ mod review_tests {
             assert!(rx.try_recv().is_err(), "terminal callback must fire exactly once");
         }
     }
-}
 
-fn import_type_to_bit(t: ImportType) -> u32 {
-    match t {
-        ImportType::History => ImportServices::HISTORY,
-        ImportType::Bookmarks => ImportServices::BOOKMARKS,
-        ImportType::Passwords => ImportServices::PASSWORDS,
-        ImportType::Cookies => ImportServices::COOKIES,
-        ImportType::Autofill => ImportServices::AUTOFILL,
-        ImportType::Favicons => ImportServices::FAVICONS,
-        ImportType::Workspaces => ImportServices::WORKSPACES,
-        ImportType::Essential => IMPORT_ESSENTIAL_BIT,
+    #[test]
+    fn summary_is_forwarded_as_non_terminal_kind_5() {
+        unsafe extern "C" fn progress(kind: u32, ty: u32, count: i32, msg: *const c_char, data: *mut c_void) {
+            let tx = &*data.cast::<mpsc::Sender<(u32, u32, i32, String)>>();
+            let text = CStr::from_ptr(msg).to_str().unwrap().to_string();
+            tx.send((kind, ty, count, text)).unwrap();
+        }
+        let (tx, rx) = mpsc::channel::<(u32, u32, i32, String)>();
+        let ctx = CallbackContext {
+            callback: progress,
+            user_data: (&tx as *const mpsc::Sender<(u32, u32, i32, String)>).cast_mut().cast(),
+        };
+        let summary = ImportProgress::Summary {
+            import_type: ImportType::Cookies,
+            count: 3,
+            message: "3 cookies need sign-in again".into(),
+        };
+        assert!(!is_terminal_progress(&summary));
+        ctx.forward_progress(&summary);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            (5, ImportServices::COOKIES, 3, "3 cookies need sign-in again".to_string())
+        );
+    }
+
+    #[test]
+    fn typed_error_is_not_terminal_untyped_is() {
+        assert!(!is_terminal_progress(&ImportProgress::Error {
+            import_type: Some(ImportType::Bookmarks),
+            message: "Bookmarks: x".into(),
+        }));
+        assert!(is_terminal_progress(&ImportProgress::Error {
+            import_type: None,
+            message: "Cancelled".into(),
+        }));
+        assert!(is_terminal_progress(&ImportProgress::AllComplete));
+    }
+
+    #[test]
+    fn per_type_errors_are_forwarded_with_type_then_all_complete() {
+        // Raises the process-global import gate; exclude every gate-idle test.
+        let _gate = crate::common::import_gate_exclusive();
+        unsafe extern "C" fn progress(kind: u32, ty: u32, _: i32, _: *const c_char, data: *mut c_void) {
+            let tx = &*data.cast::<mpsc::Sender<(u32, u32, bool)>>();
+            tx.send((kind, ty, crate::import_gate::is_active())).unwrap();
+        }
+        let mut core = Box::new(MahoCore::new());
+        let mask = ImportServices::HISTORY | ImportServices::BOOKMARKS;
+        // Nonexistent profile: both Bookmarks and History fail per type.
+        let browser = CString::new(serde_json::json!({
+            "browser_type": "Chrome", "display_name": "fixture", "profile_path": "/nonexistent/maho-ffi-profile",
+            "services_supported": mask, "requires_full_disk_access": false
+        }).to_string()).unwrap();
+        let (tx, rx) = mpsc::channel::<(u32, u32, bool)>();
+        unsafe {
+            let handle = maho_import_orchestrator_start(
+                core.as_mut(), browser.as_ptr(), mask, ptr::null(), progress,
+                None, None, None, (&tx as *const mpsc::Sender<(u32, u32, bool)>).cast_mut().cast(),
+            );
+            assert!(!handle.is_null());
+            let mut events = Vec::new();
+            loop {
+                let ev = rx
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .expect("import progress");
+                events.push(ev);
+                if ev.0 == 3 || (ev.0 == 4 && ev.1 == 0) {
+                    break;
+                }
+            }
+            maho_import_orchestrator_free(handle);
+            let errors: Vec<u32> = events.iter().filter(|e| e.0 == 4).map(|e| e.1).collect();
+            assert_eq!(
+                errors,
+                vec![ImportServices::BOOKMARKS, ImportServices::HISTORY],
+                "each per-type error carries its type bit: {events:?}"
+            );
+            let last = *events.last().unwrap();
+            assert_eq!((last.0, last.1), (3, 0), "AllComplete is the terminal event: {events:?}");
+            assert!(!last.2, "terminal callback fired before import gate release");
+            assert!(rx.try_recv().is_err(), "no events after the terminal callback");
+        }
     }
 }

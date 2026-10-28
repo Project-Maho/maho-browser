@@ -741,6 +741,8 @@ impl EventDispatcher {
                 vec![]
             }
             ShellEvent::ResetPinnedTab { .. } => vec![],
+            // Handled in MahoCore (local-only prune, never synced).
+            ShellEvent::ApplyRestorePolicyOnLaunch => vec![],
             ShellEvent::CloseOtherTabs { space_id, tab_id } => {
                 let closed = tab_mgr.close_other_tabs(&space_id, &tab_id);
                 for tid in &closed {

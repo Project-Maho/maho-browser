@@ -65,7 +65,7 @@ impl ImportWorker for FaviconWorker {
                 destination.add_favicon(page_url, image_data);
             }
             count += 1;
-            if count % 100 == 0 {
+            if count.is_multiple_of(100) {
                 send_update(
                     progress,
                     ImportType::Favicons,

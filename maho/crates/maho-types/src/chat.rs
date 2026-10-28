@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::Url;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ChatRequestMode {
+    #[default]
     GeneralChat,
     PageQuestion,
     PageTransformation,
@@ -13,26 +14,15 @@ pub enum ChatRequestMode {
     AiSearch,
 }
 
-impl Default for ChatRequestMode {
-    fn default() -> Self {
-        Self::GeneralChat
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PageExtractionStatus {
+    #[default]
     NotRequested,
     Pending,
     Partial,
     Complete,
     Failed,
-}
-
-impl Default for PageExtractionStatus {
-    fn default() -> Self {
-        Self::NotRequested
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -152,18 +142,13 @@ pub struct ConversationProject {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ConversationListState {
+    #[default]
     Active,
     Archived,
     All,
-}
-
-impl Default for ConversationListState {
-    fn default() -> Self {
-        Self::Active
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

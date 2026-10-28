@@ -286,3 +286,179 @@ fn non_default_profile_is_not_shown_on_the_other_device() {
         assert_ne!(space.profile_id, b.get_active_profile_id().cloned());
     }
 }
+
+/// Re-stamp a V2 envelope with an explicit relay sequence.
+fn with_relay_seq(envelope: &maho_core::sync_models::SyncEnvelopeV2, seq: u64) -> String {
+    let mut stamped = envelope.clone();
+    stamped.relay_seq = Some(seq);
+    serde_json::to_string(&stamped).expect("serialize envelope")
+}
+
+/// A device offline beyond relay retention: its cursor is older than the
+/// oldest retained relay entry, so it must restore from the relay snapshot
+/// before resuming incremental sync.
+#[test]
+fn stale_cursor_recovers_full_state_from_relay_snapshot() {
+    let seed = account_seed();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut a = device(&dir, "device-a", &seed);
+    let mut b = device(&dir, "device-b", &seed);
+    let room = b.get_sync_room_id().expect("room");
+
+    // Changes whose change-log entries (seq 1..N) the relay later pruned.
+    let a_space = a.get_active_space_id();
+    let pruned_tab = create_tab(&mut a, a_space.clone(), "https://example.com/pruned");
+    for envelope in a.drain_sync_outgoing_envelopes().expect("lease") {
+        assert!(a.ack_sync_delivery(&envelope.delivery_id, 1).expect("ack"));
+    }
+    let snapshot = a.export_sync_snapshot().expect("snapshot");
+
+    // Next retained entry is far beyond B's cursor (0).
+    let fresh_tab = create_tab(&mut a, a_space.clone(), "https://example.com/retained");
+    let envelopes = a.drain_sync_outgoing_envelopes().expect("lease retained");
+    assert!(!envelopes.is_empty());
+
+    let served = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let served_in = served.clone();
+    let expected_room = room.clone();
+    b.set_sync_snapshot_source(Some(Box::new(move |room_id| {
+        assert_eq!(room_id, expected_room);
+        served_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Some(snapshot.clone()))
+    })));
+
+    let first_seq = 500;
+    for (i, envelope) in envelopes.iter().enumerate() {
+        b.apply_sync_envelope_and_advance_cursor(&room, &with_relay_seq(envelope, first_seq + i as u64))
+            .expect("apply after snapshot recovery");
+    }
+    assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1, "snapshot fetched once");
+    let last = first_seq + envelopes.len() as u64 - 1;
+    assert_eq!(b.get_sync_receive_cursor(&room).expect("cursor"), last);
+    let b_tabs = active_profile_tab_ids(&b);
+    assert!(b_tabs.contains(&pruned_tab), "pruned change restored from snapshot: {b_tabs:?}");
+    assert!(b_tabs.contains(&fresh_tab), "retained change applied incrementally: {b_tabs:?}");
+}
+
+/// Snapshot fetch failure surfaces a sync error and loses no local data: the
+/// cursor stays put so the next cycle retries.
+#[test]
+fn stale_cursor_snapshot_failure_surfaces_error_without_data_loss() {
+    let seed = account_seed();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut a = device(&dir, "device-a", &seed);
+    let mut b = device(&dir, "device-b", &seed);
+    let room = b.get_sync_room_id().expect("room");
+
+    let b_space = b.get_active_space_id();
+    let local_tab = create_tab(&mut b, b_space, "https://example.com/local-only");
+    let a_space = a.get_active_space_id();
+    create_tab(&mut a, a_space, "https://example.com/remote");
+    let envelope = a
+        .drain_sync_outgoing_envelopes()
+        .expect("lease")
+        .into_iter()
+        .next()
+        .expect("envelope");
+
+    b.set_sync_snapshot_source(Some(Box::new(|_| Err("relay unreachable".to_string()))));
+    let err = b
+        .apply_sync_envelope_and_advance_cursor(&room, &with_relay_seq(&envelope, 500))
+        .expect_err("stale cursor without snapshot must fail");
+    assert!(err.contains("snapshot recovery failed"), "{err}");
+    assert_eq!(
+        b.sync_last_transport_error().map(|e| e.code()),
+        Some("snapshot_recovery_failed")
+    );
+    assert_eq!(b.get_sync_state().kind, SyncStatus::Error);
+    assert_eq!(b.get_sync_receive_cursor(&room).expect("cursor"), 0);
+    assert!(
+        b.get_tab_view_models().iter().any(|tab| tab.id == local_tab),
+        "local data kept"
+    );
+}
+
+/// Holes made only by this device's own acknowledged pushes (the relay does
+/// not echo them back) are not a retention gap.
+#[test]
+fn own_acked_sequences_are_not_a_retention_gap() {
+    use maho_core::sync_manager::relay_log_gap;
+    assert!(!relay_log_gap(4, 5, 0));
+    assert!(!relay_log_gap(4, 7, 2));
+    assert!(relay_log_gap(4, 7, 1));
+    assert!(relay_log_gap(0, 500, 0));
+}
+
+/// Regression (verifier F1): a rowless SendTab this device pushed is stored by
+/// the relay at its own seq and never echoed back, so it must not look like a
+/// retention gap. Ack it at seq 5, apply a peer envelope at seq 6 from cursor 4,
+/// and the snapshot source must never be called.
+#[test]
+fn own_rowless_send_tab_seq_is_not_a_retention_gap() {
+    let seed = account_seed();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut a = device(&dir, "device-a", &seed);
+    let mut b = device(&dir, "device-b", &seed);
+    let room = b.get_sync_room_id().expect("room");
+
+    b.send_tab_to_device("https://example.com/sent", "Sent", "device-a");
+    let rowless = b.drain_sync_outgoing_envelopes().expect("lease send-tab");
+    assert_eq!(rowless.len(), 1, "one rowless SendTab delivery");
+    assert!(b.ack_sync_delivery(&rowless[0].delivery_id, 5).expect("ack rowless"));
+    b.set_sync_receive_cursor(&room, 4).expect("cursor 4");
+
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls_in = calls.clone();
+    b.set_sync_snapshot_source(Some(Box::new(move |_| {
+        calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err("snapshot source must not be called".to_string())
+    })));
+
+    let a_space = a.get_active_space_id();
+    let peer_tab = create_tab(&mut a, a_space, "https://example.com/peer");
+    let envelope = a
+        .drain_sync_outgoing_envelopes()
+        .expect("lease")
+        .into_iter()
+        .next()
+        .expect("envelope");
+    b.apply_sync_envelope_and_advance_cursor(&room, &with_relay_seq(&envelope, 6))
+        .expect("contiguous apply");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0, "no snapshot fetch");
+    assert_eq!(b.get_sync_receive_cursor(&room).expect("cursor"), 6);
+    assert!(b.get_tab_view_models().iter().any(|tab| tab.id == peer_tab));
+}
+
+/// Verifier F3: no snapshot uploaded for the room yet (404) is not an error;
+/// sync warns and continues applying the incremental envelope, like iOS.
+#[test]
+fn stale_cursor_without_relay_snapshot_continues_incrementally() {
+    let seed = account_seed();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut a = device(&dir, "device-a", &seed);
+    let mut b = device(&dir, "device-b", &seed);
+    let room = b.get_sync_room_id().expect("room");
+
+    let a_space = a.get_active_space_id();
+    let fresh_tab = create_tab(&mut a, a_space, "https://example.com/retained");
+    let envelopes = a.drain_sync_outgoing_envelopes().expect("lease");
+    assert!(!envelopes.is_empty());
+
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls_in = calls.clone();
+    b.set_sync_snapshot_source(Some(Box::new(move |_| {
+        calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(None)
+    })));
+    for (i, envelope) in envelopes.iter().enumerate() {
+        b.apply_sync_envelope_and_advance_cursor(&room, &with_relay_seq(envelope, 500 + i as u64))
+            .expect("missing snapshot does not halt sync");
+    }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        b.get_sync_receive_cursor(&room).expect("cursor"),
+        500 + envelopes.len() as u64 - 1
+    );
+    assert!(b.sync_last_transport_error().is_none());
+    assert!(active_profile_tab_ids(&b).contains(&fresh_tab));
+}

@@ -344,6 +344,22 @@ impl CommandBarEngine {
                     icon_url: None,
                     is_default: false,
                 },
+                SearchEngine {
+                    id: "perplexity".to_string(),
+                    name: "Perplexity".to_string(),
+                    url_template: "https://www.perplexity.ai/search?q={query}".to_string(),
+                    shortcut: Some("@p".to_string()),
+                    icon_url: None,
+                    is_default: false,
+                },
+                SearchEngine {
+                    id: "kagi".to_string(),
+                    name: "Kagi".to_string(),
+                    url_template: "https://kagi.com/search?q={query}".to_string(),
+                    shortcut: Some("@k".to_string()),
+                    icon_url: None,
+                    is_default: false,
+                },
             ],
         };
         engine.register_default_actions();
@@ -1685,6 +1701,16 @@ impl CommandBarEngine {
             .iter()
             .find(|e| e.is_default)
             .or_else(|| self.search_engines.first())
+    }
+
+    /// Engine id whose template matches `template`. Settings stores `{query}`
+    /// templates; a shell may send `%@`, so both placeholders compare equal.
+    pub fn find_engine_id_by_url_template(&self, template: &str) -> Option<String> {
+        let normalized = template.replace("%@", "{query}");
+        self.search_engines
+            .iter()
+            .find(|e| e.url_template == normalized)
+            .map(|e| e.id.clone())
     }
 
     pub fn get_search_url(&self, query: &str) -> String {

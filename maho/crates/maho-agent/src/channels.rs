@@ -498,7 +498,7 @@ impl ChannelRegistry {
         let advances = entry
             .last_cursor
             .as_deref()
-            .map_or(true, |last| compare_cursor_positions(&event.cursor, last) == Ordering::Greater);
+            .is_none_or(|last| compare_cursor_positions(&event.cursor, last) == Ordering::Greater);
         if advances {
             entry.last_cursor = Some(event.cursor.clone());
         }

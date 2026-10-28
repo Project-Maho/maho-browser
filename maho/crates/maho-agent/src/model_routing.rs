@@ -272,7 +272,7 @@ impl RoutingPolicy {
                             .config
                             .default_model_by_category
                             .get(&category)
-                            .map_or(false, |d| *d == candidate);
+                            .is_some_and(|d| *d == candidate);
 
                         if is_cat_default {
                             (

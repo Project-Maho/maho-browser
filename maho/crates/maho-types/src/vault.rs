@@ -353,17 +353,19 @@ impl TryFrom<String> for PasskeyRpId {
 }
 
 macro_rules! string_enum {
-    ($name:ident { $($variant:ident),+ $(,)? }) => {
+    ($(#[$meta:meta])* $name:ident { $($(#[$vmeta:meta])* $variant:ident),+ $(,)? }) => {
+        $(#[$meta])*
         #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
         #[non_exhaustive]
         #[serde(rename_all = "snake_case")]
         pub enum $name {
-            $($variant),+
+            $($(#[$vmeta])* $variant),+
         }
     };
 }
 
-string_enum!(VaultItemKind {
+string_enum!(#[derive(Default)] VaultItemKind {
+    #[default]
     Login,
     Totp,
     Passkey,
@@ -380,13 +382,21 @@ string_enum!(VaultCiphertextPurpose {
     TotpSeed,
     PasskeyPrivateKey
 });
-string_enum!(VaultLockState {
+string_enum!(#[derive(Default)] VaultLockState {
+    #[default]
     Uninitialized,
     Locked,
     Unlocked,
     AutoLocked
 });
-string_enum!(VaultAgentPolicy {
+string_enum!(
+    /// Why an initialized Vault is locked when the reason changes the unlock path.
+    /// `AccountSeedMissing`: the Vault key is account-escrowed but this session
+    /// holds no account seed (signed out / expired), so signing in unlocks it.
+    VaultLockReason { AccountSeedMissing }
+);
+string_enum!(#[derive(Default)] VaultAgentPolicy {
+    #[default]
     Deny,
     AskEveryUse,
     AllowForTask,
@@ -469,24 +479,6 @@ string_enum!(VaultErrorCode {
     NotFound,
     StorageFailure
 });
-
-impl Default for VaultItemKind {
-    fn default() -> Self {
-        Self::Login
-    }
-}
-
-impl Default for VaultLockState {
-    fn default() -> Self {
-        Self::Uninitialized
-    }
-}
-
-impl Default for VaultAgentPolicy {
-    fn default() -> Self {
-        Self::Deny
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -762,6 +754,9 @@ pub struct VaultStatus {
     /// cross-device unlock). Passphrase-provisioned vaults report false until
     /// migrated.
     pub account_escrowed: bool,
+    /// Present only when the unlock path differs from the passphrase default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_reason: Option<VaultLockReason>,
 }
 
 /// Ciphertext-only wire record for one Vault item's cross-device sync. The

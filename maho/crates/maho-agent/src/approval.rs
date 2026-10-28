@@ -4,20 +4,15 @@ use maho_types::tool::ToolProvenance;
 
 pub use crate::approval_audit::{emit_audit_record, ApprovalAuditEventKind, ApprovalAuditRecord};
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalPolicy {
+    #[default]
     Prompt,
     AllowAll,
     AllowMcp,
     DenySensitive,
     DenyAll,
-}
-
-impl Default for ApprovalPolicy {
-    fn default() -> Self {
-        Self::Prompt
-    }
 }
 
 impl ApprovalPolicy {

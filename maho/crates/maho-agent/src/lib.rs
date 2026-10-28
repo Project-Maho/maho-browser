@@ -67,7 +67,12 @@ pub use approval::{
     ApprovalDecisionMetadata, ApprovalDecisionReason, ApprovalDecisionSource, ApprovalPolicy,
     ToolSensitivity, ToolSensitivityDowngrade, ToolSensitivityResolution,
 };
-pub use approval_audit::{ApprovalAuditEventKind, ApprovalAuditRecord};
+pub use approval_audit::{
+    classify_journal_action, consequential_action_for_tool, set_agent_action_journal_sink,
+    AgentActionJournalRecord, JournalActionInput, RESERVED_JOURNAL_ACTIONS,
+    AgentActionJournalSink, ApprovalAuditEventKind, ApprovalAuditRecord,
+    SqliteAgentActionJournalSink,
+};
 pub use context_gatherer::{
     AccountContextEntry, AccountContextSlot, ContextBlock, ContextBlockProvenance,
     ContextBlockSource, ContextGatherRequest, ContextGatherResponse,
@@ -91,7 +96,10 @@ pub use introspection::{
 };
 
 pub use permission::{
-    authorize_action_consequence, authorize_final_confirm, authorize_mail_tool,
+    agent_origin_denied, authorize_action_consequence, authorize_agent_site,
+    authorize_credential_typing_for_origin, authorize_final_confirm, authorize_mail_tool,
+    parse_agent_denied_origins, AgentSiteAuthorization, AGENT_SITE_DENIED,
+    APPROVAL_POLICY_DENY_ALL, CREDENTIAL_ORIGIN_MISMATCH,
     classify_action_consequence, classify_mail_tool, sanitize_tool_arguments, sanitize_tool_result,
     ActionConsequence, ConsequenceApprovalAction, FinalConfirmDecision, MailAuthorizationAction,
     MailAuthorizationState, MailToolClass, PermissionCallback, PermissionDecision,
@@ -201,6 +209,17 @@ pub enum AgentStreamEvent {
     },
 }
 
+/// Test-only process-wide SQLCipher key for this crate's `--lib` test binary
+/// (same contract as `maho_core::install_test_sqlcipher_key`).
+#[cfg(test)]
+pub(crate) fn install_test_sqlcipher_key() {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        maho_storage::sqlite::set_sqlcipher_key("maho-agent-lib-test-key")
+            .expect("install process-wide test SQLCipher key");
+    });
+}
+
 pub struct ZeroizedString(secrecy::SecretString);
 
 pub struct SecureKeyBundle {
@@ -208,6 +227,10 @@ pub struct SecureKeyBundle {
     pub base_url: Option<String>,
     pub model: Option<String>,
 }
+
+/// Callback that resolves a provider name to its stored API key bundle.
+pub type SecureStorageCallback =
+    Box<dyn Fn(&str) -> Result<SecureKeyBundle, AgentError> + Send + Sync + 'static>;
 
 impl SecureKeyBundle {
     pub fn from_key(key: ZeroizedString) -> Self {
@@ -715,21 +738,10 @@ pub trait AgentRuntime: Send + Sync {
     }
     async fn cancel(&self, session_id: &str) -> Result<(), AgentError>;
     async fn list_tools(&self) -> Result<Vec<ToolDefinition>, AgentError>;
-    fn set_permission_callback(
-        &self,
-        callback: Box<
-            dyn Fn(
-                    PermissionRequest,
-                ) -> std::pin::Pin<
-                    Box<dyn std::future::Future<Output = PermissionDecision> + Send>,
-                > + Send
-                + Sync
-                + 'static,
-        >,
-    ) -> Result<(), AgentError>;
+    fn set_permission_callback(&self, callback: PermissionCallback) -> Result<(), AgentError>;
     fn set_secure_storage_callback(
         &self,
-        callback: Box<dyn Fn(&str) -> Result<SecureKeyBundle, AgentError> + Send + Sync + 'static>,
+        callback: SecureStorageCallback,
     ) -> Result<(), AgentError>;
 
     fn set_browser_tool_bridge(

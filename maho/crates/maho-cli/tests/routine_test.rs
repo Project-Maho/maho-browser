@@ -234,7 +234,7 @@ fn cli_routine_run_tier_lock_ignores_message_wording() {
         "tier-locked routine must exit with code 2; stderr: {stderr}"
     );
     assert!(
-        stderr.contains("available on Max tier only"),
+        stderr.contains("available on Max tier or with a validated BYOK key"),
         "tier-lock error must be surfaced cleanly; stderr: {stderr}"
     );
     // A panic would print a backtrace / "panicked at" to stderr.

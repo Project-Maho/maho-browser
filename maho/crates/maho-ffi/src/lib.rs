@@ -1882,7 +1882,7 @@ pub unsafe extern "C" fn maho_core_is_native_password_provider_active(ptr: *mut 
 }
 
 /// # Safety
-
+///
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `query` must be a valid null-terminated C string.
 /// Caller must free the returned string with `maho_string_free`.
@@ -3635,6 +3635,181 @@ pub unsafe extern "C" fn maho_content_engine_free(handle: *mut OpaqueCompiledEng
             }
         },
         ()
+    )
+}
+
+fn data_export_status_json(result: Result<(), String>) -> *mut c_char {
+    let value = match result {
+        Ok(()) => serde_json::json!({"ok": true}),
+        Err(code) => serde_json::json!({"ok": false, "error": code}),
+    };
+    CString::new(value.to_string())
+        .map(CString::into_raw)
+        .unwrap_or(ptr::null_mut())
+}
+
+/// Writes one user-data export (`kind` is one of `bookmarks`, `history`,
+/// `passwords`, `conversations`, `spaces`, `full_backup`) to `path_utf8`.
+/// Returns `{"ok":true}` or `{"ok":false,"error":"<code>"}` (e.g.
+/// `vault_locked`, `write_failed`, `unknown_kind`). Nothing is written on
+/// failure. Password export requires the caller to have completed OS
+/// re-authentication (or `maho_core_authorize_password_export_with_passphrase`).
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`; `kind` and
+/// `path_utf8` must be valid null-terminated C strings. Free the result with
+/// `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_export_data_to_path(
+    ptr: *mut MahoCore,
+    kind: *const c_char,
+    path_utf8: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || kind.is_null() || path_utf8.is_null() {
+                return ptr::null_mut();
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return data_export_status_json(Err("import_active".to_string()));
+            }
+            let core = &*ptr;
+            let Some(kind) = CStr::from_ptr(kind)
+                .to_str()
+                .ok()
+                .and_then(maho_core::maho_core::DataExportKind::parse)
+            else {
+                return data_export_status_json(Err(
+                    maho_core::maho_core::EXPORT_ERROR_UNKNOWN_KIND.to_string(),
+                ));
+            };
+            let Ok(path) = CStr::from_ptr(path_utf8).to_str() else {
+                return data_export_status_json(Err(
+                    maho_core::maho_core::EXPORT_ERROR_WRITE_FAILED.to_string(),
+                ));
+            };
+            data_export_status_json(core.write_data_export(kind, std::path::Path::new(path)))
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Re-authenticates a password export with the Vault master passphrase on
+/// platforms without an OS authenticator (Linux). Returns `{"ok":true}` or
+/// `{"ok":false,"error":"<code>"}` where code is `vault_locked`,
+/// `os_auth_unavailable` (no passphrase slot: escrow-only vault),
+/// `passphrase_required`, `invalid_passphrase` or `rate_limited`.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`; `passphrase`
+/// must be null or a valid null-terminated C string. Free the result with
+/// `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_authorize_password_export_with_passphrase(
+    ptr: *mut MahoCore,
+    passphrase: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return data_export_status_json(Err("import_active".to_string()));
+            }
+            let core = &*ptr;
+            let passphrase = if passphrase.is_null() {
+                None
+            } else {
+                Some(CStr::from_ptr(passphrase).to_bytes())
+            };
+            data_export_status_json(
+                core.authorize_password_export_with_passphrase(passphrase)
+                    .map_err(str::to_string),
+            )
+        },
+        ptr::null_mut()
+    )
+}
+
+unsafe fn data_export_string(
+    ptr: *mut MahoCore,
+    export: impl FnOnce(&MahoCore) -> Result<String, String>,
+) -> *mut c_char {
+    if ptr.is_null() || import_gate::is_active() {
+        return ptr::null_mut();
+    }
+    match export(&*ptr) {
+        Ok(text) => CString::new(text)
+            .map(CString::into_raw)
+            .unwrap_or(ptr::null_mut()),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Netscape bookmark HTML of all bookmarks plus favorites and pinned tabs.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`. Returns null on
+/// failure; free the result with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_export_bookmarks_html(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        { data_export_string(ptr, |core| Ok(core.export_bookmarks_html())) },
+        ptr::null_mut()
+    )
+}
+
+/// History CSV (`URL,Title,Visit Count,Last Visited`) read from storage.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`. Returns null on
+/// failure; free the result with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_export_history_csv(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        { data_export_string(ptr, |core| core.export_history_csv()) },
+        ptr::null_mut()
+    )
+}
+
+/// Every AI conversation with all of its turns, as JSON.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`. Returns null on
+/// failure; free the result with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_export_conversations_json(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        { data_export_string(ptr, |core| core.export_conversations_json()) },
+        ptr::null_mut()
+    )
+}
+
+/// Spaces with folders, pinned tabs and favorites, as JSON.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`. Returns null on
+/// failure; free the result with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_export_spaces_json(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        { data_export_string(ptr, |core| Ok(core.export_spaces_json())) },
+        ptr::null_mut()
+    )
+}
+
+/// Full JSON backup (bookmarks, settings, notes, boosts, spaces; no secrets).
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`. Returns null on
+/// failure; free the result with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_export_full_backup_json(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        { data_export_string(ptr, |core| Ok(core.export_full_backup_json())) },
+        ptr::null_mut()
     )
 }
 
@@ -8840,6 +9015,145 @@ pub unsafe extern "C" fn maho_core_configure_sync_bootstrap(
     )
 }
 
+/// Switches the account to client-held keys (GAP-3). Returns
+/// `{"success":true,"recoveryPhrase":"<24 words>","roomId":"...","keyMode":"client_held"}`
+/// or `{"success":false,"error":"..."}`; on failure escrow mode is untouched.
+/// The caller must then POST `/sync/bootstrap/client-held` with `roomId`.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_enable_client_held_keys(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &mut *ptr;
+            let json = match core.enable_client_held_keys() {
+                Ok(phrase) => serde_json::json!({
+                    "success": true,
+                    "recoveryPhrase": phrase,
+                    "roomId": core.get_sync_room_id(),
+                    "keyMode": core.sync_key_mode(),
+                }),
+                Err(error) => serde_json::json!({
+                    "success": false,
+                    "error": error
+                }),
+            };
+            CString::new(json.to_string())
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Returns the local key custody mode: `"client_held"` or `"escrow"`.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_sync_key_mode(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            CString::new(core.sync_key_mode())
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Derives the sync room id a recovery phrase maps to, without joining it.
+/// Returns `{"success":true,"roomId":"..."}` or `{"success":false,"error":"..."}`.
+/// Lets a client-held join reject a phrase for another account before it
+/// starts syncing a room nobody else uses.
+///
+/// # Safety
+/// `recovery_phrase` must be a valid null-terminated C string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_sync_room_id_for_recovery_phrase(
+    recovery_phrase: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if recovery_phrase.is_null() {
+                return ptr::null_mut();
+            }
+            let phrase = match CStr::from_ptr(recovery_phrase).to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            use maho_core::sync_crypto;
+            let json = match sync_crypto::decode_recovery_phrase(phrase)
+                .and_then(|seed| sync_crypto::derive_room_id(&seed))
+            {
+                Ok(room_id) => serde_json::json!({"success": true, "roomId": room_id}),
+                Err(error) => serde_json::json!({"success": false, "error": error}),
+            };
+            CString::new(json.to_string())
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
+}
+
+#[cfg(test)]
+mod client_held_ffi_tests {
+    use super::*;
+
+    unsafe fn take_json(raw: *mut c_char) -> serde_json::Value {
+        assert!(!raw.is_null());
+        let json = CStr::from_ptr(raw).to_str().unwrap().to_string();
+        maho_string_free(raw);
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn room_id_for_recovery_phrase_matches_generated_key() {
+        let core = maho_core_new();
+        unsafe {
+            let key = take_json(maho_core_generate_sync_key(core));
+            let phrase = CString::new(key["recoveryPhrase"].as_str().unwrap()).unwrap();
+            let derived = take_json(maho_sync_room_id_for_recovery_phrase(phrase.as_ptr()));
+            assert_eq!(derived["success"], true);
+            assert_eq!(derived["roomId"], key["roomId"]);
+
+            let wrong = CString::new("not a recovery phrase").unwrap();
+            let rejected = take_json(maho_sync_room_id_for_recovery_phrase(wrong.as_ptr()));
+            assert_eq!(rejected["success"], false);
+            maho_core_free(core);
+        }
+    }
+
+    #[test]
+    fn enable_client_held_keys_without_sync_fails_and_stays_escrow() {
+        let core = maho_core_new();
+        unsafe {
+            let result = take_json(maho_core_enable_client_held_keys(core));
+            assert_eq!(result["success"], false);
+            assert!(result["error"].as_str().is_some_and(|e| !e.is_empty()));
+            let mode = maho_core_get_sync_key_mode(core);
+            assert_eq!(CStr::from_ptr(mode).to_str().unwrap(), "escrow");
+            maho_string_free(mode);
+            maho_core_free(core);
+        }
+    }
+}
+
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `server_url` and `bootstrap_seed` must be valid null-terminated C strings.
@@ -10178,7 +10492,7 @@ pub unsafe extern "C" fn maho_core_export_space_theme(
             );
             let temp_path = parent.join(temp_name);
 
-            if let Err(_) = std::fs::write(&temp_path, json.as_bytes()) {
+            if std::fs::write(&temp_path, json.as_bytes()).is_err() {
                 return false;
             }
 
@@ -10189,7 +10503,7 @@ pub unsafe extern "C" fn maho_core_export_space_theme(
                     std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o600));
             }
 
-            if let Err(_) = std::fs::rename(&temp_path, path) {
+            if std::fs::rename(&temp_path, path).is_err() {
                 let _ = std::fs::remove_file(&temp_path);
                 return false;
             }
@@ -11317,9 +11631,9 @@ pub unsafe extern "C" fn maho_core_byok_delete_key(
                 Err(_) => return false,
             };
             if let Some(storage) = core.storage_ref() {
-                let setting_key = format!("byok:{}", provider_str);
-                // Delete by setting to empty string (sentinel for "not set")
-                storage.set_setting(&setting_key, "").is_ok()
+                // Delete by setting to empty string (sentinel for "not set"), and drop
+                // the validation record so the provider no longer counts as BYOK.
+                maho_core::byok::clear_key(storage, provider_str).is_ok()
             } else {
                 false
             }
@@ -11347,33 +11661,193 @@ pub unsafe extern "C" fn maho_core_byok_get_providers(_core: *mut MahoCore) -> *
 }
 
 /// Validate a BYOK API key for the given provider. Returns true if valid.
+/// On success with a non-null `core`, records `byok_valid:<provider>` so the key
+/// unlocks BYOK agent features (Routines, Skills, deep research, premium search).
 /// Note: makes a live network request; call from a background thread.
 ///
 /// # Safety
-/// `provider` and `api_key` must be valid NUL-terminated C strings (not null). `_core` is
-/// unused and may be null. This call performs a live network request.
+/// `provider` and `api_key` must be valid NUL-terminated C strings (not null). `core`
+/// may be null (validation only) or a valid `*mut MahoCore`. This call performs a
+/// live network request.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_byok_validate_key(
-    _core: *mut MahoCore,
+    core: *mut MahoCore,
     provider: *const c_char,
     api_key: *const c_char,
 ) -> bool {
     ffi_safe!(
         {
-            if provider.is_null() || api_key.is_null() {
+            let (Some(provider_str), Some(key_str)) = (
+                crate::common::cstr_to_str(provider),
+                crate::common::cstr_to_str(api_key),
+            ) else {
+                return false;
+            };
+            let valid = maho_core::memory_manager::get_runtime().block_on(
+                maho_core::llm_provider::validate_api_key(provider_str, key_str),
+            );
+            if valid && !core.is_null() && !import_gate::is_active() {
+                if let Some(storage) = (*core).storage_ref() {
+                    let _ = maho_core::byok::mark_validated(storage, provider_str, key_str);
+                }
+            }
+            valid
+        },
+        false
+    )
+}
+
+/// True when `api_key` is the key stored for `provider` and it has already been
+/// validated. Lets shells skip a network revalidation when mirroring a key
+/// they already hold (e.g. desktop startup hydration). No network access.
+///
+/// # Safety
+/// `core` must be null or a valid `*mut MahoCore`; `provider` and `api_key` must be
+/// null or valid NUL-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_byok_is_validated(
+    core: *mut MahoCore,
+    provider: *const c_char,
+    api_key: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if core.is_null() || import_gate::is_active() {
                 return false;
             }
-            let provider_str = match CStr::from_ptr(provider).to_str() {
-                Ok(s) => s,
-                Err(_) => return false,
+            let (Some(provider), Some(key)) = (
+                crate::common::cstr_to_str(provider),
+                crate::common::cstr_to_str(api_key),
+            ) else {
+                return false;
             };
-            let key_str = match CStr::from_ptr(api_key).to_str() {
-                Ok(s) => s,
-                Err(_) => return false,
+            let Some(storage) = (*core).storage_ref() else {
+                return false;
             };
-            maho_core::memory_manager::get_runtime().block_on(
-                maho_core::llm_provider::validate_api_key(provider_str, key_str),
-            )
+            let stored = storage
+                .get_setting(&maho_core::byok::key_setting(provider))
+                .ok()
+                .flatten();
+            let recorded = storage
+                .get_setting(&maho_core::byok::valid_setting(provider))
+                .ok()
+                .flatten();
+            match (stored, recorded) {
+                (Some(stored), Some(recorded)) => {
+                    stored == key && maho_core::byok::is_validated(key, &recorded)
+                }
+                _ => false,
+            }
+        },
+        false
+    )
+}
+
+/// Mirror a BYOK key that the shell holds in its own secure store into core,
+/// marking it validated. Call only after `maho_core_byok_validate_key` returned
+/// true for this exact key (desktop validates off the core sequence, then
+/// stores here). A null or empty `api_key` clears the key and its validation.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore`; `provider` must be a valid NUL-terminated
+/// C string; `api_key` may be null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_byok_set_validated_key(
+    core: *mut MahoCore,
+    provider: *const c_char,
+    api_key: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if core.is_null() || import_gate::is_active() {
+                return false;
+            }
+            let Some(provider) = crate::common::cstr_to_str(provider) else {
+                return false;
+            };
+            if maho_core::byok::provider_endpoint(provider).is_none() {
+                return false;
+            }
+            let Some(storage) = (*core).storage_ref() else {
+                return false;
+            };
+            match crate::common::cstr_to_str(api_key).map(str::trim) {
+                Some(key) if !key.is_empty() => {
+                    maho_core::byok::store_validated_key(storage, provider, key).is_ok()
+                }
+                _ => maho_core::byok::clear_key(storage, provider).is_ok(),
+            }
+        },
+        false
+    )
+}
+
+/// BYOK-aware agent feature entitlement snapshot as JSON:
+/// `{"routines":bool,"deep_research":bool,"premium_search":bool,"byok":bool}`.
+/// Deep research and premium search resolve through the production policy
+/// constructors (`ResearchPolicy::for_account` / `SearchEntitlement::for_account`),
+/// so a validated BYOK key unlocks them on any tier and marks the run
+/// BYOK-billed (`managed = false`). PAYG credits are not tracked in core, so
+/// non-BYOK Free/Pro report the tier-only result. Caller frees with
+/// `maho_string_free`.
+///
+/// # Safety
+/// `core` must be null or a valid `*mut MahoCore`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_agent_entitlements(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*core;
+            let Some(storage) = core.storage_ref() else {
+                return ptr::null_mut();
+            };
+            to_json_cstring(&agent_entitlements(core.get_account_tier(), storage))
+        },
+        ptr::null_mut()
+    )
+}
+
+fn agent_entitlements(
+    tier: Option<maho_types::account::UserTier>,
+    storage: &maho_storage::sqlite::SqliteStorage,
+) -> serde_json::Value {
+    let account_tier = tier.unwrap_or(maho_types::account::UserTier::Free);
+    let research =
+        maho_agent::ResearchPolicy::for_account(account_tier, 0.0, String::new(), storage);
+    let search = maho_agent::SearchEntitlement::for_account(account_tier, 0.0, storage);
+    serde_json::json!({
+        "routines": crate::common::routine_entitlement(
+            crate::common::routines_tier(tier),
+            storage,
+        )
+        .allows_routines(),
+        "deep_research": research.is_entitled(),
+        "premium_search": search.allows_premium(),
+        "byok": !research.managed,
+    })
+}
+
+/// True when the account may run Routines: Max tier, or any tier holding a
+/// BYOK key that passed `maho_core_byok_validate_key` once.
+///
+/// # Safety
+/// `core` must be null or a valid `*mut MahoCore` produced by `maho_core_new*`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_entitled(core: *mut MahoCore) -> bool {
+    ffi_safe!(
+        {
+            if core.is_null() || import_gate::is_active() {
+                return false;
+            }
+            let core = &*core;
+            let tier = crate::common::routines_tier(core.get_account_tier());
+            match core.storage_ref() {
+                Some(storage) => crate::common::routine_entitlement(tier, storage).allows_routines(),
+                None => tier == maho_core::routines::UserTier::Max,
+            }
         },
         false
     )
@@ -11539,20 +12013,6 @@ pub struct MahoAgentSession {
     isolation: Arc<SessionRuntime>,
     callback_lease: Option<Arc<SessionCallbackLease>>,
     accepted_leased_turns: Arc<AcceptedLeasedTurns>,
-    permission_callback: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            tool_name: *const c_char,
-            arguments_json: *const c_char,
-        ) -> MahoAgentPermissionDecision,
-    >,
-    browser_tool_callback: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            tool_name: *const c_char,
-            args_json: *const c_char,
-        ) -> MahoAgentToolResult,
-    >,
     session_id: String,
     active_conversation_registry: Arc<Mutex<std::collections::HashMap<String, usize>>>,
     core: std::ptr::NonNull<MahoCore>,
@@ -12304,52 +12764,7 @@ mod ffi_browser_tool_bridge_tests {
     }
 }
 
-fn leased_permission_callback(
-    callback: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            tool_name: *const c_char,
-            arguments_json: *const c_char,
-        ) -> MahoAgentPermissionDecision,
-    >,
-    callback_user_data: *mut std::ffi::c_void,
-    turn_callback_lease: &Option<Arc<TurnCallbackLease>>,
-) -> Option<maho_agent::PermissionCallback> {
-    callback.map(|callback| {
-        let callback = SendableCallback(callback);
-        let callback_user_data = SendableUserData(callback_user_data as usize);
-        let turn_callback_lease = clone_callback_lease(turn_callback_lease);
-        Box::new(move |request: maho_agent::PermissionRequest| {
-            let _ = &turn_callback_lease;
-            let decision = match (
-                CString::new(request.tool_name),
-                CString::new(request.arguments),
-            ) {
-                (Ok(tool_name), Ok(arguments)) => {
-                    // SAFETY: the leased FFI turn owns `callback_user_data` through
-                    // `turn_callback_lease`, and C-string arguments remain live for this call.
-                    unsafe {
-                        (callback.0)(
-                            callback_user_data.0 as *mut std::ffi::c_void,
-                            tool_name.as_ptr(),
-                            arguments.as_ptr(),
-                        )
-                    }
-                }
-                _ => MahoAgentPermissionDecision::Deny,
-            };
-            let decision = match decision {
-                MahoAgentPermissionDecision::Allow => maho_agent::PermissionDecision::Allow,
-                MahoAgentPermissionDecision::Deny => maho_agent::PermissionDecision::Deny,
-            };
-            Box::pin(async move { decision })
-                as std::pin::Pin<
-                    Box<dyn std::future::Future<Output = maho_agent::PermissionDecision> + Send>,
-                >
-        }) as maho_agent::PermissionCallback
-    })
-}
-
+#[cfg(test)]
 fn leased_browser_tool_bridge(
     callback: Option<
         unsafe extern "C" fn(
@@ -12371,6 +12786,9 @@ fn leased_browser_tool_bridge(
     })
 }
 
+// Shared body of the exported create-session entry points; its parameters are
+// the C ABI argument list, so it cannot be bundled without an ABI change.
+#[allow(clippy::too_many_arguments)]
 unsafe fn maho_agent_create_session_impl(
     core: *mut MahoCore,
     session_id: *const c_char,
@@ -12506,18 +12924,7 @@ unsafe fn maho_agent_create_session_impl(
                 let user_data_ptr = SendableUserData(permission_user_data as usize);
                 let cb_sendable = SendableCallback(cb);
                 let callback_lease = clone_callback_lease(&callback_lease);
-                let callback: Box<
-                    dyn Fn(
-                            maho_agent::PermissionRequest,
-                        ) -> std::pin::Pin<
-                            Box<
-                                dyn std::future::Future<Output = maho_agent::PermissionDecision>
-                                    + Send,
-                            >,
-                        > + Send
-                        + Sync
-                        + 'static,
-                > = Box::new(move |req| {
+                let callback: maho_agent::PermissionCallback = Box::new(move |req| {
                     let _ = &callback_lease;
                     let p_decision = crate::agent::secure_storage::invoke_permission(
                         cb_sendable.0,
@@ -12665,8 +13072,6 @@ unsafe fn maho_agent_create_session_impl(
                 accepted_leased_turns: Arc::new(AcceptedLeasedTurns {
                     current: Mutex::new(None),
                 }),
-                permission_callback: session_permission_callback,
-                browser_tool_callback: session_browser_tool_callback,
                 session_id: sid.clone(),
                 active_conversation_registry: core_ref.active_conversation_registry(),
                 core: core_ptr,
@@ -12843,6 +13248,9 @@ pub unsafe extern "C" fn maho_agent_session_free(session: *mut MahoAgentSession)
     )
 }
 
+// Shared body of the exported send-message entry points; its parameters are
+// the C ABI callback list, so it cannot be bundled without an ABI change.
+#[allow(clippy::too_many_arguments)]
 unsafe fn maho_agent_send_message_impl(
     session: *mut MahoAgentSession,
     message: *const c_char,
@@ -13522,17 +13930,14 @@ pub unsafe extern "C" fn maho_agent_send_message_simple(
                 let user_data_val = SendableUserData(user_data as usize);
                 let callback = move |event: maho_agent::AgentStreamEvent| {
                     let udata = user_data_val.0 as *mut std::ffi::c_void;
-                    match event {
-                        maho_agent::AgentStreamEvent::Thinking(thinking) => {
-                            if let Some(cb) = on_thinking_sendable.0 {
-                                if let Ok(thinking_c) = CString::new(thinking) {
-                                    unsafe {
-                                        cb(udata, thinking_c.as_ptr());
-                                    }
+                    if let maho_agent::AgentStreamEvent::Thinking(thinking) = event {
+                        if let Some(cb) = on_thinking_sendable.0 {
+                            if let Ok(thinking_c) = CString::new(thinking) {
+                                unsafe {
+                                    cb(udata, thinking_c.as_ptr());
                                 }
                             }
                         }
-                        _ => {}
                     }
                 };
                 Some(Arc::new(callback)
@@ -14837,15 +15242,15 @@ fn validate_routine_start(
     id: &str,
     tier: maho_core::routines::UserTier,
 ) -> Result<String, String> {
-    if tier != maho_core::routines::UserTier::Max {
-        return Err("Routines are available on Max tier only".to_string());
-    }
     let db_path = unsafe { &*core }
         .sqlite_db_path()
         .map(str::to_string)
         .ok_or_else(|| "Routine storage unavailable".to_string())?;
     let storage = maho_storage::sqlite::SqliteStorage::open(&db_path)
         .map_err(|error| format!("Failed to open storage: {error}"))?;
+    if !crate::common::routine_entitlement(tier, &storage).allows_routines() {
+        return Err(maho_core::routines::RoutineError::TierLockedToMax.to_string());
+    }
     let exists = maho_core::routines::list_all_routines(&storage)
         .map_err(|error| error.to_string())?
         .iter()
@@ -14945,6 +15350,17 @@ fn spawn_tracked_routine(
                     return;
                 }
             };
+            if let Err(message) =
+                crate::common::bind_routine_provider(&backend, tier, &resolve_storage)
+            {
+                let _ = registry.mark_setup_failed(&queued_for_worker.run_id, message.clone());
+                if let Some(callback) = on_error.0 {
+                    if let Ok(error) = CString::new(message) {
+                        unsafe { callback(user_data.0 as *mut c_void, error.as_ptr()) };
+                    }
+                }
+                return;
+            }
             let result = maho_core::routines::run_routine_and_record_tracked(
                 &id,
                 tier,
@@ -15499,9 +15915,12 @@ pub unsafe extern "C" fn maho_routines_fire_event(core: *mut MahoCore, event_jso
                 return;
             }
             let core_ref = &*core;
-            // Only Max users get event-triggered routines.
-            match core_ref.get_account_tier() {
-                Some(maho_types::account::UserTier::Max) => {}
+            // Max users, or users with a validated BYOK key, get event-triggered routines.
+            let routine_tier = crate::common::routines_tier(core_ref.get_account_tier());
+            match core_ref.storage_ref() {
+                Some(storage)
+                    if crate::common::routine_entitlement(routine_tier, storage)
+                        .allows_routines() => {}
                 _ => return,
             };
             let json_str = match CStr::from_ptr(event_json).to_str() {
@@ -15603,6 +16022,12 @@ pub unsafe extern "C" fn maho_routines_fire_event(core: *mut MahoCore, event_jso
                                 .unwrap_or_else(|_| std::path::PathBuf::from(".")),
                             true,
                         );
+                        if let Err(message) =
+                            crate::common::bind_routine_provider(&backend, routine_tier, &storage)
+                        {
+                            return Box::pin(async move { Err(message) })
+                                as Pin<Box<dyn Future<Output = Result<String, String>>>>;
+                        }
                         Box::pin(async move {
                             backend.run_prompt(&prompt).await.map_err(|e| e.to_string())
                         })
@@ -15610,7 +16035,7 @@ pub unsafe extern "C" fn maho_routines_fire_event(core: *mut MahoCore, event_jso
                     };
                     if let Err(e) = maho_core::routines::fire_event_routines_tracked(
                         event,
-                        maho_core::routines::UserTier::Max,
+                        routine_tier,
                         &storage,
                         runner,
                         &registry,
@@ -15654,10 +16079,13 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
             if core.is_null() {
                 return -2;
             }
-            // Check tier — only Max users get scheduled routines
+            // Check entitlement — Max users or validated BYOK users get scheduled routines
             let core_ref = &*core;
-            match core_ref.get_account_tier() {
-                Some(maho_types::account::UserTier::Max) => {}
+            let routine_tier = crate::common::routines_tier(core_ref.get_account_tier());
+            match core_ref.storage_ref() {
+                Some(storage)
+                    if crate::common::routine_entitlement(routine_tier, storage)
+                        .allows_routines() => {}
                 _ => return -1,
             };
 
@@ -15783,9 +16211,18 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
                                 true,
                             );
 
+                            if let Err(message) = crate::common::bind_routine_provider(
+                                &backend,
+                                routine_tier,
+                                &record_storage,
+                            ) {
+                                let _ = registry.mark_setup_failed(&queued.run_id, message.clone());
+                                eprintln!("[routines scheduled] {message}");
+                                return;
+                            }
                             let result = maho_core::routines::run_routine_and_record_tracked(
                                 &id_str,
-                                maho_core::routines::UserTier::Max,
+                                routine_tier,
                                 &record_storage,
                                 maho_core::routines::RoutineRunSource::Scheduled,
                                 |prompt| async move {
@@ -15810,6 +16247,150 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
             0
         },
         -2
+    )
+}
+
+// ============================================================
+// Agent Action Journal FFI (local-only, 30-day retention, never synced)
+// ============================================================
+
+fn agent_action_journal_storage(
+    core: *mut MahoCore,
+) -> Option<maho_storage::sqlite::SqliteStorage> {
+    if core.is_null() || import_gate::is_active() {
+        return None;
+    }
+    let db_path = unsafe { (&*core).sqlite_db_path() }?.to_string();
+    maho_storage::sqlite::SqliteStorage::open(&db_path).ok()
+}
+
+unsafe fn opt_cstr<'a>(s: *const c_char) -> Option<&'a str> {
+    if s.is_null() {
+        None
+    } else {
+        CStr::from_ptr(s).to_str().ok()
+    }
+}
+
+/// Enable (or disable) agent-side journaling into this core's profile
+/// database. Hosts MUST pass `enabled = false` (or never call this) for
+/// incognito / off-the-record profiles. Returns true when the sink is set.
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new_with_storage`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_action_journal_enable(core: *mut MahoCore, enabled: bool) -> bool {
+    ffi_safe!(
+        {
+            if !enabled || core.is_null() {
+                maho_agent::set_agent_action_journal_sink(None);
+                return !enabled;
+            }
+            let Some(db_path) = (&*core).sqlite_db_path() else {
+                return false;
+            };
+            maho_agent::set_agent_action_journal_sink(Some(std::sync::Arc::new(
+                maho_agent::SqliteAgentActionJournalSink::new(db_path),
+            )));
+            true
+        },
+        false
+    )
+}
+
+/// Record one consequential agent action. Best-effort: returns false on any
+/// failure (logged), never blocks. `actor` is `cli`|`mcp`|`panel`; `action`
+/// is one of `form_submit`, `purchase`, `credential_typing`, `mail_send`,
+/// `mail_delete`, `cross_origin_navigation`, `file_upload`.
+///
+/// # Safety
+/// `core` must be valid; string args must be valid C strings or null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_action_journal_record(
+    core: *mut MahoCore,
+    ts: i64,
+    session_id: *const c_char,
+    actor: *const c_char,
+    action: *const c_char,
+    origin: *const c_char,
+    summary: *const c_char,
+    outcome: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            let Some(storage) = agent_action_journal_storage(core) else {
+                return false;
+            };
+            let (Some(actor), Some(action)) = (opt_cstr(actor), opt_cstr(action)) else {
+                return false;
+            };
+            maho_storage::agent_action_journal::record_agent_action_best_effort(
+                &storage,
+                &maho_storage::agent_action_journal::NewAgentAction {
+                    ts,
+                    session_id: opt_cstr(session_id).unwrap_or(""),
+                    actor,
+                    action,
+                    origin: opt_cstr(origin).unwrap_or(""),
+                    summary: opt_cstr(summary).unwrap_or(""),
+                    outcome: opt_cstr(outcome).unwrap_or(""),
+                },
+            )
+            .is_some()
+        },
+        false
+    )
+}
+
+/// List journal entries newest first as a JSON array. `actor`, `action` and
+/// `query` are optional filters (null or empty = all). `limit` 0 = 200.
+/// Caller frees with `maho_string_free`.
+///
+/// # Safety
+/// `core` must be valid; string args must be valid C strings or null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_action_journal_list(
+    core: *mut MahoCore,
+    actor: *const c_char,
+    action: *const c_char,
+    query: *const c_char,
+    limit: u32,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(storage) = agent_action_journal_storage(core) else {
+                return ptr::null_mut();
+            };
+            let non_empty = |s: Option<&str>| s.filter(|v| !v.is_empty()).map(str::to_string);
+            let filter = maho_storage::agent_action_journal::AgentActionJournalFilter {
+                actor: non_empty(opt_cstr(actor)),
+                action: non_empty(opt_cstr(action)),
+                query: non_empty(opt_cstr(query)),
+            };
+            let _ = storage.prune_agent_action_journal(chrono::Utc::now().timestamp());
+            match storage.list_agent_actions(&filter, if limit == 0 { 200 } else { limit }) {
+                Ok(rows) => to_json_cstring(&rows),
+                Err(_) => ptr::null_mut(),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Delete every journal entry. Returns the number removed, or -1 on failure.
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new_with_storage`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_action_journal_clear(core: *mut MahoCore) -> i64 {
+    ffi_safe!(
+        {
+            let Some(storage) = agent_action_journal_storage(core) else {
+                return -1;
+            };
+            storage.clear_agent_actions().map(|n| n as i64).unwrap_or(-1)
+        },
+        -1
     )
 }
 
@@ -18244,6 +18825,127 @@ mod tests {
         assert!(next > t, "next_fire_after must be strictly after last_run");
     }
 
+    /// BYOK unlock: a Free account with a validated BYOK key passes the routine
+    /// start gate; without a key (or with an unvalidated key) it stays
+    /// tier-locked, and the routine runtime is bound to the BYOK provider.
+    #[test]
+    fn routine_start_gate_free_tier_byok_unlock() {
+        let _gate_idle = crate::common::import_gate_idle();
+        let _key_lock = crate::common::sqlcipher_test_key_lock();
+        let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
+        use maho_core::maho_core::MahoCore;
+        use maho_core::routines::UserTier;
+
+        let db = std::env::temp_dir().join(format!(
+            "maho_routines_byok_gate_{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let db_path = db.to_string_lossy().to_string();
+        let mut core = MahoCore::new().with_storage(&db_path);
+        let core_ptr: *mut MahoCore = &mut core;
+        let locked = maho_core::routines::RoutineError::TierLockedToMax.to_string();
+
+        // Free without a key: tier-locked.
+        assert_eq!(
+            validate_routine_start(core_ptr, "morning_briefing", UserTier::Free),
+            Err(locked.clone())
+        );
+        assert!(!unsafe { maho_routines_entitled(core_ptr) });
+
+        // Stored but never validated: still tier-locked.
+        let storage = core.storage_ref().unwrap();
+        storage.set_setting("byok:openai", "sk-test-1234567890").unwrap();
+        assert_eq!(
+            validate_routine_start(core_ptr, "morning_briefing", UserTier::Free),
+            Err(locked.clone())
+        );
+
+        // Validated once: Free is allowed.
+        maho_core::byok::mark_validated(storage, "openai", "sk-test-1234567890").unwrap();
+        assert_eq!(
+            validate_routine_start(core_ptr, "morning_briefing", UserTier::Free),
+            Ok(db_path.clone())
+        );
+        assert!(unsafe { maho_routines_entitled(core_ptr) });
+
+        // A BYOK run is bound to the BYOK provider, never managed credits.
+        let runtime: Arc<dyn maho_agent::AgentRuntime> =
+            Arc::new(maho_agent::MockAgentRuntime);
+        assert!(
+            crate::common::bind_routine_provider(&runtime, UserTier::Free, storage).is_ok()
+        );
+        storage.set_setting("byok:openai", "").unwrap();
+        assert_eq!(
+            crate::common::bind_routine_provider(&runtime, UserTier::Free, storage),
+            Err(locked)
+        );
+        assert!(crate::common::bind_routine_provider(&runtime, UserTier::Max, storage).is_ok());
+
+        drop(core);
+        let _ = std::fs::remove_file(&db);
+    }
+
+    /// Desktop/iOS bridge: a shell-held key mirrored via
+    /// `maho_core_byok_set_validated_key` unlocks Free-tier Routines, deep
+    /// research and premium search; clearing it (or `delete_key`) relocks.
+    #[test]
+    fn byok_set_validated_key_bridge_unlocks_and_relocks() {
+        let _gate_idle = crate::common::import_gate_idle();
+        let _key_lock = crate::common::sqlcipher_test_key_lock();
+        let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
+        use maho_core::maho_core::MahoCore;
+
+        let db = std::env::temp_dir().join(format!(
+            "maho_byok_bridge_{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let db_path = db.to_string_lossy().to_string();
+        let mut core = MahoCore::new().with_storage(&db_path);
+        let core_ptr: *mut MahoCore = &mut core;
+        let openai = CString::new("openai").unwrap();
+        let unknown = CString::new("not-a-provider").unwrap();
+        let key = CString::new("sk-test-1234567890").unwrap();
+        let other = CString::new("sk-test-0000000000").unwrap();
+        let snapshot = |core_ptr: *mut MahoCore| {
+            let raw = unsafe { maho_core_agent_entitlements(core_ptr) };
+            assert!(!raw.is_null());
+            let json = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
+            unsafe { maho_string_free(raw) };
+            serde_json::from_str::<serde_json::Value>(&json).unwrap()
+        };
+
+        let locked = snapshot(core_ptr);
+        assert_eq!(locked["routines"], false);
+        assert_eq!(locked["deep_research"], false);
+        assert_eq!(locked["premium_search"], false);
+        assert_eq!(locked["byok"], false);
+
+        unsafe {
+            assert!(!maho_core_byok_set_validated_key(core_ptr, unknown.as_ptr(), key.as_ptr()));
+            assert!(maho_core_byok_set_validated_key(core_ptr, openai.as_ptr(), key.as_ptr()));
+            assert!(maho_core_byok_is_validated(core_ptr, openai.as_ptr(), key.as_ptr()));
+            assert!(!maho_core_byok_is_validated(core_ptr, openai.as_ptr(), other.as_ptr()));
+            assert!(maho_routines_entitled(core_ptr));
+        }
+        let unlocked = snapshot(core_ptr);
+        assert_eq!(unlocked["routines"], true);
+        assert_eq!(unlocked["deep_research"], true);
+        assert_eq!(unlocked["premium_search"], true);
+        assert_eq!(unlocked["byok"], true);
+
+        unsafe {
+            assert!(maho_core_byok_set_validated_key(core_ptr, openai.as_ptr(), ptr::null()));
+            assert!(!maho_routines_entitled(core_ptr));
+            assert!(maho_core_byok_set_validated_key(core_ptr, openai.as_ptr(), key.as_ptr()));
+            assert!(maho_core_byok_delete_key(core_ptr, openai.as_ptr()));
+            assert!(!maho_routines_entitled(core_ptr));
+            assert!(!maho_core_byok_is_validated(core_ptr, openai.as_ptr(), key.as_ptr()));
+        }
+
+        drop(core);
+        let _ = std::fs::remove_file(&db);
+    }
+
     /// Custom-routine FFI roundtrip: create -> list_all (includes it as custom)
     /// -> delete -> list_all (gone). Exercises `maho_routines_create_custom`,
     /// `maho_routines_list_all`, and `maho_routines_delete_custom` end to end
@@ -18505,6 +19207,78 @@ mod tests {
         let ghost = CString::new("never_ran").unwrap();
         let none_ptr = unsafe { maho_routines_latest(core_ptr, ghost.as_ptr()) };
         assert!(none_ptr.is_null(), "latest of a never-run routine is null");
+
+        let _ = std::fs::remove_file(&db);
+    }
+
+    /// Agent action journal FFI: record three entries, list (with filter),
+    /// clear. A record with an unknown action is rejected without panicking.
+    #[test]
+    fn agent_action_journal_ffi_record_list_clear() {
+        let _gate_idle = crate::common::import_gate_idle();
+        let _key_lock = crate::common::sqlcipher_test_key_lock();
+        let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
+        use maho_core::maho_core::MahoCore;
+        use std::ffi::{CStr, CString};
+
+        let db = std::env::temp_dir().join(format!(
+            "maho_agent_action_journal_{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&db);
+        let db_path = db.to_string_lossy().to_string();
+        let mut core = MahoCore::new().with_storage(&db_path);
+        let core_ptr: *mut MahoCore = &mut core;
+        let c = |s: &str| CString::new(s).unwrap();
+        let now = chrono::Utc::now().timestamp();
+        for (i, (actor, action)) in [("panel", "form_submit"), ("mcp", "mail_send"), ("cli", "purchase")]
+            .iter()
+            .enumerate()
+        {
+            assert!(unsafe {
+                maho_agent_action_journal_record(
+                    core_ptr,
+                    now + i as i64,
+                    c("s").as_ptr(),
+                    c(actor).as_ptr(),
+                    c(action).as_ptr(),
+                    c("https://a.example").as_ptr(),
+                    c("summary").as_ptr(),
+                    c("completed").as_ptr(),
+                )
+            });
+        }
+        assert!(!unsafe {
+            maho_agent_action_journal_record(
+                core_ptr,
+                now,
+                c("s").as_ptr(),
+                c("panel").as_ptr(),
+                c("bogus").as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        });
+
+        let list = |actor: *const c_char| -> Vec<serde_json::Value> {
+            let p = unsafe {
+                maho_agent_action_journal_list(core_ptr, actor, std::ptr::null(), std::ptr::null(), 0)
+            };
+            assert!(!p.is_null());
+            let json = unsafe { CStr::from_ptr(p).to_str().unwrap().to_string() };
+            unsafe { maho_string_free(p) };
+            serde_json::from_str(&json).unwrap()
+        };
+        let all = list(std::ptr::null());
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0]["action"], "purchase");
+        assert_eq!(all[0]["sessionId"], "s");
+        let mcp = c("mcp");
+        assert_eq!(list(mcp.as_ptr()).len(), 1);
+
+        assert_eq!(unsafe { maho_agent_action_journal_clear(core_ptr) }, 3);
+        assert!(list(std::ptr::null()).is_empty());
 
         let _ = std::fs::remove_file(&db);
     }
@@ -19131,10 +19905,7 @@ unsafe fn vault_use_login_secret(
     };
     // SAFETY: Category 8 (FFI boundary): the caller contract requires a valid
     // NUL-terminated UTF-8 JSON request pointer for the duration of this call.
-    let request = match unsafe { vault_parse_json::<VaultUseSecretRequest>(request_json) } {
-        Ok(request) => request,
-        Err(response) => return Err(response),
-    };
+    let request = unsafe { vault_parse_json::<VaultUseSecretRequest>(request_json) }?;
     match request.action {
         VaultSecretActionRequest::Copy | VaultSecretActionRequest::Fill => core
             .vault_use_login_password_at_revision(request.item_id, request.expected_revision)
@@ -20338,5 +21109,58 @@ mod vault_ffi_tests {
         );
 
         free_core(core, &path);
+    }
+}
+
+#[cfg(test)]
+mod data_export_ffi_tests {
+    use super::*;
+
+    fn take(raw: *mut c_char) -> String {
+        assert!(!raw.is_null());
+        let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_string();
+        unsafe { maho_string_free(raw) };
+        text
+    }
+
+    #[test]
+    fn export_ffi_writes_bookmarks_and_rejects_unknown_kind_and_locked_vault() {
+        let _key_lock = crate::common::sqlcipher_test_key_lock();
+        maho_storage::sqlite::set_sqlcipher_key("vault-ffi-test-key")
+            .expect("test SQLCipher key configures");
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("ffi_export.sqlite");
+        let mut core = Box::new(MahoCore::new().with_storage(db.to_str().unwrap()));
+        core.initialize_vault(b"correct horse battery staple", b"recovery-material-123")
+            .unwrap();
+        core.lock_vault().unwrap();
+        let ptr: *mut MahoCore = &mut *core;
+
+        let html = take(unsafe { maho_core_export_bookmarks_html(ptr) });
+        assert!(html.starts_with("<!DOCTYPE NETSCAPE-Bookmark-file-1>"));
+
+        let out = dir.path().join("bookmarks.html");
+        let kind = CString::new("bookmarks").unwrap();
+        let path = CString::new(out.to_str().unwrap()).unwrap();
+        let status = take(unsafe { maho_core_export_data_to_path(ptr, kind.as_ptr(), path.as_ptr()) });
+        assert_eq!(status, r#"{"ok":true}"#);
+        assert!(out.exists());
+
+        let bad = CString::new("cookies").unwrap();
+        let status = take(unsafe { maho_core_export_data_to_path(ptr, bad.as_ptr(), path.as_ptr()) });
+        assert!(status.contains("unknown_kind"), "{status}");
+
+        let pw_out = dir.path().join("passwords.csv");
+        let pw_kind = CString::new("passwords").unwrap();
+        let pw_path = CString::new(pw_out.to_str().unwrap()).unwrap();
+        let status =
+            take(unsafe { maho_core_export_data_to_path(ptr, pw_kind.as_ptr(), pw_path.as_ptr()) });
+        assert!(status.contains("vault_locked"), "{status}");
+        assert!(!pw_out.exists());
+
+        let status = take(unsafe {
+            maho_core_authorize_password_export_with_passphrase(ptr, ptr::null())
+        });
+        assert!(status.contains("vault_locked"), "{status}");
     }
 }

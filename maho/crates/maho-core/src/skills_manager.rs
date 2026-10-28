@@ -1,7 +1,9 @@
 use ed25519_dalek::Verifier;
 use maho_types::events::core_update::SkillInfo;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::collections::HashSet;
 use std::path::Path;
 
 const SKILL_PUBLIC_KEY: [u8; 32] = [
@@ -45,9 +47,7 @@ impl Skill {
     /// 2. It requires no capability (`required_capability_id: None`) and declares `user_handoff: true`.
     pub fn is_discoverable(&self, available_capabilities: &[&str]) -> bool {
         if let Some(ref req) = self.required_capability_id {
-            available_capabilities
-                .iter()
-                .any(|cap| *cap == req.as_str())
+            available_capabilities.contains(&req.as_str())
         } else {
             self.user_handoff
         }
@@ -977,7 +977,7 @@ impl SkillsManager {
         for entry in entries {
             let entry = entry.map_err(|e| format!("failed to read directory entry: {e}"))?;
             let path = entry.path();
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "md") {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
                 let content = std::fs::read_to_string(&path)
                     .map_err(|e| format!("failed to read file {}: {e}", path.display()))?;
 
@@ -1682,7 +1682,7 @@ Hello user!
 
         let skill = manager.get_skill("user-skill").unwrap();
         assert_eq!(skill.name, "User Skill");
-        assert_eq!(skill.is_first_party, false);
+        assert!(!skill.is_first_party);
         assert_eq!(skill.allowed_tools, vec!["list_dir".to_string()]);
         assert_eq!(skill.system_prompt, "Hello user!");
     }
@@ -1730,7 +1730,7 @@ tools: [view_file, write_file]
 
         let skill = manager.get_skill("fp-skill").unwrap();
         assert_eq!(skill.name, "First Party Skill");
-        assert_eq!(skill.is_first_party, true);
+        assert!(skill.is_first_party);
         assert_eq!(
             skill.allowed_tools,
             vec!["view_file".to_string(), "write_file".to_string()]

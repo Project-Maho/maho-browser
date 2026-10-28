@@ -38,8 +38,12 @@ extern "C" fn whisper_full(
         if !handle.is_null() {
             // SAFETY: the test owns this live handle until transcription returns.
             unsafe { maho_stt_session_cancel(handle) };
-            // SAFETY: the real wrapper supplies a live cancellation callback.
-            assert!(unsafe { params.abort_callback.unwrap()(params.abort_callback_user_data) });
+            let abort = params.abort_callback;
+            assert!(abort.is_some(), "the real wrapper must install an abort callback");
+            if let Some(abort) = abort {
+                // SAFETY: the real wrapper supplies a live cancellation callback.
+                assert!(unsafe { abort(params.abort_callback_user_data) });
+            }
         }
     });
     0

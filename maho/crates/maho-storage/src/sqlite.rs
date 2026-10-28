@@ -22,7 +22,10 @@ const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 // Bump whenever a migration is added: `initialize_schema` returns early once a
 // database reaches this version, so an existing DB never sees new migrations.
 // v3: session_artifacts.kind.
-const SQLITE_SCHEMA_VERSION: i64 = 3;
+// v4: history.visit_count.
+// v5: agent_action_journal (also created idempotently before the early
+//     return below, so a DB already at v4 from todo 11 still gets it).
+const SQLITE_SCHEMA_VERSION: i64 = 5;
 
 const REQUIRED_VAULT_TABLES: &[&str] = &[
     "vault_schema_info",
@@ -474,6 +477,18 @@ type AutofillAddressRecord = (
     Option<String>,
 );
 type BookmarkFolderRecord = (String, String, Option<String>, String);
+/// (entity_type, entity_id, hlc_ts, device_id, payload_json)
+pub type LocalSyncTombstoneRecord = (String, String, u64, u32, String);
+/// (fact_id, embedding); `None` means remove from the ANN index.
+pub type MemoryEmbeddingChange = (String, Option<Vec<u8>>);
+/// (mode, generation, engine_cache, engine_version, engine_hash)
+pub type ContentBlockerStateRecord = (
+    maho_types::content_blocking::ContentBlockingMode,
+    u64,
+    Option<Vec<u8>>,
+    Option<String>,
+    Option<String>,
+);
 
 pub struct AutofillAddressParams<'a> {
     pub id: &'a str,
@@ -860,6 +875,9 @@ impl SqliteStorage {
                     row.get::<_, String>(6)?,
                 ))
             })?;
+            // The binding is required: returning the iterator expression directly
+            // keeps a temporary borrowing `stmt` alive past its drop (E0597).
+            #[allow(clippy::let_and_return)]
             let has_foreign_key = rows.filter_map(Result::ok).any(|(table, from, on_delete)| {
                 table == "conversation_projects"
                     && from == "project_id"
@@ -931,6 +949,31 @@ impl SqliteStorage {
 
         self.run_routines_migrations()?;
 
+        self.run_agent_action_journal_migrations()?;
+
+        Ok(())
+    }
+
+    /// Local-only journal of consequential agent actions (see
+    /// `agent_action_journal.rs`). Never enqueued to `sync_queue`; rows are
+    /// pruned after 30 days.
+    fn run_agent_action_journal_migrations(&self) -> Result<(), StorageError> {
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS agent_action_journal (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts INTEGER NOT NULL,
+                    session_id TEXT NOT NULL,
+                    actor TEXT NOT NULL CHECK (actor IN ('cli', 'mcp', 'panel')),
+                    action TEXT NOT NULL,
+                    origin TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    outcome TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_action_journal_ts
+                    ON agent_action_journal(ts DESC);",
+            )
+            .map_err(|e| StorageError::Other(format!("agent_action_journal migration failed: {e}")))?;
         Ok(())
     }
 
@@ -1226,6 +1269,10 @@ impl SqliteStorage {
         let schema_version = self
             .conn
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
+        // Idempotent and independent of the version gate: a database that was
+        // already stamped at an earlier "current" version must still get the
+        // journal table.
+        self.run_agent_action_journal_migrations()?;
         if schema_version >= SQLITE_SCHEMA_VERSION {
             return Ok(());
         }
@@ -1253,7 +1300,8 @@ impl SqliteStorage {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT NOT NULL,
                 title TEXT NOT NULL,
-                visited_at TEXT NOT NULL
+                visited_at TEXT NOT NULL,
+                visit_count INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS bookmarks (
                 id TEXT PRIMARY KEY,
@@ -1582,6 +1630,17 @@ impl SqliteStorage {
             self.conn.execute("ALTER TABLE session_artifacts ADD COLUMN kind TEXT", [])?;
         }
 
+        let has_history_visit_count: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('history') WHERE name='visit_count')",
+            [], |row| row.get(0),
+        )?;
+        if !has_history_visit_count {
+            self.conn.execute(
+                "ALTER TABLE history ADD COLUMN visit_count INTEGER NOT NULL DEFAULT 1",
+                [],
+            )?;
+        }
+
         self.initialize_vault_schema()?;
 
         let has_acked_at: bool = self
@@ -1663,6 +1722,18 @@ impl SqliteStorage {
             "CREATE TABLE IF NOT EXISTS sync_receive_cursors (
                 room_id TEXT PRIMARY KEY,
                 last_relay_seq INTEGER NOT NULL DEFAULT 0
+            )",
+            [],
+        )?;
+        // Relay sequences of this device's own acknowledged pushes (row-backed
+        // and rowless such as SendTab). The relay does not echo them back, so
+        // they are expected holes in the receive stream; kept until the
+        // receive cursor passes them, independent of sync_queue pruning.
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS sync_own_relay_seqs (
+                room_id TEXT NOT NULL,
+                relay_seq INTEGER NOT NULL,
+                PRIMARY KEY (room_id, relay_seq)
             )",
             [],
         )?;
@@ -1760,6 +1831,35 @@ impl SqliteStorage {
         Ok(())
     }
 
+    /// Record history imported from another browser, keeping the source's
+    /// last-visit time (unix seconds) and visit count. A missing or
+    /// out-of-range time is stored as now.
+    pub fn add_history_entry_at(
+        &self,
+        url: &str,
+        title: &str,
+        visited_at_unix_secs: Option<i64>,
+        visit_count: u32,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT INTO history (url, title, visited_at, visit_count) \
+             VALUES (?1, ?2, COALESCE(datetime(?3, 'unixepoch'), datetime('now')), ?4)",
+            rusqlite::params![url, title, visited_at_unix_secs, visit_count],
+        )?;
+        Ok(())
+    }
+
+    /// Total recorded visits of `url` across its history rows (0 if none).
+    pub fn history_visit_count(&self, url: &str) -> Result<u64, StorageError> {
+        self.conn
+            .query_row(
+                "SELECT COALESCE(SUM(visit_count), 0) FROM history WHERE url = ?1",
+                rusqlite::params![url],
+                |row| row.get(0),
+            )
+            .map_err(StorageError::from)
+    }
+
     pub fn search_history(
         &self,
         query: &str,
@@ -1781,6 +1881,25 @@ impl SqliteStorage {
             results.push(row?);
         }
         Ok(results)
+    }
+
+    /// Every history row, newest first, as
+    /// `(url, title, visit_count, visited_at)`. Used by data export.
+    pub fn list_history_for_export(
+        &self,
+    ) -> Result<Vec<(String, String, i64, String)>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT url, title, visit_count, visited_at FROM history ORDER BY visited_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(StorageError::from)
     }
 
     pub fn clear_history(&self) -> Result<(), StorageError> {
@@ -3364,6 +3483,45 @@ impl SqliteStorage {
             .map_err(StorageError::from)
     }
 
+    /// Own acknowledged deliveries whose relay sequence lies in `[from, to]`.
+    /// The relay never echoes a sender's own message back over the live
+    /// socket, so these sequences are expected holes in the receive stream.
+    /// Counts both the durable own-seq record (every ACK, rowless included,
+    /// kept until the cursor passes it) and any legacy acknowledged outbox rows.
+    pub fn count_acked_sync_deliveries_in_seq_range(
+        &self,
+        room_id: &str,
+        from: u64,
+        to: u64,
+    ) -> Result<u64, StorageError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM (
+                     SELECT relay_seq FROM sync_own_relay_seqs
+                     WHERE room_id = ?1 AND relay_seq BETWEEN ?2 AND ?3
+                     UNION
+                     SELECT relay_seq FROM sync_queue
+                     WHERE state = 'acknowledged' AND relay_seq BETWEEN ?2 AND ?3
+                 )",
+                rusqlite::params![room_id, from, to],
+                |row| row.get(0),
+            )
+            .map_err(StorageError::from)
+    }
+
+    /// Records the relay sequence of one of this device's acknowledged pushes.
+    pub fn record_own_sync_relay_seq(
+        &self,
+        room_id: &str,
+        relay_seq: u64,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO sync_own_relay_seqs (room_id, relay_seq) VALUES (?1, ?2)",
+            rusqlite::params![room_id, relay_seq],
+        )?;
+        Ok(())
+    }
+
     pub fn set_sync_receive_cursor(
         &self,
         room_id: &str,
@@ -3374,6 +3532,11 @@ impl SqliteStorage {
              VALUES (?1, ?2)
              ON CONFLICT(room_id) DO UPDATE SET
                  last_relay_seq = MAX(last_relay_seq, excluded.last_relay_seq)",
+            rusqlite::params![room_id, relay_seq],
+        )?;
+        // Own-push holes at or below the cursor can no longer look like a gap.
+        self.conn.execute(
+            "DELETE FROM sync_own_relay_seqs WHERE room_id = ?1 AND relay_seq <= ?2",
             rusqlite::params![room_id, relay_seq],
         )?;
         Ok(())
@@ -3517,7 +3680,7 @@ impl SqliteStorage {
         }
     }
 
-    pub fn load_local_sync_tombstones(&self) -> Result<Vec<(String, String, u64, u32, String)>, StorageError> {
+    pub fn load_local_sync_tombstones(&self) -> Result<Vec<LocalSyncTombstoneRecord>, StorageError> {
         let mut statement = self.conn.prepare(
             "SELECT entity_type, entity_id, hlc_ts, device_id, payload_json FROM entity_versions
              WHERE json_extract(payload_json, '$.mahoSyncDeleted') = 1",
@@ -3644,6 +3807,69 @@ mod tests {
         assert_eq!(rows[1].0, "https://b.test/");
         assert!(rows[0].2 > rows[1].2);
         assert_eq!(db.load_recent_history(1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn imported_history_keeps_visit_time_and_count() {
+        let db = test_store();
+        db.add_history_entry_at("https://a.test/", "A", Some(1_700_000_000), 7)
+            .unwrap();
+        assert_eq!(
+            db.search_history("a.test", 10).unwrap(),
+            vec![(
+                "https://a.test/".to_string(),
+                "A".to_string(),
+                "2023-11-14 22:13:20".to_string()
+            )]
+        );
+        assert_eq!(db.history_visit_count("https://a.test/").unwrap(), 7);
+        // A live visit counts once on top of the imported total.
+        db.add_history_entry("https://a.test/", "A").unwrap();
+        assert_eq!(db.history_visit_count("https://a.test/").unwrap(), 8);
+        assert_eq!(db.history_visit_count("https://missing.test/").unwrap(), 0);
+    }
+
+    #[test]
+    fn imported_history_without_valid_time_is_stored_as_now() {
+        let db = test_store();
+        for visited_at in [None, Some(i64::MAX)] {
+            db.add_history_entry_at("https://b.test/", "B", visited_at, 1)
+                .unwrap();
+        }
+        let rows = db.load_recent_history(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        assert!(now_ms.abs_diff(rows[0].2) < 120_000, "stored {} vs now {now_ms}", rows[0].2);
+        assert_eq!(db.history_visit_count("https://b.test/").unwrap(), 2);
+    }
+
+    #[test]
+    fn versioned_database_without_history_visit_count_is_upgraded() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("history-v3.db");
+        let path_str = db_path.to_str().unwrap();
+        let key = test_key();
+        {
+            let storage = SqliteStorage::open_with_key(path_str, &key).unwrap();
+            storage
+                .conn
+                .execute_batch(
+                    "DROP TABLE history;
+                     CREATE TABLE history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL,
+                        title TEXT NOT NULL, visited_at TEXT NOT NULL);
+                     INSERT INTO history (url, title, visited_at)
+                        VALUES ('https://old.test/', 'Old', '2026-01-01 00:00:00');
+                     PRAGMA user_version = 3;",
+                )
+                .unwrap();
+        }
+        let storage = SqliteStorage::open_with_key(path_str, &key).unwrap();
+        assert_eq!(storage.history_visit_count("https://old.test/").unwrap(), 1);
+        storage
+            .add_history_entry_at("https://new.test/", "New", Some(1_700_000_000), 3)
+            .unwrap();
+        assert_eq!(storage.history_visit_count("https://new.test/").unwrap(), 3);
     }
 
     const RECENT_CREATED_AT: &str = "2999-01-01 00:00:00";
@@ -4741,7 +4967,7 @@ impl SqliteStorage {
     pub fn load_memory_embeddings_since(
         &self,
         sequence: i64,
-    ) -> Result<(i64, Vec<(String, Option<Vec<u8>>)>), StorageError> {
+    ) -> Result<(i64, Vec<MemoryEmbeddingChange>), StorageError> {
         let high_water = self.conn.query_row(
             "SELECT COALESCE(MAX(sequence), 0) FROM memory_index_changes",
             [],
@@ -4898,6 +5124,29 @@ impl SqliteStorage {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    /// Every turn of one conversation, oldest first, without the 100-turn
+    /// window `get_conversation_messages` applies. Used by data export.
+    pub fn get_all_conversation_messages(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<maho_types::chat::ConversationTurn>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, role, content, url_context, created_at \
+             FROM conversation_turns WHERE session_id = ?1 ORDER BY created_at ASC, rowid ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id], |row| {
+            Ok(maho_types::chat::ConversationTurn {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                url_context: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(StorageError::from)
     }
 
     pub fn get_conversation_messages(
@@ -5514,16 +5763,7 @@ impl SqliteStorage {
 
     pub fn load_content_blocker_state(
         &self,
-    ) -> Result<
-        Option<(
-            maho_types::content_blocking::ContentBlockingMode,
-            u64,
-            Option<Vec<u8>>,
-            Option<String>,
-            Option<String>,
-        )>,
-        StorageError,
-    > {
+    ) -> Result<Option<ContentBlockerStateRecord>, StorageError> {
         let result = self.conn.query_row(
             "SELECT mode, generation, engine_cache, engine_version, engine_hash FROM content_blocker_state WHERE id = 1",
             [],

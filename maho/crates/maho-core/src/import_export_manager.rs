@@ -87,6 +87,33 @@ pub struct HistoryEntry {
     pub last_visited: Option<DateTime>,
 }
 
+/// One folder level of a bookmark export tree.
+#[derive(Clone, Debug, Default)]
+pub struct BookmarkExportFolder {
+    pub name: String,
+    pub folders: Vec<BookmarkExportFolder>,
+    pub items: Vec<ImportItem>,
+}
+
+/// A bookmark parsed from Netscape HTML with its full folder path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetscapeBookmark {
+    pub title: String,
+    pub url: String,
+    pub folder_path: Vec<String>,
+    pub add_date: Option<String>,
+}
+
+/// One plaintext credential row of a password CSV export. Plaintext lives
+/// only for the duration of the export call.
+pub struct PasswordExportRow {
+    pub name: String,
+    pub url: String,
+    pub username: String,
+    pub password: zeroize::Zeroizing<String>,
+    pub note: String,
+}
+
 const MAX_IMPORT_HISTORY: usize = 20;
 
 pub struct ImportExportManager {
@@ -148,7 +175,35 @@ impl ImportExportManager {
         result
     }
 
+    /// Netscape bookmark HTML for a flat item list. Items sharing a folder
+    /// name are grouped under one `<H3>` (first-appearance order); unfiled
+    /// items are written at the root after the folders.
     pub fn export_bookmarks(&self, bookmarks: &[ImportItem]) -> String {
+        let mut root = BookmarkExportFolder::default();
+        for item in bookmarks {
+            match &item.folder {
+                Some(name) => {
+                    let index = match root.folders.iter().position(|f| &f.name == name) {
+                        Some(index) => index,
+                        None => {
+                            root.folders.push(BookmarkExportFolder {
+                                name: name.clone(),
+                                ..Default::default()
+                            });
+                            root.folders.len() - 1
+                        }
+                    };
+                    root.folders[index].items.push(item.clone());
+                }
+                None => root.items.push(item.clone()),
+            }
+        }
+        Self::export_bookmarks_tree(&root)
+    }
+
+    /// Netscape bookmark HTML for a nested folder tree. Titles, folder names
+    /// and URLs are HTML-escaped.
+    pub fn export_bookmarks_tree(root: &BookmarkExportFolder) -> String {
         let mut html = String::from(
             "<!DOCTYPE NETSCAPE-Bookmark-file-1>\n\
              <META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n\
@@ -156,31 +211,70 @@ impl ImportExportManager {
              <H1>Bookmarks</H1>\n\
              <DL><p>\n",
         );
-
-        for item in bookmarks {
-            let date_attr = item
-                .date_added
-                .as_ref()
-                .map(|d| format!(" ADD_DATE=\"{}\"", d))
-                .unwrap_or_default();
-
-            if let Some(folder) = &item.folder {
-                html.push_str(&format!("    <DT><H3>{}</H3>\n    <DL><p>\n", folder));
-                html.push_str(&format!(
-                    "        <DT><A HREF=\"{}\"{}>{}</A>\n",
-                    item.url, date_attr, item.title
-                ));
-                html.push_str("    </DL><p>\n");
-            } else {
-                html.push_str(&format!(
-                    "    <DT><A HREF=\"{}\"{}>{}</A>\n",
-                    item.url, date_attr, item.title
-                ));
-            }
-        }
-
+        write_bookmark_folder_body(root, 1, &mut html);
         html.push_str("</DL><p>\n");
         html
+    }
+
+    /// Parses Netscape bookmark HTML (the format every browser exports and
+    /// `export_bookmarks_tree` writes). Each bookmark carries its full folder
+    /// path from the root.
+    pub fn parse_netscape_bookmarks(html: &str) -> Vec<NetscapeBookmark> {
+        let mut out = Vec::new();
+        let mut stack: Vec<String> = Vec::new();
+        let mut pending_folder: Option<String> = None;
+        let lower = html.to_ascii_lowercase();
+        let mut pos = 0;
+        while let Some(rel) = lower[pos..].find('<') {
+            let tag_start = pos + rel;
+            let Some(tag_len) = lower[tag_start..].find('>') else {
+                break;
+            };
+            let tag_end = tag_start + tag_len + 1;
+            let tag = &lower[tag_start..tag_end];
+            if tag.starts_with("<h3") {
+                let close = lower[tag_end..]
+                    .find("</h3>")
+                    .map(|i| tag_end + i)
+                    .unwrap_or(lower.len());
+                pending_folder = Some(html_unescape(html[tag_end..close].trim()));
+                pos = close;
+                continue;
+            }
+            if tag.starts_with("<dl") {
+                if let Some(name) = pending_folder.take() {
+                    stack.push(name);
+                } else {
+                    // Root list (or an anonymous list) still needs a frame so
+                    // its closing tag pops symmetrically.
+                    stack.push(String::new());
+                }
+            } else if tag.starts_with("</dl") {
+                stack.pop();
+            } else if tag.starts_with("<a ") || tag == "<a>" {
+                let raw_tag = &html[tag_start..tag_end];
+                let close = lower[tag_end..]
+                    .find("</a>")
+                    .map(|i| tag_end + i)
+                    .unwrap_or(lower.len());
+                if let Some(url) = attribute_value(raw_tag, "href") {
+                    out.push(NetscapeBookmark {
+                        title: html_unescape(html[tag_end..close].trim()),
+                        url: html_unescape(&url),
+                        folder_path: stack
+                            .iter()
+                            .filter(|name| !name.is_empty())
+                            .cloned()
+                            .collect(),
+                        add_date: attribute_value(raw_tag, "add_date"),
+                    });
+                }
+                pos = close;
+                continue;
+            }
+            pos = tag_end;
+        }
+        out
     }
 
     pub fn export_data(&self, data: ExportData) -> serde_json::Value {
@@ -567,17 +661,32 @@ impl ImportExportManager {
     pub fn export_history_csv(&self, entries: &[HistoryEntry]) -> String {
         let mut csv = String::from("URL,Title,Visit Count,Last Visited\n");
         for entry in entries {
-            let title_escaped = entry.title.replace('"', "\"\"");
-            let url_escaped = entry.url.replace('"', "\"\"");
             let last_visited = entry
                 .last_visited
                 .as_ref()
                 .map(|d| d.0.clone())
                 .unwrap_or_default();
-            csv.push_str(&format!(
-                "\"{}\",\"{}\",{},\"{}\"\n",
-                url_escaped, title_escaped, entry.visit_count, last_visited
-            ));
+            csv.push_str(&csv_row(&[
+                &entry.url,
+                &entry.title,
+                &entry.visit_count.to_string(),
+                &last_visited,
+            ]));
+        }
+        csv
+    }
+
+    /// Chrome-compatible password CSV (`name,url,username,password,note`).
+    pub fn export_passwords_csv(rows: &[PasswordExportRow]) -> String {
+        let mut csv = String::from("name,url,username,password,note\n");
+        for row in rows {
+            csv.push_str(&csv_row(&[
+                &row.name,
+                &row.url,
+                &row.username,
+                &row.password,
+                &row.note,
+            ]));
         }
         csv
     }
@@ -585,6 +694,87 @@ impl ImportExportManager {
     pub fn export_settings_json(settings: &serde_json::Value) -> String {
         serde_json::to_string_pretty(settings).unwrap_or_else(|_| "{}".to_string())
     }
+}
+
+pub fn html_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn html_unescape(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&amp;", "&")
+}
+
+fn attribute_value(raw_tag: &str, name: &str) -> Option<String> {
+    let lower = raw_tag.to_ascii_lowercase();
+    let needle = format!("{}=\"", name);
+    let mut search = 0;
+    while let Some(rel) = lower[search..].find(&needle) {
+        let at = search + rel;
+        let preceded_by_space = at > 0 && lower.as_bytes()[at - 1].is_ascii_whitespace();
+        let value_start = at + needle.len();
+        if preceded_by_space {
+            let value_end = raw_tag[value_start..].find('"')? + value_start;
+            return Some(raw_tag[value_start..value_end].to_string());
+        }
+        search = value_start;
+    }
+    None
+}
+
+fn write_bookmark_folder_body(folder: &BookmarkExportFolder, depth: usize, html: &mut String) {
+    let indent = "    ".repeat(depth);
+    for child in &folder.folders {
+        html.push_str(&format!(
+            "{}<DT><H3>{}</H3>\n{}<DL><p>\n",
+            indent,
+            html_escape(&child.name),
+            indent
+        ));
+        write_bookmark_folder_body(child, depth + 1, html);
+        html.push_str(&format!("{}</DL><p>\n", indent));
+    }
+    for item in &folder.items {
+        let date_attr = item
+            .date_added
+            .as_ref()
+            .map(|d| format!(" ADD_DATE=\"{}\"", html_escape(&d.0)))
+            .unwrap_or_default();
+        html.push_str(&format!(
+            "{}<DT><A HREF=\"{}\"{}>{}</A>\n",
+            indent,
+            html_escape(&item.url),
+            date_attr,
+            html_escape(&item.title)
+        ));
+    }
+}
+
+/// One RFC 4180 CSV line with every field quoted.
+pub fn csv_row(fields: &[&str]) -> String {
+    let mut line = fields
+        .iter()
+        .map(|field| format!("\"{}\"", field.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(",");
+    line.push('\n');
+    line
 }
 
 fn dirs_or_home() -> Option<PathBuf> {

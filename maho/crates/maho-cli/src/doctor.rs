@@ -134,6 +134,7 @@ fn socket_display_candidates() -> Vec<PathBuf> {
     vec![maho_browser_mcp::paths::default_socket_path()]
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepointAction {
     AlreadyCurrent,
@@ -142,6 +143,7 @@ pub enum RepointAction {
     MissingEntry,
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn plan_cargo_bin_repoint(cargo_bin: &Path, helper: &Path) -> RepointAction {
     match std::fs::symlink_metadata(cargo_bin) {
         Ok(md) if md.file_type().is_symlink() => match std::fs::read_link(cargo_bin) {
@@ -154,6 +156,7 @@ pub fn plan_cargo_bin_repoint(cargo_bin: &Path, helper: &Path) -> RepointAction 
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BridgeAction {
     AlreadyBridged,
@@ -163,6 +166,7 @@ pub enum BridgeAction {
     NoSocket,
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn plan_socket_bridge(app_support: &Path) -> BridgeAction {
     let branded = app_support.join("Maho").join("maho.sock");
     let unbranded = app_support.join("Chromium").join("maho.sock");

@@ -9,6 +9,7 @@ pub const MAX_SYNC_PUSH_BATCH: usize = 64;
 /// Room whose full local baseline has been queued. A device that already had
 /// local tabs/spaces before joining an account must still publish them once.
 const SYNC_BASELINE_ROOM_SETTING: &str = "sync_baseline_room";
+const DEFAULT_SEARCH_ENGINE_ID_SETTING: &str = "default_search_engine_id";
 
 const LMDB_DIRTY_TABS: u8 = 0b000001;
 const LMDB_DIRTY_SPACES: u8 = 0b000010;
@@ -100,7 +101,7 @@ use crate::easel_manager::EaselManager;
 use crate::event_dispatcher::{
     CommandBarInterface, EventDispatcher, SpaceManagerInterface, TabManagerInterface,
 };
-use crate::extension_bridge::{ExtensionBridge, DEFAULT_PROFILE_KEY};
+use crate::extension_bridge::{ExtensionBridge, ExtensionSyncCallback, DEFAULT_PROFILE_KEY};
 use crate::find_manager::FindManager;
 use crate::import_export_manager::ImportExportManager;
 use crate::llm_manager::LLMManager;
@@ -128,7 +129,16 @@ use crate::vault_manager::{
 };
 use crate::vault_runtime::VaultRuntime;
 
+mod client_held;
+mod data_export;
 mod vault_items;
+
+pub use data_export::{
+    DataExportKind, EXPORT_ERROR_INVALID_PASSPHRASE, EXPORT_ERROR_OS_AUTH_UNAVAILABLE,
+    EXPORT_ERROR_PASSPHRASE_REQUIRED, EXPORT_ERROR_RATE_LIMITED,
+    EXPORT_ERROR_STORAGE_UNAVAILABLE, EXPORT_ERROR_UNKNOWN_KIND, EXPORT_ERROR_VAULT_LOCKED,
+    EXPORT_ERROR_WRITE_FAILED,
+};
 
 fn private_tab_ids_from_tabs<'a, I>(tabs: I) -> HashSet<TabId>
 where
@@ -1982,6 +1992,311 @@ mod tests {
     }
 
     #[test]
+    fn launch_restore_policy_prunes_locally_without_sync_tombstones() {
+        use maho_types::settings::{GeneralSettingsUpdate, RestorePolicy};
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("launch-restore-policy.sqlite");
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        let space_id = core.get_active_space_id().clone();
+        let normal_a = create_tab(&mut core);
+        let normal_b = create_tab(&mut core);
+        let pinned = create_tab(&mut core);
+        core.handle_event(ShellEvent::PinTab { tab_id: pinned.clone() });
+        core.update_settings(SettingsUpdate {
+            general: Some(GeneralSettingsUpdate {
+                restore_on_launch: Some(RestorePolicy::RestorePinned),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let updates = core.handle_event(ShellEvent::ApplyRestorePolicyOnLaunch);
+
+        assert!(updates.is_empty(), "launch prune must not emit synced updates");
+        assert!(core.tab_manager.get_tab(&normal_a).is_none());
+        assert!(core.tab_manager.get_tab(&normal_b).is_none());
+        assert!(core.tab_manager.get_tab(&pinned).is_some(), "pinned tab is kept");
+        let tombstones = core
+            .storage_ref()
+            .expect("storage")
+            .load_local_sync_tombstones()
+            .expect("tombstones");
+        assert!(
+            tombstones.iter().all(|(kind, ..)| kind != SyncEntityType::Tab.as_str()),
+            "launch prune must not queue tab deletions for other devices: {tombstones:?}"
+        );
+        // Never published to a sync room: the order is local, so it is cleaned.
+        let order = core.space_manager.get_tab_order(&space_id);
+        assert!(!order.contains(&normal_a) && !order.contains(&normal_b));
+    }
+
+    #[test]
+    fn launch_restore_policy_keeps_shared_space_order_after_sync_baseline() {
+        use maho_types::settings::{GeneralSettingsUpdate, RestorePolicy};
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("launch-restore-policy-shared.sqlite");
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        let space_id = core.get_active_space_id().clone();
+        let other_device_tab = create_tab(&mut core);
+        core.storage_ref()
+            .expect("storage")
+            .set_setting(SYNC_BASELINE_ROOM_SETTING, "room-1")
+            .expect("baseline room");
+        core.update_settings(SettingsUpdate {
+            general: Some(GeneralSettingsUpdate {
+                restore_on_launch: Some(RestorePolicy::StartFresh),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let tab_count_before = core
+            .get_space_view_models()
+            .into_iter()
+            .find(|space| space.id == space_id)
+            .expect("space")
+            .tab_count;
+
+        core.handle_event(ShellEvent::ApplyRestorePolicyOnLaunch);
+
+        assert!(core.tab_manager.get_tab(&other_device_tab).is_none());
+        assert!(
+            core.space_manager.get_tab_order(&space_id).contains(&other_device_tab),
+            "a later space push must not drop the tab from other devices' order"
+        );
+        let tab_count_after = core
+            .get_space_view_models()
+            .into_iter()
+            .find(|space| space.id == space_id)
+            .expect("space")
+            .tab_count;
+        assert_eq!(tab_count_after, tab_count_before - 1, "pruned tab is not counted as open");
+    }
+
+    #[test]
+    fn builtin_default_search_engine_survives_restart() {
+        use maho_types::settings::{GeneralSettingsUpdate, SearchEngine as SettingsSearchEngine};
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("default-search-engine.sqlite");
+        let path = path.to_str().expect("utf8").to_string();
+        let mut core = MahoCore::new().with_storage(&path);
+        core.update_settings(SettingsUpdate {
+            general: Some(GeneralSettingsUpdate {
+                default_search_engine: Some(SettingsSearchEngine {
+                    name: "DuckDuckGo".to_string(),
+                    url_template: "https://duckduckgo.com/?q=%@".to_string(),
+                    is_default: true,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert_eq!(
+            core.command_bar.get_default_search_engine().map(|e| e.id.clone()),
+            Some("duckduckgo".to_string())
+        );
+        drop(core);
+
+        let mut restarted = MahoCore::new().with_storage(&path);
+        restarted.load_persisted_data().expect("reload");
+
+        assert_eq!(
+            restarted.command_bar.get_default_search_engine().map(|e| e.id.clone()),
+            Some("duckduckgo".to_string()),
+            "the command bar must keep the built-in default after a restart"
+        );
+        assert_eq!(
+            restarted.get_settings().general.default_search_engine.name,
+            "DuckDuckGo",
+            "the Settings label must match the engine the command bar uses"
+        );
+    }
+
+    #[test]
+    fn set_default_search_engine_event_survives_restart() {
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("default-search-engine-event.sqlite");
+        let path = path.to_str().expect("utf8").to_string();
+        let mut core = MahoCore::new().with_storage(&path);
+        core.handle_event(ShellEvent::SetDefaultSearchEngine { id: "bing".to_string() });
+        drop(core);
+
+        let mut restarted = MahoCore::new().with_storage(&path);
+        restarted.load_persisted_data().expect("reload");
+
+        assert_eq!(
+            restarted.command_bar.get_default_search_engine().map(|e| e.id.clone()),
+            Some("bing".to_string())
+        );
+    }
+
+    fn add_custom_engine(core: &mut MahoCore, id: &str) {
+        core.handle_event(ShellEvent::AddSearchEngine {
+            engine: maho_types::search_engine::SearchEngine {
+                id: id.to_string(),
+                name: "Custom".to_string(),
+                url_template: "https://custom.example/?q={query}".to_string(),
+                shortcut: None,
+                icon_url: None,
+                is_default: false,
+            },
+        });
+        core.handle_event(ShellEvent::SetDefaultSearchEngine { id: id.to_string() });
+    }
+
+    fn stored_default_engine_id(core: &MahoCore) -> Option<String> {
+        core.storage_ref()
+            .expect("storage")
+            .get_setting(DEFAULT_SEARCH_ENGINE_ID_SETTING)
+            .expect("read setting")
+    }
+
+    #[test]
+    fn dangling_default_search_engine_id_heals_on_load() {
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("dangling-default-engine.sqlite");
+        let path = path.to_str().expect("utf8").to_string();
+        let core = MahoCore::new().with_storage(&path);
+        core.storage_ref()
+            .expect("storage")
+            .set_setting(DEFAULT_SEARCH_ENGINE_ID_SETTING, "removed-engine")
+            .expect("seed dangling id");
+        drop(core);
+
+        let mut restarted = MahoCore::new().with_storage(&path);
+        restarted.load_persisted_data().expect("reload");
+
+        assert_eq!(
+            stored_default_engine_id(&restarted),
+            None,
+            "an id naming no engine must be cleared on load"
+        );
+        let settings_name = restarted.get_settings().general.default_search_engine.name.clone();
+        let command_bar_default = restarted
+            .command_bar
+            .get_default_search_engine()
+            .map(|e| e.name.clone())
+            .expect("default engine");
+        assert!(
+            command_bar_default.eq_ignore_ascii_case(&settings_name),
+            "the fallback must pick the Settings engine ({settings_name}), got {command_bar_default}"
+        );
+    }
+
+    #[test]
+    fn removing_default_search_engine_clears_persisted_id() {
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("remove-default-engine.sqlite");
+        let path = path.to_str().expect("utf8").to_string();
+        let mut core = MahoCore::new().with_storage(&path);
+        add_custom_engine(&mut core, "custom-engine");
+        assert_eq!(stored_default_engine_id(&core), Some("custom-engine".to_string()));
+
+        core.handle_event(ShellEvent::RemoveSearchEngine { id: "custom-engine".to_string() });
+
+        assert_eq!(stored_default_engine_id(&core), None);
+    }
+
+    #[test]
+    fn sync_deleting_default_search_engine_clears_persisted_id() {
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("sync-remove-default-engine.sqlite");
+        let path = path.to_str().expect("utf8").to_string();
+        let mut core = MahoCore::new().with_storage(&path);
+        core.start_sync("wss://localhost:8080", "search-engine-room");
+        core.set_sync_status(crate::sync_models::SyncStatus::Synced);
+        add_custom_engine(&mut core, "custom-engine");
+        assert_eq!(stored_default_engine_id(&core), Some("custom-engine".to_string()));
+
+        let version = core.next_hlc_ts().expect("hlc") + 1_000;
+        let applied = core.apply_sync_remote_entities(vec![crate::sync_models::SyncEntity::new(
+            SyncEntityType::SearchEngine,
+            "custom-engine".to_string(),
+            version,
+            1_700_000_000,
+            "{}".to_string(),
+            true,
+        )]);
+        assert_eq!(applied.len(), 1, "the remote tombstone must apply");
+
+        assert_eq!(stored_default_engine_id(&core), None);
+    }
+
+    #[test]
+    fn tidy_jobs_respect_maho_ai_master_switch() {
+        use maho_types::max_settings::MaxSettingsUpdate;
+        let mut core = MahoCore::new();
+        core.update_settings(SettingsUpdate {
+            max: Some(MaxSettingsUpdate {
+                enabled: Some(false),
+                tidy_tab_titles: Some(true),
+                tidy_downloads: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let is_llm = |u: &CoreUpdate| matches!(u, CoreUpdate::RequestLlmCompletion { .. });
+
+        let tab = create_tab(&mut core);
+        let pin_updates = core.handle_event(ShellEvent::PinTab { tab_id: tab.clone() });
+        assert!(
+            !pin_updates.iter().any(is_llm),
+            "Tidy Tab Titles must not run while Maho AI is off"
+        );
+        let download_id = core.start_download("a.bin", "https://example.com/a.bin", 1, None, None, None);
+        assert!(
+            !core.complete_download(&download_id).iter().any(is_llm),
+            "Tidy Downloads must not run while Maho AI is off"
+        );
+
+        core.update_settings(SettingsUpdate {
+            max: Some(MaxSettingsUpdate {
+                enabled: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let tab = create_tab(&mut core);
+        let pin_updates = core.handle_event(ShellEvent::PinTab { tab_id: tab });
+        assert!(pin_updates.iter().any(is_llm), "Tidy Tab Titles runs once Maho AI is on");
+        let download_id = core.start_download("b.bin", "https://example.com/b.bin", 1, None, None, None);
+        assert!(
+            core.complete_download(&download_id).iter().any(is_llm),
+            "Tidy Downloads runs once Maho AI is on"
+        );
+    }
+
+    #[test]
+    fn settings_search_engine_drives_command_bar_default() {
+        let mut core = MahoCore::new();
+        for (name, template, host) in [
+            ("DuckDuckGo", "https://duckduckgo.com/?q={query}", "duckduckgo.com"),
+            ("Kagi", "https://kagi.com/search?q=%@", "kagi.com"),
+            ("Perplexity", "https://www.perplexity.ai/search?q={query}", "perplexity.ai"),
+        ] {
+            core.update_settings(SettingsUpdate {
+                general: Some(maho_types::settings::GeneralSettingsUpdate {
+                    default_search_engine: Some(maho_types::settings::SearchEngine {
+                        name: name.to_string(),
+                        url_template: template.to_string(),
+                        is_default: true,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            let url = core.command_bar.get_search_url("rust");
+            assert!(url.contains(host), "{name}: expected {host} in {url}");
+        }
+    }
+
+    #[test]
     fn tidy_tabs_below_threshold_emits_no_llm_request() {
         let mut core = MahoCore::new();
         let space_id = core.get_active_space_id().clone();
@@ -2598,6 +2913,13 @@ fn format_key_combo_label(key_combo: &KeyCombo) -> String {
     }
 }
 
+/// Relay snapshot fetch override: room id -> latest snapshot JSON (None on 404).
+pub type SyncSnapshotSource =
+    Box<dyn Fn(&str) -> Result<Option<String>, String> + Send + Sync>;
+
+/// Account-escrow slots: (KDF params, account-wrapped key).
+pub type VaultAccountEscrow = (Vec<u8>, Vec<u8>);
+
 #[allow(dead_code)]
 pub struct MahoCore {
     readiness: Arc<RwLock<CoreReadinessStatus>>,
@@ -2659,6 +2981,13 @@ pub struct MahoCore {
     /// legacy-vault-to-account-escrow migration after a passphrase unlock. Never
     /// persisted.
     last_account_seed: Option<zeroize::Zeroizing<[u8; 32]>>,
+    /// Override for the stale-cursor snapshot fetch; None uses the relay.
+    sync_snapshot_source: Option<SyncSnapshotSource>,
+    /// Test seam for the client-held snapshot upload; `None` POSTs to the relay.
+    sync_snapshot_sink: Option<client_held::SyncSnapshotSink>,
+    /// Canonical recovery phrase of a phrase-configured session; unwraps a
+    /// client-held Vault. In memory only, never persisted.
+    client_held_phrase: Option<zeroize::Zeroizing<String>>,
     #[cfg(test)]
     vault_revocation_fault: bool,
     #[cfg(test)]
@@ -2983,7 +3312,7 @@ impl MahoCore {
 
         let dispatcher = EventDispatcher::new();
 
-        let core = Self {
+        Self {
             readiness: Arc::new(RwLock::new(CoreReadinessStatus::Uninitialized)),
             tab_manager,
             space_manager,
@@ -3036,6 +3365,9 @@ impl MahoCore {
             last_vault_lifecycle_error: None,
             last_vault_account_outcome: None,
             last_account_seed: None,
+            sync_snapshot_source: None,
+            sync_snapshot_sink: None,
+            client_held_phrase: None,
             #[cfg(test)]
             vault_revocation_fault: false,
             #[cfg(test)]
@@ -3050,9 +3382,7 @@ impl MahoCore {
             #[cfg(test)]
             profile_lmdb_persist_fault: false,
             active_chat_sessions: Arc::new(Mutex::new(HashMap::new())),
-        };
-
-        core
+        }
     }
 
     // INTEGRATION POINT: RoutineScheduler
@@ -4046,6 +4376,8 @@ impl MahoCore {
                     || id == "bing"
                     || id == "brave"
                     || id == "ecosia"
+                    || id == "perplexity"
+                    || id == "kagi"
                 {
                     // Only update the is_default status for built-in engines
                     if is_default {
@@ -4122,6 +4454,45 @@ impl MahoCore {
                     tags,
                 };
                 self.reading_list_manager.insert_item(item);
+            }
+        }
+
+        // Default search engine. Built-in engines have no search_engines row, so
+        // the chosen id is kept as its own setting. Installs that predate it fall
+        // back to the engine named in the settings document, so the command bar
+        // and the Settings label agree after every restart. A stored id whose
+        // engine no longer exists (removed locally or by sync before the removal
+        // paths cleared it) is dropped and the fallback runs, so it heals.
+        let stored_default_engine = storage
+            .get_setting(DEFAULT_SEARCH_ENGINE_ID_SETTING)
+            .ok()
+            .flatten();
+        let applied_stored_default = match stored_default_engine {
+            Some(id) => {
+                let found = self.command_bar.set_default_search_engine(&id);
+                if !found {
+                    if let Err(error) = storage.delete_setting(DEFAULT_SEARCH_ENGINE_ID_SETTING) {
+                        eprintln!("[search] clearing dangling default engine failed: {error}");
+                    }
+                }
+                found
+            }
+            None => false,
+        };
+        if !applied_stored_default {
+            let engine = &self.settings_manager.get_settings().general.default_search_engine;
+            let id = self
+                .command_bar
+                .find_engine_id_by_url_template(&engine.url_template)
+                .or_else(|| {
+                    self.command_bar
+                        .get_search_engines()
+                        .into_iter()
+                        .find(|e| e.name.eq_ignore_ascii_case(&engine.name))
+                        .map(|e| e.id)
+                });
+            if let Some(id) = id {
+                self.command_bar.set_default_search_engine(&id);
             }
         }
 
@@ -4217,6 +4588,16 @@ impl MahoCore {
             .vault_agent_policy_status()
             .map(|policy| policy.policy)
             .unwrap_or(maho_types::vault::VaultAgentPolicy::Deny);
+        // A completed profile whose relay session expired keeps browsing; its
+        // account-escrowed Vault stays locked until sign-in restores the seed.
+        let locked = matches!(
+            status.lock_state,
+            maho_types::vault::VaultLockState::Locked
+                | maho_types::vault::VaultLockState::AutoLocked
+        );
+        if locked && status.account_escrowed && self.last_account_seed.is_none() {
+            status.lock_reason = Some(maho_types::vault::VaultLockReason::AccountSeedMissing);
+        }
         status
     }
 
@@ -4394,7 +4775,7 @@ impl MahoCore {
     /// vault carries no account wrap.
     pub fn export_vault_account_escrow(
         &self,
-    ) -> Result<Option<(Vec<u8>, Vec<u8>)>, VaultManagerError> {
+    ) -> Result<Option<VaultAccountEscrow>, VaultManagerError> {
         let storage = self.storage.as_ref().ok_or_else(|| {
             VaultManagerError::Storage("vault storage is not configured".to_string())
         })?;
@@ -4510,7 +4891,7 @@ impl MahoCore {
         let Some(seed) = self.last_account_seed.clone() else {
             return;
         };
-        if self.vault_runtime.has_account_wrap() {
+        if self.vault_runtime.has_account_wrap() || self.is_client_held() {
             return;
         }
         if let Err(error) = self.wrap_account_key_into_active_vault(&seed[..]) {
@@ -5147,6 +5528,48 @@ impl MahoCore {
         }
     }
 
+    /// Record a history entry imported from another browser, keeping its
+    /// last-visit time (unix seconds) and visit count. An import runs outside
+    /// any tab, so the active-tab private-mode gate of
+    /// [`Self::add_history_entry`] does not apply: a private active tab must
+    /// not silently drop imported history. A missing or invalid time is
+    /// stored as now, and a zero count as one visit. Returns false only when
+    /// the storage write fails.
+    pub fn add_imported_history_entry(
+        &mut self,
+        url: &str,
+        title: &str,
+        visit_time_secs: f64,
+        visit_count: u32,
+    ) -> bool {
+        // 9999-12-31T23:59:59Z, the last time SQLite's datetime() accepts.
+        const MAX_UNIX_SECS: f64 = 253_402_300_799.0;
+        let visited_at = (visit_time_secs.is_finite()
+            && visit_time_secs > 0.0
+            && visit_time_secs <= MAX_UNIX_SECS)
+            .then_some(visit_time_secs as i64);
+
+        match visited_at {
+            Some(secs) => self.command_bar.restore_history_entry(
+                url.to_string(),
+                title.to_string(),
+                secs as u64 * 1000,
+            ),
+            None => self.command_bar.add_history_entry(
+                url.to_string(),
+                title.to_string(),
+                self.favicon_for_url(url),
+            ),
+        }
+
+        match self.storage {
+            Some(ref storage) => storage
+                .add_history_entry_at(url, title, visited_at, visit_count.max(1))
+                .is_ok(),
+            None => true,
+        }
+    }
+
     pub fn clear_history(&mut self) {
         self.command_bar.clear_history();
         if let Some(ref storage) = self.storage {
@@ -5183,7 +5606,18 @@ impl MahoCore {
         if self.active_tab_is_private() {
             return None;
         }
+        Some(self.store_bookmark(url, title, folder_id))
+    }
 
+    /// Store a bookmark imported from another browser and return its id.
+    /// Like [`Self::add_imported_history_entry`], an import runs outside any
+    /// tab, so the active-tab private-mode gate does not apply (folders
+    /// created by the same import would otherwise stay empty).
+    pub fn add_imported_bookmark(&mut self, url: &str, title: &str, folder_id: Option<&str>) -> String {
+        self.store_bookmark(url, title, folder_id)
+    }
+
+    fn store_bookmark(&mut self, url: &str, title: &str, folder_id: Option<&str>) -> String {
         let bm = self.bookmark_manager.add_bookmark(
             title.to_string(),
             url.to_string(),
@@ -5197,7 +5631,7 @@ impl MahoCore {
         if let Ok(payload) = serde_json::to_string(&bm) {
             self.push_sync_entity(SyncEntityType::Bookmark, id_str.clone(), payload, false);
         }
-        Some(id_str)
+        id_str
     }
 
     pub fn remove_bookmark(&mut self, bookmark_id: &str) {
@@ -6154,7 +6588,7 @@ impl MahoCore {
         let mut updates = vec![CoreUpdate::DownloadCompleted {
             download_id: id.clone(),
         }];
-        if self.settings_manager.get_settings().max.tidy_downloads {
+        if self.max_feature_enabled(|max| max.tidy_downloads) {
             if let Some(download) = self.download_manager.get_download(&id) {
                 let llm_update = self.llm_manager.request_tidy_download(
                     download.id.as_ref(),
@@ -6502,7 +6936,8 @@ impl MahoCore {
             | ShellEvent::ReorderFolder { .. }
             | ShellEvent::ReorderTabInFolder { .. }
             | ShellEvent::ReorderRootItem { .. }
-            | ShellEvent::ApplyTidyTabs { .. } => LMDB_DIRTY_TABS | LMDB_DIRTY_SPACES,
+            | ShellEvent::ApplyTidyTabs { .. }
+            | ShellEvent::ApplyRestorePolicyOnLaunch => LMDB_DIRTY_TABS | LMDB_DIRTY_SPACES,
 
             ShellEvent::CreateSpace { .. } | ShellEvent::DeleteSpace { .. } => {
                 LMDB_DIRTY_SPACES | LMDB_DIRTY_ACTIVE_SPACE
@@ -6774,6 +7209,10 @@ impl MahoCore {
             }
             ShellEvent::SignOut => {
                 self.account_manager.sign_out();
+                // The account seed belongs to the ended session; dropping it
+                // (zeroized) makes vault status report account_seed_missing so
+                // the UI offers sign-in rather than a passphrase prompt.
+                self.last_account_seed = None;
                 // Session ended: lock the Vault (dropping+zeroizing the active key
                 // first; Uninitialized is preserved) and revoke active grants,
                 // recording any revocation failure for observability.
@@ -7217,7 +7656,7 @@ impl MahoCore {
                         order: vec![],
                     });
                 }
-                if self.settings_manager.get_settings().max.tidy_tab_titles {
+                if self.max_feature_enabled(|max| max.tidy_tab_titles) {
                     if let Some(tab) = self.tab_manager.get_tab(tab_id) {
                         let tidy_update = self
                             .llm_manager
@@ -7346,6 +7785,13 @@ impl MahoCore {
             }
             ShellEvent::ResetPinnedTab { ref tab_id } => {
                 self.reset_pinned_tab(tab_id);
+                return vec![];
+            }
+            ShellEvent::ApplyRestorePolicyOnLaunch => {
+                // Returns no updates on purpose: post_dispatch_sync derives sync
+                // pushes (including TabClosed tombstones) from this result, and a
+                // launch prune must never reach other devices.
+                self.apply_restore_policy_on_launch();
                 return vec![];
             }
             ShellEvent::DeleteSpace { ref space_id } => {
@@ -7780,7 +8226,7 @@ impl MahoCore {
 
         // Tidy Tab Titles: when a tab is pinned and the setting is enabled, ask LLM to shorten
         if let Some(tab_id) = pin_tab_id {
-            if self.settings_manager.get_settings().max.tidy_tab_titles {
+            if self.max_feature_enabled(|max| max.tidy_tab_titles) {
                 if let Some(tab) = self.tab_manager.get_tab(&tab_id) {
                     let tidy_update = self
                         .llm_manager
@@ -7827,8 +8273,9 @@ impl MahoCore {
         let archive_timeout = self
             .profile_manager
             .get_active_profile()
-            .and_then(|p| p.archive_timeout_hours)
-            .unwrap_or(global_archive_timeout);
+            .map_or(global_archive_timeout, |p| {
+                p.effective_archive_timeout_hours(global_archive_timeout)
+            });
         let today_timeout = self
             .settings_manager
             .get_settings()
@@ -7911,17 +8358,19 @@ impl MahoCore {
             .into_iter()
             .map(|space| {
                 let mut vm = self.space_manager.to_view_model(space);
-                let archived_count = space
+                // Archived tabs, and ids this device pruned locally but keeps in
+                // the shared order, are not open here.
+                let hidden_count = space
                     .tab_order
                     .iter()
                     .filter(|tid| {
                         self.tab_manager
                             .get_tab(tid)
                             .map(|t| matches!(t.state, TabLifecycleState::Archived { .. }))
-                            .unwrap_or(false)
+                            .unwrap_or(true)
                     })
                     .count();
-                vm.tab_count = vm.tab_count.saturating_sub(archived_count);
+                vm.tab_count = vm.tab_count.saturating_sub(hidden_count);
                 vm
             })
             .collect()
@@ -8086,6 +8535,13 @@ impl MahoCore {
         }
     }
 
+    /// A Maho AI feature runs only while the master "Enable Maho AI" switch is
+    /// on; turning it off stops every sub-feature even if its own flag is set.
+    fn max_feature_enabled(&self, feature: impl Fn(&maho_types::max_settings::MaxSettings) -> bool) -> bool {
+        let max = &self.settings_manager.get_settings().max;
+        max.enabled && feature(max)
+    }
+
     fn make_error_update(context: &str, code: &str, message: &str) -> CoreUpdate {
         CoreUpdate::Error {
             context: context.to_string(),
@@ -8113,7 +8569,17 @@ impl MahoCore {
     }
 
     pub fn update_settings(&mut self, update: SettingsUpdate) {
+        let selected_engine = update
+            .general
+            .as_ref()
+            .and_then(|general| general.default_search_engine.clone());
         let settings = self.settings_manager.update_settings(update).clone();
+        // The settings document and the command bar each hold a default search
+        // engine; keep them as one choice so the "Search with ..." suggestion and
+        // its URL follow the engine picked in Settings.
+        if let Some(engine) = selected_engine {
+            self.sync_command_bar_default_engine(&engine);
+        }
         self.apply_vault_trust_settings(&settings);
         self.emit_settings_changed(settings.clone());
         // Persist to SQLite
@@ -8336,7 +8802,7 @@ impl MahoCore {
         if switched {
             self.persist_lmdb_now_partial(LMDB_DIRTY_ACTIVE_PROFILE);
             if let Some(ref storage) = self.storage {
-                let _ = storage.set_setting("active_profile_id", &id.to_string());
+                let _ = storage.set_setting("active_profile_id", id.as_ref());
             }
             let update = CoreUpdate::ActiveProfileChanged {
                 profile_id: id.clone(),
@@ -8787,6 +9253,64 @@ impl MahoCore {
         self.tab_manager.reset_pinned_tab(tab_id)
     }
 
+    /// Device-local "On Launch" policy. Restore Pinned Only drops this device's
+    /// open normal tabs; Start Fresh also returns pinned/favorite tabs to their
+    /// pinned page. Tabs are account-wide, so nothing here is synced: no tab
+    /// tombstone is queued, and once this profile has published to a sync room
+    /// the pruned ids stay in the shared space orders so this device's next
+    /// space push does not hide them on other devices either.
+    fn apply_restore_policy_on_launch(&mut self) {
+        use maho_types::settings::RestorePolicy;
+        let policy = self
+            .settings_manager
+            .get_settings()
+            .general
+            .restore_on_launch
+            .clone();
+        if matches!(policy, RestorePolicy::RestoreAll) {
+            return;
+        }
+        let space_orders_shared = self
+            .storage
+            .as_ref()
+            .and_then(|storage| storage.get_setting(SYNC_BASELINE_ROOM_SETTING).ok().flatten())
+            .is_some();
+        let tabs: Vec<(TabId, SpaceId, TabRole, bool, bool)> = self
+            .tab_manager
+            .get_all_tabs()
+            .into_iter()
+            .map(|tab| {
+                (
+                    tab.id.clone(),
+                    tab.space_id.clone(),
+                    tab.role.clone(),
+                    tab.is_private,
+                    matches!(tab.state, TabLifecycleState::Archived { .. }),
+                )
+            })
+            .collect();
+        for (tab_id, space_id, role, is_private, is_archived) in tabs {
+            if role.is_pinned() {
+                // Pinned and favorite tabs stay; Start Fresh sends them home.
+                if matches!(policy, RestorePolicy::StartFresh) {
+                    self.tab_manager.reset_pinned_tab(&tab_id);
+                }
+                continue;
+            }
+            if is_archived {
+                continue;
+            }
+            // May already be gone as a closed parent's descendant.
+            self.tab_manager.close_tab(&tab_id);
+            if is_private || !space_orders_shared {
+                self.space_manager.remove_tab_from_space(&space_id, &tab_id);
+            }
+            if self.space_manager.get_last_active_tab(&space_id) == Some(&tab_id) {
+                self.space_manager.set_last_active_tab(&space_id, None);
+            }
+        }
+    }
+
     /// Replaces the tab's home (pinned) URL - the views' "Edit Pinned Page"
     /// target. Routed through the event pipeline so the change is persisted and
     /// synced like every other tab mutation. Returns false for unknown tabs.
@@ -8953,17 +9477,14 @@ impl MahoCore {
         }
     }
 
-    pub fn register_extension_sync_callback(
-        &mut self,
-        callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>,
-    ) {
+    pub fn register_extension_sync_callback(&mut self, callback: Option<ExtensionSyncCallback>) {
         self.register_extension_sync_callback_for_profile(DEFAULT_PROFILE_KEY, callback);
     }
 
     pub fn register_extension_sync_callback_for_profile(
         &mut self,
         profile_key: &str,
-        callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>,
+        callback: Option<ExtensionSyncCallback>,
     ) {
         self.extension_bridge
             .register_extension_sync_callback_for_profile(profile_key, callback);
@@ -9886,15 +10407,14 @@ impl MahoCore {
 
     pub fn load_content_engine_cache(&mut self, _path: &str) -> Result<(), String> {
         if let Some(ref storage) = self.storage {
-            if let Ok(Some((_mode, gen, cache, _ver, hash))) = storage.load_content_blocker_state()
+            if let Ok(Some((_mode, gen, Some(cache_data), _ver, hash))) =
+                storage.load_content_blocker_state()
             {
-                if let Some(cache_data) = cache {
-                    return self.content_blocker.deserialize_engine_with_gen(
-                        &cache_data,
-                        gen,
-                        hash.as_deref(),
-                    );
-                }
+                return self.content_blocker.deserialize_engine_with_gen(
+                    &cache_data,
+                    gen,
+                    hash.as_deref(),
+                );
             }
         }
         Ok(())
@@ -9955,6 +10475,7 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_search_engine(id);
         }
+        self.clear_default_search_engine_setting_if(id);
         self.push_sync_entity(
             SyncEntityType::SearchEngine,
             id.to_string(),
@@ -9968,9 +10489,42 @@ impl MahoCore {
         if result {
             if let Some(ref storage) = self.storage {
                 let _ = storage.update_default_search_engine(id);
+                if let Err(error) = storage.set_setting(DEFAULT_SEARCH_ENGINE_ID_SETTING, id) {
+                    eprintln!("[search] default engine persistence failed: {error}");
+                }
             }
         }
         result
+    }
+
+    /// Drops the persisted default engine id when it names `removed_id`, so a
+    /// removed engine never stays recorded as the default.
+    fn clear_default_search_engine_setting_if(&self, removed_id: &str) {
+        let Some(ref storage) = self.storage else { return };
+        let stored = storage.get_setting(DEFAULT_SEARCH_ENGINE_ID_SETTING).ok().flatten();
+        if stored.as_deref() == Some(removed_id) {
+            if let Err(error) = storage.delete_setting(DEFAULT_SEARCH_ENGINE_ID_SETTING) {
+                eprintln!("[search] clearing removed default engine failed: {error}");
+            }
+        }
+    }
+
+    /// Points the command bar's default engine at the settings engine, matched
+    /// by URL template first and then by name. Unknown engines leave it as is.
+    fn sync_command_bar_default_engine(&mut self, engine: &maho_types::settings::SearchEngine) {
+        let engines = self.command_bar.get_search_engines();
+        let by_template = self
+            .command_bar
+            .find_engine_id_by_url_template(&engine.url_template);
+        let id = by_template.or_else(|| {
+            engines
+                .iter()
+                .find(|e| e.name.eq_ignore_ascii_case(&engine.name))
+                .map(|e| e.id.clone())
+        });
+        if let Some(id) = id {
+            self.set_default_search_engine_persisted(&id);
+        }
     }
 
     pub fn save_search_persisted(&mut self, query: String) {
@@ -10581,12 +11135,6 @@ impl MahoCore {
             .import_export
             .import_bookmarks(crate::import_export_manager::ImportSource::Firefox, items);
         serde_json::to_string(&result).map_err(|e| e.to_string())
-    }
-
-    pub fn export_history_csv(&self, entries_json: &str) -> Result<String, String> {
-        let entries: Vec<crate::import_export_manager::HistoryEntry> =
-            serde_json::from_str(entries_json).map_err(|e| e.to_string())?;
-        Ok(self.import_export.export_history_csv(&entries))
     }
 
     pub fn get_all_shortcuts_json(&self) -> String {
@@ -11625,9 +12173,11 @@ impl MahoCore {
         let envelope: SyncEnvelopeV2 =
             serde_json::from_str(envelope_json).map_err(|error| error.to_string())?;
         if let Some(relay_seq) = envelope.relay_seq {
-            if relay_seq <= self.get_sync_receive_cursor(room_id)? {
+            let cursor = self.get_sync_receive_cursor(room_id)?;
+            if relay_seq <= cursor {
                 return Ok(());
             }
+            self.recover_from_snapshot_if_log_gap(room_id, cursor, relay_seq)?;
         }
         let payload = envelope
             .payload_bytes()
@@ -11641,6 +12191,120 @@ impl MahoCore {
             self.set_sync_receive_cursor(room_id, relay_seq)?;
         }
         Ok(())
+    }
+
+    /// Overrides how the latest relay snapshot is fetched during stale-cursor
+    /// recovery. The source receives the room id and returns the relay's
+    /// `{hlc_ts_ceiling, blob}` JSON, `Ok(None)` when the relay has no snapshot
+    /// for the room (404). Defaults to `GET /sync/snapshot/latest`.
+    pub fn set_sync_snapshot_source(
+        &mut self,
+        source: Option<SyncSnapshotSource>,
+    ) {
+        self.sync_snapshot_source = source;
+    }
+
+    /// When the relay pruned change-log entries this device never applied
+    /// (its cursor is older than the oldest retained entry), incremental sync
+    /// cannot reconstruct state. Apply the latest relay snapshot first, then
+    /// move the cursor up to the retained log so incremental sync resumes.
+    /// On failure the cursor and local data stay untouched and the error is
+    /// surfaced as `snapshot_recovery_failed` with sync status `Error`. When the
+    /// relay has no snapshot for the room yet (404), recovery is impossible;
+    /// like iOS, sync logs a warning and continues incrementally.
+    fn recover_from_snapshot_if_log_gap(
+        &mut self,
+        room_id: &str,
+        cursor: u64,
+        relay_seq: u64,
+    ) -> Result<(), String> {
+        if relay_seq <= cursor.saturating_add(1) {
+            return Ok(());
+        }
+        let own_acked = self
+            .storage
+            .as_ref()
+            .ok_or_else(|| "sync storage unavailable".to_string())?
+            .count_acked_sync_deliveries_in_seq_range(room_id, cursor + 1, relay_seq - 1)
+            .map_err(|error| error.to_string())?;
+        if !crate::sync_manager::relay_log_gap(cursor, relay_seq, own_acked) {
+            return Ok(());
+        }
+        eprintln!(
+            "[sync] receive cursor {cursor} is behind the retained relay log (next seq {relay_seq}); recovering from snapshot"
+        );
+        let result = self.fetch_latest_sync_snapshot(room_id).and_then(|snapshot| {
+            snapshot
+                .map(|snapshot_json| self.apply_sync_snapshot(&snapshot_json))
+                .transpose()
+        });
+        match result {
+            Ok(None) => {
+                eprintln!(
+                    "[sync] warning: relay has no snapshot for this room; continuing incremental sync from seq {relay_seq}"
+                );
+                Ok(())
+            }
+            Ok(Some(applied)) => {
+                self.flush_pending_lmdb()?;
+                self.set_sync_receive_cursor(room_id, relay_seq - 1)?;
+                println!("[sync] snapshot recovery applied {applied} entities");
+                Ok(())
+            }
+            Err(detail) => {
+                let error = crate::sync_manager::SyncTransportError::SnapshotRecoveryFailed { detail };
+                let rendered = error.to_string();
+                if let Some(manager) = self.sync_manager.as_mut() {
+                    manager.set_status(crate::sync_models::SyncStatus::Error);
+                    manager.set_last_transport_error(error);
+                }
+                Err(rendered)
+            }
+        }
+    }
+
+    fn fetch_latest_sync_snapshot(&self, room_id: &str) -> Result<Option<String>, String> {
+        if let Some(source) = self.sync_snapshot_source.as_ref() {
+            return source(room_id);
+        }
+        let server_url = self
+            .sync_manager
+            .as_ref()
+            .map(|sm| sm.config().server_url.clone())
+            .ok_or_else(|| "sync is not configured".to_string())?;
+        let rest_url = server_url
+            .replace("wss://", "https://")
+            .replace("ws://", "http://");
+        let endpoint = format!("{}/sync/snapshot/latest", rest_url.trim_end_matches('/'));
+        let token = self.get_sync_auth_token();
+        let client = crate::http::shared_http_client();
+        let room_id = room_id.to_string();
+        let request = async move {
+            let response = client
+                .get(&endpoint)
+                .query(&[("room_id", room_id.as_str())])
+                .header("Authorization", format!("Bearer {token}"))
+                .send()
+                .await
+                .map_err(|e| format!("snapshot request failed: {e}"))?;
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                return Ok(None);
+            }
+            if !response.status().is_success() {
+                return Err(format!("snapshot unavailable (status {})", response.status()));
+            }
+            response
+                .text()
+                .await
+                .map(Some)
+                .map_err(|e| format!("snapshot download failed: {e}"))
+        };
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| crate::memory_manager::get_runtime().block_on(request))
+                .join()
+                .map_err(|_| "snapshot fetch thread panicked".to_string())?
+        })
     }
 
     /// Typed, matchable view of the most recent sync transport error, if any.
@@ -11754,6 +12418,7 @@ impl MahoCore {
             sm.set_encryption_key(encryption_key);
         }
         self.bind_default_profile_to_account(&seed);
+        self.ensure_vault_for_recovery_phrase(&seed);
         let _ = self.bootstrap_sync_join_flow(&room_id);
         serde_json::json!({
             "success": true,
@@ -11779,6 +12444,7 @@ impl MahoCore {
             sm.set_encryption_key(encryption_key);
         }
         self.bind_default_profile_to_account(&seed);
+        self.ensure_vault_for_recovery_phrase(&seed);
         Ok(())
     }
 
@@ -11808,6 +12474,11 @@ impl MahoCore {
         use crate::sync_crypto;
         use base64::{engine::general_purpose::STANDARD, Engine};
 
+        // A client-held device must never fall back to the relay-escrowed
+        // seed: that would move sync back into the old, relay-readable room.
+        if self.is_client_held() {
+            return Err("client_held".to_string());
+        }
         let decoded = STANDARD
             .decode(bootstrap_seed)
             .map_err(|_| "Invalid sync bootstrap".to_string())?;
@@ -11990,6 +12661,7 @@ impl MahoCore {
             created_at: chrono::Utc::now().to_rfc3339(),
             creator_device_id: self.account_manager.device_id_hash(),
             entities: std::collections::HashMap::new(),
+            vault_keys: None,
         };
 
         let parse_dt = |dt_str: &str| -> i64 {
@@ -12483,6 +13155,7 @@ impl MahoCore {
                 sm.to_wire_profile_scope(entity);
             }
         }
+        snap.vault_keys = self.client_held_snapshot_vault_keys();
         Ok(snap)
     }
 
@@ -12595,6 +13268,7 @@ impl MahoCore {
             }
         }
 
+        self.adopt_snapshot_vault_keys(snap.vault_keys.as_ref());
         let applied = self.apply_sync_remote_entities(ordered_entities);
         if !applied.is_empty() {
             if let Some(first_space) = snap.entities.get("Space").and_then(|list| list.first()) {
@@ -12658,6 +13332,7 @@ impl MahoCore {
             }
         }
 
+        self.adopt_snapshot_vault_keys(snap.vault_keys.as_ref());
         let applied = self.apply_sync_remote_entities(ordered_entities);
         println!("[sync] Applied {} entities from snapshot", applied.len());
 
@@ -13302,6 +13977,7 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_search_engine(&entity.entity_id);
                         }
+                        self.clear_default_search_engine_setting_if(&entity.entity_id);
                     } else if let Ok(se) = serde_json::from_str::<
                         maho_types::search_engine::SearchEngine,
                     >(&entity.payload_json)
@@ -13751,6 +14427,20 @@ impl MahoCore {
     }
 
     pub fn ack_sync_delivery(&mut self, delivery_id: &str, relay_seq: u64) -> Result<bool, String> {
+        let acknowledged = self.ack_sync_delivery_inner(delivery_id, relay_seq)?;
+        // Every own push (rowless SendTab included) leaves a hole in the
+        // receive stream; record it so stale-cursor detection ignores it.
+        if acknowledged {
+            if let (Some(room_id), Some(storage)) = (self.get_sync_room_id(), self.storage.as_ref()) {
+                storage
+                    .record_own_sync_relay_seq(&room_id, relay_seq)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(acknowledged)
+    }
+
+    fn ack_sync_delivery_inner(&mut self, delivery_id: &str, relay_seq: u64) -> Result<bool, String> {
         // Rowless deliveries (SendTab, Pong, device notices, pulls) have no
         // sync_queue row; the in-memory lease is their only record.
         if let Some(manager) = self.sync_manager.as_mut() {

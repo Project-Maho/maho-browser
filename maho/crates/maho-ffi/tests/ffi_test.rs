@@ -486,7 +486,7 @@ fn check_pinned_navigation_invalid_utf8_returns_null() {
 fn legacy_preview_abi_matches_preedit() {
     let ptr = maho_ffi::maho_core_new();
     let tab_id = CString::new("tab-1").unwrap();
-    let data = vec![1, 2, 3];
+    let data = [1, 2, 3];
     unsafe {
         maho_ffi::maho_core_update_tab_preview(ptr, tab_id.as_ptr(), data.as_ptr(), data.len());
     }
@@ -498,7 +498,7 @@ fn desktop_privacy_abi_rejects_private_and_unknown() {
     let ptr = maho_ffi::maho_core_new();
 
     let unknown_tab = CString::new("unknown-tab").unwrap();
-    let data = vec![1, 2, 3];
+    let data = [1, 2, 3];
     let ok = unsafe {
         maho_ffi::maho_core_update_tab_preview_with_privacy(
             ptr,
@@ -563,7 +563,7 @@ fn desktop_privacy_abi_rejects_private_and_unknown() {
 #[test]
 fn null_length_utf8_boundaries_do_not_unwind() {
     let ptr = maho_ffi::maho_core_new();
-    let data = vec![1, 2, 3];
+    let data = [1, 2, 3];
 
     let ok = unsafe {
         maho_ffi::maho_core_update_tab_preview_with_privacy(
@@ -620,7 +620,7 @@ fn null_length_utf8_boundaries_do_not_unwind() {
     };
     assert!(!ok);
 
-    let bad_tab_id = vec![b't', b'a', b'b', 0xFF, 0];
+    let bad_tab_id = [b't', b'a', b'b', 0xFF, 0];
     let ok = unsafe {
         maho_ffi::maho_core_update_tab_preview_with_privacy(
             ptr,
@@ -637,7 +637,7 @@ fn null_length_utf8_boundaries_do_not_unwind() {
 
 #[test]
 fn test_password_list_omits_plaintext_and_unauthenticated_reveal_fails_closed() {
-    let ptr = unsafe { maho_ffi::maho_core_new() };
+    let ptr = maho_ffi::maho_core_new();
     assert!(!ptr.is_null());
 
     let domain = CString::new("example.com").unwrap();
@@ -774,7 +774,7 @@ fn test_legacy_password_ffi_routes_to_vault_when_initialized() {
 
 #[test]
 fn test_sync_device_disconnect_and_rename() {
-    let ptr = unsafe { maho_ffi::maho_core_new() };
+    let ptr = maho_ffi::maho_core_new();
     assert!(!ptr.is_null());
 
     let device_id = CString::new("remote-device-99").unwrap();

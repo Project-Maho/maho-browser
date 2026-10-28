@@ -5,6 +5,7 @@
 //! and grant revocation. Time is an explicit timestamp seam (no sleeps).
 
 mod account;
+mod client_held;
 mod credential_form;
 mod crypto_ops;
 mod device;
@@ -20,12 +21,13 @@ mod unlock;
 pub use credential_form::{
     VaultAlternativeElement, VaultCredentialFormDetails, VaultCredentialNote,
 };
+pub use client_held::PreparedClientHeldVault;
 pub use crypto_ops::ProtectedEnvelopeReader;
 pub use item_error::VaultCrudError;
 pub use item_input::{
     VaultLoginInput, VaultLoginUpdate, VaultPasskeyInput, VaultSecureItemInput, VaultTotpInput,
 };
-pub use origin::OriginMatchPolicy;
+pub use origin::{credential_origin_matches, OriginMatchPolicy};
 pub use persistence::{
     encode_account_wrap_slot, VaultAccountProvisionSlots, VaultAccountWrapSlot,
     VaultHydrationOutcome, VaultHydrationSlots, VaultPersistedSlots, SLOT_KDF_PARAMS,
@@ -172,6 +174,7 @@ impl VaultManager {
             failed_unlock_count: self.throttle.failed_attempts(),
             retry_at: self.throttle.retry_at(),
             account_escrowed: self.wrapped_account_key.is_some(),
+            lock_reason: None,
         }
     }
 

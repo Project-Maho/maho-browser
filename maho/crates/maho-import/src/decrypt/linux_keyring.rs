@@ -55,7 +55,7 @@ pub fn fetch_linux_keyring_key(browser_name: &str) -> Option<ChromiumKey> {
     let folder = format!("{} Keys", account_name);
     let key = service_name;
     if let Ok(output) = std::process::Command::new("kwallet-query")
-        .args(&["-r", key, "-d", "kdewallet", "-f", &folder])
+        .args(["-r", key, "-d", "kdewallet", "-f", &folder])
         .output()
     {
         if output.status.success() {

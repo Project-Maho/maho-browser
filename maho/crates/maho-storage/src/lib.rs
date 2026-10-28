@@ -1,3 +1,4 @@
+pub mod agent_action_journal;
 pub mod ai_extensibility_store;
 pub mod error;
 pub mod lmdb;

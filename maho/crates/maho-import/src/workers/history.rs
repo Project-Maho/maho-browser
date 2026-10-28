@@ -61,7 +61,7 @@ impl ImportWorker for HistoryWorker {
             );
             count += 1;
 
-            if count % 1000 == 0 {
+            if count.is_multiple_of(1000) {
                 send_update(progress, ImportType::History, count, "Importing history...");
             }
         }
@@ -74,7 +74,6 @@ impl ImportWorker for HistoryWorker {
 mod tests {
     use super::*;
     use crate::workers::tests::MockDestination;
-    use crate::HistoryEntry;
     use std::sync::mpsc;
 
     #[test]

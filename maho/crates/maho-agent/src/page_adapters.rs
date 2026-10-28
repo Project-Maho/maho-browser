@@ -83,7 +83,7 @@ pub trait PageAdapter: Send + Sync + std::fmt::Debug {
         };
         self.exact_origins()
             .iter()
-            .any(|pattern| canonical_origin(pattern).map_or(false, |pat| pat == target))
+            .any(|pattern| canonical_origin(pattern).is_some_and(|pat| pat == target))
     }
 
     /// Checks if this adapter supports the given operation name.
@@ -194,7 +194,7 @@ impl PageAdapterRegistry {
             let origin_matches = adapter
                 .exact_origins()
                 .iter()
-                .any(|pattern| canonical_origin(pattern).map_or(false, |pat| pat == target_origin));
+                .any(|pattern| canonical_origin(pattern).is_some_and(|pat| pat == target_origin));
             if origin_matches && adapter.supports_operation(operation) {
                 return Some(Arc::clone(adapter));
             }

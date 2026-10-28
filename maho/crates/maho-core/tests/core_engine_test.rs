@@ -389,7 +389,7 @@ mod persistence_tests {
             .find(|restored_rule| restored_rule.id == rule_id);
         assert!(restored_rule.is_some());
         let restored_rule = restored_rule.expect("traffic rule should exist after restore");
-        assert_eq!(restored_rule.enabled, false);
+        assert!(!restored_rule.enabled);
     }
 
     #[test]
@@ -415,7 +415,7 @@ mod persistence_tests {
         let mut core = create_persisted_core(&temp_dir);
 
         // Verify default values
-        assert_eq!(core.get_open_external_links_in_maho_mini(), false);
+        assert!(!core.get_open_external_links_in_maho_mini());
 
         // Set values and trigger events
         core.set_open_external_links_in_maho_mini_persisted(true);
@@ -430,7 +430,7 @@ mod persistence_tests {
         let mut restored_core = create_persisted_core(&temp_dir);
         assert!(restored_core.load_persisted_data().is_ok());
 
-        assert_eq!(restored_core.get_open_external_links_in_maho_mini(), true);
+        assert!(restored_core.get_open_external_links_in_maho_mini());
         match restored_core.get_default_link_behavior() {
             maho_types::air_traffic::DefaultLinkBehavior::SpecificSpace { space_id } => {
                 assert_eq!(space_id.as_ref(), "space-abc");
@@ -1016,7 +1016,7 @@ mod persistence_tests {
         let exported_at = envelope["exportedAt"].as_str().unwrap();
         chrono::DateTime::parse_from_rfc3339(exported_at)
             .expect("exportedAt should be valid ISO 8601 / RFC 3339");
-        assert!(envelope["shortcuts"].as_array().unwrap().len() > 0);
+        assert!(!envelope["shortcuts"].as_array().unwrap().is_empty());
 
         let combo_json = r#"{"key":"p","modifiers":["meta","shift"]}"#;
         core.set_shortcut_json("new_tab", combo_json).unwrap();

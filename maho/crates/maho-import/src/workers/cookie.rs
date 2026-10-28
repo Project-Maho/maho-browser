@@ -4,8 +4,11 @@
 //!
 //! For Chromium-derived browsers, v10-encrypted cookies are transparently
 //! decrypted via macOS Keychain (`<Browser> Safe Storage` entry). v20 cookies
-//! (Chrome 117+ App-Bound Encryption) are skipped — they require an extra
-//! Win32 DPAPI hop / per-app entitlement that is out of scope here.
+//! (Chrome 117+ App-Bound Encryption) are skipped outside Windows — they
+//! require an extra Win32 DPAPI hop / per-app entitlement that is out of scope
+//! here. Every encrypted cookie that cannot be decrypted is counted and
+//! reported once per import as a `Summary` line ("N cookies need sign-in
+//! again"), so the loss is visible instead of silent.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
@@ -13,7 +16,7 @@ use std::sync::Arc;
 
 use crate::orchestrator::{ImportDestination, ImportProgress, ImportType};
 use crate::parsers;
-use crate::parsers::chromium::cookies::EncryptionVersion;
+use crate::parsers::chromium::cookies::{ChromiumCookieEntry, EncryptionVersion};
 use crate::{BrowserType, DetectedBrowser, ImportResult};
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -63,7 +66,7 @@ impl ImportWorker for CookieWorker {
                         cookie.same_site,
                     );
                     count += 1;
-                    if count % 500 == 0 {
+                    if count.is_multiple_of(500) {
                         send_update(progress, ImportType::Cookies, count, "Importing cookies...");
                     }
                 }
@@ -88,7 +91,7 @@ impl ImportWorker for CookieWorker {
                         cookie.same_site,
                     );
                     count += 1;
-                    if count % 500 == 0 {
+                    if count.is_multiple_of(500) {
                         send_update(progress, ImportType::Cookies, count, "Importing cookies...");
                     }
                 }
@@ -145,80 +148,136 @@ impl ImportWorker for CookieWorker {
                         .ok()
                     });
 
-                for entry in &entries {
-                    if is_cancelled(cancelled) {
-                        break;
-                    }
-                    let c = &entry.cookie;
-                    if c.host.is_empty() {
-                        continue;
-                    }
-
-                    let decrypted_value: Option<String> = if !c.value.is_empty() {
-                        Some(c.value.clone())
-                    } else if !entry.encrypted_value.is_empty() {
-                        match entry.encryption_version {
-                            EncryptionVersion::V10 => {
-                                #[cfg(any(target_os = "macos", target_os = "linux"))]
-                                {
-                                    decryption_key.as_ref().and_then(|key| {
-                                        decrypt_cookie_v10(&entry.encrypted_value, key, entry.database_version, &c.host).ok()
-                                    })
-                                }
-                                #[cfg(target_os = "windows")]
-                                {
-                                    windows_decryptor.as_ref().and_then(|dec| {
-                                        dec.decrypt_cookie(&entry.encrypted_value[3..]).ok()
-                                    })
-                                }
-                                #[cfg(not(any(
-                                    target_os = "macos",
-                                    target_os = "linux",
-                                    target_os = "windows"
-                                )))]
-                                {
-                                    None
-                                }
+                let decrypt = |entry: &ChromiumCookieEntry| -> Option<String> {
+                    match entry.encryption_version {
+                        EncryptionVersion::V10 => {
+                            #[cfg(any(target_os = "macos", target_os = "linux"))]
+                            {
+                                decryption_key.as_ref().and_then(|key| {
+                                    decrypt_cookie_v10(&entry.encrypted_value, key, entry.database_version, &entry.cookie.host).ok()
+                                })
                             }
-                            EncryptionVersion::V20 => {
-                                #[cfg(target_os = "windows")]
-                                {
-                                    windows_decryptor.as_ref().and_then(|dec| {
-                                        dec.decrypt_cookie(&entry.encrypted_value[3..]).ok()
-                                    })
-                                }
-                                #[cfg(not(target_os = "windows"))]
-                                {
-                                    None
-                                }
+                            #[cfg(target_os = "windows")]
+                            {
+                                windows_decryptor.as_ref().and_then(|dec| {
+                                    dec.decrypt_cookie(&entry.encrypted_value[3..]).ok()
+                                })
                             }
-                            _ => None,
+                            #[cfg(not(any(
+                                target_os = "macos",
+                                target_os = "linux",
+                                target_os = "windows"
+                            )))]
+                            {
+                                None
+                            }
                         }
-                    } else {
-                        None
-                    };
-
-                    let Some(value) = decrypted_value else {
-                        continue;
-                    };
-                    destination.add_cookie(
-                        &c.host,
-                        &c.name,
-                        &value,
-                        &c.path,
-                        c.expires,
-                        c.is_secure,
-                        c.is_httponly,
-                        c.same_site,
-                    );
-                    count += 1;
-                    if count % 500 == 0 {
-                        send_update(progress, ImportType::Cookies, count, "Importing cookies...");
+                        EncryptionVersion::V20 => {
+                            #[cfg(target_os = "windows")]
+                            {
+                                windows_decryptor.as_ref().and_then(|dec| {
+                                    dec.decrypt_cookie(&entry.encrypted_value[3..]).ok()
+                                })
+                            }
+                            #[cfg(not(target_os = "windows"))]
+                            {
+                                None
+                            }
+                        }
+                        _ => None,
                     }
-                }
+                };
+
+                let tally =
+                    import_chromium_entries(&entries, decrypt, destination, cancelled, progress);
+                count = tally.imported;
+                send_sign_in_summary(progress, tally.needs_sign_in);
             }
         }
         Ok(count)
+    }
+}
+
+/// Outcome of writing parsed Chromium cookies to the destination.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ChromiumCookieTally {
+    imported: u32,
+    /// Encrypted cookies that could not be decrypted (on macOS/Linux this
+    /// includes every App-Bound `v20` cookie). Their sites need sign-in again.
+    needs_sign_in: u32,
+}
+
+fn import_chromium_entries(
+    entries: &[ChromiumCookieEntry],
+    decrypt: impl Fn(&ChromiumCookieEntry) -> Option<String>,
+    destination: &dyn ImportDestination,
+    cancelled: &AtomicBool,
+    progress: &Sender<ImportProgress>,
+) -> ChromiumCookieTally {
+    let mut tally = ChromiumCookieTally::default();
+    for entry in entries {
+        if is_cancelled(cancelled) {
+            break;
+        }
+        let c = &entry.cookie;
+        if c.host.is_empty() {
+            continue;
+        }
+
+        let decrypted_value: Option<String> = if !c.value.is_empty() {
+            Some(c.value.clone())
+        } else if !entry.encrypted_value.is_empty() {
+            decrypt(entry)
+        } else {
+            None
+        };
+
+        let Some(value) = decrypted_value else {
+            if !entry.encrypted_value.is_empty() {
+                tally.needs_sign_in += 1;
+            }
+            continue;
+        };
+        destination.add_cookie(
+            &c.host,
+            &c.name,
+            &value,
+            &c.path,
+            c.expires,
+            c.is_secure,
+            c.is_httponly,
+            c.same_site,
+        );
+        tally.imported += 1;
+        if tally.imported % 500 == 0 {
+            send_update(
+                progress,
+                ImportType::Cookies,
+                tally.imported,
+                "Importing cookies...",
+            );
+        }
+    }
+    tally
+}
+
+/// The per-import summary line for cookies that were dropped, or `None` when
+/// every cookie carried over.
+pub fn cookies_need_sign_in_summary(dropped: u32) -> Option<String> {
+    match dropped {
+        0 => None,
+        1 => Some("1 cookie needs sign-in again".to_string()),
+        n => Some(format!("{n} cookies need sign-in again")),
+    }
+}
+
+fn send_sign_in_summary(progress: &Sender<ImportProgress>, dropped: u32) {
+    if let Some(message) = cookies_need_sign_in_summary(dropped) {
+        let _ = progress.send(ImportProgress::Summary {
+            import_type: ImportType::Cookies,
+            count: dropped,
+            message,
+        });
     }
 }
 
@@ -302,5 +361,90 @@ mod tests {
 
         let result = CookieWorker.run(&browser, &*dest, &cancelled, &tx);
         assert!(result.is_err());
+    }
+
+    fn chromium_entry(host: &str, value: &str, encrypted: &[u8]) -> ChromiumCookieEntry {
+        ChromiumCookieEntry {
+            cookie: crate::CookieEntry {
+                host: host.to_string(),
+                name: "n".to_string(),
+                value: value.to_string(),
+                path: "/".to_string(),
+                ..Default::default()
+            },
+            encrypted_value: encrypted.to_vec(),
+            encryption_version: parsers::chromium::cookies::detect_encryption_version(encrypted),
+            database_version: 24,
+        }
+    }
+
+    #[test]
+    fn undecryptable_cookies_are_counted_and_summarized() {
+        let dest = MockDestination::new();
+        let cancelled = AtomicBool::new(false);
+        let (tx, rx) = mpsc::channel();
+        let entries = vec![
+            chromium_entry(".plain.test", "plain", b""),
+            chromium_entry(".v10ok.test", "", b"v10ok"),
+            chromium_entry(".v10bad.test", "", b"v10bad"),
+            chromium_entry(".v20.test", "", b"v20abound"),
+            chromium_entry(".v20b.test", "", b"v20abound"),
+            // Neither a value nor ciphertext: nothing to sign back into.
+            chromium_entry(".empty.test", "", b""),
+            // No host: skipped before decryption.
+            chromium_entry("", "", b"v20abound"),
+        ];
+        // Mirrors macOS/Linux: v10 decrypts when the key matches, v20 never does.
+        let decrypt = |e: &ChromiumCookieEntry| -> Option<String> {
+            (e.encrypted_value.as_slice() == b"v10ok").then(|| "decrypted".to_string())
+        };
+
+        let tally = import_chromium_entries(&entries, decrypt, &dest, &cancelled, &tx);
+        send_sign_in_summary(&tx, tally.needs_sign_in);
+
+        assert_eq!(
+            tally,
+            ChromiumCookieTally {
+                imported: 2,
+                needs_sign_in: 3
+            }
+        );
+        let hosts: Vec<String> = dest.cookies.lock().unwrap().iter().map(|c| c.host.clone()).collect();
+        assert_eq!(hosts, vec![".plain.test", ".v10ok.test"]);
+        let msgs: Vec<_> = rx.try_iter().collect();
+        assert_eq!(
+            msgs,
+            vec![ImportProgress::Summary {
+                import_type: ImportType::Cookies,
+                count: 3,
+                message: "3 cookies need sign-in again".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn no_summary_when_every_cookie_carries_over() {
+        let (tx, rx) = mpsc::channel();
+        send_sign_in_summary(&tx, 0);
+        assert!(rx.try_iter().next().is_none());
+        assert_eq!(cookies_need_sign_in_summary(0), None);
+        assert_eq!(
+            cookies_need_sign_in_summary(1).as_deref(),
+            Some("1 cookie needs sign-in again")
+        );
+        assert_eq!(
+            cookies_need_sign_in_summary(42).as_deref(),
+            Some("42 cookies need sign-in again")
+        );
+    }
+
+    #[test]
+    fn cancelled_import_stops_counting() {
+        let dest = MockDestination::new();
+        let cancelled = AtomicBool::new(true);
+        let (tx, _rx) = mpsc::channel();
+        let entries = vec![chromium_entry(".v20.test", "", b"v20abound")];
+        let tally = import_chromium_entries(&entries, |_| None, &dest, &cancelled, &tx);
+        assert_eq!(tally, ChromiumCookieTally::default());
     }
 }

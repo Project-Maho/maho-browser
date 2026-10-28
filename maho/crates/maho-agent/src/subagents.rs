@@ -462,7 +462,7 @@ impl SubagentSupervisor {
         // 4. Initialize dedicated isolated RunJournal for child
         let mut journal = RunJournal::new();
         let run_id = AgentRunId::new(&subagent_id);
-        journal.start_run(run_id.clone(), format!("subagent-{}", &subagent_id))?;
+        journal.start_run(run_id.clone(), format!("subagent-{}", subagent_id))?;
         journal.append_event(
             &run_id,
             "subagent_spawned",

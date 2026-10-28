@@ -16,7 +16,7 @@ impl MahoCore {
         }
     }
 
-    pub(super) fn vault_repository(&self) -> Result<VaultRepository<'_>, StorageError> {
+    pub(in crate::maho_core) fn vault_repository(&self) -> Result<VaultRepository<'_>, StorageError> {
         let storage = self
             .storage
             .as_ref()

@@ -2253,17 +2253,16 @@ impl SpaceManager {
             is_pinned: folder.is_pinned,
             tab_ids: folder.tab_ids.clone(),
             parent_folder_id: folder.parent_folder_id.clone(),
-            provider_type: provider_type,
-            config_json: config_json,
+            provider_type,
+            config_json,
         };
-        if parent_folder_id.is_none() {
-            if !space
+        if parent_folder_id.is_none()
+            && !space
                 .root_order
                 .iter()
                 .any(|item| item == &RootItem::Folder(folder.id.clone()))
-            {
-                space.root_order.push(RootItem::Folder(folder.id.clone()));
-            }
+        {
+            space.root_order.push(RootItem::Folder(folder.id.clone()));
         }
         space.folders.push(folder);
         Some(vm)
@@ -2541,15 +2540,14 @@ impl SpaceManager {
 
         if let Some(folder) = folder_opt {
             if let Some(target_space) = self.spaces.get_mut(target_space_id) {
-                if folder.parent_folder_id.is_none() {
-                    if !target_space
+                if folder.parent_folder_id.is_none()
+                    && !target_space
                         .root_order
                         .contains(&RootItem::Folder(folder.id.clone()))
-                    {
-                        target_space
-                            .root_order
-                            .push(RootItem::Folder(folder.id.clone()));
-                    }
+                {
+                    target_space
+                        .root_order
+                        .push(RootItem::Folder(folder.id.clone()));
                 }
                 target_space.folders.push(folder);
             }

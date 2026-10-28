@@ -54,11 +54,9 @@ pub fn parse_safari_history(safari_dir: &Path) -> ImportResult<Vec<HistoryEntry>
         .map_err(|e| ImportError::Parse(format!("History.db rows: {}", e)))?;
 
     let mut result = Vec::new();
-    for entry in entries {
-        if let Ok(e) = entry {
-            if !e.url.is_empty() {
-                result.push(e);
-            }
+    for e in entries.flatten() {
+        if !e.url.is_empty() {
+            result.push(e);
         }
     }
 

@@ -141,7 +141,6 @@ pub fn open_protected_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maho_types::hardware_security::*;
 
     #[test]
     fn test_build_envelope_aad_uniqueness() {

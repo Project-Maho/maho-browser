@@ -13,8 +13,7 @@ fn is_internal_tool(name: &str) -> bool {
 }
 
 fn validate_namespace(name: &str) -> bool {
-    if name.starts_with("mcp:") {
-        let rest = &name[4..];
+    if let Some(rest) = name.strip_prefix("mcp:") {
         if let Some((server, tool)) = rest.split_once('/') {
             !server.is_empty()
                 && !tool.is_empty()
@@ -27,8 +26,7 @@ fn validate_namespace(name: &str) -> bool {
         } else {
             false
         }
-    } else if name.starts_with("sh:") {
-        let tool = &name[3..];
+    } else if let Some(tool) = name.strip_prefix("sh:") {
         !tool.is_empty()
             && tool
                 .chars()
@@ -238,8 +236,8 @@ impl ToolRegistry {
             .iter()
             .filter(|t| {
                 t.name == name
-                    || t.name.split('/').last().unwrap_or("") == name
-                    || t.name.split(':').last().unwrap_or("") == name
+                    || t.name.split('/').next_back().unwrap_or("") == name
+                    || t.name.split(':').next_back().unwrap_or("") == name
             })
             .collect();
 

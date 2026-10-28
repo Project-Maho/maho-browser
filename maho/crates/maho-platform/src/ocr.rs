@@ -35,7 +35,7 @@ pub fn ocr_image(path: &Path, region: Option<Region>) -> Result<Vec<TextBlock>, 
     }
     #[cfg(target_os = "linux")]
     {
-        return linux::run_ocr(path, region);
+        linux::run_ocr(path, region)
     }
     #[cfg(target_os = "windows")]
     {

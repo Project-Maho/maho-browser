@@ -75,11 +75,19 @@ pub struct ProfileConfig {
     pub avatar_color: String,
     pub default_search_engine: SearchEngine,
     pub download_path: String,
+    /// Per-profile auto-archive override in hours. `None` (the default for new
+    /// profiles) inherits the global `general.archive_timeout_hours` (24h).
     pub archive_timeout_hours: Option<f64>,
     pub data_store_id: Option<String>,
 }
 
 impl ProfileConfig {
+    /// Effective auto-archive timeout: an explicit per-profile value wins,
+    /// otherwise the global setting applies.
+    pub fn effective_archive_timeout_hours(&self, global_hours: f64) -> f64 {
+        self.archive_timeout_hours.unwrap_or(global_hours)
+    }
+
     pub fn new(name: String) -> Self {
         Self {
             id: ProfileId::generate(),
@@ -91,7 +99,7 @@ impl ProfileConfig {
                 is_default: true,
             },
             download_path: "~/Downloads".to_string(),
-            archive_timeout_hours: Some(12.0),
+            archive_timeout_hours: None,
             data_store_id: Some(uuid::Uuid::new_v4().to_string()),
         }
     }
@@ -107,7 +115,7 @@ impl ProfileConfig {
                 is_default: true,
             },
             download_path: "~/Downloads".to_string(),
-            archive_timeout_hours: Some(12.0),
+            archive_timeout_hours: None,
             data_store_id: None,
         }
     }

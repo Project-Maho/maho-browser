@@ -2094,7 +2094,7 @@ fn import_export_manager_exists() {
 #[test]
 fn export_history_csv_no_panic() {
     let core = MahoCore::new();
-    let _ = core.export_history_csv("[]");
+    let _ = core.export_history_csv();
 }
 
 #[test]
@@ -3403,7 +3403,7 @@ fn test_boost_create_temp_produces_valid_boost() {
     let boost = mgr.create_temp("example.com".to_string());
 
     assert_eq!(boost.domain, "example.com");
-    assert!(!boost.id.0.as_str().is_empty());
+    assert!(!boost.id.0.is_empty());
     // A new Boost starts in manual color mode with Auto off, per the Boost
     // editor contract (`maho_boost/DESIGN.md`: new or reset Boosts get
     // `colorBoostEnabled=true` and `magicTheme=false`).

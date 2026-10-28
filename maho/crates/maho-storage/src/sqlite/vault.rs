@@ -935,6 +935,20 @@ impl VaultTx<'_> {
         Ok(count == 1)
     }
 
+    pub fn delete_metadata(&self, slot: &str) -> Result<bool, StorageError> {
+        let count = self.conn.execute(
+            "DELETE FROM vault_metadata WHERE slot = ?1",
+            rusqlite::params![slot],
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Drops every device-wrapped key; used when the Vault key is rotated and
+    /// existing device wraps would unwrap a retired key.
+    pub fn delete_all_device_keys(&self) -> Result<usize, StorageError> {
+        Ok(self.conn.execute("DELETE FROM vault_device_keys", [])?)
+    }
+
     pub fn upsert_device_key(&self, row: &VaultDeviceKeyRow) -> Result<(), StorageError> {
         self.conn.execute(
             "INSERT INTO vault_device_keys (device_id, schema_version, wrapped_key, created_at, updated_at, revoked_at) \

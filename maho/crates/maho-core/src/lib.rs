@@ -4,6 +4,7 @@ pub mod atc_manager;
 pub mod autofill_manager;
 pub mod backup_manager;
 pub mod bookmark_manager;
+pub mod byok;
 pub mod boost_css_sanitizer;
 pub mod boost_manager;
 pub mod command_bar;

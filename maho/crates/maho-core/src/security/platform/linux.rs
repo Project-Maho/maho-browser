@@ -24,7 +24,7 @@ use maho_types::hardware_security::{
 #[cfg(target_os = "linux")]
 use secret_service::blocking::SecretService;
 #[cfg(target_os = "linux")]
-use secret_service::{EncryptionType, Error as SecretServiceError};
+use secret_service::EncryptionType;
 
 #[allow(dead_code)]
 const SECRET_SERVICE_APP: &str = "maho";

@@ -1550,7 +1550,7 @@ async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: b
 
             let tabs = tool_payload(&result).get("tabs").and_then(|t| t.as_array());
             if let Some(tabs) = tabs {
-                println!("{:<4} {:<40} {:<60} {}", "ID", "TITLE", "URL", "ACTIVE");
+                println!("{:<4} {:<40} {:<60} ACTIVE", "ID", "TITLE", "URL");
                 for tab in tabs {
                     let id = tab.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
                     let title = tab.get("title").and_then(|v| v.as_str()).unwrap_or("");
@@ -2178,11 +2178,9 @@ async fn cmd_page(
                 std::process::exit(2);
             }
         }
-        PageCommands::Screenshot { full_page, .. } => {
-            if *full_page {
-                eprintln!("Error: --full-page option is not supported.");
-                std::process::exit(2);
-            }
+        PageCommands::Screenshot { full_page, .. } if *full_page => {
+            eprintln!("Error: --full-page option is not supported.");
+            std::process::exit(2);
         }
         _ => {}
     }
@@ -2448,10 +2446,12 @@ mod tests {
         assert_eq!(decoded[0].name, "browser_click");
         assert_eq!(decoded[0].description, "Click an element");
         assert_eq!(decoded[0].schema_version, 2);
-        assert!(decoded[0].policy.sensitive);
+        // Agent-driven browser control is full access: every Maho browser tool
+        // from the browser socket is auto-approved and never flagged sensitive.
+        assert!(!decoded[0].policy.sensitive);
         assert_eq!(
             decoded[0].policy.permission,
-            maho_types::tool::ToolPermission::AlwaysAsk
+            maho_types::tool::ToolPermission::AutoApprove
         );
 
         assert_eq!(decoded[1].capability_id, "tab.list");
@@ -4223,7 +4223,7 @@ async fn cmd_tool(
                 serde_json::json!({})
             };
 
-            let result = browser::send_tool_call(&client, &name, args_val).await?;
+            let result = browser::send_tool_call(&client, name, args_val).await?;
             if json_output {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
@@ -4968,42 +4968,10 @@ fn decode_browser_descriptors(
             .and_then(|v| v.as_u64())
             .unwrap_or(1) as u32;
 
-        let policy_obj = tool.get("policy").and_then(|v| v.as_object());
-        let sensitive = policy_obj
-            .and_then(|p| p.get("sensitive").and_then(|v| v.as_bool()))
-            .unwrap_or_else(|| {
-                policy_obj
-                    .and_then(|p| p.get("sensitivity").and_then(|v| v.as_str()))
-                    .map_or(false, |s| s != "low")
-            });
-
-        let can_auto_approve = if let Some(perm) =
-            policy_obj.and_then(|p| p.get("permission").and_then(|v| v.as_str()))
-        {
-            perm == "auto_approve"
-        } else if let Some(p) = policy_obj {
-            let is_readonly = p
-                .get("mutability")
-                .and_then(|v| v.as_str())
-                .map_or(false, |m| m == "readonly");
-            let changes_authority = p
-                .get("changesAuthority")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let is_low_sensitivity = p
-                .get("sensitivity")
-                .and_then(|v| v.as_str())
-                .map_or(false, |s| s == "low");
-            is_readonly && !changes_authority && is_low_sensitivity
-        } else {
-            false
-        };
-
-        let permission = if can_auto_approve {
-            maho_types::tool::ToolPermission::AutoApprove
-        } else {
-            maho_types::tool::ToolPermission::AlwaysAsk
-        };
+        // Agent-driven browser control is full access: a Maho browser tool from
+        // the browser socket never asks for approval and is never flagged
+        // sensitive, whatever its policy metadata says.
+        let permission = maho_types::tool::ToolPermission::AutoApprove;
 
         descriptors.push(maho_agent::BrowserToolDescriptor {
             capability_id,
@@ -5012,7 +4980,7 @@ fn decode_browser_descriptors(
             input_schema,
             schema_version,
             policy: maho_types::tool::BrowserToolPolicy {
-                sensitive,
+                sensitive: false,
                 permission,
             },
         });
@@ -5442,7 +5410,7 @@ async fn cmd_routine_run(name: &str, socket_path: Option<&str>, json_output: boo
             Ok(())
         }
         Err(browser::RoutineCallError::TierLocked { .. }) => {
-            eprintln!("Error: Routines are available on Max tier only");
+            eprintln!("Error: Routines are available on Max tier or with a validated BYOK key");
             std::process::exit(2);
         }
         Err(browser::RoutineCallError::Other(error)) => {
@@ -6225,7 +6193,7 @@ async fn handle_repl_line(
             let result =
                 browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
             if let Some(tabs) = tool_payload(&result).get("tabs").and_then(|t| t.as_array()) {
-                println!("{:<4} {:<40} {:<60} {}", "ID", "TITLE", "URL", "ACTIVE");
+                println!("{:<4} {:<40} {:<60} ACTIVE", "ID", "TITLE", "URL");
                 for tab in tabs {
                     let id = tab.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
                     let title = tab.get("title").and_then(|v| v.as_str()).unwrap_or("");
@@ -6696,7 +6664,7 @@ async fn handle_repl_line(
                     state.target_tab = None;
                     println!("Pinned target cleared; pin a tab before mutating again.");
                 }
-                Some(arg) if arg == "active" => {
+                Some("active") => {
                     // Deliberate convenience: resolve the CURRENTLY active tab
                     // once and pin it. Everything after this still carries an
                     // explicit tab_id, so a later focus change cannot redirect

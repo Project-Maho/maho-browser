@@ -10,7 +10,7 @@ use maho_core::maho_core::{MahoCore, VaultAccountEnsureOutcome};
 use maho_core::vault_manager::{
     VaultHydrationOutcome, VaultHydrationSlots, VaultManager, VaultManagerError,
 };
-use maho_types::vault::{VaultItemId, VaultLockState};
+use maho_types::vault::{VaultItemId, VaultLockReason, VaultLockState};
 
 const SEED: &[u8; 32] = b"escrow-account-seed-0123456789ab";
 const OTHER_SEED: &[u8; 32] = b"other-account-seed-0123456789xyz";
@@ -336,4 +336,69 @@ fn sync_bootstrap_login_hook_provisions_and_reports_failures() {
         Some(VaultManagerError::InvalidCredentials)
     ));
     assert_eq!(core.vault_status().lock_state, VaultLockState::Locked);
+}
+
+#[test]
+fn escrow_vault_without_seed_in_memory_reports_locked_account_seed_missing() {
+    // A completed profile whose relay session expired restarts with no account
+    // seed in memory: the Vault must read as locked-pending-sign-in, never as
+    // corrupted data, and no reason is attached once sign-in unwraps it.
+    let (_dir, path, mut core) = fresh_core_with_path();
+    core.ensure_vault_for_account(SEED).expect("provision");
+    drop(core);
+
+    let mut reopened = storage_backed_core(&path);
+    reopened.load_persisted_data().expect("load persisted data");
+    assert!(!matches!(
+        reopened.last_vault_lifecycle_error(),
+        Some(VaultManagerError::CorruptedVaultData)
+    ));
+    let status = reopened.vault_status();
+    assert_eq!(status.lock_state, VaultLockState::Locked);
+    assert!(status.account_escrowed);
+    assert_eq!(
+        status.lock_reason,
+        Some(VaultLockReason::AccountSeedMissing)
+    );
+    let wire = serde_json::to_value(&status).expect("serialize status");
+    assert_eq!(wire["lockReason"], "account_seed_missing");
+
+    let seed_b64 = base64::engine::general_purpose::STANDARD.encode(SEED);
+    reopened
+        .configure_sync_encryption_from_bootstrap("https://relay.test", &seed_b64)
+        .expect("bootstrap");
+    let status = reopened.vault_status();
+    assert_eq!(status.lock_state, VaultLockState::Unlocked);
+    assert_eq!(status.lock_reason, None);
+    assert!(serde_json::to_value(&status).expect("serialize")["lockReason"].is_null());
+}
+
+#[test]
+fn passphrase_only_vault_without_seed_has_no_account_lock_reason() {
+    let (_dir, mut core) = fresh_core();
+    core.initialize_vault(MASTER, RECOVERY)
+        .expect("initialize legacy vault");
+    core.lock_vault().expect("lock");
+    let status = core.vault_status();
+    assert_eq!(status.lock_state, VaultLockState::Locked);
+    assert_eq!(status.lock_reason, None);
+}
+
+#[test]
+fn mid_session_sign_out_drops_seed_and_reports_account_seed_missing() {
+    let (_dir, mut core) = fresh_core();
+    let seed_b64 = base64::engine::general_purpose::STANDARD.encode(SEED);
+    core.configure_sync_encryption_from_bootstrap("https://relay.test", &seed_b64)
+        .expect("bootstrap");
+    assert_eq!(core.vault_status().lock_state, VaultLockState::Unlocked);
+
+    core.handle_event(maho_types::events::shell_event::ShellEvent::SignOut);
+
+    let status = core.vault_status();
+    assert_eq!(status.lock_state, VaultLockState::Locked);
+    assert!(status.account_escrowed);
+    assert_eq!(
+        status.lock_reason,
+        Some(VaultLockReason::AccountSeedMissing)
+    );
 }

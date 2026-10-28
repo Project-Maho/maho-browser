@@ -202,8 +202,8 @@ fn test_extension_sync_push_and_callback() {
     assert!(cb_res.is_some());
     let (cb_id, cb_enabled, cb_deleted) = cb_res.unwrap();
     assert_eq!(cb_id, "ext-sync-test");
-    assert_eq!(cb_enabled, false);
-    assert_eq!(cb_deleted, false);
+    assert!(!cb_enabled);
+    assert!(!cb_deleted);
 
     // Verify local extension state was updated
     let installed = core.get_installed_extensions();

@@ -464,7 +464,7 @@ impl WaitRegistry {
         let buffered = self
             .unmatched_events
             .iter()
-            .position(|e| e.run_id.as_ref().map_or(true, |r| r == &run_id) && filter.matches(e))
+            .position(|e| e.run_id.as_ref().is_none_or(|r| r == &run_id) && filter.matches(e))
             .and_then(|idx| self.unmatched_events.remove(idx));
         let status = match buffered {
             Some(event) => WaitStatus::Woken {

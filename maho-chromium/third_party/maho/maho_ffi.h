@@ -122,7 +122,9 @@ typedef void (*RoutineStatusCb)(void*, const char*);
  * Progress callback type invoked from the import background thread.
  *
  * Parameters:
- *  - `kind`:  0=Starting, 1=Update, 2=TypeComplete, 3=AllComplete, 4=Error
+ *  - `kind`:  0=Starting, 1=Update, 2=TypeComplete, 3=AllComplete, 4=Error,
+ *    5=Summary (non-terminal user-facing line for one type, e.g.
+ *    "3 cookies need sign-in again"; `count` = affected items)
  *  - `import_type`: bitmask bit identifying the import type
  *       (1=History, 2=Bookmarks, 4=Passwords, 8=Autofill, 16=Cookies, 32=Workspaces, 64=Favicons, 128=Essential)
  *  - `count`: item count (for Update/TypeComplete) or 0
@@ -956,6 +958,81 @@ char *maho_content_engine_install_result_json(struct MahoCore *ptr,
  * `handle` must be from `maho_content_engine_compile_snapshot` or null.
  */
 void maho_content_engine_free(OpaqueCompiledEngineHandle *handle);
+
+/**
+ * Writes one user-data export (`kind` is one of `bookmarks`, `history`,
+ * `passwords`, `conversations`, `spaces`, `full_backup`) to `path_utf8`.
+ * Returns `{"ok":true}` or `{"ok":false,"error":"<code>"}` (e.g.
+ * `vault_locked`, `write_failed`, `unknown_kind`). Nothing is written on
+ * failure. Password export requires the caller to have completed OS
+ * re-authentication (or `maho_core_authorize_password_export_with_passphrase`).
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`; `kind` and
+ * `path_utf8` must be valid null-terminated C strings. Free the result with
+ * `maho_string_free`.
+ */
+char *maho_core_export_data_to_path(struct MahoCore *ptr, const char *kind, const char *path_utf8);
+
+/**
+ * Re-authenticates a password export with the Vault master passphrase on
+ * platforms without an OS authenticator (Linux). Returns `{"ok":true}` or
+ * `{"ok":false,"error":"<code>"}` where code is `vault_locked`,
+ * `os_auth_unavailable` (no passphrase slot: escrow-only vault),
+ * `passphrase_required`, `invalid_passphrase` or `rate_limited`.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`; `passphrase`
+ * must be null or a valid null-terminated C string. Free the result with
+ * `maho_string_free`.
+ */
+char *maho_core_authorize_password_export_with_passphrase(struct MahoCore *ptr,
+                                                          const char *passphrase);
+
+/**
+ * Netscape bookmark HTML of all bookmarks plus favorites and pinned tabs.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`. Returns null on
+ * failure; free the result with `maho_string_free`.
+ */
+char *maho_core_export_bookmarks_html(struct MahoCore *ptr);
+
+/**
+ * History CSV (`URL,Title,Visit Count,Last Visited`) read from storage.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`. Returns null on
+ * failure; free the result with `maho_string_free`.
+ */
+char *maho_core_export_history_csv(struct MahoCore *ptr);
+
+/**
+ * Every AI conversation with all of its turns, as JSON.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`. Returns null on
+ * failure; free the result with `maho_string_free`.
+ */
+char *maho_core_export_conversations_json(struct MahoCore *ptr);
+
+/**
+ * Spaces with folders, pinned tabs and favorites, as JSON.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`. Returns null on
+ * failure; free the result with `maho_string_free`.
+ */
+char *maho_core_export_spaces_json(struct MahoCore *ptr);
+
+/**
+ * Full JSON backup (bookmarks, settings, notes, boosts, spaces; no secrets).
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`. Returns null on
+ * failure; free the result with `maho_string_free`.
+ */
+char *maho_core_export_full_backup_json(struct MahoCore *ptr);
 
 /**
  * # Safety
@@ -2239,6 +2316,39 @@ char *maho_core_configure_sync_bootstrap(struct MahoCore *ptr,
                                          const char *bootstrap_seed);
 
 /**
+ * Switches the account to client-held keys (GAP-3). Returns
+ * `{"success":true,"recoveryPhrase":"<24 words>","roomId":"...","keyMode":"client_held"}`
+ * or `{"success":false,"error":"..."}`; on failure escrow mode is untouched.
+ * The caller must then POST `/sync/bootstrap/client-held` with `roomId`.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_enable_client_held_keys(struct MahoCore *ptr);
+
+/**
+ * Returns the local key custody mode: `"client_held"` or `"escrow"`.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_sync_key_mode(struct MahoCore *ptr);
+
+/**
+ * Derives the sync room id a recovery phrase maps to, without joining it.
+ * Returns `{"success":true,"roomId":"..."}` or `{"success":false,"error":"..."}`.
+ * Lets a client-held join reject a phrase for another account before it
+ * starts syncing a room nobody else uses.
+ *
+ * # Safety
+ * `recovery_phrase` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_sync_room_id_for_recovery_phrase(const char *recovery_phrase);
+
+/**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * `server_url` and `bootstrap_seed` must be valid null-terminated C strings.
@@ -2366,11 +2476,33 @@ char *maho_core_apply_remote_entities(struct MahoCore *ptr, const char *entities
 char *maho_core_drain_outgoing(struct MahoCore *ptr);
 
 /**
+ * Leases at most one relay push batch (`MAX_SYNC_PUSH_BATCH`) of outgoing
+ * envelopes; the remainder stays queued for the next call.
+ *
  * # Safety
  * `ptr` must be valid.
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_drain_outgoing_envelopes(struct MahoCore *ptr);
+
+/**
+ * Returns the leased, unacknowledged outgoing batch to the front of the queue
+ * (rows back to `pending`) after a failed push. Returns the number of
+ * requeued envelopes, or -1 on failure.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ */
+int32_t maho_core_requeue_outgoing_envelopes(struct MahoCore *ptr);
+
+/**
+ * Records the shell transport's cycle state (`{"kind":"synced","last_error":null}`)
+ * so `maho_core_get_sync_state` reflects real relay progress. Returns 0 on success.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`; `report_json` a NUL-terminated string.
+ */
+int32_t maho_core_report_sync_transport_state(struct MahoCore *ptr, const char *report_json);
 
 /**
  * Get and drain received tabs as a JSON array.
@@ -2813,13 +2945,65 @@ char *maho_core_byok_get_providers(struct MahoCore *_core);
 
 /**
  * Validate a BYOK API key for the given provider. Returns true if valid.
+ * On success with a non-null `core`, records `byok_valid:<provider>` so the key
+ * unlocks BYOK agent features (Routines, Skills, deep research, premium search).
  * Note: makes a live network request; call from a background thread.
  *
  * # Safety
- * `provider` and `api_key` must be valid NUL-terminated C strings (not null). `_core` is
- * unused and may be null. This call performs a live network request.
+ * `provider` and `api_key` must be valid NUL-terminated C strings (not null). `core`
+ * may be null (validation only) or a valid `*mut MahoCore`. This call performs a
+ * live network request.
  */
-bool maho_core_byok_validate_key(struct MahoCore *_core, const char *provider, const char *api_key);
+bool maho_core_byok_validate_key(struct MahoCore *core, const char *provider, const char *api_key);
+
+/**
+ * True when `api_key` is the key stored for `provider` and it has already been
+ * validated. Lets shells skip a network revalidation when mirroring a key
+ * they already hold (e.g. desktop startup hydration). No network access.
+ *
+ * # Safety
+ * `core` must be null or a valid `*mut MahoCore`; `provider` and `api_key` must be
+ * null or valid NUL-terminated C strings.
+ */
+bool maho_core_byok_is_validated(struct MahoCore *core, const char *provider, const char *api_key);
+
+/**
+ * Mirror a BYOK key that the shell holds in its own secure store into core,
+ * marking it validated. Call only after `maho_core_byok_validate_key` returned
+ * true for this exact key (desktop validates off the core sequence, then
+ * stores here). A null or empty `api_key` clears the key and its validation.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore`; `provider` must be a valid NUL-terminated
+ * C string; `api_key` may be null.
+ */
+bool maho_core_byok_set_validated_key(struct MahoCore *core,
+                                      const char *provider,
+                                      const char *api_key);
+
+/**
+ * BYOK-aware agent feature entitlement snapshot as JSON:
+ * `{"routines":bool,"deep_research":bool,"premium_search":bool,"byok":bool}`.
+ * Deep research and premium search resolve through the production policy
+ * constructors (`ResearchPolicy::for_account` / `SearchEntitlement::for_account`),
+ * so a validated BYOK key unlocks them on any tier and marks the run
+ * BYOK-billed (`managed = false`). PAYG credits are not tracked in core, so
+ * non-BYOK Free/Pro report the tier-only result. Caller frees with
+ * `maho_string_free`.
+ *
+ * # Safety
+ * `core` must be null or a valid `*mut MahoCore`.
+ */
+char *maho_core_agent_entitlements(struct MahoCore *core);
+
+/**
+ * True when the account may run Routines: Max tier, or any tier holding a
+ * BYOK key that passed `maho_core_byok_validate_key` once.
+ *
+ * # Safety
+ * `core` must be null or a valid `*mut MahoCore` produced by `maho_core_new*`.
+ */
+bool maho_routines_entitled(struct MahoCore *core);
 
 /**
  * Send an image-only chat message. Fires a ShellEvent::ChatMessage with image content.
@@ -3362,6 +3546,41 @@ void maho_routines_fire_event(struct MahoCore *core, const char *event_json);
 int32_t maho_routines_tick(struct MahoCore *core, int64_t now_sec);
 
 /**
+ * Enable (or disable) agent-side journaling into this core's profile
+ * database. Hosts MUST pass `enabled = false` (or never call this) for
+ * incognito / off-the-record profiles. Returns true when the sink is set.
+ */
+bool maho_agent_action_journal_enable(struct MahoCore *core, bool enabled);
+
+/**
+ * Record one consequential agent action. Best-effort: returns false on any
+ * failure (logged), never blocks.
+ */
+bool maho_agent_action_journal_record(struct MahoCore *core,
+                                      int64_t ts,
+                                      const char *session_id,
+                                      const char *actor,
+                                      const char *action,
+                                      const char *origin,
+                                      const char *summary,
+                                      const char *outcome);
+
+/**
+ * List journal entries newest first as a JSON array. Caller frees with
+ * `maho_string_free`.
+ */
+char *maho_agent_action_journal_list(struct MahoCore *core,
+                                     const char *actor,
+                                     const char *action,
+                                     const char *query,
+                                     uint32_t limit);
+
+/**
+ * Delete every journal entry. Returns the number removed, or -1 on failure.
+ */
+int64_t maho_agent_action_journal_clear(struct MahoCore *core);
+
+/**
  * Returns JSON array of recorded routine results (the routine inbox), newest
  * first. If `routine_id` is non-null, only that routine's history is returned;
  * pass null for all routines. `limit` caps the number of rows (0 is treated as
@@ -3730,7 +3949,9 @@ char *maho_vault_unlock_with_recovery_json(struct MahoCore *core, const char *re
 /**
  * Silently unlocks the profile-owned Vault with the device-wrapped key that
  * the last successful passphrase/recovery/account unlock enrolled for this
- * device. Returns the same envelope as `maho_vault_unlock_json`.
+ * device (a 0600 file next to the profile database; the OS keystore is
+ * never used). Returns the same
+ * envelope as `maho_vault_unlock_json`.
  *
  * # Safety
  * `core` must be valid.

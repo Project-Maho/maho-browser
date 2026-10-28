@@ -101,7 +101,7 @@ impl ImportWorker for PasswordWorker {
                 return Err(ImportError::Io("password destination rejected the import".into()));
             }
             count += 1;
-            if count % 100 == 0 {
+            if count.is_multiple_of(100) {
                 send_update(
                     progress,
                     ImportType::Passwords,

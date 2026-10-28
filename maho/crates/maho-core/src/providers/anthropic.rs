@@ -156,16 +156,15 @@ impl LLMProvider for AnthropicProvider {
                                         if let Some(text) =
                                             delta.get("text").and_then(|t| t.as_str())
                                         {
-                                            if !text.is_empty() {
-                                                if tx
+                                            if !text.is_empty()
+                                                && tx
                                                     .send(Ok(LLMStreamChunk::Token(
                                                         text.to_string(),
                                                     )))
                                                     .await
                                                     .is_err()
-                                                {
-                                                    return;
-                                                }
+                                            {
+                                                return;
                                             }
                                         }
                                     }

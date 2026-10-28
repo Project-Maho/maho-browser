@@ -35,6 +35,7 @@ fn vault_representative_public_surface_is_secret_free() {
             failed_unlock_count: 0,
             retry_at: None,
             account_escrowed: false,
+            lock_reason: None,
         },
         "item": VaultItemPublicDto {
             favorite: false,

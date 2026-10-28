@@ -11,17 +11,12 @@ pub const MAX_PASSPHRASE_WORDS: u32 = 12;
 pub const DEFAULT_PASSPHRASE_WORDS: u32 = 5;
 pub const DEFAULT_PASSPHRASE_SEPARATOR: &str = "-";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PasswordGeneratorMode {
+    #[default]
     Password,
     Passphrase,
-}
-
-impl Default for PasswordGeneratorMode {
-    fn default() -> Self {
-        Self::Password
-    }
 }
 
 fn default_mode() -> PasswordGeneratorMode {

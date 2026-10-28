@@ -444,7 +444,7 @@ pub fn project_cli_result(result: Value) -> Value {
         serde_json::from_value::<maho_types::tool::BrowserToolExecution>(payload.clone())
     {
         let output = serde_json::from_str(&execution.output_json)
-            .unwrap_or_else(|_| Value::String(execution.output_json));
+            .unwrap_or(Value::String(execution.output_json));
         return serde_json::json!({
             "result": output,
             "receipt": execution.receipt.project(),

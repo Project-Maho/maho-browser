@@ -14,7 +14,6 @@ use maho_storage::sqlite::SqliteStorage;
 
 use crate::agent::callback_lease::{SendableCallback, SendableUserData};
 use crate::common::{to_json_cstring, CallbackLease, NEXT_CALLBACK_TOKEN};
-use crate::ffi_safe;
 use crate::import_gate;
 
 fn get_storage(core: *mut MahoCore) -> Option<SqliteStorage> {
@@ -701,6 +700,8 @@ pub(crate) fn routine_run_registry(
     registry
 }
 
+// Caller is the split-out core.rs, which is not compiled into the crate yet.
+#[allow(dead_code)]
 pub(crate) fn remove_routine_run_registry(core: *mut MahoCore) {
     let key = core as usize;
     if let Some(registries) = ROUTINE_RUN_REGISTRIES.get() {
@@ -734,15 +735,15 @@ fn validate_routine_start(
     id: &str,
     tier: maho_core::routines::UserTier,
 ) -> Result<String, String> {
-    if tier != maho_core::routines::UserTier::Max {
-        return Err("Routines are available on Max tier only".to_string());
-    }
     let db_path = unsafe { &*core }
         .sqlite_db_path()
         .map(str::to_string)
         .ok_or_else(|| "Routine storage unavailable".to_string())?;
     let storage = maho_storage::sqlite::SqliteStorage::open(&db_path)
         .map_err(|error| format!("Failed to open storage: {error}"))?;
+    if !crate::common::routine_entitlement(tier, &storage).allows_routines() {
+        return Err(maho_core::routines::RoutineError::TierLockedToMax.to_string());
+    }
     let exists = maho_core::routines::list_all_routines(&storage)
         .map_err(|error| error.to_string())?
         .iter()
@@ -842,6 +843,17 @@ fn spawn_tracked_routine(
                     return;
                 }
             };
+            if let Err(message) =
+                crate::common::bind_routine_provider(&backend, tier, &resolve_storage)
+            {
+                let _ = registry.mark_setup_failed(&queued_for_worker.run_id, message.clone());
+                if let Some(callback) = on_error.0 {
+                    if let Ok(error) = CString::new(message) {
+                        unsafe { callback(user_data.0 as *mut c_void, error.as_ptr()) };
+                    }
+                }
+                return;
+            }
             let result = maho_core::routines::run_routine_and_record_tracked(
                 &id,
                 tier,
@@ -1269,9 +1281,12 @@ pub unsafe extern "C" fn maho_routines_fire_event(core: *mut MahoCore, event_jso
                 return;
             }
             let core_ref = &*core;
-            // Only Max users get event-triggered routines.
-            match core_ref.get_account_tier() {
-                Some(maho_types::account::UserTier::Max) => {}
+            // Max users, or users with a validated BYOK key, get event-triggered routines.
+            let routine_tier = crate::common::routines_tier(core_ref.get_account_tier());
+            match core_ref.storage_ref() {
+                Some(storage)
+                    if crate::common::routine_entitlement(routine_tier, storage)
+                        .allows_routines() => {}
                 _ => return,
             };
             let json_str = match CStr::from_ptr(event_json).to_str() {
@@ -1373,6 +1388,12 @@ pub unsafe extern "C" fn maho_routines_fire_event(core: *mut MahoCore, event_jso
                                 .unwrap_or_else(|_| std::path::PathBuf::from(".")),
                             true,
                         );
+                        if let Err(message) =
+                            crate::common::bind_routine_provider(&backend, routine_tier, &storage)
+                        {
+                            return Box::pin(async move { Err(message) })
+                                as Pin<Box<dyn Future<Output = Result<String, String>>>>;
+                        }
                         Box::pin(async move {
                             backend.run_prompt(&prompt).await.map_err(|e| e.to_string())
                         })
@@ -1380,7 +1401,7 @@ pub unsafe extern "C" fn maho_routines_fire_event(core: *mut MahoCore, event_jso
                     };
                     if let Err(e) = maho_core::routines::fire_event_routines_tracked(
                         event,
-                        maho_core::routines::UserTier::Max,
+                        routine_tier,
                         &storage,
                         runner,
                         &registry,
@@ -1485,10 +1506,13 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
             if core.is_null() {
                 return -2;
             }
-            // Check tier — only Max users get scheduled routines
+            // Check entitlement — Max users or validated BYOK users get scheduled routines
             let core_ref = &*core;
-            match core_ref.get_account_tier() {
-                Some(maho_types::account::UserTier::Max) => {}
+            let routine_tier = crate::common::routines_tier(core_ref.get_account_tier());
+            match core_ref.storage_ref() {
+                Some(storage)
+                    if crate::common::routine_entitlement(routine_tier, storage)
+                        .allows_routines() => {}
                 _ => return -1,
             };
 
@@ -1636,9 +1660,18 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
                                 true,
                             );
 
+                            if let Err(message) = crate::common::bind_routine_provider(
+                                &backend,
+                                routine_tier,
+                                &record_storage,
+                            ) {
+                                let _ = registry.mark_setup_failed(&queued.run_id, message.clone());
+                                eprintln!("[routines scheduled] {message}");
+                                return;
+                            }
                             let result = maho_core::routines::run_routine_and_record_tracked(
                                 &id_str,
-                                maho_core::routines::UserTier::Max,
+                                routine_tier,
                                 &record_storage,
                                 maho_core::routines::RoutineRunSource::Scheduled,
                                 |prompt| async move {

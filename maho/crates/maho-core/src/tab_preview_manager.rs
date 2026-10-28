@@ -164,7 +164,7 @@ impl TabPreviewManager {
     }
 
     pub fn take_screenshot_requests(&mut self) -> Vec<ScreenshotRequest> {
-        self.screenshot_requests.drain(..).collect()
+        std::mem::take(&mut self.screenshot_requests)
     }
 
     pub fn has_pending_screenshots(&self) -> bool {

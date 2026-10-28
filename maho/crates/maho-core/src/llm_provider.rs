@@ -20,6 +20,9 @@ pub trait LLMProvider: Send + Sync {
     fn supports_tools(&self) -> bool;
 }
 
+/// Overall timeout for a key-validation probe (connect + response).
+pub const VALIDATE_KEY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// # Threading
 /// Async — callers at FFI boundaries must use their own `block_on` bridge.
 pub async fn validate_api_key(provider: &str, api_key: &str) -> bool {
@@ -29,8 +32,10 @@ pub async fn validate_api_key(provider: &str, api_key: &str) -> bool {
 
     let client = crate::http::shared_http_client();
 
-    let req = if provider == "anthropic" {
-        client
+    // Each provider is probed against its own API; a provider without a
+    // verifiable key (e.g. a local Ollama server) never validates.
+    let req = match provider {
+        "anthropic" => client
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
@@ -38,20 +43,29 @@ pub async fn validate_api_key(provider: &str, api_key: &str) -> bool {
                 "model": "claude-sonnet-4-20250514",
                 "max_tokens": 1,
                 "messages": [{"role": "user", "content": "Ping"}]
-            }))
-    } else {
-        client
+            })),
+        "openai" | "openai-compatible" => client
             .get("https://api.openai.com/v1/models")
-            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Authorization", format!("Bearer {}", api_key)),
+        "gemini" => client
+            .get("https://generativelanguage.googleapis.com/v1beta/models")
+            .header("x-goog-api-key", api_key),
+        _ => return false,
     };
 
-    match req.send().await {
-        Ok(res) => {
-            let status = res.status().as_u16();
-            status != 401 && status != 403
-        }
+    // Bound the whole probe: a stalled provider must not block the caller
+    // (the core sequence on desktop) indefinitely.
+    match req.timeout(VALIDATE_KEY_TIMEOUT).send().await {
+        Ok(res) => status_proves_valid_key(res.status().as_u16()),
         Err(_) => false,
     }
+}
+
+/// Only a 2xx response proves the provider accepted the key. Rate limits,
+/// outages and not-found responses are inconclusive and must not count as
+/// valid, because a validated BYOK key unlocks agent features.
+pub fn status_proves_valid_key(status: u16) -> bool {
+    (200..300).contains(&status)
 }
 
 pub struct OpenAICompatibleProvider {
@@ -174,16 +188,15 @@ impl LLMProvider for OpenAICompatibleProvider {
                                     if let Some(content) =
                                         delta.get("content").and_then(|c| c.as_str())
                                     {
-                                        if !content.is_empty() {
-                                            if tx
+                                        if !content.is_empty()
+                                            && tx
                                                 .send(Ok(LLMStreamChunk::Token(
                                                     content.to_string(),
                                                 )))
                                                 .await
                                                 .is_err()
-                                            {
-                                                return;
-                                            }
+                                        {
+                                            return;
                                         }
                                     }
 
@@ -305,6 +318,22 @@ pub fn chat_content_to_openai_value(content: &ChatContent) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_2xx_proves_a_valid_key() {
+        use super::status_proves_valid_key;
+        assert!(status_proves_valid_key(200));
+        assert!(status_proves_valid_key(204));
+        for status in [401u16, 403, 404, 429, 500, 503] {
+            assert!(!status_proves_valid_key(status), "{status} must not validate");
+        }
+    }
+
+    #[tokio::test]
+    async fn providers_without_a_verifiable_key_never_validate() {
+        assert!(!super::validate_api_key("ollama", "sk-local-123456789").await);
+        assert!(!super::validate_api_key("unknown", "sk-local-123456789").await);
+    }
+
     use super::*;
     use maho_types::chat::{ChatContent, ChatContentPart};
 

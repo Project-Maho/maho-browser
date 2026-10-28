@@ -155,9 +155,7 @@ fn trivia(characters: &[char], mut index: usize) -> Option<usize> {
         }
         index += 2;
         while characters.get(index..index + 2) != Some(&['*', '/']) {
-            if characters.get(index).is_none() {
-                return None;
-            }
+            characters.get(index)?;
             index += 1;
         }
         index += 2;

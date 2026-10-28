@@ -1,14 +1,14 @@
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
-use maho_types::vault::{TotpAlgorithm, VaultCiphertextEnvelope, VaultItemId, VaultStatus};
+use maho_types::vault::{VaultCiphertextEnvelope, VaultItemId, VaultStatus};
 use zeroize::Zeroizing;
 
 use crate::oscrypt::{VaultDeviceBinding, VaultDeviceProtector, VaultDeviceWrapBundle};
 use crate::vault_crypto::WrappedVaultKeyEnvelope;
 use crate::vault_manager::{
-    VaultAccountProvisionSlots, VaultHydrationOutcome, VaultHydrationSlots, VaultManager,
-    VaultManagerError, VaultPersistedSlots,
+    PreparedClientHeldVault, VaultAccountProvisionSlots, VaultHydrationOutcome,
+    VaultHydrationSlots, VaultManager, VaultManagerError, VaultPersistedSlots,
 };
 
 pub(crate) mod audit;
@@ -28,9 +28,6 @@ pub(crate) enum VaultSecretResult {
     LoginPassword(Zeroizing<String>),
     Totp {
         seed: Zeroizing<Vec<u8>>,
-        algorithm: TotpAlgorithm,
-        digits: u32,
-        period_seconds: u64,
     },
     PasskeyPrivateKey(Zeroizing<Vec<u8>>),
     SecureBytes(Zeroizing<Vec<u8>>),
@@ -141,6 +138,38 @@ impl VaultRuntime {
         account_seed: &[u8],
     ) -> Result<WrappedVaultKeyEnvelope, VaultManagerError> {
         self.with_manager(|manager| manager.wrap_active_key_for_account(account_seed))?
+    }
+
+    pub fn has_user_wrap(&self) -> bool {
+        self.with_manager(|manager| manager.has_user_wrap())
+            .unwrap_or(false)
+    }
+
+    pub fn verify_user_passphrase(
+        &self,
+        master_passphrase: &[u8],
+        now: DateTime<Utc>,
+    ) -> Result<(), VaultManagerError> {
+        self.with_manager(|manager| manager.verify_user_passphrase(master_passphrase, now))?
+    }
+
+    /// Side-effect-free first phase of the client-held rotation; see
+    /// [`VaultManager::prepare_client_held_rotation`].
+    pub fn prepare_client_held_rotation(
+        &self,
+        recovery_secret: &[u8],
+        rows: &[maho_storage::sqlite::EncryptedVaultItemRow],
+    ) -> Result<PreparedClientHeldVault, VaultManagerError> {
+        self.with_manager(|manager| manager.prepare_client_held_rotation(recovery_secret, rows))?
+    }
+
+    /// Installs a rotation the caller already persisted.
+    pub fn commit_client_held_rotation(
+        &self,
+        prepared: PreparedClientHeldVault,
+        now: DateTime<Utc>,
+    ) -> Result<(), VaultManagerError> {
+        self.with_manager(|manager| manager.commit_client_held_rotation(prepared, now))
     }
 
     pub fn has_account_wrap(&self) -> bool {

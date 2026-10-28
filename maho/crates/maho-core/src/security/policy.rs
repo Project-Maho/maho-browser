@@ -28,9 +28,9 @@ impl HardwareSecurityPolicyEngine {
             }
             FallbackPolicyKind::DeviceIdentityPreferred => {
                 // Prefers hardware-backed signing, reports actual level obtained without spoofing
-                if capabilities.supports_non_exportable_signing {
-                    Ok(capabilities.protection_level)
-                } else if capabilities.protection_level >= ProtectionLevel::OsSecretStore {
+                if capabilities.supports_non_exportable_signing
+                    || capabilities.protection_level >= ProtectionLevel::OsSecretStore
+                {
                     Ok(capabilities.protection_level)
                 } else {
                     Ok(ProtectionLevel::SoftwareProcess)
@@ -84,13 +84,14 @@ impl HardwareSecurityPolicyEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maho_types::hardware_security::*;
 
     #[test]
     fn test_background_database_requires_os_secret_store() {
-        let mut caps = HardwareSecurityCapabilities::default();
-        caps.protection_level = ProtectionLevel::SoftwareProcess;
-        caps.supports_background_unwrap = true;
+        let mut caps = HardwareSecurityCapabilities {
+            protection_level: ProtectionLevel::SoftwareProcess,
+            supports_background_unwrap: true,
+            ..Default::default()
+        };
 
         let res = HardwareSecurityPolicyEngine::evaluate_fallback_policy(
             FallbackPolicyKind::BackgroundDatabase,
@@ -110,8 +111,10 @@ mod tests {
 
     #[test]
     fn test_strict_hardware_rejects_software_and_secret_store() {
-        let mut caps = HardwareSecurityCapabilities::default();
-        caps.protection_level = ProtectionLevel::OsSecretStore;
+        let mut caps = HardwareSecurityCapabilities {
+            protection_level: ProtectionLevel::OsSecretStore,
+            ..Default::default()
+        };
 
         let res = HardwareSecurityPolicyEngine::evaluate_fallback_policy(
             FallbackPolicyKind::StrictHardware,
@@ -131,10 +134,12 @@ mod tests {
 
     #[test]
     fn test_high_risk_presence_verification() {
-        let mut caps = HardwareSecurityCapabilities::default();
-        caps.supports_user_presence = true;
-        caps.supports_biometric_strong = false;
-        caps.supports_biometric = true;
+        let caps = HardwareSecurityCapabilities {
+            supports_user_presence: true,
+            supports_biometric_strong: false,
+            supports_biometric: true,
+            ..Default::default()
+        };
 
         let res = HardwareSecurityPolicyEngine::evaluate_fallback_policy(
             FallbackPolicyKind::HighRiskUserPresence,

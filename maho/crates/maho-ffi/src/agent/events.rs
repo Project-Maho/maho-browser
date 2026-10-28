@@ -1,17 +1,13 @@
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
-use std::sync::Arc;
 
-use maho_agent::AgentRuntime;
 use maho_core::maho_core::MahoCore;
 
 use crate::agent::callback_lease::{
-    dispatch_unified_event, MahoAgentReleaseCallback, SessionCallbackLease,
-    UnifiedEventCallbackRegistration,
+    dispatch_unified_event, SessionCallbackLease, UnifiedEventCallbackRegistration,
 };
 use crate::agent::session::MahoAgentSession;
 use crate::common::to_c_string;
-use crate::ffi_safe;
 use crate::import_gate;
 
 /// ABI v2 Agent Event Kind
@@ -1651,9 +1647,9 @@ pub unsafe extern "C" fn maho_agent_get_last_compaction_info(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maho_agent::interaction::{InteractionAnswer, InteractionRequestId};
+    use maho_agent::interaction::InteractionAnswer;
     use maho_agent::run_journal::{AgentRunId, RunCheckpointKind, RunJournal};
-    use std::path::PathBuf;
+    use std::ffi::CString;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     include!("review_runtime.rs");

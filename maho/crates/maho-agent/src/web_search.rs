@@ -123,6 +123,9 @@ pub enum WebSearchError {
 pub struct SearchEntitlement {
     pub tier: UserTier,
     pub payg_credits_usd: f64,
+    /// True when the request runs on the user's validated BYOK key instead of
+    /// Maho-managed billing; tier/PAYG checks then do not apply.
+    pub byok: bool,
 }
 
 impl SearchEntitlement {
@@ -130,6 +133,7 @@ impl SearchEntitlement {
         Self {
             tier,
             payg_credits_usd,
+            byok: false,
         }
     }
 
@@ -137,6 +141,7 @@ impl SearchEntitlement {
         Self {
             tier: UserTier::Free,
             payg_credits_usd: 0.0,
+            byok: false,
         }
     }
 
@@ -144,6 +149,7 @@ impl SearchEntitlement {
         Self {
             tier: UserTier::Max,
             payg_credits_usd: 0.0,
+            byok: false,
         }
     }
 
@@ -151,11 +157,29 @@ impl SearchEntitlement {
         Self {
             tier: UserTier::Free,
             payg_credits_usd: credits_usd,
+            byok: false,
         }
     }
 
+    /// Production constructor: tier/PAYG entitlement plus a validated BYOK key
+    /// resolved from `storage`.
+    pub fn for_account(
+        tier: UserTier,
+        payg_credits_usd: f64,
+        storage: &maho_storage::sqlite::SqliteStorage,
+    ) -> Self {
+        Self::new(tier, payg_credits_usd).with_byok(maho_core::byok::has_byok_key(storage))
+    }
+
+    /// Marks the entitlement as backed by a validated BYOK key.
+    pub fn with_byok(mut self, byok: bool) -> Self {
+        self.byok = byok;
+        self
+    }
+
     pub fn allows_premium(&self) -> bool {
-        matches!(self.tier, UserTier::Max) || self.payg_credits_usd > 0.0
+        // Tier/PAYG only gate Maho-managed spend; BYOK is always entitled.
+        self.byok || matches!(self.tier, UserTier::Max) || self.payg_credits_usd > 0.0
     }
 }
 
@@ -164,6 +188,7 @@ impl From<crate::deep_research::ResearchEntitlement> for SearchEntitlement {
         Self {
             tier: entitlement.tier,
             payg_credits_usd: entitlement.payg_credits_usd,
+            byok: false,
         }
     }
 }
@@ -173,6 +198,7 @@ impl From<UserTier> for SearchEntitlement {
         Self {
             tier,
             payg_credits_usd: 0.0,
+            byok: false,
         }
     }
 }
@@ -333,7 +359,8 @@ impl WebSearchEntitlementRouter {
                     Ok(self.premium_backend.clone())
                 } else {
                     Err(WebSearchError::TypedUnavailable(
-                        "Premium web search requires Max tier or active PAYG credits".to_string(),
+                        "Premium web search requires Max tier, active PAYG credits, or your own API key (BYOK)"
+                            .to_string(),
                     ))
                 }
             }
@@ -404,6 +431,33 @@ mod tests {
         let res = router.execute_search(&payg_user, query).await.unwrap();
         assert_eq!(res.provenance.tier, SearchTier::Premium);
         assert_eq!(res.provenance.engine, "premium_neural_index");
+    }
+
+    #[tokio::test]
+    async fn test_for_account_resolves_byok_from_storage() {
+        crate::install_test_sqlcipher_key();
+        let storage = maho_storage::sqlite::SqliteStorage::open_in_memory().unwrap();
+        let router = WebSearchEntitlementRouter::default();
+        let free = SearchEntitlement::for_account(UserTier::Free, 0.0, &storage);
+        assert!(!free.byok);
+        let query = WebSearchQuery::new("rust").with_tier(SearchTier::Premium);
+        assert!(router.execute_search(&free, query.clone()).await.is_err());
+
+        maho_core::byok::store_validated_key(&storage, "anthropic", "sk-ant-aaaaaaaa").unwrap();
+        let byok = SearchEntitlement::for_account(UserTier::Free, 0.0, &storage);
+        assert!(byok.byok);
+        let res = router.execute_search(&byok, query).await.unwrap();
+        assert_eq!(res.provenance.tier, SearchTier::Premium);
+    }
+
+    #[tokio::test]
+    async fn test_tier_routing_byok_free_user_selects_premium() {
+        let router = WebSearchEntitlementRouter::default();
+        let byok_user = SearchEntitlement::free().with_byok(true);
+        let query = WebSearchQuery::new("rust async").with_tier(SearchTier::Premium);
+
+        let res = router.execute_search(&byok_user, query).await.unwrap();
+        assert_eq!(res.provenance.tier, SearchTier::Premium);
     }
 
     #[tokio::test]

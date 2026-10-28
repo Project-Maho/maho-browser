@@ -5,6 +5,9 @@
 //! Shared test harness: detect/connect to a running Maho browser instance via
 //! `BrowserClient`, provide helper utilities for teardown.
 
+// Shared by several test binaries; each one uses only a subset of helpers.
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use std::time::Duration;
 

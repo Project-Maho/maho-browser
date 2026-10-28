@@ -188,7 +188,7 @@ fn test_sync_all_entities_round_trip() {
     assert!(core
         .get_note_view_models()
         .iter()
-        .any(|n| n.id.to_string() == "note-1"));
+        .any(|n| n.id == "note-1"));
 
     // 7. Boost
     let boost_payload = serde_json::json!({

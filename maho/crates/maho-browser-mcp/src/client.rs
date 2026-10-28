@@ -1400,16 +1400,13 @@ mod tests {
         server_handle.await.unwrap();
     }
 
-    static PERF_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static PERF_ENV_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// Proves that when `MAHO_BROWSER_PERF_TRACE=1`, JSON perf trace lines are emitted to stderr
     /// per request with the required keys (tool, connect_ms, handshake_ms, wire_bytes_in, wire_bytes_out, total_ms).
     #[tokio::test]
     async fn perf_trace_emitted_when_env_flag_set() {
-        let _guard = match PERF_ENV_MUTEX.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
+        let _guard = PERF_ENV_MUTEX.lock().await;
         std::env::set_var("MAHO_BROWSER_PERF_TRACE", "1");
 
         let recorded_traces = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1504,10 +1501,7 @@ mod tests {
     /// Proves that when `MAHO_BROWSER_PERF_TRACE` is unset (or not 1), NO trace lines are emitted to stderr.
     #[tokio::test]
     async fn perf_trace_absent_when_env_flag_unset() {
-        let _guard = match PERF_ENV_MUTEX.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
+        let _guard = PERF_ENV_MUTEX.lock().await;
         std::env::remove_var("MAHO_BROWSER_PERF_TRACE");
 
         let recorded_traces = Arc::new(std::sync::Mutex::new(Vec::new()));

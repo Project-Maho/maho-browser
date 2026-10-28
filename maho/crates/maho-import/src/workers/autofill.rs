@@ -55,7 +55,7 @@ impl ImportWorker for AutofillWorker {
                 entry.last_used,
             );
             count += 1;
-            if count % 200 == 0 {
+            if count.is_multiple_of(200) {
                 send_update(
                     progress,
                     ImportType::Autofill,

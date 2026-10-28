@@ -181,6 +181,48 @@ pub struct ResearchPolicy {
     pub managed: bool,
 }
 
+impl ResearchPolicy {
+    /// Production constructor: resolves billing from the account. A validated
+    /// BYOK key in `storage` makes the run BYOK (`managed = false`), so it bills
+    /// the user's own provider and is not tier-gated; otherwise the run is
+    /// Maho-managed and the tier/PAYG entitlement applies.
+    pub fn for_account(
+        tier: UserTier,
+        payg_credits_usd: f64,
+        model: impl Into<String>,
+        storage: &maho_storage::sqlite::SqliteStorage,
+    ) -> Self {
+        Self::resolve(
+            tier,
+            payg_credits_usd,
+            model,
+            maho_core::byok::has_byok_key(storage),
+        )
+    }
+
+    /// Like [`ResearchPolicy::for_account`] with an already-resolved BYOK flag.
+    pub fn resolve(
+        tier: UserTier,
+        payg_credits_usd: f64,
+        model: impl Into<String>,
+        has_byok: bool,
+    ) -> Self {
+        Self {
+            entitlement: ResearchEntitlement {
+                tier,
+                payg_credits_usd,
+            },
+            model: model.into(),
+            managed: !has_byok,
+        }
+    }
+
+    /// True when the policy would allow a run (ignoring the frontier-model gate).
+    pub fn is_entitled(&self) -> bool {
+        !self.managed || self.entitlement.allows_deep_research()
+    }
+}
+
 /// Run a bounded deep-research loop. Gating is enforced first, then the loop
 /// runs under strict caps and always terminates.
 pub async fn run_deep_research(
@@ -189,7 +231,9 @@ pub async fn run_deep_research(
     budget: ResearchBudget,
     stepper: &dyn ResearchStepper,
 ) -> Result<DeepResearchReport, DeepResearchError> {
-    if !policy.entitlement.allows_deep_research() {
+    // Tier/PAYG entitlement guards Maho-managed spend only; a BYOK run bills the
+    // user's own provider key, so it is never tier-locked.
+    if !policy.is_entitled() {
         return Err(DeepResearchError::TierNotEntitled);
     }
     if policy.managed && is_frontier_model(&policy.model) {
@@ -660,6 +704,57 @@ mod tests {
                 .unwrap_err();
             assert!(matches!(err, DeepResearchError::TierNotEntitled));
         }
+    }
+
+    #[tokio::test]
+    async fn for_account_uses_byok_billing_only_with_a_validated_key() {
+        crate::install_test_sqlcipher_key();
+        let storage = maho_storage::sqlite::SqliteStorage::open_in_memory().unwrap();
+        let managed = ResearchPolicy::for_account(UserTier::Free, 0.0, "m", &storage);
+        assert!(managed.managed, "no BYOK key -> Maho-managed");
+        let err = run_deep_research(
+            "q",
+            &managed,
+            ResearchBudget::managed_default(),
+            &CompletesStepper,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DeepResearchError::TierNotEntitled));
+
+        maho_core::byok::store_validated_key(&storage, "openai", "sk-test-1234567890").unwrap();
+        let byok = ResearchPolicy::for_account(UserTier::Free, 0.0, "m", &storage);
+        assert!(!byok.managed, "validated BYOK key -> BYOK billing");
+        let report = run_deep_research(
+            "q",
+            &byok,
+            ResearchBudget::managed_default(),
+            &CompletesStepper,
+        )
+        .await
+        .expect("Free + validated BYOK is entitled");
+        assert_eq!(report.stop_reason, StopReason::Completed);
+    }
+
+    #[tokio::test]
+    async fn byok_free_tier_is_entitled() {
+        let policy = ResearchPolicy {
+            entitlement: ResearchEntitlement {
+                tier: UserTier::Free,
+                payg_credits_usd: 0.0,
+            },
+            model: "byok/model".into(),
+            managed: false,
+        };
+        let report = run_deep_research(
+            "q",
+            &policy,
+            ResearchBudget::managed_default(),
+            &CompletesStepper,
+        )
+        .await
+        .expect("BYOK runs are not tier-gated");
+        assert_eq!(report.stop_reason, StopReason::Completed);
     }
 
     #[tokio::test]

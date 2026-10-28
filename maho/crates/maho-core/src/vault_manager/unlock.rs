@@ -45,6 +45,45 @@ impl VaultManager {
         self.attempt_unlock(account_seed, now, UnlockKind::Account)
     }
 
+    /// Whether a master-passphrase wrap slot exists. Account-escrow-only
+    /// vaults (zero-input unlock) have none.
+    pub fn has_user_wrap(&self) -> bool {
+        self.wrapped_user_key.is_some()
+    }
+
+    /// Re-verifies the master passphrase against the user wrap slot without
+    /// changing lock state. Shares the unlock rate limiter, so it cannot be
+    /// used to brute-force the passphrase faster than unlock itself.
+    pub fn verify_user_passphrase(
+        &mut self,
+        master_passphrase: &[u8],
+        now: DateTime<Utc>,
+    ) -> Result<(), VaultManagerError> {
+        if self.throttle.check(now).is_err() {
+            return Err(VaultManagerError::RateLimited);
+        }
+        let metadata = self
+            .kdf_metadata
+            .clone()
+            .ok_or(VaultManagerError::Uninitialized)?;
+        let envelope = self
+            .wrapped_user_key
+            .clone()
+            .ok_or(VaultManagerError::InvalidCredentials)?;
+        let wrapping_key = derive_user_wrapping_key(master_passphrase, &metadata)?;
+        match unwrap_vault_key(&envelope, &wrapping_key, MANAGER_WRAP_AAD) {
+            Ok(_key) => {
+                self.throttle.reset();
+                Ok(())
+            }
+            Err(VaultCryptoError::AuthenticationFailed) => {
+                self.throttle.record_failure(now);
+                Err(VaultManagerError::InvalidCredentials)
+            }
+            Err(_) => Err(VaultManagerError::CorruptedVaultData),
+        }
+    }
+
     fn attempt_unlock(
         &mut self,
         secret: &[u8],

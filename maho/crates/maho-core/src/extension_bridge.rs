@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_PROFILE_KEY: &str = "default";
 
-type ExtensionSyncCallback = Box<dyn Fn(&str, bool, bool) + Send + Sync>;
+/// Extension sync callback signature.
+pub type ExtensionSyncFn = dyn Fn(&str, bool, bool) + Send + Sync;
+/// Owned extension sync callback.
+pub type ExtensionSyncCallback = Box<ExtensionSyncFn>;
 
 pub struct ExtensionBridge {
     profiles: HashMap<String, ProfileExtensionState>,
@@ -288,17 +291,14 @@ impl ExtensionBridge {
         find_password_provider(&exts)
     }
 
-    pub fn register_extension_sync_callback(
-        &mut self,
-        callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>,
-    ) {
+    pub fn register_extension_sync_callback(&mut self, callback: Option<ExtensionSyncCallback>) {
         self.register_extension_sync_callback_for_profile(DEFAULT_PROFILE_KEY, callback);
     }
 
     pub fn register_extension_sync_callback_for_profile(
         &mut self,
         profile_key: &str,
-        callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>,
+        callback: Option<ExtensionSyncCallback>,
     ) {
         self.profile_mut(profile_key).sync_callback = callback;
     }
@@ -306,7 +306,7 @@ impl ExtensionBridge {
     pub fn sync_callback_for_profile(
         &self,
         profile_key: &str,
-    ) -> Option<&(dyn Fn(&str, bool, bool) + Send + Sync)> {
+    ) -> Option<&ExtensionSyncFn> {
         self.profile(profile_key)
             .and_then(|profile| profile.sync_callback.as_deref())
     }

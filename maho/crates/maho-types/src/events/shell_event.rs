@@ -227,6 +227,10 @@ pub enum ShellEvent {
     ResetPinnedTab {
         tab_id: TabId,
     },
+    /// Applies this device's "On Launch" policy once after state loads. The
+    /// prune is local to this device: it never queues sync deletions, so tabs
+    /// open on other devices of the account are left alone.
+    ApplyRestorePolicyOnLaunch,
 
     // Space management (5)
     CreateSpace {
@@ -804,6 +808,7 @@ impl ShellEvent {
                 | Self::RestoreArchivedTab { .. }
                 | Self::DeleteArchivedTab { .. }
                 | Self::ResetPinnedTab { .. }
+                | Self::ApplyRestorePolicyOnLaunch
         )
     }
 
