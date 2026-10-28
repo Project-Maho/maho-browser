@@ -3,6 +3,7 @@
 #include "maho/browser/ui/theme/maho_theme_helper.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <utility>
 #include <vector>
@@ -60,11 +61,73 @@ float SidebarBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
   return 0.08f;
 }
 
+// Picker range and default (resources/maho_space_create/react/types.ts,
+// kDefaultThemeOpacity in maho_space_theme_state.cc).
+constexpr float kThemeOpacityMin = 0.25f;
+constexpr float kThemeOpacityDefault = 0.5f;
+constexpr float kThemeOpacityMax = 0.9f;
+constexpr float kMinSidebarBlendScale = 0.5f;
+constexpr float kMaxSidebarThemeBlend = 0.5f;
+
+// Theme-hue share of the surface for `opacity`: the per-kind blend at the
+// default, half of it at the minimum, kMaxSidebarThemeBlend at the maximum.
+float SidebarBlendForOpacity(float kind_blend, float opacity) {
+  const float clamped =
+      std::clamp(opacity, kThemeOpacityMin, kThemeOpacityMax);
+  if (clamped <= kThemeOpacityDefault) {
+    const float t = (clamped - kThemeOpacityMin) /
+                    (kThemeOpacityDefault - kThemeOpacityMin);
+    return kind_blend *
+           (kMinSidebarBlendScale + (1.0f - kMinSidebarBlendScale) * t);
+  }
+  const float t = (clamped - kThemeOpacityDefault) /
+                  (kThemeOpacityMax - kThemeOpacityDefault);
+  return kind_blend + (kMaxSidebarThemeBlend - kind_blend) * t;
+}
+
+float LinearChannel(U8CPU channel) {
+  const float value = channel / 255.0f;
+  return value <= 0.04045f ? value / 12.92f
+                           : std::pow((value + 0.055f) / 1.055f, 2.4f);
+}
+
+U8CPU EncodeChannel(float linear) {
+  const float value = std::clamp(linear, 0.0f, 1.0f);
+  const float encoded = value <= 0.0031308f
+                            ? 12.92f * value
+                            : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+  return static_cast<U8CPU>(
+      std::lround(std::clamp(encoded, 0.0f, 1.0f) * 255.0f));
+}
+
+// Moves `color` to relative luminance `target` in linear light, keeping its
+// hue: scales toward black to darken, mixes toward white to lighten.
+SkColor WithRelativeLuminance(SkColor color, float target) {
+  const float current = color_utils::GetRelativeLuminance(color);
+  float r = LinearChannel(SkColorGetR(color));
+  float g = LinearChannel(SkColorGetG(color));
+  float b = LinearChannel(SkColorGetB(color));
+  if (current > target) {
+    const float scale = target / current;
+    r *= scale;
+    g *= scale;
+    b *= scale;
+  } else if (current < target) {
+    const float mix = (target - current) / (1.0f - current);
+    r += mix * (1.0f - r);
+    g += mix * (1.0f - g);
+    b += mix * (1.0f - b);
+  }
+  return SkColorSetARGB(SkColorGetA(color), EncodeChannel(r), EncodeChannel(g),
+                        EncodeChannel(b));
+}
+
 SkColor MakeTintedStop(const MahoSpaceThemeState::SpaceHSV& hsv,
                        MahoSpaceThemeState::ThemeKind kind,
                        bool dark_family,
                        SkColor base_surface,
-                       SkAlpha surface_alpha) {
+                       SkAlpha surface_alpha,
+                       float opacity) {
   SkScalar saturation = hsv.saturation;
   SkScalar value = dark_family ? std::clamp(hsv.value + 0.02f, 0.0f, 1.0f)
                                : std::clamp(hsv.value * 1.08f, 0.0f, 1.0f);
@@ -79,9 +142,21 @@ SkColor MakeTintedStop(const MahoSpaceThemeState::SpaceHSV& hsv,
   const SkAlpha tint_alpha =
       kind == MahoSpaceThemeState::ThemeKind::kSolid ? 22 : 18;
   const SkColor tint = SkColorSetA(SkHSVToColor(tint_alpha, adjusted_hsv), 255);
-  return SkColorSetA(
-      maho_theme::BlendColors(base_surface, tint, SidebarBlendForKind(kind)),
-      surface_alpha);
+  const float kind_blend = SidebarBlendForKind(kind);
+  const SkColor reference =
+      maho_theme::BlendColors(base_surface, tint, kind_blend);
+  const float blend = SidebarBlendForOpacity(kind_blend, opacity);
+  if (blend == kind_blend) {
+    return SkColorSetA(reference, surface_alpha);
+  }
+  // Opacity also sets how much theme hue the surface carries, so the slider
+  // shows where alpha cannot: opaque paint modes (Linux, overlays) and a
+  // backdrop close to the base. Holding the default blend's luminance keeps
+  // the text contrast the roles are resolved against.
+  const SkColor tinted = WithRelativeLuminance(
+      maho_theme::BlendColors(base_surface, tint, blend),
+      color_utils::GetRelativeLuminance(reference));
+  return SkColorSetA(tinted, surface_alpha);
 }
 
 SkColor SampleGradient(const std::vector<SkColor>& stops, float position) {
@@ -329,7 +404,7 @@ MahoSidebarPalette ResolveMahoSidebarPalette(
     for (size_t i = 0; i < stop_count; ++i) {
       palette.surface_stops.push_back(MakeTintedStop(
           environment.theme->stops[i], environment.theme->kind,
-          palette.dark_family, base_surface, surface_alpha));
+          palette.dark_family, base_surface, surface_alpha, opacity));
     }
   } else {
     palette.surface_stops.push_back(SkColorSetA(base_surface, surface_alpha));

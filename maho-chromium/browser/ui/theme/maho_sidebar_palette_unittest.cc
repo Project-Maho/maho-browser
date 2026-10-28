@@ -4,6 +4,7 @@
 
 #include "maho/browser/ui/theme/maho_color_id.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <initializer_list>
 #include <memory>
@@ -267,6 +268,47 @@ TEST(MahoSidebarPaletteTest, MapsOpacityEndpointsToActualSurfaceAlpha) {
   EXPECT_EQ(SkColorGetA(transparent_palette.surface_stops[0]), 24u);
   EXPECT_EQ(SkColorGetA(near_opaque_palette.surface_stops[0]), 231u);
   EXPECT_EQ(SkColorGetA(transparent_palette.opaque_contrast_stops[0]), 255u);
+}
+
+// Opaque paint modes (Linux, overlays) drop alpha, and a backdrop close to the
+// base surface hides an alpha-only change, so opacity must move the color too.
+TEST(MahoSidebarPaletteTest, OpacityChangesThemeColorNotOnlyAlpha) {
+  const auto chroma = [](SkColor color) {
+    const U8CPU r = SkColorGetR(color);
+    const U8CPU g = SkColorGetG(color);
+    const U8CPU b = SkColorGetB(color);
+    return std::max({r, g, b}) - std::min({r, g, b});
+  };
+  for (const ColorScheme scheme : {ColorScheme::kLight, ColorScheme::kDark}) {
+    const bool dark = scheme == ColorScheme::kDark;
+    const auto resolve = [&](float opacity) {
+      return ResolveMahoSidebarPalette(Environment(
+          MakeTheme(ThemeKind::kSolid, scheme,
+                    {SkColorSetRGB(0x42, 0x73, 0xA5)}, opacity),
+          dark));
+    };
+    const MahoSidebarPalette faint = resolve(0.25f);
+    const MahoSidebarPalette standard = resolve(0.5f);
+    const MahoSidebarPalette strong = resolve(0.9f);
+    ASSERT_EQ(faint.opaque_contrast_stops.size(), 1u);
+    ASSERT_EQ(strong.opaque_contrast_stops.size(), 1u);
+    const SkColor faint_color = faint.opaque_contrast_stops[0];
+    const SkColor standard_color = standard.opaque_contrast_stops[0];
+    const SkColor strong_color = strong.opaque_contrast_stops[0];
+
+    EXPECT_NE(faint_color, strong_color);
+    EXPECT_LT(chroma(faint_color), chroma(standard_color));
+    EXPECT_LT(chroma(standard_color), chroma(strong_color));
+    EXPECT_NEAR(color_utils::GetRelativeLuminance(strong_color),
+                color_utils::GetRelativeLuminance(standard_color), 0.01f);
+    EXPECT_NEAR(color_utils::GetRelativeLuminance(faint_color),
+                color_utils::GetRelativeLuminance(standard_color), 0.01f);
+    for (const MahoSidebarPalette* palette : {&faint, &strong}) {
+      EXPECT_FALSE(palette->used_surface_fallback);
+      ExpectContrastAtLeast(*palette, palette->primary_text, 4.5f);
+      ExpectContrastAtLeast(*palette, palette->secondary_text, 4.5f);
+    }
+  }
 }
 
 TEST(MahoSidebarPaletteTest,
