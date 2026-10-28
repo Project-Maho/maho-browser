@@ -54,6 +54,26 @@ bool MahoMailRegisterEventCallback(MahoMailEventCallback callback);
 
 bool MahoMailRegisterNewMailCallback(MahoMailNewMailCallback callback);
 
+/**
+ * Cancels a queued agent send from the toast or the Agent activity journal.
+ * Result: `{"cancelled":true}` when stopped in time, `false` when the window
+ * already closed (sent/sending) or the id is unknown.
+ */
+bool MahoMailCancelAgentSend(const char *id, MahoMailReadCallback callback, void *user_data);
+
+/**
+ * Lists agent sends still inside their undo window.
+ */
+bool MahoMailListAgentSendQueue(MahoMailReadCallback callback, void *user_data);
+
+/**
+ * Agent-originated send honoring `agent.mail_send_delay_seconds` (request
+ * field `agent_send_delay_seconds` from the profile pref wins when present).
+ */
+bool MahoMailAgentSendEmail(const char *request_json,
+                            MahoMailReadCallback callback,
+                            void *user_data);
+
 bool MahoMailGetEmailSummary(const char *account_id,
                              const char *request_json,
                              MahoMailReadCallback callback,
@@ -659,6 +679,16 @@ bool MahoMailListBySmartCategory(const char *account_id,
                                  MahoMailReadCallback callback,
                                  void *user_data);
 
+/**
+ * Scans recent incoming Messages for a one-time code and reports it with the
+ * same JSON shape as `MahoMailExtractOtp`: a two-entry field mapping, or `[]`.
+ * `page_origin` null/empty means the requesting page is unknown.
+ */
+bool MahoMessagesExtractOtp(int64_t max_age_seconds,
+                            const char *page_origin,
+                            MahoMailReadCallback callback,
+                            void *user_data);
+
 bool MahoMailExtractOtp(const char *account_id,
                         const char *folder_id,
                         const char *query,
@@ -666,11 +696,6 @@ bool MahoMailExtractOtp(const char *account_id,
                         const char *page_origin,
                         MahoMailReadCallback callback,
                         void *user_data);
-
-bool MahoMessagesExtractOtp(int64_t max_age_seconds,
-                            const char *page_origin,
-                            MahoMailReadCallback callback,
-                            void *user_data);
 
 bool MahoMailListAccounts(MahoMailReadCallback callback, void *user_data);
 

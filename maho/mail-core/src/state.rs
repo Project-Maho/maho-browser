@@ -38,8 +38,8 @@ pub struct InitInfo {
 pub struct AppCtx {
     pub pool: SqlitePool,
     pub db_path: PathBuf,
-    /// Raw sqlcipher key string, re-applied to any freshly opened connection
-    /// (`PRAGMA key`). Held to support ad-hoc connections outside the pool.
+    /// Raw sqlcipher key string, carried only for the transfer artifact format
+    /// (see `credentials.rs`); the mail database is plain SQLite and never keyed.
     pub sqlcipher_key: String,
     /// 32-byte AES-256-GCM key used to decrypt per-account credentials stored
     /// in the `encrypted_credentials` table (mirrors maho-core scheme, but keyed

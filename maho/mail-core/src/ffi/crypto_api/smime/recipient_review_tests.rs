@@ -14,7 +14,6 @@ use ::openssl::x509::extension::{
 };
 use ::openssl::x509::store::X509StoreBuilder;
 use ::openssl::x509::{X509NameBuilder, X509};
-use base64::Engine as _;
 use mail_parser::MimeHeaders;
 use serde_json::{json, Value};
 use std::ffi::{CStr, CString};

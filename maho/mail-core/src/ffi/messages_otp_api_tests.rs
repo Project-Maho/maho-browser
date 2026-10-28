@@ -21,7 +21,10 @@ fn apple_ns(at: DateTime<Utc>) -> i64 {
     (at.timestamp() - APPLE_EPOCH_OFFSET_SECS) * 1_000_000_000
 }
 
-fn fixture_db(tag: &str, rows: &[(Option<&str>, Option<Vec<u8>>, i64, i64)]) -> PathBuf {
+/// Fixture message row: (text, attributedBody, date ns, is_from_me).
+type FixtureRow<'a> = (Option<&'a str>, Option<Vec<u8>>, i64, i64);
+
+fn fixture_db(tag: &str, rows: &[FixtureRow<'_>]) -> PathBuf {
     let path = temp_db_path(tag);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(

@@ -2,6 +2,9 @@ use super::*;
 use maho_core::imap_client::ImapClient;
 use std::sync::mpsc;
 
+// Shared loopback TLS fixture, included by several test modules; each uses
+// only part of it.
+#[allow(clippy::duplicate_mod, dead_code)]
 #[path = "../vendor/maho-core/src/imap_review_fixtures/tls.rs"]
 mod tls;
 

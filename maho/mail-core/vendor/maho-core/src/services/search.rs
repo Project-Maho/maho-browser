@@ -220,7 +220,7 @@ pub fn search_emails(
         .date_to
         .as_deref()
         .filter(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok())
-        .and_then(|_| date_to)
+        .and(date_to)
         .and_then(|date| date.checked_add_signed(chrono::Duration::days(1)));
 
     let where_sql = if where_clauses.is_empty() {

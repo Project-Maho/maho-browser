@@ -273,10 +273,7 @@ fn queue_uncertain_delivery(
 }
 
 fn is_network_error(err: &MailFfiError) -> bool {
-    match err {
-        MailFfiError::Core(maho_core::error::AppError::Network(_)) => true,
-        _ => false,
-    }
+    matches!(err, MailFfiError::Core(maho_core::error::AppError::Network(_)))
 }
 
 fn is_oauth_auth_error(err: &MailFfiError) -> bool {
@@ -425,7 +422,7 @@ fn enforce_cache_limit(cache_dir: &std::path::Path, max_bytes: u64) {
         return;
     }
 
-    files.sort_by(|a, b| a.2.cmp(&b.2));
+    files.sort_by_key(|file| file.2);
 
     for (path, size, _) in files {
         if total_size <= max_bytes {
@@ -451,104 +448,106 @@ pub extern "C" fn MahoMailSendEmail(
         let Ok(request) = serde_json::from_str::<ComposeEmailRequest>(&raw) else {
             return false;
         };
-        accept_read(callback, user_data, move |ctx| {
-            Box::pin(async move {
-                // The connection guard is `!Send`, so every database step below
-                // takes it for the duration of that step only and never holds
-                // it across the SMTP round trips.
-                let creds = smtp_credentials_async(&ctx, &request.account_id).await?;
+        accept_read(callback, user_data, move |ctx| Box::pin(send_now(ctx, request)))
+    })
+}
 
-                let to = request.to.clone();
-                let cc = request.cc.clone().unwrap_or_default();
-                let bcc = request.bcc.clone().unwrap_or_default();
-                let subject = request.subject.clone();
-                let body_text = request.body_text.clone();
-                let body_html = request.body_html.clone();
-                let from = creds.email.clone();
-                let use_xoauth2 = match &creds.auth {
-                    ImapAuth::OAuth2 { .. } => true,
-                    _ => false,
-                };
-                let attachments = request.attachments.clone().unwrap_or_default();
-                let read_receipt_to = if request.read_receipt.unwrap_or(false) {
-                    Some(creds.email.clone())
-                } else {
-                    None
-                };
+/// Immediate SMTP send with OAuth refresh retry and offline outbox fallback.
+/// Shared by user compose and by the agent undo-window queue at its deadline.
+pub(crate) async fn send_now(
+    ctx: std::sync::Arc<crate::state::AppCtx>,
+    request: ComposeEmailRequest,
+) -> Result<String> {
+    // The connection guard is `!Send`, so every database step below
+    // takes it for the duration of that step only and never holds
+    // it across the SMTP round trips.
+    let creds = smtp_credentials_async(&ctx, &request.account_id).await?;
 
+    let to = request.to.clone();
+    let cc = request.cc.clone().unwrap_or_default();
+    let bcc = request.bcc.clone().unwrap_or_default();
+    let subject = request.subject.clone();
+    let body_text = request.body_text.clone();
+    let body_html = request.body_html.clone();
+    let from = creds.email.clone();
+    let use_xoauth2 = matches!(&creds.auth, ImapAuth::OAuth2 { .. });
+    let attachments = request.attachments.clone().unwrap_or_default();
+    let read_receipt_to = if request.read_receipt.unwrap_or(false) {
+        Some(creds.email.clone())
+    } else {
+        None
+    };
+
+    match send_smtp_message(
+        creds.clone(),
+        use_xoauth2,
+        from.clone(),
+        to.clone(),
+        cc.clone(),
+        bcc.clone(),
+        subject.clone(),
+        body_text.clone(),
+        body_html.clone(),
+        request.in_reply_to.clone(),
+        request.references.clone(),
+        read_receipt_to.clone(),
+        attachments.clone(),
+        None,
+    )
+    .await
+    {
+        Ok(()) => Ok(serde_json::json!({"status": "sent"}).to_string()),
+        Err(err) if use_xoauth2 && is_oauth_auth_error(&err) => {
+            let _ = ctx.with_db(|conn| {
+                Ok(conn.execute(
+                    "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
+                    [&request.account_id],
+                ))
+            });
+            if let Ok(refreshed_creds) =
+                smtp_credentials_async(&ctx, &request.account_id).await
+            {
                 match send_smtp_message(
-                    creds.clone(),
-                    use_xoauth2,
-                    from.clone(),
-                    to.clone(),
-                    cc.clone(),
-                    bcc.clone(),
-                    subject.clone(),
-                    body_text.clone(),
-                    body_html.clone(),
+                    refreshed_creds,
+                    true,
+                    from,
+                    to,
+                    cc,
+                    bcc,
+                    subject,
+                    body_text,
+                    body_html,
                     request.in_reply_to.clone(),
                     request.references.clone(),
-                    read_receipt_to.clone(),
-                    attachments.clone(),
+                    read_receipt_to,
+                    attachments,
                     None,
                 )
                 .await
                 {
                     Ok(()) => Ok(serde_json::json!({"status": "sent"}).to_string()),
-                    Err(err) if use_xoauth2 && is_oauth_auth_error(&err) => {
-                        let _ = ctx.with_db(|conn| {
-                            Ok(conn.execute(
-                                "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
-                                [&request.account_id],
-                            ))
-                        });
-                        if let Ok(refreshed_creds) =
-                            smtp_credentials_async(&ctx, &request.account_id).await
-                        {
-                            match send_smtp_message(
-                                refreshed_creds,
-                                true,
-                                from,
-                                to,
-                                cc,
-                                bcc,
-                                subject,
-                                body_text,
-                                body_html,
-                                request.in_reply_to.clone(),
-                                request.references.clone(),
-                                read_receipt_to,
-                                attachments,
-                                None,
-                            )
-                            .await
-                            {
-                                Ok(()) => Ok(serde_json::json!({"status": "sent"}).to_string()),
-                                Err(MailFfiError::Core(maho_core::error::AppError::DeliveryUncertain(error))) => {
-                                    ctx.with_db(|conn| queue_uncertain_delivery(conn, &request, &error))
-                                }
-                                Err(retry_err) if is_network_error(&retry_err) => {
-                                    ctx.with_db(|conn| queue_to_outbox(conn, &request))?;
-                                    Ok(serde_json::json!({"status": "queued"}).to_string())
-                                }
-                                Err(retry_err) => Err(retry_err),
-                            }
-                        } else {
-                            Err(err)
-                        }
-                    }
                     Err(MailFfiError::Core(maho_core::error::AppError::DeliveryUncertain(error))) => {
                         ctx.with_db(|conn| queue_uncertain_delivery(conn, &request, &error))
                     }
-                    Err(err) if is_network_error(&err) => {
+                    Err(retry_err) if is_network_error(&retry_err) => {
                         ctx.with_db(|conn| queue_to_outbox(conn, &request))?;
                         Ok(serde_json::json!({"status": "queued"}).to_string())
                     }
-                    Err(err) => Err(err),
+                    Err(retry_err) => Err(retry_err),
                 }
-            })
-        })
-    })
+            } else {
+                Err(err)
+            }
+        }
+        Err(MailFfiError::Core(maho_core::error::AppError::DeliveryUncertain(error))) => {
+            ctx.with_db(|conn| queue_uncertain_delivery(conn, &request, &error))
+        }
+        Err(err) if is_network_error(&err) => {
+            ctx.with_db(|conn| queue_to_outbox(conn, &request))?;
+            Ok(serde_json::json!({"status": "queued"}).to_string())
+        }
+        Err(err) => Err(err),
+    }
 }
 
 #[no_mangle]
@@ -1017,10 +1016,7 @@ pub extern "C" fn MahoMailFlushOutbox(
 
                             match smtp_credentials_async(&ctx, &account_id).await {
                                 Ok(c) => {
-                                    let xoauth2 = match &c.auth {
-                                        ImapAuth::OAuth2 { .. } => true,
-                                        _ => false,
-                                    };
+                                    let xoauth2 = matches!(&c.auth, ImapAuth::OAuth2 { .. });
                                     let from_addr = c.email.clone();
                                     (c, xoauth2, from_addr)
                                 }
@@ -1264,14 +1260,6 @@ mod tests {
                 guard = next;
             }
             guard.clone()
-        }
-
-        fn peek(&self) -> Option<(bool, String)> {
-            self.slot.lock().unwrap().clone()
-        }
-
-        fn invocations(&self) -> usize {
-            self.count.load(Ordering::SeqCst)
         }
 
         fn as_user_data(&self) -> *mut c_void {
@@ -1549,10 +1537,7 @@ pub extern "C" fn MahoMailDelegateEmail(
                 });
 
                 let creds = smtp_credentials_async(&ctx, &request.account_id).await?;
-                let use_xoauth2 = match &creds.auth {
-                    ImapAuth::OAuth2 { .. } => true,
-                    _ => false,
-                };
+                let use_xoauth2 = matches!(&creds.auth, ImapAuth::OAuth2 { .. });
                 let from = creds.email.clone();
 
                 send_smtp_message(
@@ -1649,10 +1634,7 @@ pub extern "C" fn MahoMailSendMdnReceipt(
 
                 let creds = smtp_credentials_async(&ctx, &request.account_id).await?;
                 let recipient_email = creds.email.clone();
-                let use_xoauth2 = match &creds.auth {
-                    ImapAuth::OAuth2 { .. } => true,
-                    _ => false,
-                };
+                let use_xoauth2 = matches!(&creds.auth, ImapAuth::OAuth2 { .. });
                 let from = creds.email.clone();
 
                 let mdn_text = format!(

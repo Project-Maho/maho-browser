@@ -119,36 +119,32 @@ pub extern "C" fn MahoMailExtractOtp(
 
                 let mut best_candidate = None;
 
-                for row_res in rows {
-                    if let Ok((subject, snippet, body_text, body_html, date_str, from_address)) =
-                        row_res
-                    {
-                        let parsed_date = DateTime::parse_from_rfc3339(&date_str)
-                            .map(|dt| dt.with_timezone(&Utc))
-                            .unwrap_or(cutoff);
+                for (subject, snippet, body_text, body_html, date_str, from_address) in rows.flatten() {
+                    let parsed_date = DateTime::parse_from_rfc3339(&date_str)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or(cutoff);
 
-                        let body_t = body_text.unwrap_or(snippet);
-                        let body_h = body_html.unwrap_or_default();
+                    let body_t = body_text.unwrap_or(snippet);
+                    let body_h = body_html.unwrap_or_default();
 
-                        let msg = OtpMessage {
-                            sender_email: from_address.as_deref(),
-                            recipient_email: None,
-                            page_origin: origin_filter.as_deref(),
-                            subject: &subject,
-                            body_text: &body_t,
-                            body_html: &body_h,
-                            received_at: parsed_date,
-                            now: Utc::now(),
-                        };
+                    let msg = OtpMessage {
+                        sender_email: from_address.as_deref(),
+                        recipient_email: None,
+                        page_origin: origin_filter.as_deref(),
+                        subject: &subject,
+                        body_text: &body_t,
+                        body_html: &body_h,
+                        received_at: parsed_date,
+                        now: Utc::now(),
+                    };
 
-                        if let Some(cand) = best_otp_candidate(&msg) {
-                            match best_candidate {
-                                None => best_candidate = Some(cand),
-                                Some(ref current) if cand.confidence > current.confidence => {
-                                    best_candidate = Some(cand);
-                                }
-                                _ => {}
+                    if let Some(cand) = best_otp_candidate(&msg) {
+                        match best_candidate {
+                            None => best_candidate = Some(cand),
+                            Some(ref current) if cand.confidence > current.confidence => {
+                                best_candidate = Some(cand);
                             }
+                            _ => {}
                         }
                     }
                 }

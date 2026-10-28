@@ -169,9 +169,6 @@ fn draft_roundtrip(update: bool) {
     assert_eq!(detail["read_receipt"], req["read_receipt"]);
     drop(conn);
     let reopened = rusqlite::Connection::open(&ctx.database).unwrap();
-    reopened
-        .pragma_update(None, "key", &ctx.sqlcipher_key)
-        .unwrap();
     let (persisted, _, needs_fetch) =
         maho_core::services::email::get_email_from_db(&reopened, id).unwrap();
     assert!(!needs_fetch);

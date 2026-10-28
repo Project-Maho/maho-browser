@@ -13,11 +13,9 @@ unsafe extern "C" fn capture(ok: bool, payload: *const c_char, data: *mut c_void
     // The callback owns the sender, including if the receiver times out.
     let sender = unsafe { Box::from_raw(data.cast::<mpsc::Sender<Captured>>()) };
     let payload = unsafe { CStr::from_ptr(payload) }.to_bytes().to_owned();
-    if sender.send(Captured { ok, payload }).is_err() {
-        // The receiving test has already failed its bounded callback wait.
-        // A late callback must release its sender without unwinding across C.
-        return;
-    }
+    // A send error means the receiving test already failed its bounded callback
+    // wait; a late callback must release its sender without unwinding across C.
+    let _ = sender.send(Captured { ok, payload });
 }
 
 fn extract(query: &str) -> serde_json::Value {

@@ -1030,8 +1030,6 @@ mod tests {
 
     fn setup_test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "key", "test-key-not-for-production")
-            .unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         run_migrations(&conn).unwrap();
@@ -1712,8 +1710,6 @@ mod tests {
     #[test]
     fn test_migrate_v52_backfills_attachment_part_id_from_legacy_id() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "key", "test-key-not-for-production")
-            .unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
 

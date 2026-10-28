@@ -1704,6 +1704,11 @@ pub extern "C" fn MahoMailStartScheduler(
                     if let Err(error) = run_scheduler_once(&ctx, chrono::Utc::now()).await {
                         log::error!("Scheduler tick failed: {error}");
                     }
+                    // Backstop for agent undo-window sends whose timer was lost.
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    if let Err(error) = super::agent_send_delay::run_due(&ctx, now_ms).await {
+                        log::error!("Agent send queue sweep failed: {error}");
+                    }
                 }
             });
 
@@ -1764,10 +1769,8 @@ pub extern "C" fn MahoMailClassifyEmailsSmart(
                         .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                     let mut res = Vec::new();
-                    for r in rows {
-                        if let Ok(val) = r {
-                            res.push(val);
-                        }
+                    for val in rows.flatten() {
+                        res.push(val);
                     }
                     res
                 };
@@ -1992,10 +1995,8 @@ pub extern "C" fn MahoMailListBySmartCategory(
                     .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                 let mut res = Vec::new();
-                for r in rows {
-                    if let Ok(val) = r {
-                        res.push(val);
-                    }
+                for val in rows.flatten() {
+                    res.push(val);
                 }
                 Ok(res)
             })

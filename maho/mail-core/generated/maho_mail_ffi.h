@@ -54,6 +54,26 @@ bool MahoMailRegisterEventCallback(MahoMailEventCallback callback);
 
 bool MahoMailRegisterNewMailCallback(MahoMailNewMailCallback callback);
 
+/**
+ * Cancels a queued agent send from the toast or the Agent activity journal.
+ * Result: `{"cancelled":true}` when stopped in time, `false` when the window
+ * already closed (sent/sending) or the id is unknown.
+ */
+bool MahoMailCancelAgentSend(const char *id, MahoMailReadCallback callback, void *user_data);
+
+/**
+ * Lists agent sends still inside their undo window.
+ */
+bool MahoMailListAgentSendQueue(MahoMailReadCallback callback, void *user_data);
+
+/**
+ * Agent-originated send honoring `agent.mail_send_delay_seconds` (request
+ * field `agent_send_delay_seconds` from the profile pref wins when present).
+ */
+bool MahoMailAgentSendEmail(const char *request_json,
+                            MahoMailReadCallback callback,
+                            void *user_data);
+
 bool MahoMailGetEmailSummary(const char *account_id,
                              const char *request_json,
                              MahoMailReadCallback callback,

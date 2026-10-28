@@ -652,11 +652,10 @@ pub extern "C" fn MahoMailExportPgpKey(
 
                 let exported = if is_private {
                     if include_private {
-                        let armored = get_private_key(&conn, &ctx.credential_key, &key_id, true)?
+                        get_private_key(&conn, &ctx.credential_key, &key_id, true)?
                             .ok_or_else(|| {
                             not_found_err("Private key data not found in credential store")
-                        })?;
-                        armored
+                        })?
                     } else {
                         let armored = get_private_key(&conn, &ctx.credential_key, &key_id, true)?
                             .ok_or_else(|| not_found_err("Private key data not found"))?;
@@ -1234,7 +1233,7 @@ pub extern "C" fn MahoMailImportSmimeIdentity(
                         smime_key_scope(&ctx, &req.account_id)?,
                     );
                     return match cleanup {
-                        Ok(()) => Err(error.into()),
+                        Ok(()) => Err(error),
                         Err(cleanup_error) => Err(internal_err(format!(
                             "{error}; CNG key cleanup also failed: {cleanup_error}",
                         ))),

@@ -239,7 +239,6 @@ fn replay_lost_ack_is_durable_and_never_replayed() {
     assert!(matches!(result, Err(MailFfiError::Core(maho_core::error::AppError::DeliveryUncertain(_)))));
     assert!(!server.finish().is_empty());
     let conn = rusqlite::Connection::open(f.ctx.pool.get().unwrap().path().unwrap()).unwrap();
-    conn.pragma_update(None, "key", &f.ctx.sqlcipher_key).unwrap();
     let durable = maho_core::services::offline_queue::list_pending_mutations(&conn, "acc1").unwrap();
     assert_eq!(durable.len(), 1);
     let payload: serde_json::Value = serde_json::from_str(durable[0].payload_json.as_deref().unwrap()).unwrap();

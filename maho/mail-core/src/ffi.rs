@@ -11,6 +11,7 @@ use crate::error::{MailFfiError, Result};
 use crate::state::{self, AppCtx, InitInfo};
 use crate::sync::start_sync_worker;
 
+pub mod agent_send_delay;
 pub mod ai_api;
 pub mod calendar_api;
 pub mod compose_api;
@@ -159,12 +160,19 @@ fn inject_keys(sqlcipher_key: *const c_char, credential_key: *const c_char) -> R
     let credential_key = decode_credential_key(&c_string(credential_key, "credential_key")?)?;
     let init = state::init_info().ok_or(MailFfiError::NotInitialized)?;
     let pool = maho_core::db::init_database_pool(&init.db_path)?;
-    state::set_ctx(Arc::new(AppCtx {
+    let ctx = Arc::new(AppCtx {
         pool,
         db_path: init.db_path.clone(),
         sqlcipher_key,
         credential_key,
-    }))
+    });
+    state::set_ctx(ctx.clone())?;
+    // Agent sends still inside their undo window when the app last stopped are
+    // re-armed now; overdue ones go out immediately (documented durability).
+    if let Err(e) = agent_send_delay::resume_pending(&ctx) {
+        log::error!("agent send queue recovery failed: {e}");
+    }
+    Ok(())
 }
 
 fn start_sync(account_id: *const c_char) -> Result<()> {

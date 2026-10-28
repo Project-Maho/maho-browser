@@ -149,6 +149,8 @@ fn require_email_owned(
     }
 }
 
+// One parameter per ai_action_log column; a struct would only rename them.
+#[allow(clippy::too_many_arguments)]
 fn log_ai_action(
     db: &rusqlite::Connection,
     account_id: &str,
@@ -854,8 +856,11 @@ fn build_anthropic_messages(
     messages
 }
 
-fn get_cancellations() -> &'static Mutex<HashMap<(String, String), Arc<AtomicBool>>> {
-    static CANCELLATIONS: std::sync::OnceLock<Mutex<HashMap<(String, String), Arc<AtomicBool>>>> =
+/// In-flight AI requests keyed by (account id, request id) -> cancel flag.
+type CancellationMap = HashMap<(String, String), Arc<AtomicBool>>;
+
+fn get_cancellations() -> &'static Mutex<CancellationMap> {
+    static CANCELLATIONS: std::sync::OnceLock<Mutex<CancellationMap>> =
         std::sync::OnceLock::new();
     CANCELLATIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -2811,6 +2816,58 @@ pub extern "C" fn MahoMailTranslateText(
     })
 }
 
+// === [W-G] ===
+
+#[no_mangle]
+pub extern "C" fn MahoMailTranslateSegments(
+    segments_json: *const c_char,
+    target_lang: *const c_char,
+    source_lang: *const c_char,
+    callback: MahoMailReadCallback,
+    user_data: *mut c_void,
+) -> bool {
+    accept_read_call(move || {
+        let Ok(segments_raw) = c_string(segments_json, "segments_json") else {
+            return false;
+        };
+        let Ok(segments) = serde_json::from_str::<Vec<String>>(&segments_raw) else {
+            return false;
+        };
+        let Ok(target_lang) = non_empty(target_lang, "target_lang") else {
+            return false;
+        };
+        let source_lang = if source_lang.is_null() {
+            None
+        } else {
+            let Ok(val) = c_string(source_lang, "source_lang") else {
+                return false;
+            };
+            if val.trim().is_empty() {
+                None
+            } else {
+                Some(val)
+            }
+        };
+
+        accept_read(callback, user_data, move |ctx| {
+            Box::pin(async move {
+                let mut translated = Vec::new();
+                for segment in segments {
+                    let res = translate_text_impl(
+                        &ctx,
+                        segment,
+                        target_lang.clone(),
+                        source_lang.clone(),
+                    )
+                    .await?;
+                    translated.push(res);
+                }
+                serde_json::to_string(&translated).map_err(MailFfiError::from)
+            })
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3015,56 +3072,4 @@ mod tests {
         });
         assert!(res.is_ok(), "CancellationGuard::drop must not panic on poisoned mutex");
     }
-}
-
-// === [W-G] ===
-
-#[no_mangle]
-pub extern "C" fn MahoMailTranslateSegments(
-    segments_json: *const c_char,
-    target_lang: *const c_char,
-    source_lang: *const c_char,
-    callback: MahoMailReadCallback,
-    user_data: *mut c_void,
-) -> bool {
-    accept_read_call(move || {
-        let Ok(segments_raw) = c_string(segments_json, "segments_json") else {
-            return false;
-        };
-        let Ok(segments) = serde_json::from_str::<Vec<String>>(&segments_raw) else {
-            return false;
-        };
-        let Ok(target_lang) = non_empty(target_lang, "target_lang") else {
-            return false;
-        };
-        let source_lang = if source_lang.is_null() {
-            None
-        } else {
-            let Ok(val) = c_string(source_lang, "source_lang") else {
-                return false;
-            };
-            if val.trim().is_empty() {
-                None
-            } else {
-                Some(val)
-            }
-        };
-
-        accept_read(callback, user_data, move |ctx| {
-            Box::pin(async move {
-                let mut translated = Vec::new();
-                for segment in segments {
-                    let res = translate_text_impl(
-                        &ctx,
-                        segment,
-                        target_lang.clone(),
-                        source_lang.clone(),
-                    )
-                    .await?;
-                    translated.push(res);
-                }
-                serde_json::to_string(&translated).map_err(MailFfiError::from)
-            })
-        })
-    })
 }

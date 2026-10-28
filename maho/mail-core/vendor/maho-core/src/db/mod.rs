@@ -304,8 +304,6 @@ mod tests {
 
     fn setup_test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "key", "test-key-not-for-production")
-            .unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         crate::db::migrations::run_migrations(&conn).unwrap();

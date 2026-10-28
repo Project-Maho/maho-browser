@@ -13,10 +13,8 @@ mod reply_boundary;
 unsafe extern "C" fn capture(ok: bool, payload: *const c_char, data: *mut c_void) {
     let sender = unsafe { Box::from_raw(data.cast::<mpsc::Sender<(bool, Vec<u8>)>>()) };
     let payload = unsafe { CStr::from_ptr(payload) }.to_bytes().to_vec();
-    if sender.send((ok, payload)).is_err() {
-        // Receiver already failed its bounded callback wait.
-        return;
-    }
+    // A send error means the receiver already failed its bounded callback wait.
+    let _ = sender.send((ok, payload));
 }
 
 fn call(invoke: impl FnOnce(MahoMailReadCallback, *mut c_void) -> bool) -> (bool, String) {

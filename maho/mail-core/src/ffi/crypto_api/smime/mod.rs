@@ -18,6 +18,8 @@ pub(crate) struct ImportedIdentity {
     pub not_after: String,
 }
 
+// Only the Windows CNG backend reads the scope; the OpenSSL backend ignores it.
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SmimeKeyScope<'a> {
     pub profile_path: &'a std::path::Path,
@@ -406,7 +408,7 @@ mod tests {
             .import_pkcs12(FIXED_PKCS12, FIXED_PASSWORD, fixed_scope())
             .expect("fixed PKCS#12 imports");
         let encrypted = backend()
-            .encrypt(&[identity.cert_pem.clone()], None, FIXED_BODY)
+            .encrypt(std::slice::from_ref(&identity.cert_pem), None, FIXED_BODY)
             .expect("fixed body encrypts");
         let decrypted = backend()
             .decrypt(
@@ -588,7 +590,7 @@ mod tests {
             key_pem: identity.key_pem.clone(),
         };
         let encrypted = backend()
-            .encrypt(&[identity.cert_pem.clone()], None, FIXED_BODY)
+            .encrypt(std::slice::from_ref(&identity.cert_pem), None, FIXED_BODY)
             .expect("fixed body encrypts to the persisted identity");
 
         for iteration in 0..256 {

@@ -58,8 +58,10 @@ use maho_core::models::account::{CreateAccountRequest, Encryption};
 use std::sync::{Mutex, OnceLock};
 
 static EVENT_LOG: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
-static NEW_MAIL_LOG: OnceLock<Mutex<Vec<(String, String, String, String, String, u64, u64)>>> =
-    OnceLock::new();
+/// One captured new-mail callback: five string fields plus two counters.
+type NewMailEntry = (String, String, String, String, String, u64, u64);
+
+static NEW_MAIL_LOG: OnceLock<Mutex<Vec<NewMailEntry>>> = OnceLock::new();
 
 unsafe extern "C" fn test_event_cb(
     event_type: *const std::os::raw::c_char,

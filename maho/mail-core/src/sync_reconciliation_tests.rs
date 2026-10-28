@@ -18,7 +18,8 @@ fn review_stale_flags_cannot_undo_committed_user_action() {
     maho_core::services::email::mark_read(&conn, "em1").unwrap();
     apply(&conn, &folder, &snapshot).unwrap();
     let env = ImapEnvelope { uid: 1, message_id: "same".into(), in_reply_to: None, subject: "same".into(), from_address: "sender@test".into(), from_name: None, to_addresses: vec![], cc_addresses: vec![], date: "2026-09-14T00:00:00Z".into(), flags: vec![], size: 1, has_attachments: false, attachments: vec![] };
-    super::super::sync_envelopes_with_snapshots(&mut conn, "acc1", &folder, &[env.clone()], 1234, Some(&[env]), Some(&snapshot)).unwrap();
+    let envs = [env];
+    super::super::sync_envelopes_with_snapshots(&mut conn, "acc1", &folder, &envs, 1234, Some(&envs), Some(&snapshot)).unwrap();
     let read: bool = conn.query_row("SELECT is_read FROM emails WHERE id='em1'", [], |r| r.get(0)).unwrap();
     assert!(read, "pre-action snapshot reverted successfully committed mark-read");
 }

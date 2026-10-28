@@ -39,7 +39,7 @@ tokio = { version = "1", features = ["full"] }
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-# Reuse the Tauri-free domain library: db (SQLCipher + migrations), models,
+# Reuse the Tauri-free domain library: db (plain SQLite + migrations), models,
 # services (account/email/folder), imap_client, folder_normalize, error.
 maho-core = { path = "vendor/maho-core" }
 

@@ -485,11 +485,13 @@ pub(crate) fn normalize_organizer_cal_address(raw: &str) -> String {
     format!("mailto:{}", s)
 }
 
+/// (account_id, google_calendar_id, source, external_id, recurring_event_id).
+type CalendarEventLocator = (String, Option<String>, String, Option<String>, Option<String>);
+
 fn escape_ics_text(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace("\r\n", "\\n")
-        .replace('\r', "\\n")
-        .replace('\n', "\\n")
+        .replace(['\r', '\n'], "\\n")
         .replace(';', "\\;")
         .replace(',', "\\,")
 }
@@ -502,10 +504,7 @@ fn escape_ics_value(val: &str) -> String {
 }
 
 fn format_ics_datetime(iso_str: &str) -> String {
-    iso_str
-        .replace('-', "")
-        .replace(':', "")
-        .replace(".000", "")
+    iso_str.replace(['-', ':'], "").replace(".000", "")
 }
 
 fn format_ics_date_property(name: &str, value: &str, zone: Option<&str>) -> std::result::Result<String, String> {
@@ -706,7 +705,7 @@ pub(crate) async fn send_ics_rsvp_reply(ctx: &AppCtx, rsvp_ctx: IcsRsvpContext) 
         attendee_name: rsvp_ctx.attendee_name.clone(),
         partstat: partstat.to_string(),
     })
-    .map_err(|e| maho_core::error::AppError::Validation(e))?;
+    .map_err(maho_core::error::AppError::Validation)?;
 
     let prefix = subject_prefix_for_partstat(partstat);
     let subject = format!("{}: {}", prefix, rsvp_ctx.summary);
@@ -796,6 +795,9 @@ pub(crate) async fn send_ics_rsvp_reply(ctx: &AppCtx, rsvp_ctx: IcsRsvpContext) 
 }
 
 /// Serialize and reload one persisted RSVP before attempting delivery.
+// Only the replay tests call this today; the production replay path enters
+// through `calendar_replay::replay_locked` with the lock already held.
+#[cfg(test)]
 pub(crate) async fn replay_calendar_mutation(
     ctx: &AppCtx,
     mutation: &maho_core::services::offline_queue::PendingMutation,
@@ -2791,13 +2793,7 @@ pub extern "C" fn MahoMailDeleteCalendarEvent(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let row: Option<(
-                    String,
-                    Option<String>,
-                    String,
-                    Option<String>,
-                    Option<String>,
-                )> = {
+                let row: Option<CalendarEventLocator> = {
                     let db = ctx
                         .pool
                         .get()
@@ -3206,13 +3202,7 @@ pub extern "C" fn MahoMailUpdateCalendarEvent(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let row: Option<(
-                    String,
-                    Option<String>,
-                    String,
-                    Option<String>,
-                    Option<String>,
-                )> = {
+                let row: Option<CalendarEventLocator> = {
                     let db = ctx
                         .pool
                         .get()

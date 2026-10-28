@@ -667,7 +667,7 @@ mod tests {
         let input = CString::new("hello").unwrap();
         let _rt = crate::runtime::runtime().unwrap();
         let pool = crate::test_support::pool_with_seeded_data();
-        crate::state::set_ctx(crate::test_support::ctx_arc(pool));
+        crate::state::set_ctx(crate::test_support::ctx_arc(pool)).unwrap();
 
         let success = MahoMailMd5Hash(input.as_ptr(), Some(test_callback), capture.as_user_data());
         assert!(success);
@@ -682,7 +682,7 @@ mod tests {
         let _rt = crate::runtime::runtime().unwrap();
         let pool = crate::test_support::pool_with_seeded_data();
         let ctx = crate::test_support::ctx_arc(pool);
-        crate::state::set_ctx(ctx);
+        crate::state::set_ctx(ctx).unwrap();
 
         // Set setting
         {
@@ -824,6 +824,7 @@ pub extern "C" fn MahoMailExportMailTransferArtifact(
 /// Truncate `value` to at most `max_chars` characters without splitting a
 /// multi-byte character. Guards the T11b regression: `&id[..8]` panics when the
 /// id is shorter than 8 bytes or the boundary falls inside a UTF-8 sequence.
+#[cfg(test)]
 fn safe_id_prefix(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }

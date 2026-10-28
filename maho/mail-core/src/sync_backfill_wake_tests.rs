@@ -4,6 +4,9 @@ use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::task::Poll;
 
+// Shared loopback TLS fixture, included by several test modules; each uses
+// only part of it.
+#[allow(clippy::duplicate_mod, dead_code)]
 #[path = "../vendor/maho-core/src/imap_review_fixtures/tls.rs"]
 mod tls;
 
@@ -27,6 +30,10 @@ async fn replaced_backfill_is_not_woken_by_old_sync_completion() {
     wake_after_sync(false, true).await;
 }
 
+// The std guard serializes the process-global mail context with synchronous
+// tests on other threads; each #[tokio::test] owns its runtime, so holding it
+// across awaits cannot deadlock this one.
+#[allow(clippy::await_holding_lock)]
 async fn wake_after_sync(fail_commit: bool, replace: bool) {
     let _context_guard = crate::test_support::global_ctx_guard();
     let _registered = RegisteredBackfill;

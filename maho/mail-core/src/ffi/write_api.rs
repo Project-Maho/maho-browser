@@ -92,15 +92,15 @@ pub extern "C" fn MahoMailMarkRead(
                 }).transpose()?;
                 let transaction = conn.unchecked_transaction()?;
                 let conn = &transaction;
-                maho_core::services::email::mark_read(&conn, &email_id)?;
+                maho_core::services::email::mark_read(conn, &email_id)?;
 
                 if let Some(((account_id, folder_path, uid), resolved)) = remote {
-                    if let Ok(mut client) = connect_email_imap(&conn, &resolved, &folder_path) {
+                    if let Ok(mut client) = connect_email_imap(conn, &resolved, &folder_path) {
                         let res = client.set_flags(&folder_path, uid, "\\Seen");
                         safe_logout(client);
                         if res.is_err() {
                             maho_core::services::offline_queue::queue_mutation(
-                                &conn,
+                                conn,
                                 &account_id,
                                 uid as i64,
                                 &folder_path,
@@ -110,7 +110,7 @@ pub extern "C" fn MahoMailMarkRead(
                         }
                     } else {
                         maho_core::services::offline_queue::queue_mutation(
-                            &conn,
+                            conn,
                             &account_id,
                             uid as i64,
                             &folder_path,
@@ -148,15 +148,15 @@ pub extern "C" fn MahoMailMarkUnread(
                 }).transpose()?;
                 let transaction = conn.unchecked_transaction()?;
                 let conn = &transaction;
-                maho_core::services::email::mark_unread(&conn, &email_id)?;
+                maho_core::services::email::mark_unread(conn, &email_id)?;
 
                 if let Some(((account_id, folder_path, uid), resolved)) = remote {
-                    if let Ok(mut client) = connect_email_imap(&conn, &resolved, &folder_path) {
+                    if let Ok(mut client) = connect_email_imap(conn, &resolved, &folder_path) {
                         let res = client.remove_flags(&folder_path, uid, "\\Seen");
                         safe_logout(client);
                         if res.is_err() {
                             maho_core::services::offline_queue::queue_mutation(
-                                &conn,
+                                conn,
                                 &account_id,
                                 uid as i64,
                                 &folder_path,
@@ -166,7 +166,7 @@ pub extern "C" fn MahoMailMarkUnread(
                         }
                     } else {
                         maho_core::services::offline_queue::queue_mutation(
-                            &conn,
+                            conn,
                             &account_id,
                             uid as i64,
                             &folder_path,
@@ -412,7 +412,7 @@ pub extern "C" fn MahoMailToggleStar(
                 }).transpose()?;
                 let transaction = conn.unchecked_transaction()?;
                 let conn = &transaction;
-                maho_core::services::email::toggle_star(&conn, &email_id)?;
+                maho_core::services::email::toggle_star(conn, &email_id)?;
 
                 let is_starred: bool = conn
                     .query_row(
@@ -423,7 +423,7 @@ pub extern "C" fn MahoMailToggleStar(
                     .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
                 if let Some(((account_id, folder_path, uid), resolved)) = remote {
-                    if let Ok(mut client) = connect_email_imap(&conn, &resolved, &folder_path) {
+                    if let Ok(mut client) = connect_email_imap(conn, &resolved, &folder_path) {
                         let res = if is_starred {
                             client.set_flags(&folder_path, uid, "\\Flagged")
                         } else {
@@ -432,7 +432,7 @@ pub extern "C" fn MahoMailToggleStar(
                         safe_logout(client);
                         if res.is_err() {
                             maho_core::services::offline_queue::queue_mutation(
-                                &conn,
+                                conn,
                                 &account_id,
                                 uid as i64,
                                 &folder_path,
@@ -442,7 +442,7 @@ pub extern "C" fn MahoMailToggleStar(
                         }
                     } else {
                         maho_core::services::offline_queue::queue_mutation(
-                            &conn,
+                            conn,
                             &account_id,
                             uid as i64,
                             &folder_path,
@@ -474,13 +474,16 @@ fn trash_folder_for(conn: &rusqlite::Connection, email_id: &str) -> Result<Optio
     Ok(trash.filter(|id| id != &folder_id))
 }
 
+/// (account_id, folder_path, uid, message_id) of a stored email.
+type EmailLocation = (String, String, i64, Option<String>);
+
 /// The row's IMAP identity plus the Message-ID that can stand in for a UID the
 /// local row does not have yet: a folder move parks a negative placeholder UID
 /// on the row until the next sync learns the real one.
 fn get_email_location(
     conn: &rusqlite::Connection,
     email_id: &str,
-) -> Result<Option<(String, String, i64, Option<String>)>> {
+) -> Result<Option<EmailLocation>> {
     let row = conn
         .query_row(
             "SELECT e.account_id, f.path, e.uid, e.message_id FROM emails e JOIN folders f ON e.folder_id = f.id AND e.account_id = f.account_id WHERE e.id = ?1",
@@ -817,7 +820,7 @@ pub extern "C" fn MahoMailCreateFolder(
                 let mut client = connect_imap(&resolved)?;
                 client
                     .create_folder(&folder_name)
-                    .map_err(|e| MailFfiError::Core(e))?;
+                    .map_err(MailFfiError::Core)?;
                 safe_logout(client);
 
                 let id = uuid::Uuid::new_v4().to_string();
@@ -887,7 +890,7 @@ pub extern "C" fn MahoMailRenameFolder(
                 let mut client = connect_imap(&resolved)?;
                 client
                     .rename_folder(&old_path, &new_path)
-                    .map_err(|e| MailFfiError::Core(e))?;
+                    .map_err(MailFfiError::Core)?;
                 safe_logout(client);
 
                 conn.execute(
@@ -942,7 +945,7 @@ pub extern "C" fn MahoMailDeleteFolder(
                 let mut client = connect_imap(&resolved)?;
                 client
                     .delete_folder(&folder_path)
-                    .map_err(|e| MailFfiError::Core(e))?;
+                    .map_err(MailFfiError::Core)?;
                 safe_logout(client);
 
                 conn.execute(

@@ -327,6 +327,7 @@ struct OAuthCompletion<'a> {
 }
 
 impl OAuthCompletion<'_> {
+    #[cfg(test)]
     fn complete(&mut self, state_token: &str, code: &str) -> Result<AccountResponse> {
         self.complete_with_options(state_token, code, CompleteOAuthOptions::default())
     }

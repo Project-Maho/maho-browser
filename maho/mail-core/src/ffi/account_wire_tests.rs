@@ -20,10 +20,9 @@ unsafe extern "C" fn capture_account(
     let sender = unsafe { Box::from_raw(data.cast::<mpsc::Sender<CapturedAccount>>()) };
     // SAFETY: the FFI callback supplies a NUL-terminated string valid during this call.
     let payload = unsafe { CStr::from_ptr(payload) }.to_bytes().to_vec();
-    if sender.send(CapturedAccount { ok, payload }).is_err() {
-        // The receiver already failed its bounded wait; never unwind across C.
-        return;
-    }
+    // A send error means the receiver already failed its bounded wait; never
+    // unwind across C.
+    let _ = sender.send(CapturedAccount { ok, payload });
 }
 
 #[test]

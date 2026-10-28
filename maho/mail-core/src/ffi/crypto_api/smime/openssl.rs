@@ -19,11 +19,7 @@ fn x509_name_to_string(name: &X509NameRef) -> String {
     name.entries()
         .map(|entry| {
             let key = entry.object().nid().short_name().unwrap_or("??");
-            let value = entry
-                .data()
-                .as_utf8()
-                .map(|value| value.to_string())
-                .unwrap_or_default();
+            let value = entry.data().to_string().unwrap_or_default();
             format!("{key}={value}")
         })
         .collect::<Vec<_>>()
@@ -47,8 +43,7 @@ fn extract_email(cert: &X509Ref) -> String {
             .subject_name()
             .entries_by_nid(nid)
             .next()
-            .and_then(|entry| entry.data().as_utf8().ok())
-            .map(|value| value.to_string())
+            .and_then(|entry| entry.data().to_string().ok())
         {
             if nid != openssl::nid::Nid::COMMONNAME || value.contains('@') {
                 return value;

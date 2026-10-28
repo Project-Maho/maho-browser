@@ -153,7 +153,7 @@ fn review_delete_uses_uid_expunge_and_retains_failed_store() {
     let _guard = global_ctx_guard();
     crate::runtime::runtime().unwrap();
     for fail_store in [false, true] {
-        let replies: Arc<dyn Fn(&str) -> Option<String> + Send + Sync> = Arc::new(move |command| {
+        let replies: CustomReplies = Arc::new(move |command| {
             (fail_store && command.starts_with("UID STORE ")).then(|| "NO rejected\r\n".into())
         });
         let server = LoopbackImapServer::new(None, Some(replies));
@@ -194,6 +194,9 @@ struct GateHook {
     release_rx: Arc<Mutex<mpsc::Receiver<()>>>,
 }
 
+/// Per-command reply override: returns Some(response) to replace the default.
+type CustomReplies = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 struct LoopbackImapServer {
     port: u16,
     stats: Arc<Mutex<ServerStats>>,
@@ -204,7 +207,7 @@ struct LoopbackImapServer {
 impl LoopbackImapServer {
     fn new(
         gate: Option<GateHook>,
-        custom_replies: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
+        custom_replies: Option<CustomReplies>,
     ) -> Self {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let cert = rustls::pki_types::CertificateDer::from(
@@ -657,7 +660,7 @@ fn memory_thread_batch_failed_store_keeps_retry() {
     crate::runtime::runtime().unwrap();
 
     // Given: server that rejects UID STORE for acc1 with NO [TEMPFAIL], but succeeds for acc2
-    let custom_replies: Arc<dyn Fn(&str) -> Option<String> + Send + Sync> = Arc::new(|cmd: &str| {
+    let custom_replies: CustomReplies = Arc::new(|cmd: &str| {
         let upper = cmd.to_uppercase();
         if upper.starts_with("UID STORE 1 ")
             || upper.starts_with("UID STORE 1,")

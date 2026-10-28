@@ -101,6 +101,9 @@ pub struct ImapAttachmentMeta {
     pub content_id: Option<String>,
 }
 
+/// Per-UID (uid, seen, flagged) flags plus the folder's UIDVALIDITY epoch.
+pub type UidFlagsSnapshot = (Vec<(u32, bool, bool)>, u32);
+
 pub struct ImapClient {
     session: Option<Session<ImapTlsStream>>,
     /// Track the currently selected folder to avoid redundant SELECT calls
@@ -569,7 +572,7 @@ impl ImapClient {
         &mut self,
         folder: &str,
         uids: &[u32],
-    ) -> Result<(Vec<(u32, bool, bool)>, u32), AppError> {
+    ) -> Result<UidFlagsSnapshot, AppError> {
         let epoch = self.get_uid_validity(folder)?;
         if uids.is_empty() {
             return Ok((Vec::new(), epoch));
@@ -783,7 +786,7 @@ impl ImapClient {
     ) -> Result<(), AppError> {
         self.select_folder_if_needed(folder)?;
         self.session()
-            .uid_store(uid_set.to_string(), format!("+FLAGS ({})", flags))
+            .uid_store(uid_set, format!("+FLAGS ({})", flags))
             .map_err(|e| AppError::Network(e.to_string()))?;
         Ok(())
     }

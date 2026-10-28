@@ -130,6 +130,9 @@ fn run_callback_listener(
     provider: String,
     expected_state: String,
 ) {
+    // `LoopbackListenerHandle` is `&TcpListener` on Linux but an owned
+    // `TcpListener` elsewhere, so the borrow is only redundant on Linux.
+    #[cfg_attr(target_os = "linux", allow(clippy::needless_borrow))]
     let result = accept_and_complete(&listener, &expected_state);
     state::cancellation_store().remove(&expected_state);
     state::pending_pkce().take(&expected_state);

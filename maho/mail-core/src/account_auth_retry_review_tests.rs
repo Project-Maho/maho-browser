@@ -12,8 +12,11 @@ use crate::account::{
     self, connect_imap_with_retry_fn, is_auth_error, resolve_account_auth, ImapAuth,
 };
 use crate::credentials::store_encrypted_credential;
-use crate::error::{MailFfiError, Result};
+use crate::error::MailFfiError;
 
+// Shared loopback TLS fixture, included by several test modules; each uses
+// only part of it.
+#[allow(clippy::duplicate_mod, dead_code)]
 #[path = "../vendor/maho-core/src/imap_review_fixtures/tls.rs"]
 mod tls;
 
