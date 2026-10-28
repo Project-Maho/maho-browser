@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Maho generichide fixture</title>
+</head>
+<body>
+<h1 id="fixture-title">Maho generichide fixture</h1>
+
+<!-- The list carries an @@||127.0.0.1^$generichide exception for this path,
+     so the generic ##.ad-banner rule must NOT hide this element. -->
+<div class="ad-banner" id="generic-target">Generic ad banner on a generichide page</div>
+
+<!-- A site-specific (non-generic) rule still applies under generichide. -->
+<div class="site-specific" id="specific-target">Site-specific target</div>
+</body>
+</html>

@@ -7,6 +7,8 @@ source_set("maho_command_overlay") {
     "maho_command_action_handler.cc",
     "maho_command_action_handler.h",
     "maho_mail_command_catalog.h",
+    "maho_command_attachment_model.cc",
+    "maho_command_attachment_model.h",
     "maho_command_model.cc",
     "maho_command_model.h",
     "maho_remote_search_suggestions.cc",
@@ -51,6 +53,7 @@ source_set("maho_command_overlay") {
     "//components/omnibox/browser",
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_ai_file_attachment_registry",
     "//maho/browser:maho_tab_id_helper",
     # maho::ShowLinkCopiedToast (shared link-copied toast) lives in the
     # notification overlay source set; maho_command_action_handler.cc calls it.
@@ -77,6 +80,7 @@ source_set("maho_command_overlay") {
     "//ui/compositor",
     "//ui/events",
     "//ui/gfx",
+    "//ui/shell_dialogs",
     "//ui/views",
     "//url",
   ]
@@ -86,6 +90,7 @@ source_set("unit_tests") {
   testonly = true
   sources = [
     "maho_command_action_handler_unittest.cc",
+    "maho_command_attachment_model_unittest.cc",
     "maho_command_model_unittest.cc",
     "maho_command_overlay_controller_unittest.cc",
     "maho_command_overlay_view_unittest.cc",
@@ -94,6 +99,7 @@ source_set("unit_tests") {
     "maho_unified_click_path_behavior_unittest.cc",
     "maho_command_action_selector_view_unittest.cc",
     "maho_shortcut_contract_unittest.cc",
+    "maho_shortcut_accelerator_registration_unittest.cc",
   ]
 
   deps = [
@@ -106,6 +112,7 @@ source_set("unit_tests") {
     "//maho/third_party/maho:maho_core_prebuilt",
     "//testing/gtest",
     "//ui/base",
+    "//ui/base:test_support",
     "//ui/events",
     "//ui/views",
     "//ui/views:test_support",
@@ -125,6 +132,7 @@ test("maho_command_overlay_unittests") {
     "//chrome/browser:browser",
     "//chrome/browser/ui",
     "//chrome/test:test_support",
+    "//maho/browser/ui/tabs:unit_tests",
     "//mojo/core/embedder",
     "//testing/gtest",
     "//ui/views:test_support",

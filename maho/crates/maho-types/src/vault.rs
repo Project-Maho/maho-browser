@@ -568,6 +568,10 @@ pub struct TotpMetadata {
     pub last_used_at: Option<DateTime<Utc>>,
 }
 
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PasskeyMetadata {
@@ -575,11 +579,18 @@ pub struct PasskeyMetadata {
     pub user_name_hint: String,
     pub display_name: String,
     pub credential_id: Vec<u8>,
+    // Added for WebAuthn assertions; omitted when empty so v1 records keep
+    // their exact wire shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_handle: Vec<u8>,
     pub transports: Vec<PasskeyTransport>,
     pub discoverable: bool,
     pub backup_eligible: bool,
     pub backup_state: bool,
     pub user_verification: PasskeyUserVerification,
+    // WebAuthn signature counter; omitted while zero (v1 wire shape).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub sign_count: u32,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
 }

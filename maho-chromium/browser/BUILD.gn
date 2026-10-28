@@ -15,6 +15,7 @@ source_set("maho_core_holder") {
   # (SetCoreForProfile / GetCoreOwnerProfile / IsPasswordManagerAllowedForProfile)
   # and the .cc calls Profile methods, so profiles:profile is a public_dep.
   public_deps = [
+    ":maho_core_watchdog_policy",
     "//chrome/browser/profiles:profile",
     "//maho/browser/mail_helper:maho_mail_launcher",
   ]
@@ -32,6 +33,51 @@ source_set("maho_core_holder") {
   # platform. Windows uses the native Crypt32/NCrypt S/MIME backend, so the
   # mail static library no longer brings OpenSSL into this executable's link.
   deps += [ "//maho/browser/mail_helper:maho_mail_helper" ]
+}
+
+source_set("maho_webauthn") {
+  sources = [
+    "webauthn/maho_vault_passkey_authenticator.cc",
+    "webauthn/maho_vault_passkey_authenticator.h",
+    "webauthn/maho_vault_passkey_discovery.cc",
+    "webauthn/maho_vault_passkey_discovery.h",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/cbor",
+    "//content/public/browser",
+    "//crypto",
+    "//device/fido",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//url",
+  ]
+}
+
+source_set("maho_webauthn_unittests") {
+  testonly = true
+  sources = [ "webauthn/maho_vault_passkey_authenticator_unittest.cc" ]
+  deps = [
+    ":maho_webauthn",
+    "//base",
+    "//base/test:test_support",
+    "//components/cbor",
+    "//crypto",
+    "//device/fido",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_webauthn_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_webauthn_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//testing/gtest",
+  ]
 }
 
 
@@ -97,6 +143,10 @@ source_set("maho_password_provider") {
     "//chrome/browser:browser_process",
     "//chrome/browser/profiles:profile",
     "//components/prefs",
+    "//content/public/browser",
+    "//net",
+    "//services/network/public/cpp",
+    "//url",
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/third_party/maho:maho_core_prebuilt",
   ]
@@ -176,6 +226,32 @@ source_set("maho_otp_backend") {
   ]
 }
 
+source_set("maho_selection_ask_query") {
+  sources = [
+    "ai/maho_selection_ask_query.cc",
+    "ai/maho_selection_ask_query.h",
+  ]
+  deps = [ "//base" ]
+}
+
+source_set("maho_selection_ask_dispatch") {
+  sources = [
+    "ai/maho_selection_ask_dispatch.cc",
+    "ai/maho_selection_ask_dispatch.h",
+  ]
+  deps = [
+    ":maho_ai_file_attachment_registry",
+    ":maho_selection_ask_query",
+    "//base",
+    "//chrome/browser/ui",
+    "//chrome/browser/ui/side_panel",
+    "//content/public/browser",
+    ":maho_ai_ingress_coordinator",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//url",
+  ]
+}
+
 source_set("maho_ai_client") {
   sources = [
     "ai/maho_ai_llm_client.cc",
@@ -207,6 +283,41 @@ source_set("maho_artifact_registry") {
     "//components/keyed_service/core",
     "//content/public/browser",
     "//net",
+  ]
+}
+
+source_set("maho_ai_file_attachment_registry") {
+  sources = [
+    "ai/maho_ai_file_attachment_registry.cc",
+    "ai/maho_ai_file_attachment_registry.h",
+  ]
+  public_deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+  ]
+}
+
+source_set("maho_ai_file_attachment_registry_unittests") {
+  testonly = true
+  sources = [ "ai/maho_ai_file_attachment_registry_unittest.cc" ]
+  deps = [
+    ":maho_ai_file_attachment_registry",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_ai_file_attachment_registry_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_ai_file_attachment_registry_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/test:test_support",
+    "//testing/gtest",
   ]
 }
 
@@ -249,6 +360,7 @@ source_set("maho_ffi_callback_handle_unittests") {
     "//base",
     "//base/test:test_support",
     "//testing/gtest",
+    "//testing/gmock",
   ]
 }
 
@@ -374,6 +486,8 @@ source_set("maho_browser_ai_tools") {
     "ai/maho_ai_page_context_extractor.cc",
     "ai/maho_ai_page_context_extractor.h",
     "ai/maho_agent_site_policy.h",
+    "ai/maho_browse_episode_observer.cc",
+    "ai/maho_browse_episode_observer.h",
     "ai/maho_browser_tool_executor.cc",
     "ai/maho_browser_tool_executor.h",
     "ai/maho_capability_broker.cc",
@@ -390,10 +504,17 @@ source_set("maho_browser_ai_tools") {
     ":maho_browser_tool_registry",
     ":maho_page_adapter_registry",
     "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/tabs:tab_strip",
+    "//components/sessions",
     "//content/public/browser",
     "//crypto",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_private_context_policy",
+    "//maho/browser:maho_tab_id_helper",
     "//maho/browser/mcp:maho_mcp",
+    "//maho/third_party/maho:maho_ffi_headers",
     "//ui/accessibility",
     "//url",
   ]
@@ -403,6 +524,8 @@ source_set("maho_control_activity_service") {
   sources = [
     "ai/maho_control_activity_service.cc",
     "ai/maho_control_activity_service.h",
+    "ui/views/sidebar/maho_sidebar_agent_task_model.cc",
+    "ui/views/sidebar/maho_sidebar_agent_task_model.h",
   ]
   public_deps = [ "//base" ]
   deps = [
@@ -416,6 +539,7 @@ source_set("maho_browser_tool_executor_unittests") {
   testonly = true
   sources = [
     "ai/maho_ai_page_context_extractor_unittest.cc",
+    "ai/maho_browse_episode_observer_unittest.cc",
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
     "ai/maho_capability_broker_unittest.cc",
@@ -437,6 +561,7 @@ source_set("maho_browser_tool_executor_unittests") {
 test("maho_browser_tool_executor_test") {
   sources = [
     "ai/maho_ai_page_context_extractor_unittest.cc",
+    "ai/maho_browse_episode_observer_unittest.cc",
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
     "ai/maho_capability_broker_unittest.cc",
@@ -470,6 +595,8 @@ test("maho_control_activity_service_test") {
   sources = [
     "ai/maho_browser_tool_test_main.cc",
     "ai/maho_control_activity_service_unittest.cc",
+    "ui/views/sidebar/maho_sidebar_agent_task_model_unittest.cc",
+    "ui/views/sidebar/maho_sidebar_agent_tasks_policy_unittest.cc",
   ]
   deps = [
     ":maho_control_activity_service",
@@ -561,13 +688,18 @@ test("maho_tab_borrow_chip_test") {
 test("maho_sync_relay_client_test") {
   sources = [
     "ai/maho_browser_tool_test_main.cc",
+    "sync/maho_site_session_cookie.cc",
+    "sync/maho_site_session_cookie.h",
+    "sync/maho_site_session_cookie_unittest.cc",
     "sync/maho_sync_relay_client_unittest.cc",
   ]
   deps = [
     ":maho_sync_relay_protocol",
     "//base",
     "//base/test:test_support",
+    "//net",
     "//testing/gtest",
+    "//url",
   ]
 }
 
@@ -785,6 +917,10 @@ if (is_mac) {
       "ui/views/maho_mini/maho_mini_window.h",
       "ui/views/maho_mini/maho_mini_top_bar_view.cc",
       "ui/views/maho_mini/maho_mini_top_bar_view.h",
+      "ui/views/maho_mini/maho_mini_shortcut.cc",
+      "ui/views/maho_mini/maho_mini_shortcut.h",
+      "ui/views/maho_mini/maho_mini_state_policy.cc",
+      "ui/views/maho_mini/maho_mini_state_policy.h",
     ]
     deps = [
       "//base",
@@ -806,6 +942,10 @@ if (is_win) {
       "ui/views/maho_mini/maho_mini_window.h",
       "ui/views/maho_mini/maho_mini_top_bar_view.cc",
       "ui/views/maho_mini/maho_mini_top_bar_view.h",
+      "ui/views/maho_mini/maho_mini_shortcut.cc",
+      "ui/views/maho_mini/maho_mini_shortcut.h",
+      "ui/views/maho_mini/maho_mini_state_policy.cc",
+      "ui/views/maho_mini/maho_mini_state_policy.h",
     ]
     deps = [
       "//base",
@@ -828,6 +968,10 @@ if (is_linux) {
       "ui/views/maho_mini/maho_mini_window.h",
       "ui/views/maho_mini/maho_mini_top_bar_view.cc",
       "ui/views/maho_mini/maho_mini_top_bar_view.h",
+      "ui/views/maho_mini/maho_mini_shortcut.cc",
+      "ui/views/maho_mini/maho_mini_shortcut.h",
+      "ui/views/maho_mini/maho_mini_state_policy.cc",
+      "ui/views/maho_mini/maho_mini_state_policy.h",
     ]
     deps = [
       "//base",
@@ -956,6 +1100,7 @@ source_set("maho_space_profile_bridge") {
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/profiles:profile",
+    "//maho/browser/mcp:maho_mcp",
   ]
 }
 
@@ -1057,11 +1202,18 @@ source_set("maho_browser_main_extra_parts") {
     "ui/webui/maho_webui_private_boundary.h",
     "sync/maho_sync_relay_client.cc",
     "sync/maho_sync_relay_client.h",
+    "sync/maho_site_session_collector.cc",
+    "sync/maho_site_session_collector.h",
+    "sync/maho_site_session_applier.cc",
+    "sync/maho_site_session_applier.h",
+    "sync/maho_site_session_cookie.cc",
+    "sync/maho_site_session_cookie.h",
   ]
 
 
 
   deps = [
+    ":maho_agent_channel_service",
     ":maho_core_holder",
     ":maho_content_blocker_update_service",
     ":maho_content_blocker_update_service_factory",
@@ -1075,6 +1227,7 @@ source_set("maho_browser_main_extra_parts") {
     ":maho_tab_registry",
     ":maho_theme_support",
     ":maho_mcp_integration",
+    ":maho_selection_ask_dispatch",
     ":maho_sync_relay_protocol",
     ":maho_control_activity_service",
     "//base",
@@ -1083,6 +1236,12 @@ source_set("maho_browser_main_extra_parts") {
     "//chrome/browser/sessions:sessions",
     "//maho/browser/net",
     "//services/network/public/mojom",
+    "//components/services/storage/public/mojom",
+    "//content/public/browser",
+    "//net",
+    "//third_party/blink/public/common",
+    "//third_party/blink/public/mojom:mojom_platform",
+    "//url",
 
     "//maho/browser/importer",
     "//maho/browser/mail_helper:maho_mail_notification_coordinator",
@@ -1110,6 +1269,24 @@ source_set("maho_private_context_policy") {
     "//chrome/browser/ui/tabs:tab_strip",
     "//content/public/browser",
   ]
+}
+
+source_set("maho_ntp_preload_policy") {
+  sources = [
+    "maho_ntp_preload_policy.cc",
+    "maho_ntp_preload_policy.h",
+  ]
+  deps = [
+    "//url",
+  ]
+}
+
+source_set("maho_core_watchdog_policy") {
+  sources = [
+    "maho_core_watchdog_policy.cc",
+    "maho_core_watchdog_policy.h",
+  ]
+  public_deps = [ "//base" ]
 }
 
 source_set("maho_settings_navigation") {
@@ -1304,10 +1481,38 @@ source_set("maho_authenticated_service_api_broker") {
   ]
 }
 
+source_set("maho_agent_channel_service") {
+  sources = [
+    "ai/maho_agent_channel_service.cc",
+    "ai/maho_agent_channel_service.h",
+  ]
+  public_deps = [
+    ":maho_agent_channel_gateway",
+    ":maho_ai_runtime_adapter_interface",
+    "//base",
+    "//components/keyed_service/core",
+  ]
+  deps = [
+    ":maho_core_holder",
+    ":maho_unified_agent_adapter",
+    "//chrome/browser/profiles:profile",
+    "//content/public/browser",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//maho/third_party/maho:maho_bridge",
+    "//services/network/public/cpp",
+  ]
+}
+
 source_set("maho_agent_channel_gateway") {
   sources = [
     "ai/maho_agent_channel_gateway.cc",
     "ai/maho_agent_channel_gateway.h",
+    "ai/maho_agent_channel_telegram_transport.cc",
+    "ai/maho_agent_channel_telegram_transport.h",
+    "ai/maho_agent_channel_protocols.cc",
+    "ai/maho_agent_channel_protocols.h",
+    "ai/maho_agent_channel_websocket_transport.cc",
+    "ai/maho_agent_channel_websocket_transport.h",
   ]
   public_deps = [
     ":maho_authenticated_service_api_broker",
@@ -1316,6 +1521,12 @@ source_set("maho_agent_channel_gateway") {
   deps = [
     ":maho_ai_runtime_adapter_interface",
     "//components/prefs",
+    "//content/public/browser",
+    "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+    "//url",
+    "//crypto",
   ]
 }
 
@@ -1339,6 +1550,7 @@ source_set("maho_ai_provider_oauth") {
     "//maho/third_party/maho:maho_ffi_headers",
     "//ui/base",
     "//url",
+    "//crypto",
   ]
 }
 
@@ -1442,6 +1654,28 @@ source_set("maho_agent_event_replay_buffer_unittests") {
   ]
 }
 
+source_set("maho_selection_ask_query_unittests") {
+  testonly = true
+  sources = [ "ai/maho_selection_ask_query_unittest.cc" ]
+  deps = [
+    ":maho_selection_ask_query",
+    "//base",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_selection_ask_query_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_selection_ask_query_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
 source_set("maho_page_adapter_registry_unittests") {
   testonly = true
   sources = [
@@ -1472,6 +1706,9 @@ source_set("maho_agent_channel_gateway_unittests") {
   testonly = true
   sources = [
     "ai/maho_agent_channel_gateway_unittest.cc",
+    "ai/maho_agent_channel_telegram_transport_unittest.cc",
+    "ai/maho_agent_channel_protocols_unittest.cc",
+    "ai/maho_agent_channel_websocket_transport_unittest.cc",
   ]
   deps = [
     ":maho_agent_channel_gateway",
@@ -1479,6 +1716,11 @@ source_set("maho_agent_channel_gateway_unittests") {
     "//base",
     "//base/test:test_support",
     "//testing/gtest",
+    "//net:test_support",
+    "//services/network:test_support",
+    "//services/network/public/cpp",
+    "//url",
+    "//content/test:test_support",
   ]
 }
 
@@ -1521,7 +1763,8 @@ source_set("maho_contents_header_unittests") {
 source_set("maho_theme_io_unittests") {
   testonly = true
   sources = [
-    "ai/maho_agent_channel_gateway_unittest.cc",
+    "ui/views/maho_mini/maho_mini_shortcut_unittest.cc",
+    "ui/views/maho_mini/maho_mini_state_policy_unittest.cc",
     "ai/maho_artifact_html_sanitizer_unittest.cc",
     "ai/maho_artifact_pdf_processor_unittest.cc",
     "ai/maho_artifact_registry_unittest.cc",
@@ -1532,31 +1775,41 @@ source_set("maho_theme_io_unittests") {
     "ui/theme/maho_space_theme_io_unittest.cc",
     "ui/notifications/maho_notification_overlay_unittest.cc",
     "maho_tab_id_helper_unittest.cc",
+    "maho_ntp_preload_policy_unittest.cc",
+    "maho_core_watchdog_policy_unittest.cc",
     "ui/maho_ai_ingress_coordinator_unittest.cc",
     "ui/webui/maho_space_config/maho_space_config_page_handler_unittest.cc",
   ]
   deps = [
-    ":maho_agent_channel_gateway",
+    ":maho_mini",
+    ":maho_agent_channel_gateway_unittests",
+    ":maho_authenticated_service_api_broker_unittests",
     ":maho_artifact_html_sanitizer",
     ":maho_artifact_pdf_processor",
     ":maho_artifact_registry",
     ":maho_artifact_xlsx_processor",
     ":maho_tab_id_helper",
+    ":maho_ntp_preload_policy",
     ":maho_theme_support",
     ":maho_unified_agent_adapter",
     ":maho_ai_ingress_coordinator",
     ":maho_browser_tool_executor_unittests",
     ":maho_core_holder",
+    ":maho_core_watchdog_policy",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_core",
     "//maho/browser/ui/webui/maho_ai:maho_ai_unittests",
     "//maho/browser/ui/webui/maho_space_config:maho_space_config",
     "//maho/browser/ui/views/space_create:maho_space_theme_picker_dialog",
     "//maho/browser/mcp:unittests",
     "//base",
     "//base/test:test_support",
+    "//chrome/browser/lifetime",
+    "//ui/views",
     "//chrome/test:test_support",
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
     "//maho/third_party/maho:maho_bridge",
     "//testing/gtest",
+    "//url",
     "//ui/views:test_support",
   ]
 }
@@ -1751,11 +2004,15 @@ test("maho_content_blocker_update_service_test") {
   sources = [
     "net/maho_content_blocker_update_service_unittest.cc",
     "net/maho_content_blocker_update_service_test_main.cc",
+    "net/maho_cosmetic_class_id_poller_unittest.cc",
+    "net/maho_cosmetic_filters_handler_unittest.cc",
   ]
   deps = [
     ":maho_content_blocker_update_service",
+    "//maho/browser/net",
     "//base",
     "//base/test:test_support",
+    "//chrome/test:test_support",
     "//content/test:test_support",
     "//mojo/core/embedder",
     "//net",

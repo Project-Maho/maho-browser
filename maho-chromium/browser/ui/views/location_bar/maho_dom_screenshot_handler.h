@@ -67,6 +67,7 @@ class MahoDomScreenshotHandler
   void OnSendToClicked();
 #endif
   void OnRetakeClicked();
+  void OnAskMahoClicked();
   void OnBubbleDismissed();
 
   // Removes this session's selection overlay from the page, if still present.

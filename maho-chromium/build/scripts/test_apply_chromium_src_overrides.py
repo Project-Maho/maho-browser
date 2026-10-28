@@ -8,6 +8,7 @@ from apply_chromium_src_overrides import (
     _MAHO_FOCUS_ACCELERATOR_REGISTRATION,
     _MAHO_SIDEBAR_RAIL_LAYOUT,
     _MAHO_SIDEBAR_RAIL_LAYOUT_V1,
+    _UPDATED154_REAPPLY_SHA256,
     REPLACEMENTS,
     apply_base_patch,
     apply_replacements,
@@ -21,6 +22,12 @@ from apply_chromium_src_overrides import (
 _BROWSER_BUILD_PATH = "chrome/browser/BUILD.gn"
 _BROWSER_COMMAND_CONTROLLER_PATH = "chrome/browser/ui/browser_command_controller.cc"
 _CHROME_PAGES_CC_PATH = "chrome/browser/ui/chrome_pages.cc"
+_CHROME_AUTHENTICATOR_REQUEST_DELEGATE_H_PATH = (
+    "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
+)
+_CHROME_AUTHENTICATOR_REQUEST_DELEGATE_CC_PATH = (
+    "chrome/browser/webauthn/chrome_authenticator_request_delegate.cc"
+)
 
 _UPSTREAM_ADDED_TO_WIDGET = (
     "  views::ClientView::AddedToWidget();\n"
@@ -99,6 +106,35 @@ _UPSTREAM_RUN_FILE_CHOOSER = (
 
 
 class ApplyChromiumSrcOverridesTest(unittest.TestCase):
+
+    def test_vault_platform_discovery_is_wired_into_chrome_delegate(self):
+        header = "".join(
+            item.new
+            for item in REPLACEMENTS[
+                _CHROME_AUTHENTICATOR_REQUEST_DELEGATE_H_PATH
+            ]
+        )
+        source = "".join(
+            item.new
+            for item in REPLACEMENTS[
+                _CHROME_AUTHENTICATOR_REQUEST_DELEGATE_CC_PATH
+            ]
+        )
+        self.assertIn("CreatePlatformDiscoveries() override;", header)
+        self.assertIn("CreateVaultPasskeyDiscoveries(rfh)", source)
+        self.assertIn("IsOffTheRecord()", source)
+
+    def test_vault_webauthn_sources_are_injected_into_chrome_ui_sources(self):
+        from apply_chromium_src_overrides import _CHROME_BROWSER_UI_SOURCES
+
+        self.assertIn(
+            "//maho/browser/webauthn/maho_vault_passkey_authenticator.cc",
+            _CHROME_BROWSER_UI_SOURCES,
+        )
+        self.assertIn(
+            "//maho/browser/webauthn/maho_vault_passkey_discovery.cc",
+            _CHROME_BROWSER_UI_SOURCES,
+        )
     def test_macos_app_declares_bluetooth_for_hybrid_passkeys(self):
         import plistlib
 
@@ -2367,6 +2403,67 @@ class MahoDesktopDefectRegressionTest(unittest.TestCase):
             self.assertFalse(changed_again)
 
 
+class RenderViewContextMenuAskMahoReplacementTest(unittest.TestCase):
+    _PATH = "chrome/browser/renderer_context_menu/render_view_context_menu.cc"
+
+    def test_ask_maho_selection_replacements_apply_and_are_idempotent(self):
+        replacements = [
+            r for r in REPLACEMENTS[self._PATH]
+            if "Ask Maho" in r.description
+        ]
+        self.assertEqual(len(replacements), 4)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "render_view_context_menu.cc"
+            target.write_text(
+                '#include "maho/browser/ui/context_menu/maho_context_menu_ids.h"\n'
+                "  AppendGlicItems();\n\n"
+                "  if (use_simplified_menu_for_text_selection &&\n"
+                "      !(params_.has_image_contents && !params_.link_url.is_empty())) {\n"
+                "    AppendRevisedTextSelectionSection();\n"
+                "  }\n"
+                "    case IDC_MAHO_LINK_OPEN_MAHO_MINI:\n"
+                "      return navigation_allowed && params_.link_url.is_valid() &&\n"
+                "             IsOpenLinkAllowedByDlp(params_.link_url);\n"
+                "    case IDC_CONTENT_CONTEXT_TRANSLATE:\n"
+                "      ExecTranslate();\n"
+                "      break;\n"
+            )
+            apply_replacements(target, replacements, relative_path=self._PATH)
+            output = target.read_text()
+            self.assertIn('#include "maho/browser/ai/maho_selection_ask_dispatch.h"', output)
+            self.assertIn("IDC_MAHO_ASK_ABOUT_SELECTION,", output)
+            self.assertEqual(output.count("case IDC_MAHO_ASK_ABOUT_SELECTION:"), 2)
+            self.assertIn("GetBrowser(), embedder_web_contents_", output)
+            changed_again, _ = apply_replacements(
+                target, replacements, relative_path=self._PATH)
+            self.assertFalse(changed_again)
+
+    def test_command_enable_and_execution_cases_match_pristine_154(self):
+        replacements = [
+            r for r in REPLACEMENTS[self._PATH]
+            if "Ask Maho" in r.description
+        ]
+        enable = next(r for r in replacements if "enable" in r.description)
+        execute = next(r for r in replacements
+                       if "through browser AI ingress" in r.description)
+        # Anchored on Maho's own Mini case: the upstream translate case is
+        # rewritten by an earlier Maho replacement.
+        self.assertEqual(
+            enable.old,
+            "    case IDC_MAHO_LINK_OPEN_MAHO_MINI:\n"
+            "      return navigation_allowed && params_.link_url.is_valid() &&\n",
+        )
+        self.assertIn("case IDC_MAHO_ASK_ABOUT_SELECTION:", enable.new)
+        self.assertIn("params_.page_url.is_valid()", enable.new)
+        self.assertEqual(
+            execute.old,
+            "    case IDC_CONTENT_CONTEXT_TRANSLATE:\n"
+            "      ExecTranslate();\n"
+            "      break;",
+        )
+        self.assertIn("maho::AskMahoAboutSelection", execute.new)
+
+
 class MahoSidebarFloatingLayoutTest(unittest.TestCase):
     """An auto-hide sidebar reserves no width but must stay laid out as a
     floating hover strip, or nothing on screen can receive the hover that
@@ -2445,6 +2542,68 @@ class MahoArcLayoutBasePatchTest(unittest.TestCase):
     def test_base_patch_mirrors_contents_corners_in_rtl(self):
         self.assertIn("gfx::RoundedCornersF(12.0f, 0.0f, 0.0f, 12.0f)",
                       self._added_lines())
+
+
+class MahoAsideAdoptionBasePatchTest(unittest.TestCase):
+    """f89f3a43 rebuilds these files from whole-file base patches and skips
+    REPLACEMENTS, so the aside-adoption hooks must live in the patches."""
+
+    _DIR = (
+        Path(__file__).resolve().parents[1] / "chromium_base_patches"
+        / "f89f3a4363808e117c592adedcf9947882ac3b79")
+
+    def _added_lines(self, relative_path):
+        patch = self._DIR / f"{relative_path}.patch"
+        return "\n".join(
+            line[1:] for line in patch.read_text().splitlines()
+            if line.startswith("+") and not line.startswith("+++"))
+
+    def test_ui_target_compiles_new_maho_sources(self):
+        added = self._added_lines("chrome/browser/ui/BUILD.gn")
+        for source in (
+            "//maho/browser/ui/views/maho_mini/maho_mini_shortcut.cc",
+            "//maho/browser/ui/views/maho_mini/maho_mini_state_policy.cc",
+            "//maho/browser/ui/views/sidebar/maho_core_recovery_policy.cc",
+            "//maho/browser/ui/views/sidebar/maho_core_recovery_banner_view.cc",
+            "//maho/browser/ui/views/sidebar/maho_sidebar_agent_tasks_view.cc",
+            "//maho/browser/sync/maho_site_session_collector.cc",
+            "//maho/browser/sync/maho_site_session_applier.cc",
+            "//maho/browser/ai/maho_selection_ask_dispatch.cc",
+        ):
+            self.assertIn(f'"{source}"', added)
+        self.assertIn('"//maho/browser:maho_webauthn"', added)
+
+    def test_tab_helpers_attach_browse_episode_observer(self):
+        self.assertIn(
+            "MahoBrowseEpisodeObserver::CreateForWebContents(web_contents);",
+            self._added_lines("chrome/browser/ui/tab_helpers.cc"))
+
+    def test_context_menu_offers_ask_maho_about_selection(self):
+        added = self._added_lines(
+            "chrome/browser/renderer_context_menu/render_view_context_menu.cc")
+        self.assertIn("IDC_MAHO_ASK_ABOUT_SELECTION", added)
+        self.assertIn("maho::AskMahoAboutSelection(", added)
+
+    def test_webauthn_delegate_creates_vault_discovery(self):
+        self.assertIn(
+            "CreatePlatformDiscoveries() override;",
+            self._added_lines(
+                "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"))
+        self.assertIn(
+            "maho::CreateVaultPasskeyDiscoveries(rfh)",
+            self._added_lines(
+                "chrome/browser/webauthn/chrome_authenticator_request_delegate.cc"))
+
+    def test_previous_base_patch_states_migrate_forward(self):
+        for relative_path in (
+            "chrome/browser/ui/BUILD.gn",
+            "chrome/browser/ui/tab_helpers.cc",
+            "chrome/browser/renderer_context_menu/render_view_context_menu.cc",
+        ):
+            self.assertIn(relative_path, _UPDATED154_REAPPLY_SHA256)
+            self.assertTrue(
+                (self._DIR.parents[1] / "chromium_base_reapply_migrations"
+                 / self._DIR.name / f"{relative_path}.patch").is_file())
 
 
 class MahoAppMenuAnchorBasePatchTest(unittest.TestCase):

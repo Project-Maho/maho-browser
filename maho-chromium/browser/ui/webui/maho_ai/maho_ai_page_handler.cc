@@ -51,6 +51,7 @@
 #include "maho/browser/ai/maho_ai_runtime_router.h"
 #include "maho/browser/ai/maho_ai_security_utils.h"
 #include "maho/browser/ai/maho_artifact_registry.h"
+#include "maho/browser/ai/maho_ai_file_attachment_registry.h"
 #include "maho/browser/ai/maho_capability_broker.h"
 #include "maho/browser/ai/maho_credential_redaction.h"
 #include "maho/browser/ai/maho_extract_prompt_messages.h"
@@ -76,6 +77,7 @@
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "mojo/public/cpp/bindings/clone_traits.h"
 #include "net/base/net_errors.h"
 #include "net/base/url_util.h"
 #include "net/http/http_response_headers.h"
@@ -94,6 +96,7 @@ base::NoDestructor<std::set<MahoAIPageHandler*>> g_active_page_handlers;
 namespace ai = maho::ai_prefs;
 
 static constexpr size_t kMaxPageContextChars = 8000;
+static constexpr uint32_t kMemoryRecallTopK = 5;
 
 // Capped at 100 sessions to keep profile prefs loading fast on startup
 // while providing sufficient history size for regular usage.
@@ -2394,6 +2397,18 @@ void MahoAIPageHandler::SubmitPromptInternal(
     batch->chat_intent = chat_intent;
     batch->correlation = correlation;
     batch->dispatch_gate = std::move(dispatch_gate);
+    std::optional<std::string> rejected_attachment_error;
+    auto reject_file_attachment = [this, batch, &correlation](
+                                     const char* message) {
+      if (batch->dispatch_gate)
+        std::move(batch->dispatch_gate).Run(false);
+      MahoAiRuntimeEvent error_event;
+      error_event.type = MahoAiRuntimeEventType::kError;
+      error_event.text = message;
+      OnRuntimeEventForSession(correlation.session_id,
+                               correlation.request_id,
+                               std::move(error_event));
+    };
 
     for (const auto& att : *attachments) {
       AttachmentSlot slot;
@@ -2404,6 +2419,64 @@ void MahoAIPageHandler::SubmitPromptInternal(
       } else if (att->kind == maho_ai::mojom::ContextSourceKind::kOpenTab) {
         slot.header_tag = base::StrCat({"Tab Context: ", att->label});
         batch->slots.push_back(std::move(slot));
+      } else if (att->kind ==
+                 maho_ai::mojom::ContextSourceKind::kLocalFile) {
+        if (browser_->GetProfile()->IsOffTheRecord()) {
+          reject_file_attachment(
+              "Local file attachments are unavailable in private windows.");
+          return;
+        }
+        auto* registry =
+            maho::ai::GetMahoAiFileAttachmentRegistry(browser_->GetProfile());
+        const std::string token = att->file_token.value_or("");
+        if (!registry || !registry->CanResolve(token)) {
+          LOG(WARNING) << "Rejected invalid AI file attachment token";
+          rejected_attachment_error =
+              "The selected file is no longer available or is not supported.";
+          break;
+        }
+        auto path = registry->Resolve(token);
+        if (!path || !maho::ai::IsAllowedAiFileAttachment(*path)) {
+          LOG(WARNING) << "Rejected expired or unsupported AI file attachment";
+          rejected_attachment_error =
+              "The selected file exceeds the 10 MiB limit.";
+          break;
+        }
+        std::string file_text;
+        if (!base::ReadFileToStringWithMaxSize(
+                *path, &file_text,
+                maho::ai::MahoAiFileAttachmentRegistry::kMaxFileBytes)) {
+          LOG(WARNING) << "Rejected unreadable or oversized AI file attachment";
+          rejected_attachment_error =
+              "The selected file exceeds the 10 MiB limit.";
+          break;
+        }
+        slot.header_tag = base::StrCat({"File Context: ", att->label});
+        slot.result.extraction_status =
+            MahoAiPageContextExtractor::PageContextResult::Status::kSuccess;
+        slot.result.title = att->label;
+        slot.result.main_text = std::move(file_text);
+        batch->slots.push_back(std::move(slot));
+      } else if (att->kind ==
+                 maho_ai::mojom::ContextSourceKind::kCapturedImage) {
+        if (browser_->GetProfile()->IsOffTheRecord()) {
+          reject_file_attachment(
+              "Captured images are unavailable in private windows.");
+          return;
+        }
+        auto* registry =
+            maho::ai::GetMahoAiFileAttachmentRegistry(browser_->GetProfile());
+        std::optional<std::vector<uint8_t>> png =
+            registry && !batch->captured_image
+                ? registry->TakeCapturedImage(att->file_token.value_or(""))
+                : std::nullopt;
+        if (!png) {
+          LOG(WARNING) << "Rejected invalid or extra AI captured-image token";
+          rejected_attachment_error =
+              "The captured image is no longer available.";
+          break;
+        }
+        batch->captured_image = std::move(png);
       } else if (att->kind == maho_ai::mojom::ContextSourceKind::kHistory) {
         slot.header_tag = base::StrCat({"History Context: ", att->label});
         batch->slots.push_back(std::move(slot));
@@ -2413,7 +2486,15 @@ void MahoAIPageHandler::SubmitPromptInternal(
       }
     }
 
+    if (rejected_attachment_error) {
+      reject_file_attachment(rejected_attachment_error->c_str());
+      return;
+    }
+
     if (batch->slots.empty()) {
+      if (!StageBatchImage(adapter, *batch)) {
+        return;
+      }
       if (batch->dispatch_gate && !std::move(batch->dispatch_gate).Run(true)) {
         return;
       }
@@ -2439,6 +2520,11 @@ void MahoAIPageHandler::SubmitPromptInternal(
             att->tab_id,
             base::BindOnce(&MahoAIPageHandler::OnAttachmentSlotCompleted,
                            weak_factory_.GetWeakPtr(), batch, slot_idx));
+      } else if (att->kind ==
+                 maho_ai::mojom::ContextSourceKind::kLocalFile) {
+        size_t slot_idx = idx++;
+        OnAttachmentSlotCompleted(batch, slot_idx,
+                                  std::move(batch->slots[slot_idx].result));
       } else if (att->kind == maho_ai::mojom::ContextSourceKind::kHistory) {
         size_t slot_idx = idx++;
         std::string redacted_url = maho::ai_security::RedactUrlForAi(att->url);
@@ -2467,10 +2553,31 @@ void MahoAIPageHandler::SubmitPromptInternal(
   }
 
   if (attach_browser_context) {
+    // Query-scoped local memory recall first (untrusted context); an
+    // unavailable core or blank prompt goes straight to page extraction.
+    if (maho::GetCore() &&
+        !base::TrimWhitespaceASCII(prompt, base::TRIM_ALL).empty()) {
+      maho::PostCoreTask<std::string>(
+          FROM_HERE,
+          base::BindOnce(
+              [](std::string query) {
+                MahoCore* core = maho::GetCore();
+                return core ? maho::core::SearchMemoryHybridJson(
+                                  core, query, kMemoryRecallTopK)
+                            : std::string();
+              },
+              prompt),
+          base::BindOnce(&MahoAIPageHandler::OnMemoryRecallThenExtract,
+                         weak_factory_.GetWeakPtr(), std::move(correlation),
+                         std::move(dispatch_gate), prompt, mode,
+                         chat_intent));
+      return;
+    }
     page_context_extractor_->GetPageContext(
         base::BindOnce(&MahoAIPageHandler::OnContextExtractedThenSubmit,
                        weak_factory_.GetWeakPtr(), std::move(correlation),
-                       std::move(dispatch_gate), prompt, mode, chat_intent));
+                       std::move(dispatch_gate), prompt, mode, chat_intent,
+                       std::string()));
     return;
   }
 
@@ -2485,12 +2592,30 @@ void MahoAIPageHandler::SubmitPromptInternal(
                           correlation.request_id));
 }
 
+void MahoAIPageHandler::OnMemoryRecallThenExtract(
+    Correlation correlation,
+    base::OnceCallback<bool(bool)> dispatch_gate,
+    std::string user_prompt,
+    maho_ai::mojom::InteractionMode mode,
+    maho_ai::mojom::ChatIntent chat_intent,
+    std::string results_json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::string recall =
+      MahoAiPageContextExtractor::FormatMemoryRecall(user_prompt, results_json);
+  page_context_extractor_->GetPageContext(base::BindOnce(
+      &MahoAIPageHandler::OnContextExtractedThenSubmit,
+      weak_factory_.GetWeakPtr(), std::move(correlation),
+      std::move(dispatch_gate), std::move(user_prompt), mode, chat_intent,
+      std::move(recall)));
+}
+
 void MahoAIPageHandler::OnContextExtractedThenSubmit(
     Correlation correlation,
     base::OnceCallback<bool(bool)> dispatch_gate,
     std::string user_prompt,
     maho_ai::mojom::InteractionMode mode,
     maho_ai::mojom::ChatIntent chat_intent,
+    std::string memory_recall,
     MahoAiPageContextExtractor::PageContextResult ctx) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -2531,7 +2656,10 @@ void MahoAIPageHandler::OnContextExtractedThenSubmit(
   if (!ctx.HasUsableContent()) {
     DVLOG(1) << "MahoAIPageHandler: page context extraction failed ("
              << ctx.GetExtractionStatusString() << "); sending original prompt";
-    final_prompt = user_prompt;
+    final_prompt =
+        memory_recall.empty()
+            ? user_prompt
+            : base::StrCat({memory_recall, "\n\nUser Question:\n", user_prompt});
     std::string status_str;
     switch (ctx.extraction_status) {
       case MahoAiPageContextExtractor::PageContextResult::Status::kNoActiveTab:
@@ -2559,7 +2687,9 @@ void MahoAIPageHandler::OnContextExtractedThenSubmit(
     final_prompt = base::StrCat({"[Current Page Context]\nTitle: ", ctx.title,
                                  "\nURL: ", ctx.url, "\nContent:\n",
                                  maho::ai_security::WrapUntrusted(clipped_text),
-                                 "\n\nUser Question:\n", user_prompt});
+                                 "\n\n", memory_recall,
+                                 memory_recall.empty() ? "" : "\n\n",
+                                 "User Question:\n", user_prompt});
     ctx_event.payload.Set("status", "injected");
     ctx_event.payload.Set("url", ctx.url);
     ctx_event.payload.Set("title", ctx.title);
@@ -2675,6 +2805,28 @@ void MahoAIPageHandler::OnTabContextExtractedThenSubmit(
                           correlation.request_id));
 }
 
+bool MahoAIPageHandler::StageBatchImage(MahoAiRuntimeAdapter* adapter,
+                                        PendingAttachmentBatch& batch) {
+  if (!batch.captured_image) {
+    return true;
+  }
+  if (adapter->StageUserImage(*std::exchange(batch.captured_image,
+                                             std::nullopt))) {
+    return true;
+  }
+  if (batch.dispatch_gate) {
+    std::move(batch.dispatch_gate).Run(false);
+  }
+  MahoAiRuntimeEvent error_event;
+  error_event.type = MahoAiRuntimeEventType::kError;
+  error_event.text =
+      "The current AI runtime cannot read images, so the capture was not sent.";
+  OnRuntimeEventForSession(batch.correlation.session_id,
+                           batch.correlation.request_id,
+                           std::move(error_event));
+  return false;
+}
+
 void MahoAIPageHandler::OnAttachmentSlotCompleted(
     std::shared_ptr<PendingAttachmentBatch> batch,
     size_t slot_index,
@@ -2765,6 +2917,9 @@ void MahoAIPageHandler::OnAttachmentSlotCompleted(
         {combined_context, "User Question:\n", batch->user_prompt});
   }
 
+  if (!StageBatchImage(adapter, *batch)) {
+    return;
+  }
   if (batch->dispatch_gate && !std::move(batch->dispatch_gate).Run(true)) {
     return;
   }
@@ -4665,7 +4820,9 @@ void MahoAIPageHandler::OnAskMahoDispatch(
   SubmitPromptInternal(
       session_id, dispatch.query,
       /*attach_browser_context=*/false, dispatch.mode,
-      /*attachments=*/std::nullopt, maho_ai::mojom::ChatIntent::kFreeform,
+      std::optional<std::vector<maho_ai::mojom::ContextAttachmentPtr>>(
+          mojo::Clone(dispatch.attachments)),
+      maho_ai::mojom::ChatIntent::kFreeform,
       Correlation{active_session_id_, dispatch.request_id},
       base::BindOnce(
           [](base::WeakPtr<MahoAIPageHandler> self, std::string request_id,

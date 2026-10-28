@@ -113,6 +113,7 @@ impl SettingsManager {
             autofill: AutofillSettings::default(),
             advanced: AdvancedSettings::default(),
             notifications: NotificationSettings::default(),
+            episodic_memory: Default::default(),
         }
     }
 
@@ -305,6 +306,24 @@ impl SettingsManager {
             }
             if let Some(experimental_features) = advanced.experimental_features {
                 self.settings.advanced.experimental_features = experimental_features;
+            }
+        }
+        if let Some(episodic) = changes.episodic_memory {
+            if let Some(enabled) = episodic.enabled {
+                self.settings.episodic_memory.enabled = enabled;
+            }
+            if let Some(paused) = episodic.paused {
+                self.settings.episodic_memory.paused = paused;
+            }
+            if let Some(domains) = episodic.excluded_domains {
+                let mut cleaned: Vec<String> = domains
+                    .into_iter()
+                    .map(|d| d.trim().trim_start_matches("*.").to_ascii_lowercase())
+                    .filter(|d| !d.is_empty())
+                    .collect();
+                cleaned.sort();
+                cleaned.dedup();
+                self.settings.episodic_memory.excluded_domains = cleaned;
             }
         }
         if let Some(notifications) = changes.notifications {

@@ -596,6 +596,24 @@ std::string VaultGeneratePasswordJson(MahoCore* core,
   return TakeAndFreeMahoJson(raw_json, /*sensitive=*/true);
 }
 
+std::string VaultPasskeyCreateJson(MahoCore* core,
+                                   const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_passkey_create_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
+std::string VaultPasskeyGetAssertionJson(MahoCore* core,
+                                         const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_passkey_get_assertion_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
 std::string VaultPasswordStrengthJson(MahoCore* core,
                                       const char* request_json) {
   if (!core || !request_json) {
@@ -656,6 +674,101 @@ std::string GetContentBlockerStateJson(MahoCore* core) {
   std::string ret(result);
   maho_string_free(result);
   return ret;
+}
+
+namespace {
+std::string TakeContentBlockerJson(char* result) {
+  if (!result) {
+    return "{}";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+}  // namespace
+
+std::string TestContentBlockerRequestJson(MahoCore* core,
+                                          const std::string& url,
+                                          const std::string& source_url,
+                                          const std::string& request_type) {
+  return TakeContentBlockerJson(maho_core_content_blocker_test_request_json(
+      core, url.c_str(), source_url.c_str(), request_type.c_str()));
+}
+
+std::string GetCustomRulesJson(MahoCore* core) {
+  return TakeContentBlockerJson(maho_core_get_custom_rules_json(core));
+}
+
+std::string SetCustomRulesJson(MahoCore* core, const std::string& rules) {
+  return TakeContentBlockerJson(
+      maho_core_set_custom_rules_json(core, rules.c_str()));
+}
+
+std::string ImportLocalFilterListJson(MahoCore* core,
+                                      const std::string& name,
+                                      const std::string& contents) {
+  return TakeContentBlockerJson(maho_core_import_local_filter_list_json(
+      core, name.c_str(), base::as_byte_span(contents).data(),
+      contents.size()));
+}
+
+std::string RecordEpisodeJson(MahoCore* core, const std::string& episode_json) {
+  char* result = maho_core_episode_record_json(core, episode_json.c_str());
+  if (!result) {
+    return std::string();
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+int64_t ForgetEpisodeOrigin(MahoCore* core, const std::string& site) {
+  return maho_core_episode_forget_origin(core, site.c_str());
+}
+
+std::string SearchMemoryHybridJson(MahoCore* core,
+                                   const std::string& query,
+                                   uint32_t top_k) {
+  char* result = maho_core_search_memory_hybrid_json(core, query.c_str(), top_k);
+  if (!result) {
+    return std::string();
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+namespace {
+std::string TakeFfiString(char* result) {
+  if (!result) {
+    return std::string();
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+}  // namespace
+
+std::string GetSiteSessionOptedOriginsJson(MahoCore* core) {
+  return TakeFfiString(maho_core_site_session_get_opted_origins_json(core));
+}
+
+bool SetSiteSessionOptedOriginsJson(MahoCore* core,
+                                    const std::string& origins_json) {
+  return maho_core_site_session_set_opted_origins_json(core,
+                                                        origins_json.c_str());
+}
+
+std::string GetSiteSessionExportOriginsJson(MahoCore* core) {
+  return TakeFfiString(maho_core_site_session_records_for_export_json(core));
+}
+
+bool RecordSiteSessionJson(MahoCore* core, const std::string& record_json) {
+  return maho_core_site_session_record_json(core, record_json.c_str());
+}
+
+std::string TakeSiteSessionAppliesJson(MahoCore* core) {
+  return TakeFfiString(maho_core_site_session_take_applied_json(core));
 }
 
 std::string AddFilterListResultJson(MahoCore* core,
@@ -774,6 +887,21 @@ std::string GetCosmeticResources(MahoCore* core, const char* url) {
   char* result = maho_core_get_cosmetic_resources(core, url);
   if (!result) {
     return "{}";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+std::string GetHiddenClassIdSelectors(MahoCore* core,
+                                      const char* request_json) {
+  if (!core || !request_json) {
+    return "[]";
+  }
+  char* result =
+      maho_core_get_hidden_class_id_selectors(core, request_json);
+  if (!result) {
+    return "[]";
   }
   std::string ret(result);
   maho_string_free(result);

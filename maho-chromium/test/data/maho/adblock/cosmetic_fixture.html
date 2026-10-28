@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Maho cosmetic parity fixture</title>
+</head>
+<body>
+<h1 id="fixture-title">Maho cosmetic parity fixture</h1>
+
+<!-- Generic class rule: ##.ad-banner hides this. -->
+<div class="ad-banner" id="generic-target">Generic ad banner</div>
+
+<!-- Procedural :has-text rule hides this. -->
+<div class="promo-card" id="hastext-target">Sponsored content</div>
+
+<!-- Procedural :upward(2) rule hides the grandparent of the marker span. -->
+<section id="upward-target">
+  <div class="upward-wrapper">
+    <span class="upward-marker">Upward marker</span>
+  </div>
+</section>
+
+<!-- #@# exception keeps this one visible although ##.ad-sidebar is generic. -->
+<div class="ad-sidebar" id="exception-target">Excepted sidebar</div>
+
+<!-- Control element no rule targets; must stay visible. -->
+<p id="control-target">Control paragraph</p>
+</body>
+</html>

@@ -10,7 +10,9 @@
 #include <string_view>
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
@@ -22,6 +24,9 @@
 #include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/thread_annotations.h"
+#include "base/threading/platform_thread.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
@@ -31,6 +36,17 @@
 #include "maho/third_party/maho/maho_ffi.h"
 
 struct MahoCore;
+
+#if !defined(OFFICIAL_BUILD)
+// maho_core_debug_induce_panic is declared by maho_ffi.h under
+// MAHO_FFI_DEBUG_TEST_HOOKS, which third_party/maho/BUILD.gn defines for every
+// non-official build (matching the debug-test-hooks cargo feature).
+#if !defined(MAHO_FFI_DEBUG_TEST_HOOKS)
+#error "non-official builds must define MAHO_FFI_DEBUG_TEST_HOOKS"
+#endif
+constexpr char kMahoTestCorePanicSwitch[] = "maho-test-core-panic";
+constexpr char kMahoTestCoreHangSwitch[] = "maho-test-core-hang";
+#endif
 
 namespace maho {
 
@@ -64,6 +80,21 @@ base::Lock& GetVaultBackendCreationLock() {
 // sequence in unit tests); they are never touched from the core task runner.
 VaultLockStateCallbackList& GetVaultLockStateCallbackList() {
   static base::NoDestructor<VaultLockStateCallbackList> callbacks;
+  return *callbacks;
+}
+
+struct WatchdogState {
+  base::Lock lock;
+  CoreWatchdogPolicy policy GUARDED_BY(lock);
+};
+
+WatchdogState& GetWatchdogState() {
+  static base::NoDestructor<WatchdogState> state;
+  return *state;
+}
+
+CoreHealthCallbackList& GetCoreHealthCallbackList() {
+  static base::NoDestructor<CoreHealthCallbackList> callbacks;
   return *callbacks;
 }
 
@@ -289,6 +320,31 @@ void SetCoreForProfile(::MahoCore* core, Profile* owner_profile,
     }
     g_core.store(core, std::memory_order_release);
   }
+#if !defined(OFFICIAL_BUILD)
+  if (core) {
+    static std::atomic<bool> s_test_switches_checked{false};
+    if (!s_test_switches_checked.exchange(true)) {
+      const auto* cmdline = base::CommandLine::ForCurrentProcess();
+      if (cmdline && cmdline->HasSwitch(kMahoTestCorePanicSwitch)) {
+        GetCoreTaskRunner()->PostTask(
+            FROM_HERE, base::BindOnce([]() {
+              LOG(WARNING) << "Maho: executing --maho-test-core-panic";
+              maho_core_debug_induce_panic();
+            }));
+      }
+      if (cmdline && cmdline->HasSwitch(kMahoTestCoreHangSwitch)) {
+        const uint64_t watchdog_task_id =
+            BeginWatchedCoreTask(CoreOperationClass::kInteractive);
+        GetCoreTaskRunner()->PostTask(
+            FROM_HERE, base::BindOnce([](uint64_t task_id) {
+              LOG(WARNING) << "Maho: executing --maho-test-core-hang (sleeping 200s)";
+              base::PlatformThread::Sleep(base::Seconds(200));
+              EndWatchedCoreTask(task_id);
+            }, watchdog_task_id));
+      }
+    }
+  }
+#endif
   auto publish = base::BindOnce(
       [](uint64_t generation, bool ready, std::vector<CoreTabFacts> facts) {
         if (generation != GetCoreGeneration()) {
@@ -307,6 +363,75 @@ void SetCoreForProfile(::MahoCore* core, Profile* owner_profile,
   } else {
     content::GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(publish));
   }
+}
+
+uint64_t BeginWatchedCoreTask(CoreOperationClass operation) {
+  uint64_t id = 0;
+  {
+    WatchdogState& state = GetWatchdogState();
+    base::AutoLock lock(state.lock);
+    id = state.policy.OnTaskStarted(operation, base::TimeTicks::Now());
+  }
+  if (const auto deadline = CoreOperationDeadline(operation);
+      deadline &&
+      content::BrowserThread::IsThreadInitialized(content::BrowserThread::UI)) {
+    content::GetUIThreadTaskRunner({})->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce([]() { EvaluateCoreWatchdog(base::TimeTicks::Now()); }),
+        *deadline + base::Milliseconds(50));
+  }
+  return id;
+}
+
+void EndWatchedCoreTask(uint64_t task_id) {
+  {
+    WatchdogState& state = GetWatchdogState();
+    base::AutoLock lock(state.lock);
+    state.policy.OnTaskFinished(task_id);
+  }
+  if (content::BrowserThread::IsThreadInitialized(content::BrowserThread::UI)) {
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce([]() { EvaluateCoreWatchdog(base::TimeTicks::Now()); }));
+  }
+}
+
+void EvaluateCoreWatchdog(base::TimeTicks now) {
+  std::optional<CoreHealth> changed;
+  {
+    WatchdogState& state = GetWatchdogState();
+    base::AutoLock lock(state.lock);
+    changed = state.policy.Evaluate(now);
+  }
+  if (changed) {
+    GetCoreHealthCallbackList().Notify(*changed);
+    if (Profile* profile = GetCoreOwnerProfile()) {
+      const base::FilePath profile_path = profile->GetPath();
+      const char* state_str =
+          (*changed == CoreHealth::kDegraded) ? "degraded" : "healthy";
+      base::ThreadPool::PostTask(
+          FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+          base::BindOnce(
+              [](base::FilePath root, const char* health_str) {
+                for (const base::FilePath& base_dir : {root.DirName(), root}) {
+                  const base::FilePath logs_dir =
+                      base_dir.AppendASCII("MahoCore").AppendASCII("logs");
+                  if (base::CreateDirectory(logs_dir)) {
+                    const std::string line =
+                        std::string("{\"health\":\"") + health_str + "\"}\n";
+                    base::WriteFile(
+                        logs_dir.AppendASCII("core-watchdog.jsonl"), line);
+                  }
+                }
+              },
+              profile_path, state_str));
+    }
+  }
+}
+
+base::CallbackListSubscription AddCoreHealthCallback(
+    base::RepeatingCallback<void(CoreHealth health)> callback) {
+  return GetCoreHealthCallbackList().Add(std::move(callback));
 }
 
 base::CallbackListSubscription AddCoreReadyCallback(

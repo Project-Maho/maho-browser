@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -31,6 +32,7 @@
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "maho/browser/ai/maho_artifact_registry.h"
+#include "maho/browser/ai/maho_ai_file_attachment_registry.h"
 #include "maho/browser/maho_ai_popup_lifetime_tracker.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_private_context_policy.h"
@@ -43,9 +45,26 @@
 #include "maho/third_party/maho/maho_ffi.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "base/files/file_util.h"
+#include "chrome/browser/profiles/profile.h"
 
 class MahoAIPageHandlerTestPeer {
  public:
+  static void SubmitFileAttachments(
+      MahoAIPageHandler* handler,
+      std::vector<maho_ai::mojom::ContextAttachmentPtr> attachments) {
+    bool accepted = true;
+    handler->SubmitPromptInternal(
+        "", "summarize", false,
+        maho_ai::mojom::InteractionMode::kAssistant, std::move(attachments),
+        maho_ai::mojom::ChatIntent::kFreeform,
+        MahoAIPageHandler::Correlation("test-session", "file-request"),
+        base::BindLambdaForTesting([&](bool result) {
+          accepted = result;
+          return result;
+        }));
+    EXPECT_FALSE(accepted);
+  }
   static size_t RetainedReplayBytes(MahoAIPageHandler* handler) {
     return handler->replay_budget_.bytes;
   }
@@ -303,6 +322,13 @@ class AcceptingRuntimeAdapter : public MahoAiRuntimeAdapter {
     }
     submitted_messages.push_back(message);
   }
+  bool StageUserImage(std::vector<uint8_t> png_bytes) override {
+    if (!accepts_images) {
+      return false;
+    }
+    staged_images.push_back(std::move(png_bytes));
+    return true;
+  }
   void CancelCurrentTurn() override {}
   void RespondToApproval(const std::string& approval_id,
                          bool approved) override {}
@@ -310,8 +336,10 @@ class AcceptingRuntimeAdapter : public MahoAiRuntimeAdapter {
   void Reset() override {}
 
   bool available = true;
+  bool accepts_images = true;
   base::RepeatingClosure before_submit;
   std::vector<std::string> submitted_messages;
+  std::vector<std::vector<uint8_t>> staged_images;
 };
 
 // Mirrors the live adapter contract: no session means no live config. Record
@@ -363,8 +391,10 @@ class MahoAIPageHandlerTest : public BrowserWithTestWindowTest {
     MahoAiIngressCoordinator::RemoveFromBrowser(browser());
     SetCore(saved_core_);
     if (test_core_) {
-      maho_core_free(test_core_);
+      // Drop the raw_ptr before freeing so it never dangles.
+      MahoCore* core = test_core_.get();
       test_core_ = nullptr;
+      maho_core_free(core);
     }
     BrowserWithTestWindowTest::TearDown();
   }
@@ -392,7 +422,8 @@ class MahoAIPageHandlerTest : public BrowserWithTestWindowTest {
     return maho_ai::mojom::AskMahoDispatch::New(
         request_id, query, maho_ai::mojom::AskMahoSource::kCommandPalette, true,
         maho_ai::mojom::InteractionMode::kAssistant,
-        maho_ai::mojom::AskMahoContextIntent::kNone, std::nullopt);
+        maho_ai::mojom::AskMahoContextIntent::kNone, std::nullopt,
+        std::vector<maho_ai::mojom::ContextAttachmentPtr>());
   }
 
   static maho_ai::mojom::SessionInfoPtr StartSession(
@@ -456,6 +487,139 @@ TEST_F(MahoAIPageHandlerTest, RoutineUserTierRespondsWhenRoutinePipeDisconnects)
   MahoAIPageHandlerTestPeer::DisconnectRoutineHandler(handler.get());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(tier, 0);
+}
+
+TEST_F(MahoAIPageHandlerTest, FileAttachmentTokenIsResolvedAndConsumed) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  AcceptingRuntimeAdapter adapter;
+  MahoAIPageHandlerTestPeer::SetRuntimeAdapterForTesting(handler.get(),
+                                                         &adapter);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+  const auto path = temp_dir_.GetPath().AppendASCII("attached.txt");
+  ASSERT_TRUE(base::WriteFile(path, "local content"));
+  auto* registry = ai::GetMahoAiFileAttachmentRegistry(profile());
+  const std::string token = registry->IssueToken(path);
+  ASSERT_FALSE(token.empty());
+  auto attachment = maho_ai::mojom::ContextAttachment::New();
+  attachment->kind = maho_ai::mojom::ContextSourceKind::kLocalFile;
+  attachment->label = "attached.txt";
+  attachment->file_token = token;
+  std::vector<maho_ai::mojom::ContextAttachmentPtr> attachments;
+  attachments.push_back(std::move(attachment));
+  handler->SubmitPrompt(session->session_id, "summarize", false,
+                       maho_ai::mojom::InteractionMode::kAssistant,
+                       std::move(attachments),
+                       maho_ai::mojom::ChatIntent::kFreeform,
+                       base::BindLambdaForTesting([](bool) {}));
+  EXPECT_EQ(1u, adapter.submitted_messages.size());
+  EXPECT_FALSE(registry->CanResolve(token));
+}
+
+maho_ai::mojom::ContextAttachmentPtr CapturedImageAttachment(
+    const std::string& token) {
+  auto attachment = maho_ai::mojom::ContextAttachment::New();
+  attachment->kind = maho_ai::mojom::ContextSourceKind::kCapturedImage;
+  attachment->tab_id = -1;
+  attachment->label = "Capture";
+  attachment->file_token = token;
+  return attachment;
+}
+
+std::vector<uint8_t> TestPng() {
+  return {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 7, 7, 7};
+}
+
+TEST_F(MahoAIPageHandlerTest, CapturedImageIsStagedBeforeThePrompt) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  AcceptingRuntimeAdapter adapter;
+  MahoAIPageHandlerTestPeer::SetRuntimeAdapterForTesting(handler.get(),
+                                                         &adapter);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+  auto* registry = ai::GetMahoAiFileAttachmentRegistry(profile());
+  const std::string token = registry->IssueCapturedImageToken(TestPng());
+  ASSERT_FALSE(token.empty());
+  size_t staged_at_submit = 0;
+  adapter.before_submit = base::BindLambdaForTesting(
+      [&] { staged_at_submit = adapter.staged_images.size(); });
+  std::vector<maho_ai::mojom::ContextAttachmentPtr> attachments;
+  attachments.push_back(CapturedImageAttachment(token));
+  bool accepted = false;
+  handler->SubmitPrompt(session->session_id, "What is this?", false,
+                        maho_ai::mojom::InteractionMode::kAssistant,
+                        std::move(attachments),
+                        maho_ai::mojom::ChatIntent::kFreeform,
+                        base::BindLambdaForTesting(
+                            [&](bool result) { accepted = result; }));
+  ASSERT_EQ(1u, adapter.submitted_messages.size());
+  EXPECT_EQ("What is this?", adapter.submitted_messages[0]);
+  ASSERT_EQ(1u, adapter.staged_images.size());
+  EXPECT_EQ(TestPng(), adapter.staged_images[0]);
+  EXPECT_EQ(1u, staged_at_submit);
+  EXPECT_TRUE(accepted);
+  // The token is single-use.
+  EXPECT_FALSE(registry->TakeCapturedImage(token).has_value());
+}
+
+TEST_F(MahoAIPageHandlerTest, CapturedImageIsNotSentToATextOnlyRuntime) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  AcceptingRuntimeAdapter adapter;
+  adapter.accepts_images = false;
+  MahoAIPageHandlerTestPeer::SetRuntimeAdapterForTesting(handler.get(),
+                                                         &adapter);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+  const std::string token = ai::GetMahoAiFileAttachmentRegistry(profile())
+                                ->IssueCapturedImageToken(TestPng());
+  std::vector<maho_ai::mojom::ContextAttachmentPtr> attachments;
+  attachments.push_back(CapturedImageAttachment(token));
+  bool accepted = true;
+  handler->SubmitPrompt(session->session_id, "What is this?", false,
+                        maho_ai::mojom::InteractionMode::kAssistant,
+                        std::move(attachments),
+                        maho_ai::mojom::ChatIntent::kFreeform,
+                        base::BindLambdaForTesting(
+                            [&](bool result) { accepted = result; }));
+  EXPECT_TRUE(adapter.submitted_messages.empty());
+  EXPECT_FALSE(accepted);
+}
+
+TEST_F(MahoAIPageHandlerTest, ForgedCapturedImageTokenIsRejected) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  AcceptingRuntimeAdapter adapter;
+  MahoAIPageHandlerTestPeer::SetRuntimeAdapterForTesting(handler.get(),
+                                                         &adapter);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+  std::vector<maho_ai::mojom::ContextAttachmentPtr> attachments;
+  attachments.push_back(CapturedImageAttachment("forged-token"));
+  handler->SubmitPrompt(session->session_id, "What is this?", false,
+                        maho_ai::mojom::InteractionMode::kAssistant,
+                        std::move(attachments),
+                        maho_ai::mojom::ChatIntent::kFreeform,
+                        base::BindLambdaForTesting([](bool) {}));
+  EXPECT_TRUE(adapter.submitted_messages.empty());
+  EXPECT_TRUE(adapter.staged_images.empty());
+}
+
+TEST_F(MahoAIPageHandlerTest, UnknownFileAttachmentTokenIsRejected) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto attachment = maho_ai::mojom::ContextAttachment::New();
+  attachment->kind = maho_ai::mojom::ContextSourceKind::kLocalFile;
+  attachment->label = "missing.txt";
+  attachment->file_token = "unknown-token";
+  std::vector<maho_ai::mojom::ContextAttachmentPtr> attachments;
+  attachments.push_back(std::move(attachment));
+  MahoAIPageHandlerTestPeer::SubmitFileAttachments(handler.get(),
+                                                   std::move(attachments));
+  EXPECT_FALSE(ai::GetMahoAiFileAttachmentRegistry(profile())
+                   ->CanResolve("unknown-token"));
 }
 
 TEST_F(MahoAIPageHandlerTest,

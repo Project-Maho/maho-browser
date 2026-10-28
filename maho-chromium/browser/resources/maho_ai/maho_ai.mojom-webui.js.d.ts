@@ -72,6 +72,8 @@ export enum ContextSourceKind {
   kHistory,
   kBookmark,
   kFile,
+  kLocalFile,
+  kCapturedImage,
 }
 
 export interface HistoryItem {
@@ -123,6 +125,7 @@ export interface ContextAttachment {
   tabId: number;
   label: string;
   url: string;
+  fileToken?: string | null;
 }
 
 export enum InteractionMode {

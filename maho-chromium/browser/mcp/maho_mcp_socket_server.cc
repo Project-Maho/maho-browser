@@ -227,11 +227,13 @@ void MahoMcpSocketServer::OnAcceptComplete(int result) {
 
   std::string peer_executable;
   bool peer_is_trusted_maho = false;
+  base::ProcessId peer_process_id = base::kNullProcessId;
 #if BUILDFLAG(IS_APPLE)
   pid_t peer_pid = -1;
   socklen_t pid_size = sizeof(peer_pid);
   if (getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, &peer_pid, &pid_size) ==
       0) {
+    peer_process_id = peer_pid;
     peer_executable =
         base::GetProcessExecutablePath(peer_pid).AsUTF8Unsafe();
     peer_is_trusted_maho = IsTrustedMahoPeer(
@@ -239,6 +241,7 @@ void MahoMcpSocketServer::OnAcceptComplete(int result) {
   }
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   if (have_credentials) {
+    peer_process_id = credentials.process_id;
     const base::FilePath executable_path =
         base::GetProcessExecutablePath(credentials.process_id);
     peer_executable = executable_path.AsUTF8Unsafe();
@@ -255,6 +258,11 @@ void MahoMcpSocketServer::OnAcceptComplete(int result) {
   auto session = std::make_unique<MahoMcpSession>(
       getuid(), lease_registry_.get(), std::move(peer_executable),
       peer_is_trusted_maho);
+  // Controller pairing: the browser's own descendants (the built-in agent's
+  // bridge) are exempt; every other same-UID peer must pair.
+  session->SetPairing(MahoMcpPairingCoordinator::Get(),
+                      peer_process_id != base::kNullProcessId &&
+                          IsMahoMcpPeerBrowserOwned(peer_process_id));
 
   ActiveConnection conn;
   conn.socket = std::move(accepted_socket_);

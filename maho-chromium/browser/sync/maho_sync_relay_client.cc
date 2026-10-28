@@ -607,6 +607,7 @@ void MahoSyncRelayClient::OnCoreFrameApplied(uint64_t connection_generation,
     return;
   }
   if (drain_received_tabs) {
+    ApplyPendingSiteSessions();
     DrainReceivedTabs();
   }
 }
@@ -793,17 +794,71 @@ void MahoSyncRelayClient::PublishSnapshotIfNeeded() {
   ::MahoCore* core = maho::GetCore();
   if (!core) return;
 
-  char* snapshot_json = maho_core_export_sync_snapshot(core);
-  if (!snapshot_json) return;
+  CollectSiteSessionsAndPublish();
+}
 
-  std::string snapshot(snapshot_json);
-  maho_core_free_string(snapshot_json);
-
-  if (snapshot == last_published_snapshot_) {
+void MahoSyncRelayClient::CollectSiteSessionsAndPublish() {
+  if (site_sessions_collecting_ || !profile_ || profile_->IsOffTheRecord())
     return;
-  }
+  ::MahoCore* core = maho::GetCore();
+  if (!core) return;
+  if (!site_session_collector_)
+    site_session_collector_ =
+        std::make_unique<MahoSiteSessionCollector>(profile_);
+  site_sessions_collecting_ = true;
+  site_session_collector_->Collect(base::BindOnce(
+      [](base::WeakPtr<MahoSyncRelayClient> client,
+         std::vector<std::string> records) {
+        if (!client) return;
+        client->site_sessions_collecting_ = false;
+        ::MahoCore* core = maho::GetCore();
+        if (!core) return;
+        for (const auto& record : records)
+          maho::core::RecordSiteSessionJson(core, record);
+        char* snapshot_json = maho_core_export_sync_snapshot(core);
+        if (!snapshot_json) return;
+        std::string snapshot(snapshot_json);
+        maho_core_free_string(snapshot_json);
+        if (snapshot != client->last_published_snapshot_)
+          client->UploadSnapshot(std::move(snapshot));
+      }, weak_ptr_factory_.GetWeakPtr()));
+}
 
-  UploadSnapshot(std::move(snapshot));
+void MahoSyncRelayClient::ApplyPendingSiteSessions() {
+  ::MahoCore* core = maho::GetCore();
+  if (!core || !profile_ || profile_->IsOffTheRecord()) return;
+  if (!site_session_applier_)
+    site_session_applier_ = std::make_unique<MahoSiteSessionApplier>(profile_);
+  const std::string records_json =
+      maho::core::TakeSiteSessionAppliesJson(core);
+  auto parsed = base::JSONReader::Read(records_json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) return;
+  std::vector<std::string> records;
+  for (const auto& record : parsed->GetList()) {
+    std::string json;
+    if (base::JSONWriter::Write(record, &json))
+      records.push_back(std::move(json));
+  }
+  ApplySiteSessionRecords(std::move(records), 0);
+}
+
+void MahoSyncRelayClient::ApplySiteSessionRecords(
+    std::vector<std::string> records,
+    size_t index) {
+  if (index >= records.size() || !site_session_applier_) return;
+  site_session_applier_->Apply(
+      records[index],
+      base::BindOnce(
+          [](base::WeakPtr<MahoSyncRelayClient> client,
+             std::vector<std::string> records, size_t index,
+             SiteSessionApplyResult result) {
+            if (!client) return;
+            for (const auto& failure : result.failures)
+              LOG(WARNING) << "Site session apply failed for " << result.origin
+                           << ": " << failure;
+            client->ApplySiteSessionRecords(std::move(records), index + 1);
+          },
+          weak_ptr_factory_.GetWeakPtr(), std::move(records), index));
 }
 
 void MahoSyncRelayClient::UploadSnapshot(std::string snapshot) {

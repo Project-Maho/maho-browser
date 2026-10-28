@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Maho WebAuthn Test Fixture</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 40px auto;
+      max-width: 650px;
+      padding: 0 20px;
+      line-height: 1.5;
+    }
+    h1 {
+      font-size: 20px;
+    }
+    button {
+      padding: 10px 16px;
+      font-size: 14px;
+      margin-right: 10px;
+      cursor: pointer;
+    }
+    #status {
+      margin-top: 20px;
+      padding: 12px;
+      background: #f0f0f0;
+      border-radius: 6px;
+      font-weight: 600;
+      min-height: 24px;
+    }
+    #log {
+      margin-top: 15px;
+      padding: 12px;
+      background: #fafafa;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>Maho WebAuthn Passkey Test Fixture</h1>
+  <p>RP ID: <code>localhost</code></p>
+  <div>
+    <button id="btn-register" onclick="registerPasskey()">1. Register Passkey</button>
+    <button id="btn-signin" onclick="signInPasskey()">2. Sign In with Passkey</button>
+  </div>
+  <div id="status">ready</div>
+  <div id="log"></div>
+
+  <script>
+    // The relying party lives in serve.py: it issues single-use challenges and
+    // verifies every ceremony server-side. The page only shuttles bytes.
+    window.__registeredCredentialId = null;
+    window.__assertion_verified = false;
+
+    function appendLog(msg) {
+      document.getElementById("log").textContent += msg + "\n";
+    }
+
+    function setStatus(text) {
+      document.getElementById("status").textContent = text;
+      appendLog("[status] " + text);
+    }
+
+    function toB64u(buf) {
+      let s = "";
+      for (const b of new Uint8Array(buf)) s += String.fromCharCode(b);
+      return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+
+    function fromB64u(text) {
+      const s = atob(text.replace(/-/g, "+").replace(/_/g, "/"));
+      return Uint8Array.from(s, (c) => c.charCodeAt(0));
+    }
+
+    async function rp(path, body) {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {})
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error("RP rejected: " + json.error);
+      return json;
+    }
+
+    async function registerPasskey() {
+      try {
+        setStatus("registering...");
+        const { challenge } = await rp("/challenge");
+        const credential = await navigator.credentials.create({
+          publicKey: {
+            rp: { name: "Local Test RP", id: "localhost" },
+            user: { id: new Uint8Array([1, 2, 3, 4]), name: "testuser@localhost", displayName: "Test User" },
+            challenge: fromB64u(challenge),
+            pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+            authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
+            timeout: 60000
+          }
+        });
+        const result = await rp("/register", {
+          id: credential.id,
+          clientDataJSON: toB64u(credential.response.clientDataJSON),
+          attestationObject: toB64u(credential.response.attestationObject)
+        });
+        window.__registeredCredentialId = credential.id;
+        setStatus("registered");
+        appendLog("Credential ID: " + result.registered + " signCount=" + result.signCount);
+        return true;
+      } catch (err) {
+        setStatus(err.name === "Error" ? err.message : (err.name || "Error"));
+        appendLog("Registration error: " + err.message);
+        return false;
+      }
+    }
+
+    async function signInPasskey() {
+      try {
+        if (!window.__registeredCredentialId) {
+          setStatus("Error: Must register first");
+          return false;
+        }
+        setStatus("signing in...");
+        const { challenge } = await rp("/challenge");
+        const assertion = await navigator.credentials.get({
+          publicKey: {
+            rpId: "localhost",
+            challenge: fromB64u(challenge),
+            allowCredentials: [{ type: "public-key", id: fromB64u(window.__registeredCredentialId) }],
+            userVerification: "preferred",
+            timeout: 60000
+          }
+        });
+        const result = await rp("/verify", {
+          id: assertion.id,
+          clientDataJSON: toB64u(assertion.response.clientDataJSON),
+          authenticatorData: toB64u(assertion.response.authenticatorData),
+          signature: toB64u(assertion.response.signature)
+        });
+        window.__assertion_verified = true;
+        setStatus(result.result);
+        appendLog("signCount=" + result.signCount + " uv=" + result.uv);
+        return true;
+      } catch (err) {
+        setStatus(err.name === "Error" ? err.message : (err.name || "Error"));
+        appendLog("Assertion error: " + err.message);
+        return false;
+      }
+    }
+  </script>
+</body>
+</html>

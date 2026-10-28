@@ -15,6 +15,7 @@
 #ifndef MAHO_BROWSER_AI_MAHO_AI_RUNTIME_ADAPTER_H_
 #define MAHO_BROWSER_AI_MAHO_AI_RUNTIME_ADAPTER_H_
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -191,6 +192,11 @@ class MahoAiRuntimeAdapter {
                              bool attach_browser_context,
                              maho_ai::mojom::InteractionMode mode,
                              RuntimeEventCallback on_event) = 0;
+
+  // Stages one PNG image to accompany the next SubmitMessage call (the user
+  // attached a page capture). Returns false when the adapter cannot carry
+  // images or a turn is already running; the caller must then not submit.
+  virtual bool StageUserImage(std::vector<uint8_t> png_bytes);
 
   // Cancel the current turn, if any. The adapter should emit a
   // kTurnComplete or kError event after cancellation.

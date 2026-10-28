@@ -5,17 +5,23 @@
 #include <utility>
 
 #include <map>
+#include <optional>
 #include <string>
 
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
 #include "components/prefs/pref_service.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/ui/views/maho_mini/maho_mini_shortcut.h"
 
 #if BUILDFLAG(IS_MAC)
 #include <Carbon/Carbon.h>
 
 #include "chrome/browser/ui/browser_window.h"
+#include "ui/events/keycodes/dom/keycode_converter.h"
+#include "ui/events/keycodes/keyboard_code_conversion.h"
 #else
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener.h"
@@ -51,6 +57,8 @@ namespace {
 
 constexpr int kMahoMiniWidth = 600;
 constexpr int kMahoMiniHeight = 760;
+constexpr int kMahoMiniCompactWidth = 480;
+constexpr int kMahoMiniCompactHeight = 320;
 
 maho::LinkDestinationResult ParseLinkDestination(const std::string& json_str) {
   maho::LinkDestinationResult result;
@@ -89,6 +97,11 @@ std::map<Profile*, base::WeakPtr<BrowserWindowInterface>>& GetActiveMahoMiniWind
   return *active_windows;
 }
 
+std::map<Browser*, MahoMiniState>& GetMahoMiniStates() {
+  static base::NoDestructor<std::map<Browser*, MahoMiniState>> states;
+  return *states;
+}
+
 std::map<Browser*, std::string>& GetOriginatingSpaceIds();
 
 class MahoMiniBrowserDestructionObserver : public BrowserCollectionObserver {
@@ -108,6 +121,7 @@ class MahoMiniBrowserDestructionObserver : public BrowserCollectionObserver {
     Browser* browser_ptr = static_cast<Browser*>(browser);
     if (browser_ptr) {
       GetOriginatingSpaceIds().erase(browser_ptr);
+      GetMahoMiniStates().erase(browser_ptr);
     }
   }
 
@@ -187,6 +201,13 @@ void LaunchMahoMini(content::BrowserContext* context, MahoMiniRequest request) {
         static_cast<Browser*>(active_window_it->second.get());
     GetOriginatingSpaceIds()[maho_mini_browser] =
         CaptureOriginatingSpace(active_browser);
+    if (!request.url.is_empty() &&
+        GetMahoMiniState(maho_mini_browser) == MahoMiniState::kCompact) {
+      const MahoMiniState expanded = TransitionMahoMiniState(
+          GetMahoMiniState(maho_mini_browser),
+          MahoMiniStateEvent::kNavigation);
+      SetMahoMiniState(maho_mini_browser, expanded);
+    }
     maho_mini_browser->OpenURL(
         content::OpenURLParams(target, content::Referrer(),
                                WindowOpenDisposition::CURRENT_TAB,
@@ -236,6 +257,7 @@ void LaunchMahoMini(content::BrowserContext* context, MahoMiniRequest request) {
 
   Browser* popup = static_cast<Browser*>(CreateBrowserWindow(std::move(params)));
   active_windows[profile] = popup->GetWeakPtr();
+  GetMahoMiniStates()[popup] = MahoMiniState::kExpanded;
   GetOriginatingSpaceIds()[popup] = originating_space;
 
   GURL target = request.url.is_empty() ? GURL("about:blank") : request.url;
@@ -250,6 +272,36 @@ void LaunchMahoMini(content::BrowserContext* context, MahoMiniRequest request) {
   }
 
   popup->GetWindow()->Show();
+}
+
+MahoMiniState GetMahoMiniState(Browser* browser) {
+  auto it = GetMahoMiniStates().find(browser);
+  return it == GetMahoMiniStates().end() ? MahoMiniState::kExpanded
+                                         : it->second;
+}
+
+void SetMahoMiniState(Browser* browser, MahoMiniState state) {
+  if (!browser || !GetMahoMiniStates().contains(browser)) {
+    return;
+  }
+  GetMahoMiniStates()[browser] = state;
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+  views::Widget* widget = browser_view ? browser_view->GetWidget() : nullptr;
+  if (!widget) {
+    return;
+  }
+  if (state == MahoMiniState::kCompact) {
+    if (views::View* contents = browser_view->contents_container()) {
+      contents->SetVisible(false);
+    }
+    widget->SetSize(gfx::Size(kMahoMiniCompactWidth,
+                              kMahoMiniCompactHeight));
+  } else {
+    if (views::View* contents = browser_view->contents_container()) {
+      contents->SetVisible(true);
+    }
+    widget->SetSize(gfx::Size(kMahoMiniWidth, kMahoMiniHeight));
+  }
 }
 
 void DecideLinkDestination(
@@ -324,31 +376,99 @@ OSStatus HotKeyHandler(EventHandlerCallRef nextHandler,
 }  // namespace
 
 void RegisterGlobalShortcut(Profile* profile) {
-  static bool registered = false;
-  if (registered || !profile ||
-      !profile->GetPrefs()->GetBoolean(
-          maho::sidebar_prefs::kMahoMiniGlobalShortcutEnabled)) {
+  if (!profile) {
     return;
   }
 
-  EventHotKeyRef hotkey_ref;
-  EventHotKeyID hotKeyID;
-  hotKeyID.signature = 'maho';
-  hotKeyID.id = 1;
-
-  UInt32 modifiers = cmdKey | optionKey;
-  if (RegisterEventHotKey(45, modifiers, hotKeyID, GetApplicationEventTarget(),
-                          0, &hotkey_ref) != noErr) {
+  struct Registration {
+    raw_ptr<Profile> profile = nullptr;
+    EventHotKeyRef hotkey = nullptr;
+    ui::Accelerator accelerator;
+    base::NoDestructor<PrefChangeRegistrar> pref_changes;
+  };
+  static base::NoDestructor<Registration> registration;
+  if (registration->profile && registration->profile != profile) {
     return;
   }
+  registration->profile = profile;
 
-  EventTypeSpec eventType;
-  eventType.eventClass = kEventClassKeyboard;
-  eventType.eventKind = kEventHotKeyPressed;
-  if (InstallApplicationEventHandler(NewEventHandlerUPP(HotKeyHandler), 1,
-                                     &eventType, nullptr, nullptr) == noErr) {
-    registered = true;
+  auto register_preference = [] {
+    Registration& current = *registration;
+    PrefService* prefs = current.profile->GetPrefs();
+    if (!prefs->GetBoolean(
+            maho::sidebar_prefs::kMahoMiniGlobalShortcutEnabled)) {
+      if (current.hotkey) {
+        UnregisterEventHotKey(current.hotkey);
+        current.hotkey = nullptr;
+      }
+      prefs->SetString(maho::sidebar_prefs::kMahoMiniGlobalShortcutError, "");
+      return;
+    }
+    const std::string configured =
+        prefs->GetString(maho::sidebar_prefs::kMahoMiniGlobalShortcut);
+    const std::string effective = configured.empty() ? "Alt+Command+N" : configured;
+    const maho::ParsedMiniShortcut parsed = maho::ParseMiniShortcut(effective);
+    if (!parsed.error.empty()) {
+      prefs->SetString(maho::sidebar_prefs::kMahoMiniGlobalShortcutError,
+                       parsed.error);
+      return;
+    }
+    UInt32 modifiers = 0;
+    if (parsed.accelerator.IsCmdDown()) modifiers |= cmdKey;
+    if (parsed.accelerator.IsCtrlDown()) modifiers |= controlKey;
+    if (parsed.accelerator.IsAltDown()) modifiers |= optionKey;
+    if (parsed.accelerator.IsShiftDown()) modifiers |= shiftKey;
+    const int key_code = ui::KeycodeConverter::DomCodeToNativeKeycode(
+        ui::UsLayoutKeyboardCodeToDomCode(parsed.accelerator.key_code()));
+    if (key_code == ui::KeycodeConverter::InvalidNativeKeycode()) {
+      const std::string error = "Shortcut key is not supported by Carbon.";
+      prefs->SetString(maho::sidebar_prefs::kMahoMiniGlobalShortcutError,
+                       error);
+      return;
+    }
+    EventHotKeyRef replacement = nullptr;
+    EventHotKeyID hotkey_id{'maho', 1};
+    const OSStatus status = RegisterEventHotKey(
+        key_code, modifiers, hotkey_id, GetApplicationEventTarget(), 0,
+        &replacement);
+    if (status != noErr) {
+      const std::string error = "Shortcut registration failed (" +
+                                std::to_string(status) + ").";
+      prefs->SetString(maho::sidebar_prefs::kMahoMiniGlobalShortcutError,
+                       error);
+      return;
+    }
+    if (current.hotkey && current.accelerator == parsed.accelerator) {
+      UnregisterEventHotKey(replacement);
+      return;
+    }
+    if (current.hotkey) {
+      UnregisterEventHotKey(current.hotkey);
+    }
+    current.hotkey = replacement;
+    current.accelerator = parsed.accelerator;
+    prefs->SetString(maho::sidebar_prefs::kMahoMiniGlobalShortcutError, "");
+    static bool handler_installed = false;
+    if (!handler_installed) {
+      EventTypeSpec event_type{kEventClassKeyboard, kEventHotKeyPressed};
+      if (InstallApplicationEventHandler(NewEventHandlerUPP(HotKeyHandler), 1,
+                                         &event_type, nullptr, nullptr) ==
+          noErr) {
+        handler_installed = true;
+      }
+    }
+  };
+  Registration& current = *registration;
+  if (!current.pref_changes->prefs()) {
+    current.pref_changes->Init(profile->GetPrefs());
+    current.pref_changes->Add(
+        maho::sidebar_prefs::kMahoMiniGlobalShortcut,
+        base::BindRepeating(register_preference));
+    current.pref_changes->Add(
+        maho::sidebar_prefs::kMahoMiniGlobalShortcutEnabled,
+        base::BindRepeating(register_preference));
   }
+  register_preference();
 }
 #else  // !IS_MAC: portable global shortcut via ui::GlobalAcceleratorListener.
 
@@ -385,22 +505,72 @@ MahoMiniShortcutObserver* ShortcutObserver() {
 }  // namespace
 
 void RegisterGlobalShortcut(Profile* profile) {
-  static bool registered = false;
-  if (registered || !profile ||
-      !profile->GetPrefs()->GetBoolean(
-          maho::sidebar_prefs::kMahoMiniGlobalShortcutEnabled)) {
+  if (!profile) {
     return;
   }
 
-  auto* listener = ui::GlobalAcceleratorListener::GetInstance();
-  if (!listener) {
+  struct Registration {
+    raw_ptr<Profile> profile = nullptr;
+    std::optional<ui::Accelerator> accelerator;
+    base::NoDestructor<PrefChangeRegistrar> pref_changes;
+  };
+  static base::NoDestructor<Registration> registration;
+  if (registration->profile && registration->profile != profile) {
     return;
   }
-  const ui::Accelerator accelerator(ui::VKEY_N,
-                                    ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN);
-  if (listener->RegisterAccelerator(accelerator, ShortcutObserver())) {
-    registered = true;
+  registration->profile = profile;
+  Registration& current = *registration;
+  auto register_preference = [] {
+    Registration& current = *registration;
+    PrefService* prefs = current.profile->GetPrefs();
+    auto* listener = ui::GlobalAcceleratorListener::GetInstance();
+    if (!prefs->GetBoolean(
+            maho::sidebar_prefs::kMahoMiniGlobalShortcutEnabled)) {
+      if (current.accelerator && listener) {
+        listener->UnregisterAccelerator(*current.accelerator,
+                                        ShortcutObserver());
+        current.accelerator.reset();
+      }
+      prefs->SetString(maho::sidebar_prefs::kMahoMiniGlobalShortcutError, "");
+      return;
+    }
+    const std::string configured =
+        prefs->GetString(maho::sidebar_prefs::kMahoMiniGlobalShortcut);
+    const std::string effective = configured.empty() ? "Ctrl+Alt+N" : configured;
+    const maho::ParsedMiniShortcut parsed = maho::ParseMiniShortcut(effective);
+    if (!parsed.error.empty() || !listener) {
+      const std::string error = parsed.error.empty()
+                                   ? "Global shortcut listener is unavailable."
+                                   : parsed.error;
+      prefs->SetString(maho::sidebar_prefs::kMahoMiniGlobalShortcutError,
+                       error);
+      return;
+    }
+    if (current.accelerator && *current.accelerator == parsed.accelerator) {
+      return;
+    }
+    if (!listener->RegisterAccelerator(parsed.accelerator, ShortcutObserver())) {
+      prefs->SetString(maho::sidebar_prefs::kMahoMiniGlobalShortcutError,
+                       "Shortcut is already registered.");
+      return;
+    }
+    if (current.accelerator) {
+      listener->UnregisterAccelerator(*current.accelerator,
+                                      ShortcutObserver());
+    }
+    current.accelerator = parsed.accelerator;
+    prefs->SetString(maho::sidebar_prefs::kMahoMiniGlobalShortcutError, "");
+  };
+  if (!current.pref_changes->prefs()) {
+    current.pref_changes->Init(profile->GetPrefs());
+    current.pref_changes->Add(
+        maho::sidebar_prefs::kMahoMiniGlobalShortcut,
+        base::BindRepeating(register_preference));
+    current.pref_changes->Add(
+        maho::sidebar_prefs::kMahoMiniGlobalShortcutEnabled,
+        base::BindRepeating(register_preference));
   }
+  register_preference();
 }
 #endif
 
@@ -426,6 +596,11 @@ void MahoMiniWindow::PromoteToTab(Browser* popup_browser) {
   if (!popup_browser) {
     return;
   }
+
+  maho::SetMahoMiniState(
+      popup_browser,
+      maho::TransitionMahoMiniState(maho::GetMahoMiniState(popup_browser),
+                                    maho::MahoMiniStateEvent::kPromote));
 
   TabStripModel* popup_tab_strip = popup_browser->GetTabStripModel();
   if (!popup_tab_strip || popup_tab_strip->empty()) {

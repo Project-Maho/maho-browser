@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use maho_types::chat::{ChatContent, ChatMessage};
 
 pub mod approval;
+pub mod artifacts;
 pub mod approval_audit;
 pub mod browser_action_contract;
 pub mod channels;
@@ -17,6 +18,7 @@ pub mod fallback_ladder_browser;
 pub mod image_search;
 pub mod interaction;
 pub mod introspection;
+pub mod js_sandbox;
 
 #[cfg(not(target_os = "ios"))]
 pub mod mcp_client;
@@ -30,6 +32,7 @@ pub mod permission;
 pub mod retry_policy;
 pub mod run_journal;
 pub mod runtime_isolation;
+pub mod sandbox;
 pub mod skill_creator;
 pub mod subagents;
 pub mod suggestions;

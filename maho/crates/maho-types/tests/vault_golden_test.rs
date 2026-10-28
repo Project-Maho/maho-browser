@@ -46,11 +46,13 @@ fn every_vault_dto_has_a_stable_golden_wire_shape() {
         user_name_hint: "u***@example.com".to_string(),
         display_name: "Example passkey".to_string(),
         credential_id: vec![12, 13],
+        user_handle: vec![],
         transports: vec![PasskeyTransport::Internal, PasskeyTransport::Hybrid],
         discoverable: true,
         backup_eligible: true,
         backup_state: false,
         user_verification: PasskeyUserVerification::Required,
+        sign_count: 0,
         created_at: timestamp(0),
         last_used_at: None,
     };

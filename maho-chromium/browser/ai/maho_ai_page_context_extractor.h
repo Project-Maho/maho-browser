@@ -223,6 +223,12 @@ class MahoAiPageContextExtractor {
   // Token estimation helper: ~4 chars per token for Latin/ASCII text.
   static size_t EstimateTokens(std::string_view text);
 
+  // Formats hybrid memory search results (JSON array of {fact, source, score})
+  // as a bounded "[MEMORY RECALL]" block wrapped as untrusted content. Empty
+  // for an empty query or when no result carries a fact.
+  static std::string FormatMemoryRecall(std::string_view query,
+                                        std::string_view results_json);
+
   // Budget cap enforcement with largest-first priority: Page > History > Memory.
   static void ApplyBudgetCap(GatheredContextResult* result, size_t max_tokens);
 

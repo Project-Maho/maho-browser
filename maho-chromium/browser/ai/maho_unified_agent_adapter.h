@@ -247,6 +247,11 @@ struct MahoAgentFfi {
                         const char* preference_opt_json,
                         const char* available_opt_json,
                         char** out_json);
+  bool (*stage_user_image)(MahoAgentSession* session,
+                           const char* mime,
+                           const uint8_t* data,
+                           uint32_t len);
+  void (*free_string)(char* s);
 };
 
 const MahoAgentFfi* GetProductionMahoAgentFfi();
@@ -301,6 +306,7 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
                    RuntimeEventCallback on_event) override;
   uint64_t GetLastConsumedEventSeq(const std::string& run_id) const override;
   bool IsTurnActive() const override;
+  bool StageUserImage(std::vector<uint8_t> png_bytes) override;
   bool SubmitFollowUp(const std::string& message,
                       const std::string& intent = "queue") override;
   uint32_t GetTurnQueueDepth() const override;
@@ -594,6 +600,9 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
 
   std::string session_id_;
   std::string pending_message_;
+  // PNG staged by StageUserImage() for the next SubmitMessage(); moved out at
+  // the start of that call so an early error never leaks it into a later turn.
+  std::optional<std::vector<uint8_t>> pending_user_image_;
 
   std::string permission_extension_id_;
   std::set<std::string> session_grants_;

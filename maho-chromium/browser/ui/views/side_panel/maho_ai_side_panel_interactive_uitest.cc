@@ -1025,7 +1025,8 @@ class MahoAiIngressLifecycleInteractiveTest : public InProcessBrowserTest {
     return maho_ai::mojom::AskMahoDispatch::New(
         request_id, query, maho_ai::mojom::AskMahoSource::kCommandPalette,
         /*submit=*/true, maho_ai::mojom::InteractionMode::kAssistant,
-        maho_ai::mojom::AskMahoContextIntent::kNone, std::nullopt);
+        maho_ai::mojom::AskMahoContextIntent::kNone, std::nullopt,
+        std::vector<maho_ai::mojom::ContextAttachmentPtr>());
   }
 
   static maho_ai::mojom::SessionInfoPtr StartRealSession(

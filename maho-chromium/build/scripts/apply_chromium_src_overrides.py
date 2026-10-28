@@ -534,6 +534,55 @@ _MAHO_TRANSLATE_BUBBLE_COMMENT_TAIL: Final[str] = (
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    "chrome/browser/webauthn/chrome_authenticator_request_delegate.h": [
+        Replacement(
+            old=(
+                "  // content::AuthenticatorRequestClientDelegate:\n"
+                "  void SetRelyingPartyId(const std::string& rp_id) override;\n"
+            ),
+            new=(
+                "  // content::AuthenticatorRequestClientDelegate:\n"
+                "  std::vector<std::unique_ptr<device::FidoDiscoveryBase>>\n"
+                "  CreatePlatformDiscoveries() override;\n"
+                "  void SetRelyingPartyId(const std::string& rp_id) override;\n"
+            ),
+            description="Maho: declare Vault WebAuthn platform discovery override",
+            guard="  CreatePlatformDiscoveries() override;\n",
+        ),
+    ],
+    "chrome/browser/webauthn/chrome_authenticator_request_delegate.cc": [
+        Replacement(
+            old=(
+                '#include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"\n'
+                '#include "maho/browser/webauthn/maho_vault_passkey_discovery.h"\n'
+            ),
+            description="Maho: include Vault WebAuthn discovery in Chrome delegate",
+            guard='#include "maho/browser/webauthn/maho_vault_passkey_discovery.h"',
+        ),
+        Replacement(
+            old=(
+                "void ChromeAuthenticatorRequestDelegate::SetRelyingPartyId(\n"
+            ),
+            new=(
+                "std::vector<std::unique_ptr<device::FidoDiscoveryBase>>\n"
+                "ChromeAuthenticatorRequestDelegate::CreatePlatformDiscoveries() {\n"
+                "  std::vector<std::unique_ptr<device::FidoDiscoveryBase>> discoveries;\n"
+                "  auto* rfh = GetRenderFrameHost();\n"
+                "  if (rfh && !rfh->GetBrowserContext()->IsOffTheRecord()) {\n"
+                "    discoveries = maho::CreateVaultPasskeyDiscoveries(rfh);\n"
+                "  }\n"
+                "  return discoveries;\n"
+                "}\n"
+                "\n"
+                "void ChromeAuthenticatorRequestDelegate::SetRelyingPartyId(\n"
+            ),
+            description="Maho: provide Vault-backed platform discovery",
+            guard="ChromeAuthenticatorRequestDelegate::CreatePlatformDiscoveries()",
+        ),
+    ],
     # ── Xcode 27 rejects Mach-O whose LINKEDIT string pool is misaligned ───────
     # Chromium links with llvm-strip -x -S. When the indirect symbol count is
     # odd, stroff ends up 4-byte aligned (e.g. Maho Framework at 0x0F9260CC), and
@@ -2863,6 +2912,26 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Attach MahoWebStoreRebrandHandler in TabHelpers::AttachTabHelpers()"
             ),
             guard="MahoWebStoreRebrandHandler::CreateForWebContents(web_contents);",
+        ),
+        Replacement(
+            old='#include "maho/browser/maho_tab_id_helper.h"\n',
+            new=(
+                '#include "maho/browser/maho_tab_id_helper.h"\n'
+                '#include "maho/browser/ai/maho_browse_episode_observer.h"\n'
+            ),
+            description="Add MahoBrowseEpisodeObserver include to tab_helpers.cc",
+            guard='#include "maho/browser/ai/maho_browse_episode_observer.h"',
+        ),
+        Replacement(
+            old="  MahoTabIdHelper::CreateForWebContents(web_contents);\n",
+            new=(
+                "  MahoTabIdHelper::CreateForWebContents(web_contents);\n"
+                "  MahoBrowseEpisodeObserver::CreateForWebContents(web_contents);\n"
+            ),
+            description=(
+                "Attach MahoBrowseEpisodeObserver in TabHelpers::AttachTabHelpers()"
+            ),
+            guard="MahoBrowseEpisodeObserver::CreateForWebContents(web_contents);",
         ),
         Replacement(
             old='#include "maho/browser/ui/link_preview/maho_link_preview_manager.h"\n',
@@ -10208,6 +10277,16 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/renderer_context_menu/render_view_context_menu.cc": [
         Replacement(
+            old='#include "maho/browser/ui/context_menu/maho_context_menu_ids.h"\n',
+            new=(
+                '#include "maho/browser/ui/context_menu/maho_context_menu_ids.h"\n'
+                '#include "maho/browser/ai/maho_selection_ask_dispatch.h"\n'
+            ),
+            description="Maho: include the Ask Maho selection dispatcher",
+            guard='maho/browser/ai/maho_selection_ask_dispatch.h',
+            idempotent=True,
+        ),
+        Replacement(
             old=(
                 '#include "maho/browser/ui/views/little_'
                 'arc/maho_little_'
@@ -10244,6 +10323,67 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Maho: route context-menu command through Maho Mini launch API",
             guard='maho::LaunchMahoMini(browser_context_',
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                '  AppendGlicItems();\n'
+                '\n'
+                '  if (use_simplified_menu_for_text_selection &&'
+            ),
+            new=(
+                '  AppendGlicItems();\n'
+                '\n'
+                '  if (!params_.selection_text.empty() &&\n'
+                '      !params_.is_editable && params_.page_url.is_valid()) {\n'
+                '    menu_model_.AddItem(\n'
+                '        IDC_MAHO_ASK_ABOUT_SELECTION,\n'
+                '        u"Ask Maho about \\u201c" +\n'
+                '            gfx::TruncateString(params_.selection_text, 32,\n'
+                '                                gfx::CHARACTER_BREAK) +\n'
+                '            u"\\u201d");\n'
+                '  }\n'
+                '\n'
+                '  if (use_simplified_menu_for_text_selection &&'
+            ),
+            description="Maho: add Ask Maho action for selected page text",
+            guard="IDC_MAHO_ASK_ABOUT_SELECTION",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                '    case IDC_MAHO_LINK_OPEN_MAHO_MINI:\n'
+                '      return navigation_allowed && params_.link_url.is_valid() &&\n'
+            ),
+            new=(
+                '    case IDC_MAHO_ASK_ABOUT_SELECTION:\n'
+                '      return params_.page_url.is_valid() &&\n'
+                '             !params_.selection_text.empty() && !params_.is_editable;\n'
+                '    case IDC_MAHO_LINK_OPEN_MAHO_MINI:\n'
+                '      return navigation_allowed && params_.link_url.is_valid() &&\n'
+            ),
+            description="Maho: enable Ask Maho only for valid non-editable page selections",
+            guard="case IDC_MAHO_ASK_ABOUT_SELECTION:",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                '    case IDC_CONTENT_CONTEXT_TRANSLATE:\n'
+                '      ExecTranslate();\n'
+                '      break;'
+            ),
+            new=(
+                '    case IDC_MAHO_ASK_ABOUT_SELECTION:\n'
+                '      maho::AskMahoAboutSelection(\n'
+                '          GetBrowser(), embedder_web_contents_, params_.page_url,\n'
+                '          params_.selection_text);\n'
+                '      break;\n'
+                '    case IDC_CONTENT_CONTEXT_TRANSLATE:\n'
+                '      ExecTranslate();\n'
+                '      break;'
+            ),
+            description="Maho: dispatch Ask Maho selection through browser AI ingress",
+            guard="maho::AskMahoAboutSelection(\n          GetBrowser()",
             idempotent=True,
         ),
         Replacement(
@@ -12313,6 +12453,15 @@ _UPDATED154_LAYOUT_SHA256: Final[dict[str, str]] = {
 _UPDATED154_REAPPLY_SHA256: Final[dict[str, str]] = {
     "chrome/browser/ui/browser_command_controller.cc":
         "a2a18c212978494b311f4a2b4f412b9d26d5a078677a31f72b3a62518aaf210c",
+    # Aside adoption: chrome/browser/ui:ui gains the new Maho sources, tab
+    # helpers attach the browse-episode observer, and the context menu gains
+    # Ask Maho about selection.
+    "chrome/browser/ui/BUILD.gn":
+        "428c439a6ceda26c03c27d9556ef78c4dc90b1cb469e224263e0a4319bfacf5e",
+    "chrome/browser/ui/tab_helpers.cc":
+        "12b5641335472e0ade1109c4df5d92989d3f28f8b4f092db1803a9ca29711ccf",
+    "chrome/browser/renderer_context_menu/render_view_context_menu.cc":
+        "7f81524f97a842fb179fd05928946af3269413528721cc75daf995ff4bc709ed",
 }
 
 
@@ -12614,6 +12763,10 @@ def normalize_gn_stale_deps(text: str, relative_path: str = "") -> tuple[str, in
 
 
 _CHROME_BROWSER_UI_SOURCES: Final[tuple[str, ...]] = (
+    "//maho/browser/webauthn/maho_vault_passkey_authenticator.cc",
+    "//maho/browser/webauthn/maho_vault_passkey_authenticator.h",
+    "//maho/browser/webauthn/maho_vault_passkey_discovery.cc",
+    "//maho/browser/webauthn/maho_vault_passkey_discovery.h",
     "//maho/browser/maho_browser_main_extra_parts.cc",
     "//maho/browser/maho_browser_main_extra_parts.h",
     "//maho/browser/maho_routines_scheduler.cc",
@@ -12634,6 +12787,20 @@ _CHROME_BROWSER_UI_SOURCES: Final[tuple[str, ...]] = (
     "//maho/browser/sync/maho_sync_relay_client.h",
     "//maho/browser/sync/maho_sync_relay_protocol.cc",
     "//maho/browser/sync/maho_sync_relay_protocol.h",
+    "//maho/browser/sync/maho_site_session_cookie.cc",
+    "//maho/browser/sync/maho_site_session_cookie.h",
+    "//maho/browser/sync/maho_site_session_collector.cc",
+    "//maho/browser/sync/maho_site_session_collector.h",
+    "//maho/browser/sync/maho_site_session_applier.cc",
+    "//maho/browser/sync/maho_site_session_applier.h",
+    "//maho/browser/ai/maho_selection_ask_query.cc",
+    "//maho/browser/ai/maho_selection_ask_query.h",
+    "//maho/browser/ai/maho_selection_ask_dispatch.cc",
+    "//maho/browser/ai/maho_selection_ask_dispatch.h",
+    "//maho/browser/ui/views/maho_mini/maho_mini_shortcut.cc",
+    "//maho/browser/ui/views/maho_mini/maho_mini_shortcut.h",
+    "//maho/browser/ui/views/maho_mini/maho_mini_state_policy.cc",
+    "//maho/browser/ui/views/maho_mini/maho_mini_state_policy.h",
     "//maho/browser/updates/maho_config_manager.cc",
     "//maho/browser/updates/maho_config_manager.h",
     "//maho/browser/updates/maho_update_signature.cc",
@@ -12698,6 +12865,10 @@ _CHROME_BROWSER_UI_SOURCES: Final[tuple[str, ...]] = (
     "//maho/browser/ui/webui/maho_live_folders/maho_live_folders_page_handler.h",
     "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.cc",
     "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.h",
+    "//maho/browser/ui/views/sidebar/maho_core_recovery_banner_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_core_recovery_banner_view.h",
+    "//maho/browser/ui/views/sidebar/maho_core_recovery_policy.cc",
+    "//maho/browser/ui/views/sidebar/maho_core_recovery_policy.h",
     "//maho/browser/ui/views/sidebar/maho_favorite_edit_dialog.cc",
     "//maho/browser/ui/views/sidebar/maho_favorite_edit_dialog.h",
     "//maho/browser/ui/views/sidebar/maho_sidebar_container_view.cc",

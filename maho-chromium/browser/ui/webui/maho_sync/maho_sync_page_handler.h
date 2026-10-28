@@ -4,6 +4,7 @@
 #define MAHO_BROWSER_UI_WEBUI_MAHO_SYNC_PAGE_HANDLER_H_
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
@@ -36,6 +37,11 @@ class MahoSyncPageHandler : public maho_sync::mojom::PageHandler {
   void StopSync() override;
   void GetConnectedDevices(GetConnectedDevicesCallback callback) override;
   void GenerateSyncKey(GenerateSyncKeyCallback callback) override;
+  void GetSiteSessionOptedOrigins(
+      GetSiteSessionOptedOriginsCallback callback) override;
+  void SetSiteSessionOptedOrigins(
+      const std::vector<std::string>& origins,
+      SetSiteSessionOptedOriginsCallback callback) override;
 
  private:
   static maho_sync::mojom::SyncStatusPtr BuildSyncStatusOnPool();
@@ -55,6 +61,9 @@ class MahoSyncPageHandler : public maho_sync::mojom::PageHandler {
     std::string recovery_phrase;
   };
   static GenerateSyncKeyResult GenerateSyncKeyOnPool();
+  static std::vector<std::string> GetSiteSessionOptedOriginsOnPool();
+  static std::pair<bool, std::string> SetSiteSessionOptedOriginsOnPool(
+      const std::vector<std::string>& origins);
 
   void OnJoinSyncComplete(JoinSyncCallback callback,
                           maho_sync::mojom::SyncStatusPtr status);

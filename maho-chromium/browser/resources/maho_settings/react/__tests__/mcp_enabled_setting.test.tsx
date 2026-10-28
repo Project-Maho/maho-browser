@@ -35,7 +35,12 @@ afterEach(() => {
 
 function render(settings: SettingValue[]) {
   const commitSettingValue = vi.fn().mockResolvedValue(true);
-  const store = {commitSettingValue} as never;
+  // The pane also renders AgentChannels, which lists channels on mount.
+  const handler = {
+    listAgentChannels: vi.fn().mockResolvedValue(
+        {json: JSON.stringify({channels: [], locked: false})}),
+  };
+  const store = {commitSettingValue, getHandler: () => handler} as never;
   act(() => {
     root.render(
         <AiDevelopersPane pane={DEVELOPERS_PANE} settings={settings} store={store} />);

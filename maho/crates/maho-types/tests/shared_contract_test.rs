@@ -213,6 +213,7 @@ fn profile_contains_all_entity_arrays() {
             autofill: Default::default(),
             advanced: Default::default(),
             notifications: Default::default(),
+            episodic_memory: Default::default(),
         },
     };
     assert_eq!(profile.name, "Default");

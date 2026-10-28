@@ -126,9 +126,11 @@ MahoCtrlTabSwitcherController::~MahoCtrlTabSwitcherController() {
 
 bool MahoCtrlTabSwitcherController::HandleAdvance(bool forward) {
   if (!tracker_ || !browser_view_) {
+    LOG(WARNING) << "[maho-ctrl-tab] declined: no tracker or browser view";
     return false;
   }
   if (!ReadMruOrderPref(browser_view_)) {
+    LOG(WARNING) << "[maho-ctrl-tab] declined: MRU order pref is off";
     return false;
   }
 
@@ -139,6 +141,7 @@ bool MahoCtrlTabSwitcherController::HandleAdvance(bool forward) {
       active_strip ? active_strip->active_index() : TabStripModel::kNoTab;
   if (!active_strip || active_index == TabStripModel::kNoTab ||
       !active_strip->GetActiveWebContents()) {
+    LOG(WARNING) << "[maho-ctrl-tab] declined: no active tab";
     return false;
   }
 
@@ -153,10 +156,12 @@ bool MahoCtrlTabSwitcherController::HandleAdvance(bool forward) {
 
   std::vector<content::WebContents*> mru;
   const std::string scope = ReadScopePref(browser_view_);
+  std::string space_id_for_log;
   if (scope == ctrl_tab_prefs::kScopeCurrentSpace) {
     const std::string& space_id =
         MahoSpaceProfileBridge::GetInstance()->GetActiveSpaceId(
             browser_view_->browser());
+    space_id_for_log = space_id;
     if (space_id.empty()) {
       mru = tracker_->GetMruList();
     } else {
@@ -171,6 +176,10 @@ bool MahoCtrlTabSwitcherController::HandleAdvance(bool forward) {
   }
 
   if (mru.size() < 2) {
+    LOG(WARNING) << "[maho-ctrl-tab] declined: only " << mru.size()
+                 << " candidate tab(s) of "
+                 << tracker_->GetMruList().size() << " total; scope=" << scope
+                 << " active_space='" << space_id_for_log << "'";
     return false;
   }
 
@@ -372,15 +381,21 @@ void MahoCtrlTabSwitcherController::OnShowTimerFired() {
 
 void MahoCtrlTabSwitcherController::OpenOverlay() {
   if (!browser_view_ || snapshot_.empty()) {
+    LOG(WARNING) << "[maho-ctrl-tab] overlay not opened: no view or empty "
+                    "snapshot";
     return;
   }
 
   views::Widget* parent = browser_view_->GetWidget();
   if (!parent) {
+    LOG(WARNING) << "[maho-ctrl-tab] overlay not opened: no parent widget";
     return;
   }
 
-  if (LiveList(snapshot_).size() < 2) {
+  std::vector<content::WebContents*> live = LiveList(snapshot_);
+  if (live.size() < 2) {
+    LOG(WARNING) << "[maho-ctrl-tab] overlay cancelled: " << live.size()
+                 << " live tab(s) in snapshot";
     CancelWithoutCommit();
     return;
   }
@@ -412,6 +427,8 @@ void MahoCtrlTabSwitcherController::OpenOverlay() {
   overlay_widget_->ShowInactive();
 
   state_ = State::kShowing;
+  LOG(WARNING) << "[maho-ctrl-tab] overlay shown with " << live.size()
+               << " tabs";
 }
 
 std::unique_ptr<MahoCtrlTabSwitcherView>

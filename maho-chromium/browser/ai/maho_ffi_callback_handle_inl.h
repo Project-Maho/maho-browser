@@ -40,13 +40,13 @@ void FfiCallbackHandle<T>::Cancel() {
     return;
   }
 
+  // Clear the raw_ptr before freeing so it never points at freed memory.
+  user_data_bridge_ = nullptr;
   if (bridge->producer_leased.load(std::memory_order_acquire)) {
-    user_data_bridge_ = nullptr;
     return;
   }
 
   delete bridge;
-  user_data_bridge_ = nullptr;
 }
 
 template <typename T>

@@ -1,4 +1,3 @@
-#include "maho/browser/ai/maho_ai_runtime_adapter.h"
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #ifndef MAHO_BROWSER_AI_MAHO_AGENT_CHANNEL_GATEWAY_H_
@@ -19,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "maho/browser/ai/maho_agent_channel_protocols.h"
 #include "maho/browser/ai/maho_authenticated_service_api_broker.h"
 
 #if !defined(MAHO_STANDALONE_TEST)
@@ -104,6 +104,7 @@ auto BindRepeating(R (C::*method)(MethodArgs...), WeakPtr<C> weak_ptr, Args&&...
 
 class PrefService;
 class MahoAiRuntimeAdapter;
+class Profile;
 
 namespace maho::ai {
 
@@ -186,6 +187,7 @@ struct ChannelConfig {
   std::string name;
   bool enabled = true;
   std::optional<ChannelToken> token;
+  std::optional<ChannelToken> outbound_token;
   std::optional<std::string> account_id;
   std::optional<std::string> opaque_auth_handle;
   uint32_t poll_interval_seconds = 30;
@@ -234,6 +236,7 @@ struct ChannelEvent {
 
   std::string id;
   std::string channel_id;
+  std::string reply_channel_id;
   ChannelProvider provider = ChannelProvider::kSlack;
   ChannelEventKind kind = ChannelEventKind::kMessageReceived;
   std::string sender_id;
@@ -256,6 +259,7 @@ struct AgentSessionTrigger {
   AgentSessionTrigger& operator=(AgentSessionTrigger&&) noexcept;
 
   std::string channel_id;
+  std::string reply_channel_id;
   ChannelProvider provider = ChannelProvider::kSlack;
   std::string sender_id;
   std::optional<std::string> sender_name;
@@ -324,6 +328,7 @@ struct OutboundChannelMessage {
   ChannelProvider provider = ChannelProvider::kSlack;
   std::string text;
   std::optional<std::string> reply_to_event_id;
+  std::string destination_id;
 };
 
 /// Outbound command wrapping a direct API operation with confirmation requirement.
@@ -474,22 +479,21 @@ class ChannelTransport {
   virtual void FetchEvents(const ChannelConfig& config,
                            const std::optional<std::string>& cursor,
                            FetchCallback callback) = 0;
-};
-
-/// Production HTTP transport stub (TODO: Wire real HTTP transport with URL loader).
-class DefaultChannelHttpTransport : public ChannelTransport {
- public:
-  DefaultChannelHttpTransport();
-  ~DefaultChannelHttpTransport() override;
-
-  void FetchEvents(const ChannelConfig& config,
-                   const std::optional<std::string>& cursor,
-                   FetchCallback callback) override;
+  // Sends a plain-text message to |recipient| (Telegram chat id, Slack or
+  // Discord channel id). Used for pairing codes.
+  virtual void SendText(const ChannelConfig& config,
+                        std::string recipient,
+                        std::string text,
+                        base::OnceCallback<void(bool)> callback) = 0;
 };
 
 /// Main Gateway lifecycle coordinator for external messaging channels (Gap #19).
 class MahoAgentChannelGateway {
  public:
+  // Builds the provider transport for one channel (null when the channel
+  // has no credential or the provider has no transport).
+  using ProviderTransportFactory = base::RepeatingCallback<
+      std::unique_ptr<ChannelTransport>(ChannelProvider, const ChannelConfig&)>;
   using TriggerCallback = base::RepeatingCallback<bool(const AgentSessionTrigger&)>;
   using SendCallback =
       base::OnceCallback<void(base::expected<OutboundSendReceipt, ChannelError>)>;
@@ -515,6 +519,7 @@ class MahoAgentChannelGateway {
   bool StopChannel(const std::string& channel_id);
   void StartAll();
   void StopAll();
+  void ClearCredentials();
   bool IsChannelRunning(const std::string& channel_id) const;
 
   // Inbound Turn-Submission Integration
@@ -545,6 +550,31 @@ class MahoAgentChannelGateway {
 
   // Polling Configuration and Manual Drives
   void SetTransport(std::unique_ptr<ChannelTransport> transport);
+  // Per-channel transport override (tests) and the provider factory used
+  // for channels without one.
+  void SetProviderTransport(std::string channel_id,
+                            std::unique_ptr<ChannelTransport> transport);
+  void SetProviderTransportFactory(ProviderTransportFactory factory);
+#if !defined(MAHO_STANDALONE_TEST)
+  // Production: Telegram over the profile's URL loader, Slack Socket Mode and
+  // Discord Gateway over the profile's network context, each authenticated
+  // with the channel's own token. Also turns on sender pairing.
+  void ConfigureProductionTransports(Profile* profile);
+#endif
+
+  // Sender pairing (todo 62). When enabled, an unknown sender only receives a
+  // one-time code; the user approves it in Maho with ApprovePairing. Pairing
+  // authorizes the sender to submit messages and never bypasses Maho's
+  // in-chat approval for consequential tools.
+  void SetPairingRequired(bool required);
+  MahoAgentChannelPairing::ConfirmResult ApprovePairing(
+      const std::string& channel_id,
+      const std::string& sender_id,
+      std::string_view code);
+  void RevokePairing(const std::string& channel_id,
+                     const std::string& sender_id);
+  bool IsSenderPaired(const std::string& channel_id,
+                      const std::string& sender_id) const;
   void SetPollInterval(base::TimeDelta interval);
   void PollChannelOnce(const std::string& channel_id);
   void PollAllOnce();
@@ -577,8 +607,17 @@ class MahoAgentChannelGateway {
 
   void StartPollTimer();
 
+  static std::string PairingPrincipal(const std::string& channel_id,
+                                      const std::string& sender_id);
+  ChannelTransport* TransportForChannel(const ChannelConfig& config);
+  void SendPairingCode(const ChannelEvent& event, const std::string& principal);
+
   ChannelRegistry registry_;
   std::unique_ptr<ChannelTransport> transport_;
+  std::map<std::string, std::unique_ptr<ChannelTransport>> provider_transports_;
+  ProviderTransportFactory provider_factory_;
+  MahoAgentChannelPairing pairing_;
+  bool pairing_required_ = false;
   raw_ptr<MahoAuthenticatedServiceApiBroker> broker_ = nullptr;
   raw_ptr<::MahoAiRuntimeAdapter> runtime_adapter_ = nullptr;
   TriggerCallback trigger_callback_;

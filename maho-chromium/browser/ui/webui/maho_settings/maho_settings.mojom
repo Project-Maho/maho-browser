@@ -645,6 +645,10 @@ struct FilterListInfo {
   int64? last_attempt_timestamp;
   int64? last_success_timestamp;
   uint32 failure_count;
+  uint32 accepted_network_rule_count;
+  uint32 accepted_cosmetic_rule_count;
+  uint32 rejected_rule_count;
+  array<string> rejected_rule_samples;
   uint16? last_status;
   string? last_error;
   int64? next_retry_timestamp;
@@ -671,6 +675,18 @@ struct AgentActionJournalEntry {
   string origin;
   string summary;
   string outcome;
+};
+
+struct ContentBlockerTestResult {
+  bool valid_request;
+  bool native_mode;
+  bool site_excepted;
+  bool blocked;
+  bool important;
+  string? matched_filter;
+  string? exception;
+  string? list_id;
+  string? redirect;
 };
 
 struct ContentBlockerMutationResult {
@@ -778,6 +794,12 @@ interface PageHandlerFactory {
 };
 
 interface PageHandler {
+  ListAgentChannels() => (string json);
+  ConfigureAgentChannel(string config_json) => (string json);
+  RemoveAgentChannel(string id) => (string json);
+  ApproveAgentChannelPairing(string id, string sender, string code) => (string json);
+  RevokeAgentChannelPairing(string id, string sender) => (string json);
+  SendAgentChannelReply(string id, string reply_id) => (string json);
   GetSettings() => (array<SettingValue> settings);
   SetSetting(string key, string value) => (bool success);
   GetSearchEngines() => (array<SearchEngineInfo> engines);
@@ -999,6 +1021,10 @@ interface PageHandler {
   DeleteAutofillPayment(string id) => (bool success);
 
   GetFilterLists() => (array<FilterListInfo> lists);
+  SetEpisodicMemory(bool enabled,
+                    bool paused,
+                    array<string> excluded_domains) => (bool success);
+  ForgetEpisodeSite(string site) => (int64 deleted_count);
   // `success` mirrors mutation.success for existing JS callers. The structured
   // result carries the bridge error and scheduling truth without optimistic
   // fallback behavior.
@@ -1009,6 +1035,21 @@ interface PageHandler {
       => (bool success, ContentBlockerMutationResult mutation);
 
   RemoveFilterList(string id)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  // Explains how the active rules treat one request (diagnostic only).
+  TestContentBlockerRequest(string url, string source_url, string request_type)
+      => (ContentBlockerTestResult result);
+
+  // The user's hand-written rules (pseudo-list "maho-custom"). Saving blank
+  // text removes them; a rejected save keeps the previous rules.
+  GetCustomFilterRules() => (string rules);
+  SaveCustomFilterRules(string rules)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  // Imports a filter list from the text of a file the user picked in the
+  // page's file chooser. The browser never reads a user-typed path.
+  ImportLocalFilterList(string name, string content)
       => (bool success, ContentBlockerMutationResult mutation);
 
   // Success means compile/install was accepted or coalesced. `stats` is the

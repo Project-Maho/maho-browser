@@ -1,0 +1,51 @@
+diff --git a/chrome/browser/renderer_context_menu/render_view_context_menu.cc b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
+index 8158578..8875ee6 100644
+--- a/chrome/browser/renderer_context_menu/render_view_context_menu.cc
++++ b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
+@@ -6,6 +6,7 @@
+ #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
+ #include "maho/browser/net/maho_translate_injection_handler.h"
+ #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
++#include "maho/browser/ai/maho_selection_ask_dispatch.h"
+ 
+ #include <stddef.h>
+ 
+@@ -1365,6 +1366,16 @@ void RenderViewContextMenu::InitMenu() {
+ 
+   AppendGlicItems();
+ 
++  if (!params_.selection_text.empty() &&
++      !params_.is_editable && params_.page_url.is_valid()) {
++    menu_model_.AddItem(
++        IDC_MAHO_ASK_ABOUT_SELECTION,
++        u"Ask Maho about \u201c" +
++            gfx::TruncateString(params_.selection_text, 32,
++                                gfx::CHARACTER_BREAK) +
++            u"\u201d");
++  }
++
+   if (use_simplified_menu_for_text_selection &&
+       !(params_.has_image_contents && !params_.link_url.is_empty())) {
+     AppendRevisedTextSelectionSection();
+@@ -3478,6 +3489,9 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
+       return navigation_allowed && params_.link_url.is_valid() &&
+              params_.link_url.IsStandard() &&
+              IsOpenLinkAllowedByDlp(params_.link_url);
++    case IDC_MAHO_ASK_ABOUT_SELECTION:
++      return params_.page_url.is_valid() &&
++             !params_.selection_text.empty() && !params_.is_editable;
+     case IDC_MAHO_LINK_OPEN_MAHO_MINI:
+       return navigation_allowed && params_.link_url.is_valid() &&
+              IsOpenLinkAllowedByDlp(params_.link_url);
+@@ -4132,6 +4146,11 @@ void RenderViewContextMenu::ExecuteCommand(int id, int event_flags) {
+       ExecInspectElement();
+       break;
+ 
++    case IDC_MAHO_ASK_ABOUT_SELECTION:
++      maho::AskMahoAboutSelection(
++          GetBrowser(), embedder_web_contents_, params_.page_url,
++          params_.selection_text);
++      break;
+     case IDC_CONTENT_CONTEXT_TRANSLATE:
+       ExecTranslate();
+       break;

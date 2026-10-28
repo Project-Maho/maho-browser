@@ -1296,6 +1296,7 @@ fn settings_update_appearance() {
         autofill: None,
         advanced: None,
         notifications: None,
+        episodic_memory: None,
     });
     assert_eq!(core.get_settings().appearance.sidebar_width, 300.0);
 }

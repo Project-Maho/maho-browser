@@ -3,7 +3,10 @@
 #include "maho/browser/ui/tabs/maho_mru_tab_tracker.h"
 
 #include <memory>
+#include <string>
+#include <vector>
 
+#include "base/containers/flat_map.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
@@ -120,6 +123,43 @@ TEST_F(MahoMruTabTrackerTest, GetMruListForSpaceWithoutCoreReturnsEmpty) {
   auto filtered =
       tracker()->GetMruListForSpace(std::string("unknown-space-id"));
   EXPECT_TRUE(filtered.empty());
+}
+
+// FilterBySpace is the rule set behind "Ctrl+Tab shows no preview": the
+// switcher needs two candidates, and any tab dropped here counts against that.
+TEST(MahoMruSpaceFilterTest, KeepsOnlyTabsMappedToTheSpace) {
+  base::flat_map<std::string, std::string> map = {
+      {"t1", "s1"}, {"t2", "s1"}, {"t3", "s2"}};
+  auto r = MahoMruTabTracker::FilterBySpace({"t1", "t3", "t2"}, map, "s1");
+  EXPECT_EQ((std::vector<size_t>{0, 2}), r.kept);
+  EXPECT_EQ(1u, r.other_space);
+  EXPECT_EQ(0u, r.unmapped);
+  EXPECT_EQ(0u, r.unidentified);
+}
+
+TEST(MahoMruSpaceFilterTest, ClassifiesWhyEachDroppedTabWasDropped) {
+  base::flat_map<std::string, std::string> map = {{"t1", "s1"}, {"t2", "s2"}};
+  auto r = MahoMruTabTracker::FilterBySpace(
+      {"t1", "", "not-in-core", "t2"}, map, "s1");
+  EXPECT_EQ((std::vector<size_t>{0}), r.kept);
+  EXPECT_EQ(1u, r.unidentified);
+  EXPECT_EQ(1u, r.unmapped);
+  EXPECT_EQ(1u, r.other_space);
+}
+
+// A tab the core has not mapped yet is dropped, so a window whose tabs are
+// all unmapped yields zero candidates and the switcher declines. The cache
+// is only rebuilt on tab-strip changes, which is why this is worth logging.
+TEST(MahoMruSpaceFilterTest, UnmappedTabsAreNotCandidates) {
+  base::flat_map<std::string, std::string> map = {{"other", "s1"}};
+  auto r = MahoMruTabTracker::FilterBySpace({"a", "b", "c"}, map, "s1");
+  EXPECT_TRUE(r.kept.empty());
+  EXPECT_EQ(3u, r.unmapped);
+}
+
+TEST(MahoMruSpaceFilterTest, EmptyInputKeepsNothing) {
+  auto r = MahoMruTabTracker::FilterBySpace({}, {}, "s1");
+  EXPECT_TRUE(r.kept.empty());
 }
 
 }  // namespace maho
