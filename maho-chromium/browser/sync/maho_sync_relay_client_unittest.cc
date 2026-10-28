@@ -42,4 +42,21 @@ TEST(MahoSyncRelayClientTest, RecognizesControlFrames) {
             ClassifyMahoSyncRelayFrame(R"({"type":"catchup_done"})"));
 }
 
+TEST(MahoSyncRelayClientTest, RecognizesRoomRetired) {
+  EXPECT_EQ(MahoSyncRelayFrameKind::kRoomRetired,
+            ClassifyMahoSyncRelayFrame(
+                R"({"type":"error","msg":"room_retired"})"));
+  EXPECT_EQ(MahoSyncRelayFrameKind::kInvalid,
+            ClassifyMahoSyncRelayFrame(
+                R"({"type":"error","msg":"room_owned_by_another_user"})"));
+  EXPECT_TRUE(IsMahoSyncRoomRetiredResponse(
+      410, R"({"error":"room_retired","code":"room_retired"})"));
+  EXPECT_TRUE(IsMahoSyncRoomRetiredResponse(410, R"({"code":"room_retired"})"));
+  EXPECT_FALSE(IsMahoSyncRoomRetiredResponse(410, ""));
+  EXPECT_FALSE(IsMahoSyncRoomRetiredResponse(410, R"({"code":"gone"})"));
+  EXPECT_FALSE(IsMahoSyncRoomRetiredResponse(409, R"({"code":"client_held"})"));
+  EXPECT_FALSE(
+      IsMahoSyncRoomRetiredResponse(200, R"({"code":"room_retired"})"));
+}
+
 }  // namespace maho
