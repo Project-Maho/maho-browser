@@ -152,6 +152,8 @@ struct MahoAiRuntimeConfig {
   bool final_confirm;
   bool proactive_mode;
   std::vector<std::string> fs_whitelist_roots;
+  // Parsed `maho.agent.denied_origins` pref (GAP-6). Empty = no site denied.
+  std::vector<std::string> agent_denied_origins;
 };
 
 // Abstract runtime adapter interface. Each concrete adapter owns its own

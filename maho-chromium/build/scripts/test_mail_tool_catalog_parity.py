@@ -30,7 +30,6 @@ EXPECTED_DENIAL_REASONS = frozenset(
         "mail_helper_starting",
         "mail_helper_unavailable",
         "mail_global_policy_denied",
-        "mail_read_consent_required",
     }
 )
 
@@ -167,8 +166,9 @@ class MailToolCatalogParityTest(unittest.TestCase):
         self.assertEqual(len(set(EXPECTED_CANONICAL_IDS.values())), len(EXPECTED_CANONICAL_IDS))
 
     def test_catalog_mutability_does_not_underclassify_authorized_reads(self) -> None:
-        # Account connection testing is intentionally approval-gated despite
-        # being non-mutating; all other ReadOnly capabilities must be reads.
+        # Account connection testing is intentionally classified as a write even
+        # though it is non-mutating; all other ReadOnly capabilities must be
+        # reads.
         exceptions = {"mail_test_connection"}
         read_only = {
             name for name, entry in self.cpp_catalog.items() if entry.mutability == "ReadOnly"
@@ -186,10 +186,13 @@ class MailToolCatalogParityTest(unittest.TestCase):
             self.cpp_source,
             "AuthorizeMailTool(",
             "}  // namespace maho::ai",
-            {"mail_read_allowed", "mail_typed_approval_required"},
+            {"mail_read_allowed", "mail_write_allowed"},
         )
         rust_reasons = _authorization_reason_codes(
-            self.rust_source, "pub fn authorize_mail_tool(", "pub struct PermissionRequest"
+            self.rust_source,
+            "pub fn authorize_mail_tool(",
+            "pub struct PermissionRequest",
+            {"mail_read_allowed", "mail_write_allowed"},
         )
         self.assertEqual(cpp_reasons, EXPECTED_DENIAL_REASONS)
         self.assertEqual(rust_reasons, EXPECTED_DENIAL_REASONS)

@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
@@ -17,6 +18,7 @@
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "base/values.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "url/origin.h"
 
@@ -35,6 +37,11 @@ enum class ControlActivityState {
   kCompleted,
   kFailed,
 };
+
+// True for states after which an activity no longer controls its target
+// (kDisconnected, kCompleted, kFailed). Activities are kept in the service
+// after they end, so control surfaces must filter with this predicate.
+bool IsTerminalControlActivityState(ControlActivityState state);
 
 enum class ControlPlane {
   kLocalAgent,
@@ -155,6 +162,63 @@ struct ControlActivityUpdate {
   std::optional<ActivityReceipt> receipt;
 };
 
+// Consequential agent action persisted to the local-only agent action journal
+// (profile SQLite `agent_action_journal`, 30-day retention, never synced).
+// Journaling is after-the-fact review only: it never prompts or waits.
+struct AgentActionJournalRecord {
+  int64_t timestamp_seconds = 0;
+  std::string session_id;
+  std::string actor;   // "cli" | "mcp" | "panel"
+  std::string action;  // see JournalActionForTool()
+  std::string origin;
+  std::string summary;
+  std::string outcome;  // "completed" | "failed"
+
+  bool operator==(const AgentActionJournalRecord&) const = default;
+};
+
+// Inputs for classifying one tool execution into a journal action kind.
+// Mirrors `classify_journal_action` in maho-agent/src/approval_audit.rs; keep
+// both tables in sync with maho_browser_capability_catalog.def.
+struct JournalActionInput {
+  std::string_view tool_name;
+  // Tool arguments; nullptr = no argument signals.
+  const base::DictValue* arguments = nullptr;
+  // Browser-minted consequence (e.g. "submit" for a click classified as a
+  // form submission). Never model- or MCP-argument-supplied.
+  std::string_view action_consequence;
+  // Committed origin of the page before the action; opaque = unknown.
+  url::Origin current_origin;
+};
+
+// Journal kinds that exist in storage but have no producing tool in the
+// current catalog ("purchase", "mail_delete"). Reserved so a future tool can
+// journal without a schema change; nothing maps to them today.
+bool IsReservedJournalAction(std::string_view action);
+
+// Classifies a tool execution into its journal action kind, or nullopt when
+// it is not consequential (reads, scrolls, snapshots, same-origin nav, ...).
+//   mail_send, mail_queue_email                         -> mail_send
+//   vault_fill_*, browser_type{allow_credentials}       -> credential_typing
+//   browser_type / act_and_observe{type} with submit,
+//     or a click whose browser-minted consequence is
+//     "submit"                                          -> form_submit
+//   browser_navigate / act_and_observe{navigate} to a
+//     different origin than the current page            -> cross_origin_navigation
+//   browser_file_upload_select                          -> file_upload
+std::optional<std::string> ClassifyJournalAction(
+    const JournalActionInput& input);
+
+// Name-only convenience wrapper (no argument signals).
+std::optional<std::string> JournalActionForTool(std::string_view tool_name);
+
+// True for actions that also raise a non-modal after-the-fact toast
+// (purchase, credential typing, mail send).
+bool ShouldShowAgentActionNotice(std::string_view action);
+
+// Journal actor for a control plane / controller kind.
+std::string JournalActorFor(ControlPlane plane, ControllerType controller_type);
+
 class MahoControlActivityService : public KeyedService {
  public:
   class Observer : public base::CheckedObserver {
@@ -189,6 +253,23 @@ class MahoControlActivityService : public KeyedService {
   bool Disconnect(std::string_view session_id, uint64_t event_revision);
   bool RequestImmediateStop(int64_t tab_id);
   void OnTargetClosed(int64_t tab_id);
+
+  // Process-wide sinks installed at browser startup. The writer persists one
+  // record and returns false on failure; the presenter shows a non-modal
+  // toast. Both are optional and must never block.
+  using AgentActionJournalWriter =
+      base::RepeatingCallback<bool(const AgentActionJournalRecord&)>;
+  using AgentActionNoticePresenter =
+      base::RepeatingCallback<void(Profile*, const AgentActionJournalRecord&)>;
+  static void SetAgentActionJournalWriter(AgentActionJournalWriter writer);
+  static void SetAgentActionNoticePresenter(
+      AgentActionNoticePresenter presenter);
+
+  // Best-effort: records `record` (unless the profile is off-the-record) and
+  // raises the notice for purchase/credential/mail-send. A writer failure is
+  // logged and ignored; the agent action is never blocked. Returns whether
+  // the record was persisted.
+  bool RecordAgentAction(const AgentActionJournalRecord& record);
 
   std::optional<ControlActivity> GetActivity(std::string_view session_id) const;
   std::vector<ControlActivity> GetActivities() const;

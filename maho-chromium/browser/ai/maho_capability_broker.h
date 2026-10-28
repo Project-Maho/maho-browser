@@ -63,12 +63,21 @@ struct CapabilityRequestContext {
   std::string fs_path;
   std::vector<std::string> fs_whitelist_roots;
 
-  // Final-confirmation gate input (plan row 5). Browser-minted consequence
-  // classification for this request (e.g. "submit", "ordinary"); empty
-  // means the request is not consequence-scoped and the gate is inert,
-  // except for browser action tools whose missing classification is Unknown
-  // and fails closed to gated. Never model- or MCP-argument-supplied.
+  // Browser-minted consequence classification for this request (e.g.
+  // "submit", "ordinary"), carried for receipts and audit only. It never
+  // gates a request. Never model- or MCP-argument-supplied.
   std::string action_consequence;
+
+  // Per-site agent deny list (GAP-6), parsed from the user's
+  // `maho.agent.denied_origins` pref. A request whose source or destination
+  // origin is covered is refused with agent_site_denied. Empty = inert.
+  std::vector<std::string> agent_denied_origins;
+
+  // Credential origin binding (GAP-6). Set only for requests that put a vault
+  // credential into a page: the vault item's origin. When non-empty it must be
+  // the same origin as `source_origin` (the target frame), else the request is
+  // refused with credential_origin_mismatch. Never an approval prompt.
+  std::string credential_vault_origin;
 };
 
 // Parses a raw session permission-tier string into its canonical form,
@@ -83,16 +92,6 @@ std::string ParseRuntimeConfigTier(std::string_view raw_tier);
 bool FsPathInsideRuntimeWhitelist(
     const std::string& path,
     const std::vector<std::string>& whitelist_roots);
-
-// Final-confirmation gate classification (plan row 5). Returns true when the
-// resolved consequence class must obtain a user confirmation before commit
-// under final_confirm=true: submit, purchase_or_transfer, account_security,
-// credential_fill, file_transfer, destructive. "ordinary" and "new_origin"
-// (navigation is reversible) are free; unknown, unrecognized, or empty input
-// fails closed to gated. The accepted strings mirror the Rust
-// classify_action_consequence vocabulary in
-// maho/crates/maho-agent/src/permission.rs.
-bool IsFinalConfirmGatedConsequence(std::string_view consequence);
 
 struct CapabilityObligations {
   CapabilityObligations();
@@ -151,6 +150,10 @@ enum class CapabilityDenyReason {
   // maho/crates/maho-agent/src/permission.rs.
   kPermissionTierDeniedWrite,
   kPermissionTierDeniedRead,
+  // GAP-6 deterministic refusals; names mirror the Rust constants
+  // AGENT_SITE_DENIED / CREDENTIAL_ORIGIN_MISMATCH in permission.rs.
+  kAgentSiteDenied,
+  kCredentialOriginMismatch,
 };
 
 struct ApprovalRequest {
@@ -326,6 +329,10 @@ inline constexpr std::string_view CapabilityDenyReasonName(
       return "permission_tier_denied_write";
     case CapabilityDenyReason::kPermissionTierDeniedRead:
       return "permission_tier_denied_read";
+    case CapabilityDenyReason::kAgentSiteDenied:
+      return "agent_site_denied";
+    case CapabilityDenyReason::kCredentialOriginMismatch:
+      return "credential_origin_mismatch";
   }
   return "none";
 }

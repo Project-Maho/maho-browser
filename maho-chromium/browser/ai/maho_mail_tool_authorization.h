@@ -23,7 +23,7 @@ inline constexpr std::array<std::string_view, 12> kMailWriteAccountTools = {
 
 enum class MailGlobalPolicy { kPrompt, kAllow, kDeny };
 enum class MailToolClass { kNotMail, kRead, kWriteAccount };
-enum class MailAuthorizationAction { kAllow, kRequireApproval, kDeny };
+enum class MailAuthorizationAction { kAllow, kDeny };
 
 struct MailAuthorizationContext {
   bool feature_enabled = false;
@@ -71,18 +71,11 @@ constexpr MailAuthorizationDecision AuthorizeMailTool(
   if (context.global_policy == MailGlobalPolicy::kDeny) {
     return {MailAuthorizationAction::kDeny, "mail_global_policy_denied"};
   }
-  if (tool_class == MailToolClass::kRead) {
-    if (!context.read_allowed) {
-      return {MailAuthorizationAction::kDeny,
-              "mail_read_consent_required"};
-    }
-    return {MailAuthorizationAction::kAllow, "mail_read_allowed"};
-  }
-  // Mail writes/account mutations never inherit global allow. They retain a
-  // typed, per-call approval and backend validation under every non-deny
-  // global policy.
-  return {MailAuthorizationAction::kRequireApproval,
-          "mail_typed_approval_required"};
+  // Agent-driven control is full access: Mail reads and writes/account
+  // mutations are never gated on a consent toggle or a per-call approval.
+  return {MailAuthorizationAction::kAllow, tool_class == MailToolClass::kRead
+                                               ? "mail_read_allowed"
+                                               : "mail_write_allowed"};
 }
 
 }  // namespace maho::ai

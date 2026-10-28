@@ -28,6 +28,7 @@
 #include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/supports_user_data.h"
+#include "base/base_paths.h"
 #include "base/path_service.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/task/bind_post_task.h"
@@ -49,6 +50,9 @@
 #else
 #include "maho/browser/mcp/maho_mcp_socket_server.h"
 #endif
+#if BUILDFLAG(IS_LINUX)
+#include "maho/browser/updates/linux_install_kind.h"
+#endif
 #if BUILDFLAG(IS_MAC)
 #include "base/apple/mach_port_rendezvous_mac.h"
 #endif
@@ -59,6 +63,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/browser_process.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/file_select_helper.h"
 #include "chrome/browser/notifications/notification_common.h"
@@ -72,8 +78,8 @@
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/browser/sessions/session_tab_helper_factory.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -101,11 +107,14 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
+#include "maho/browser/ai/maho_agent_site_policy.h"
 #include "maho/browser/ai/maho_ai_settings_migration.h"
 #include "maho/browser/ai/maho_artifact_registry.h"
 #include "maho/browser/ai/maho_control_activity_service.h"
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"
+#include "maho/browser/ui/webui/maho_ai_provider_oauth.h"
 #include "maho/browser/maho_routines_scheduler.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
@@ -1737,6 +1746,14 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
               return false;
             });
       }
+      // Remember the pre-action origin so the journal can tell a
+      // cross-origin navigation apart after the page has moved.
+      if (params.target && !params.target->origin.opaque()) {
+        if (journal_pre_action_origins_.size() > 256) {
+          journal_pre_action_origins_.clear();
+        }
+        journal_pre_action_origins_[activity_id] = params.target->origin;
+      }
       const bool activity_started = service->StartActivity(params);
       const std::optional<maho::ai::ControlActivity> stored =
           service->GetActivity(activity_id);
@@ -1814,6 +1831,90 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
     service->ApplyUpdate(activity_id, std::move(update));
   }
 
+  void RecordAgentAction(const std::string& activity_id,
+                         const std::string& controller_session_id,
+                         const std::string& controller_type,
+                         const maho::ResolvedMahoMcpTarget& target,
+                         const std::string& tool_name,
+                         const base::DictValue& arguments,
+                         bool failed) override {
+    if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate,
+                 std::string act_id, std::string session_id,
+                 std::string type, maho::ResolvedMahoMcpTarget tgt,
+                 std::string tool, base::DictValue args, bool did_fail) {
+                if (delegate) {
+                  delegate->RecordAgentAction(act_id, session_id, type, tgt,
+                                              tool, args, did_fail);
+                }
+              },
+              ui_weak_ptr_, activity_id, controller_session_id,
+              controller_type, target, tool_name, arguments.Clone(), failed));
+      return;
+    }
+    // Origin of the target tab now (post-action) - used as the journal
+    // origin when no pre-action origin was captured.
+    url::Origin post_action_origin;
+    if (target.valid) {
+      ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+          [&post_action_origin, &target](BrowserWindowInterface* browser) {
+            if (!browser || browser->GetSessionID().id() != target.browser_id ||
+                !browser->GetTabStripModel()) {
+              return true;
+            }
+            content::WebContents* contents =
+                browser->GetTabStripModel()->GetActiveWebContents();
+            if (contents) {
+              post_action_origin =
+                  contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
+            }
+            return false;
+          });
+    }
+    url::Origin pre_action_origin;
+    if (auto it = journal_pre_action_origins_.find(activity_id);
+        it != journal_pre_action_origins_.end()) {
+      pre_action_origin = it->second;
+      journal_pre_action_origins_.erase(it);
+    }
+    maho::ai::JournalActionInput input;
+    input.tool_name = tool_name;
+    input.arguments = &arguments;
+    input.current_origin = pre_action_origin;
+    const std::optional<std::string> action =
+        maho::ai::ClassifyJournalAction(input);
+    if (!action) {
+      return;
+    }
+    // GetForProfile returns null for off-the-record profiles, so nothing is
+    // journaled from incognito.
+    auto* service =
+        maho::ai::MahoControlActivityService::GetForProfile(GetProfile());
+    if (!service) {
+      return;
+    }
+    maho::ai::AgentActionJournalRecord record;
+    record.timestamp_seconds = base::Time::Now().ToTimeT();
+    record.session_id = controller_session_id;
+    record.actor = maho::ai::JournalActorFor(
+        maho::ai::ControlPlane::kMcp,
+        controller_type == "automation"
+            ? maho::ai::ControllerType::kAutomation
+            : maho::ai::ControllerType::kRemoteClient);
+    record.action = *action;
+    const url::Origin& shown_origin =
+        pre_action_origin.opaque() ? post_action_origin : pre_action_origin;
+    if (!shown_origin.opaque()) {
+      record.origin = shown_origin.Serialize();
+    }
+    record.summary = tool_name;
+    record.outcome = failed ? "failed" : "completed";
+    service->RecordAgentAction(record);
+  }
+
   void RevokeVaultCredentialLeases() {
     vault_credential_expiry_timer_.Stop();
     vault_credential_handles_.clear();
@@ -1863,70 +1964,7 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
     return vault_credential_handles_.size() + vault_credential_grants_.size();
   }
 
-std::string FormatMailActionDetails(const std::string& action_name,
-                                    const std::string& request_json) {
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(request_json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) {
-    return request_json;
-  }
-  const base::DictValue& dict = parsed->GetDict();
-  std::string formatted;
-
-  if (action_name == "Add Mail Account") {
-    if (const std::string* email = dict.FindString("email")) {
-      formatted += "• Account: " + *email + "\n";
-    }
-    if (const std::string* name = dict.FindString("display_name")) {
-      formatted += "• Name: " + *name + "\n";
-    }
-    if (const std::string* host = dict.FindString("imap_host")) {
-      formatted += "• IMAP: " + *host;
-      if (std::optional<int> port = dict.FindInt("imap_port")) {
-        formatted += ":" + base::NumberToString(*port);
-      }
-      formatted += "\n";
-    }
-    if (const std::string* host = dict.FindString("smtp_host")) {
-      formatted += "• SMTP: " + *host;
-      if (std::optional<int> port = dict.FindInt("smtp_port")) {
-        formatted += ":" + base::NumberToString(*port);
-      }
-      formatted += "\n";
-    }
-    if (dict.FindString("password")) {
-      formatted += "• Password: ••••••••\n";
-    }
-  } else if (action_name == "Send Email" || action_name == "Save Mail Draft" || action_name == "Queue Email") {
-    if (const std::string* to = dict.FindString("to")) {
-      formatted += "• To: " + *to + "\n";
-    }
-    if (const std::string* subject = dict.FindString("subject")) {
-      formatted += "• Subject: " + *subject + "\n";
-    }
-  }
-
-  if (formatted.empty()) {
-    base::DictValue sanitized = dict.Clone();
-    if (sanitized.FindString("password")) {
-      sanitized.Set("password", "••••••••");
-    }
-    if (sanitized.FindString("oauth2_access_token")) {
-      sanitized.Set("oauth2_access_token", "[REDACTED]");
-    }
-    if (sanitized.FindString("oauth2_refresh_token")) {
-      sanitized.Set("oauth2_refresh_token", "[REDACTED]");
-    }
-    base::JSONWriter::WriteWithOptions(
-        sanitized, base::JSONWriter::OPTIONS_PRETTY_PRINT, &formatted);
-  }
-
-  return formatted;
-}
-
   base::RepeatingCallback<Profile*()> mail_profile_resolver_for_testing_;
-  base::RepeatingCallback<bool(const std::string&, const std::string&)>
-      mail_approval_presenter_for_testing_;
 
   Profile* GetMailProfile() {
     return mail_profile_resolver_for_testing_
@@ -1934,42 +1972,13 @@ std::string FormatMailActionDetails(const std::string& action_name,
                : GetProfile();
   }
 
-  bool ConfirmMailWriteAction(const std::string& action_name,
-                              const std::string& details) {
-    if (mail_approval_presenter_for_testing_) {
-      return mail_approval_presenter_for_testing_.Run(action_name, details);
+  std::vector<std::string> GetAgentDeniedOrigins() override {
+    Profile* profile = GetProfile();
+    if (!profile || !profile->GetPrefs()) {
+      return {};
     }
-    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-    Profile* profile = GetMailProfile();
-    auto* adapter = profile
-                        ? MahoUnifiedAgentAdapter::FindForPrefs(profile->GetPrefs())
-                        : nullptr;
-    if (!adapter) {
-      VLOG(1) << "[maho-approval] denied without chat listener: " << action_name;
-      return false;
-    }
-    base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
-    struct Decision {
-      bool approved = false;
-      base::OnceClosure quit;
-    };
-    auto decision = std::make_shared<Decision>();
-    decision->quit = run_loop.QuitClosure();
-    adapter->RequestBoundaryApproval(
-        action_name, "Approve this boundary action: " + action_name,
-        base::BindOnce([](std::shared_ptr<Decision> decision, bool approved) {
-          decision->approved = approved;
-          if (decision->quit) {
-            std::move(decision->quit).Run();
-          }
-        }, decision));
-    base::OneShotTimer timeout;
-    timeout.Start(FROM_HERE, base::Seconds(120), run_loop.QuitClosure());
-    run_loop.Run();
-    decision->quit.Reset();
-    VLOG(1) << "[maho-approval] " << action_name
-            << " approved=" << decision->approved;
-    return decision->approved;
+    return maho::ai::ParseAgentDeniedOrigins(
+        profile->GetPrefs()->GetString(maho::ai_prefs::kAgentDeniedOrigins));
   }
 
   maho::ai::MailAuthorizationContext GetMailAuthorizationContext() override {
@@ -1999,41 +2008,16 @@ std::string FormatMailActionDetails(const std::string& action_name,
     return context;
   }
 
-  bool ConfirmMailToolApproval(std::string_view tool_name,
-                               std::string_view redacted_arguments) override {
-    return ConfirmMailWriteAction(std::string(tool_name),
-                                  std::string(redacted_arguments));
-  }
-
-  bool ConfirmCredentialTypingApproval(
-      std::string_view tool_name,
-      const maho::ResolvedMahoMcpTarget& target) override {
-    const bool approved = ConfirmMailWriteAction(
-        std::string(tool_name), "Use credentials in the selected browser tab.");
-    VLOG(1) << "[maho-approval] credential typing approved=" << approved
-            << " browser: " << target.browser_id << " tab: " << target.tab_id;
-    return approved;
-  }
-
-  bool ConfirmBrowserActionApproval(
-      std::string_view tool_name,
-      const maho::ResolvedMahoMcpTarget& target) override {
-    const bool approved = ConfirmMailWriteAction(
-        std::string(tool_name), "Perform the requested browser boundary action.");
-    VLOG(1) << "[maho-approval] boundary action approved=" << approved
-            << " browser: " << target.browser_id << " tab: " << target.tab_id;
-    return approved;
-  }
-
   maho::MahoMcpFeatureGates GetFeatureGates() override {
     Profile* mail_profile = GetMailProfile();
-    const int32_t tier =
-        maho::GetCore() ? maho_account_get_tier(maho::GetCore()) : 0;
+    // Max tier, or a validated BYOK key, unlocks Routines.
+    const bool routines_entitled =
+        maho::GetCore() && maho_routines_entitled(maho::GetCore());
     return {
         .mail_enabled =
             mail_profile && maho::sidebar_prefs::IsMahoMailEnabled(
                                 mail_profile->GetPrefs()),
-        .routines_enabled = tier >= 2,
+        .routines_enabled = routines_entitled,
         .vault_enabled = maho::GetCore() != nullptr,
     };
   }
@@ -2139,12 +2123,15 @@ std::string FormatMailActionDetails(const std::string& action_name,
           "Maho core unavailable");
       return;
     }
-    int32_t tier = maho_account_get_tier(core);
-    if (tier != 2) {
+    if (!maho_routines_entitled(core)) {
       std::move(callback).Run(
           maho::MahoMcpBrowserDelegate::RoutineRunError::kTierLocked,
-          "Routines are available on Max tier only");
+          "Routines are available on Max tier or with your own API key (BYOK)");
       return;
+    }
+    int32_t tier = maho_account_get_tier(core);
+    if (tier < 0) {
+      tier = 0;
     }
     auto* ctx = new RunRoutineFfiCtx{
         std::move(callback), base::SequencedTaskRunner::GetCurrentDefault()};
@@ -2247,7 +2234,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
 
     coordinator->Dispatch(std::move(dispatch));
 
-    auto* side_panel_ui = browser->GetFeatures().side_panel_ui();
+    auto* side_panel_ui = SidePanelUI::From(browser);
     const bool panel_shown =
         side_panel_ui &&
         side_panel_ui->GetCurrentEntryId() ==
@@ -2341,11 +2328,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailAddAccount(
       const std::string& request_json,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Add Mail Account",
-                                FormatMailActionDetails("Add Mail Account", request_json))) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2368,11 +2350,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailDeleteAccount(
       const std::string& account_id,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Delete Mail Account",
-                                "Account ID: " + account_id)) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2410,11 +2387,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailReconnectAccount(
       const std::string& account_id,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Reconnect Mail Account",
-                                "Account ID: " + account_id)) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2426,11 +2398,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailImportMigrationArchive(
       const std::string& archive_json,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Import Migration Archive",
-                                "Archive JSON: " + archive_json)) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2457,32 +2424,32 @@ std::string FormatMailActionDetails(const std::string& action_name,
 
   void MailSendEmail(
       const std::string& request_json,
-      bool already_authorized,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!already_authorized &&
-        !ConfirmMailWriteAction("Send Email",
-                                FormatMailActionDetails("Send Email", request_json))) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
       return;
     }
-    service->SendEmail(request_json, std::move(callback));
+    // Only agent surfaces (AI panel tool executor, MCP/CLI mail_send) reach
+    // this delegate; user compose calls MahoMailService::SendEmail directly.
+    // Route through the undo-window path with the profile's delay pref.
+    std::string agent_request = request_json;
+    Profile* profile = GetMailProfile();
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(request_json, base::JSON_PARSE_RFC);
+    if (profile && profile->GetPrefs() && parsed && parsed->is_dict()) {
+      parsed->GetDict().Set(
+          "agent_send_delay_seconds",
+          profile->GetPrefs()->GetInteger(
+              maho::ai_prefs::kAgentMailSendDelaySeconds));
+      base::JSONWriter::Write(*parsed, &agent_request);
+    }
+    service->CallBackend("AgentSendEmail", agent_request, std::move(callback));
   }
 
   void MailSaveDraft(
       const std::string& request_json,
-      bool already_authorized,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!already_authorized &&
-        !ConfirmMailWriteAction("Save Mail Draft",
-                                FormatMailActionDetails("Save Mail Draft", request_json))) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2494,15 +2461,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailUpdateDraft(
       const std::string& draft_id,
       const std::string& request_json,
-      bool already_authorized,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!already_authorized &&
-        !ConfirmMailWriteAction(
-            "Update Mail Draft",
-            "Draft ID: " + draft_id + "\nRequest JSON: " + request_json)) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -2514,11 +2473,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
   void MailQueueEmail(
       const std::string& request_json,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
-    if (!ConfirmMailWriteAction("Queue Email",
-                                FormatMailActionDetails("Queue Email", request_json))) {
-      std::move(callback).Run(false, "Permission denied by user");
-      return;
-    }
     maho::MahoMailService* service = GetMailService();
     if (!service) {
       std::move(callback).Run(false, "Mail service unavailable");
@@ -6321,6 +6275,8 @@ std::string FormatMailActionDetails(const std::string& action_name,
   // while its exact token still authorizes kMCP.
   std::map<int64_t, std::unique_ptr<MahoPrivateContextToken>>
       resolved_target_tokens_;
+  // activity_id -> committed origin at activity start (UI thread only).
+  std::map<std::string, url::Origin> journal_pre_action_origins_;
   base::WeakPtr<MahoMcpBrowserDelegateImpl> ui_weak_ptr_;
   base::WeakPtrFactory<MahoMcpBrowserDelegateImpl> weak_factory_{this};
 };
@@ -6334,13 +6290,10 @@ MahoMcpBrowserDelegateImpl* GetMcpBrowserDelegate() {
 
 std::unique_ptr<maho::MahoMcpBrowserDelegate>
 maho::CreateMailDelegateForTesting(
-    base::RepeatingCallback<Profile*()> profile_resolver,
-    base::RepeatingCallback<bool(const std::string&, const std::string&)>
-        approval_presenter) {
+    base::RepeatingCallback<Profile*()> profile_resolver) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   auto delegate = std::make_unique<MahoMcpBrowserDelegateImpl>();
   delegate->mail_profile_resolver_for_testing_ = std::move(profile_resolver);
-  delegate->mail_approval_presenter_for_testing_ = std::move(approval_presenter);
   return delegate;
 }
 
@@ -6435,8 +6388,9 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
             prefs->GetBoolean(maho::welcome::kWelcomeCompleted),
             has_valid_relay_session, has_stored_session));
     const bool gate_value = maho::welcome::IsLoginGateActive(
-        login_gate_bypassed, has_valid_relay_session,
-        prefs->GetBoolean(maho::welcome::kWelcomeCompleted));
+        login_gate_bypassed,
+        prefs->GetBoolean(maho::welcome::kWelcomeCompleted),
+        prefs->GetBoolean(maho::welcome::kLocalOnly));
 
     prefs->SetBoolean(maho::welcome::kLoginGateActive, gate_value);
 
@@ -6847,6 +6801,70 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
     routines_scheduler_ = std::make_unique<maho::MahoRoutinesScheduler>(core_);
     routines_scheduler_->Start();
 
+    // Agent action journal (after-the-fact review, never a gate). The core
+    // is only bound to regular profiles; MahoControlActivityService refuses
+    // off-the-record profiles before the writer runs.
+    maho_agent_action_journal_enable(core_, !profile->IsOffTheRecord());
+    maho::ai::MahoControlActivityService::SetAgentActionJournalWriter(
+        base::BindRepeating(
+            [](const maho::ai::AgentActionJournalRecord& record) {
+              MahoCore* core = maho::GetCore();
+              return core && maho_agent_action_journal_record(
+                                 core, record.timestamp_seconds,
+                                 record.session_id.c_str(),
+                                 record.actor.c_str(), record.action.c_str(),
+                                 record.origin.c_str(),
+                                 record.summary.c_str(),
+                                 record.outcome.c_str());
+            }));
+    maho::ai::MahoControlActivityService::SetAgentActionNoticePresenter(
+        base::BindRepeating([](Profile* notice_profile,
+                               const maho::ai::AgentActionJournalRecord&
+                                   record) {
+          BrowserWindowInterface* target = nullptr;
+          ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+              [&](BrowserWindowInterface* browser) {
+                if (browser && browser->GetProfile() == notice_profile) {
+                  target = browser;
+                  return false;
+                }
+                return true;
+              });
+          Browser* browser = static_cast<Browser*>(target);
+          if (!browser) {
+            return;
+          }
+          std::u16string title;
+          if (record.action == "purchase") {
+            title = u"Agent completed a purchase";
+          } else if (record.action == "credential_typing") {
+            title = u"Agent entered a saved credential";
+          } else {
+            title = u"Agent sent an email";
+          }
+          maho::ShowAgentActionNoticeToast(
+              browser, title,
+              base::UTF8ToUTF16(record.origin.empty() ? record.summary
+                                                      : record.origin) +
+                  u" \u00b7 View agent activity");
+        }));
+
+    // Desktop BYOK keys live in OSCrypt prefs; mirror the saved keys into
+    // maho_core so a validated key unlocks Routines/Skills/deep research/
+    // premium search for Free/Pro accounts across restarts.
+    if (g_browser_process && g_browser_process->os_crypt_async()) {
+      g_browser_process->os_crypt_async()->GetInstance(base::BindOnce(
+          [](base::WeakPtr<Profile> byok_profile,
+             scoped_refptr<os_crypt_async::Encryptor> encryptor) {
+            if (!byok_profile || !encryptor) {
+              return;
+            }
+            maho::ai_oauth::HydrateByokKeysIntoCore(byok_profile->GetPrefs(),
+                                                    *encryptor);
+          },
+          profile->GetWeakPtr()));
+    }
+
     // This core-owning initial regular profile owns the sole process-wide
     // content-blocker updater: construct it, designate it, and start it
     // according to the persisted mode (0 == native; anything else is inert).
@@ -6975,8 +6993,9 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
           prefs->GetBoolean(maho::welcome::kWelcomeCompleted),
           has_valid_relay_session, has_stored_session));
   bool needs_login_gate = maho::welcome::IsLoginGateActive(
-      login_gate_bypassed, has_valid_relay_session,
-      prefs->GetBoolean(maho::welcome::kWelcomeCompleted));
+      login_gate_bypassed,
+      prefs->GetBoolean(maho::welcome::kWelcomeCompleted),
+      prefs->GetBoolean(maho::welcome::kLocalOnly));
 
   // Account escrow: the Vault key follows the signed-in account and is
   // provisioned by the sign-in Sync bootstrap, so an onboarded profile whose
@@ -7028,30 +7047,55 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
         profile, SessionStartupPref(SessionStartupPref::LAST));
   }
 
-  // MCP server
+  // MCP server. maho.mcp.enabled (Settings > Developers) is the off switch:
+  // when false no socket / pipe is created, so no local process can reach the
+  // MCP control surface.
+  if (!prefs->GetBoolean(maho::ai_prefs::kMcpEnabled)) {
+    LOG(INFO) << "MCP: disabled by maho.mcp.enabled; server not started";
+  } else {
 #if BUILDFLAG(IS_WIN)
-  mcp_session_token_ = maho::MahoMcpSessionToken::Create();
-  if (mcp_session_token_) {
-    base::FilePath token_path =
-        maho::MahoMcpSessionToken::GetSessionTokenPath();
-    if (!token_path.empty()) {
-      mcp_session_token_->WriteEncryptedToDisk(token_path);
+    mcp_session_token_ = maho::MahoMcpSessionToken::Create();
+    bool token_persisted = false;
+    if (mcp_session_token_) {
+      base::FilePath token_path =
+          maho::MahoMcpSessionToken::GetSessionTokenPath();
+      token_persisted = !token_path.empty() &&
+                        mcp_session_token_->WriteEncryptedToDisk(token_path);
     }
-  }
-  mcp_pipe_server_ =
-      std::make_unique<maho::MahoMcpPipeServer>(mcp_session_token_.get());
-  content::GetIOThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(base::IgnoreResult(&maho::MahoMcpPipeServer::Start),
-                     base::Unretained(mcp_pipe_server_.get())));
+    if (!token_persisted) {
+      // Fail closed: without a current-user-only token file the pipe must not
+      // accept connections.
+      LOG(ERROR) << "MCP: session token could not be persisted with a "
+                    "current-user-only ACL; pipe server not started";
+      mcp_session_token_.reset();
+    } else {
+      mcp_pipe_server_ =
+          std::make_unique<maho::MahoMcpPipeServer>(mcp_session_token_.get());
+      content::GetIOThreadTaskRunner({})->PostTask(
+          FROM_HERE,
+          base::BindOnce(base::IgnoreResult(&maho::MahoMcpPipeServer::Start),
+                         base::Unretained(mcp_pipe_server_.get())));
+    }
 #else
-  mcp_socket_server_ =
-      std::make_unique<maho::MahoMcpSocketServer>(storage_path_);
-  content::GetIOThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(base::IgnoreResult(&maho::MahoMcpSocketServer::Start),
-                     base::Unretained(mcp_socket_server_.get())));
+#if BUILDFLAG(IS_LINUX)
+    // A self-contained (.tar.gz) install ships the maho CLI beside the
+    // browser binary; register that directory so the CLI is labelled trusted.
+    if (maho::updates::DetectLinuxInstallKind() ==
+        maho::updates::LinuxInstallKind::kSelfContained) {
+      base::FilePath exe_dir;
+      if (base::PathService::Get(base::DIR_EXE, &exe_dir)) {
+        maho::SetTrustedSelfContainedInstallDir(exe_dir);
+      }
+    }
 #endif
+    mcp_socket_server_ =
+        std::make_unique<maho::MahoMcpSocketServer>(storage_path_);
+    content::GetIOThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(base::IgnoreResult(&maho::MahoMcpSocketServer::Start),
+                       base::Unretained(mcp_socket_server_.get())));
+#endif
+  }
 
   maho::RegisterGlobalShortcut(profile);
 

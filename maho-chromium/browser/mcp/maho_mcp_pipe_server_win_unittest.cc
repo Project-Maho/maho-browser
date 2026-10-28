@@ -203,12 +203,6 @@ std::string ScreenshotRequest(int id) {
 
 class MemoryThreadPipeDelegate : public FakePipeDelegate {
  public:
-  bool ConfirmBrowserActionApproval(
-      std::string_view tool_name,
-      const ResolvedMahoMcpTarget& target) override {
-    return approve_fetch && tool_name == "browser_same_origin_fetch" &&
-           target.valid && target.tab_id == 1;
-  }
   void SameOriginFetch(int tab_id, const GURL& url, const std::string& method,
                        const std::string& body, const std::string& headers,
                        SameOriginFetchCallback callback) override {
@@ -225,7 +219,6 @@ class MemoryThreadPipeDelegate : public FakePipeDelegate {
     std::move(callback).Run(std::move(result));
   }
   std::vector<SameOriginFetchCallback> pending;
-  bool approve_fetch = false;
 };
 
 // Wait for the exact kernel event while allowing real server write completions
@@ -300,15 +293,15 @@ class MahoMcpPipeServerWinTest : public testing::Test {
     ASSERT_TRUE(lease.ok) << lease.message;
     ASSERT_TRUE(server_->lease_registry_->IsHeldBy(1, *session_id));
     DeliverPipe(FetchPipeBatch(1));
-    const std::string denied_line = ReadPipeLine();
-    const auto denied =
-        base::JSONReader::Read(denied_line, base::JSON_PARSE_RFC);
-    ASSERT_TRUE(denied && denied->is_dict()) << denied_line;
-    const auto* error = denied->GetDict().FindDict("error");
-    ASSERT_TRUE(error) << denied_line;
-    ASSERT_EQ(error->FindInt("code"), -32008) << denied_line;
-    ASSERT_TRUE(memory_thread_delegate_->pending.empty());
-    memory_thread_delegate_->approve_fetch = true;
+    // Agent-driven control is full access: the fetch is never gated, it is
+    // simply deferred. Complete it once so later batches start from a clean
+    // admission state.
+    ASSERT_EQ(memory_thread_delegate_->pending.size(), 1u);
+    memory_thread_delegate_->CompleteFirst("warm");
+    const std::string warm_line = ReadPipeLine();
+    const auto warm = base::JSONReader::Read(warm_line, base::JSON_PARSE_RFC);
+    ASSERT_TRUE(warm && warm->is_dict()) << warm_line;
+    ASSERT_TRUE(warm->GetDict().FindDict("result")) << warm_line;
   }
 
   void DeliverPipe(const std::string& bytes) {

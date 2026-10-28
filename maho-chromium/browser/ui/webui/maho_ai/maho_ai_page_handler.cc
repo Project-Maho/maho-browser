@@ -2942,7 +2942,7 @@ void MahoAIPageHandler::ClosePanel() {
     return;
   }
 
-  auto* side_panel_ui = browser_->GetFeatures().side_panel_ui();
+  auto* side_panel_ui = SidePanelUI::From(browser_);
   if (!side_panel_ui) {
     return;
   }
@@ -3118,8 +3118,8 @@ void MahoAIPageHandler::SetRuntimeConfig(
   prefs_->SetBoolean(maho::ai_prefs::kFinalConfirm, config->final_confirm);
   prefs_->SetBoolean(maho::ai_prefs::kProactiveMode, config->proactive_mode);
   // Mail read consent shares this pref with chrome://maho-settings, so both
-  // surfaces stay on one source of truth. Mail writes are unaffected: they
-  // keep their per-call typed approval in the Mail authorization table.
+  // surfaces stay on one source of truth. Mail writes are unaffected and are
+  // never gated on it.
   prefs_->SetBoolean(maho::ai_prefs::kMailReadAllowed,
                      config->mail_read_allowed);
   // Also reconcile when the values are unchanged and no pref observer fires.
@@ -3194,9 +3194,9 @@ void MahoAIPageHandler::SetViewMode(maho_ai::mojom::ViewMode mode) {
           collection ? collection->FindTabbedBrowser(/*match_original_profiles=*/false)
                      : nullptr;
       Browser* tabbed_browser = static_cast<Browser*>(tabbed_bwi);
-      if (tabbed_browser && tabbed_browser->GetFeatures().side_panel_ui()) {
+      if (tabbed_browser && SidePanelUI::From(tabbed_browser)) {
         PrepareForViewModeHandoff();
-        tabbed_browser->GetFeatures().side_panel_ui()->Show(
+        SidePanelUI::From(tabbed_browser)->Show(
             SidePanelEntryId::kMahoAiPanel);
         tabbed_browser->GetWindow()->Activate();
       }

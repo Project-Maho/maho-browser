@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "base/time/time.h"
+#include "maho/browser/ai/maho_agent_site_policy.h"
 #include "maho/browser/ai/maho_mail_tool_authorization.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -136,33 +137,23 @@ TEST(MahoCapabilityBrokerTest, PermissionTierReadOnlyDeniesFileWriteAndOutsideRe
   EXPECT_TRUE(read_inside_res.IsPermitted());
 }
 
-TEST(MahoCapabilityBrokerTest, PermissionTierGuardAskGatesOutsideWhitelistAndIsFreeInside) {
+TEST(MahoCapabilityBrokerTest, PermissionTierGuardNeverAsksInsideOrOutsideWhitelist) {
   MahoCapabilityBroker broker;
 
-  // Outside the whitelist, the tier forces the existing approval-token
-  // ask-gate even though the request carries a valid context.
+  // Outside the whitelist the guard tier adds nothing: agent-driven control is
+  // full access, so no approval ask is raised.
   CapabilityRequestContext outside_ctx =
       MakeFileScopedContext("artifact.export", "/etc/passwd");
   outside_ctx.permission_tier = "guard";
   CapabilityEvaluationResult outside_res = broker.Evaluate(outside_ctx);
-  EXPECT_TRUE(outside_res.RequiresApproval());
-  ASSERT_TRUE(outside_res.approval_request.has_value());
-  EXPECT_EQ(outside_res.approval_request->capability_id, "artifact.export");
+  EXPECT_FALSE(outside_res.RequiresApproval());
+  EXPECT_FALSE(outside_res.approval_request.has_value());
+  EXPECT_TRUE(outside_res.IsPermitted());
 
-  // A granted approval token satisfies the ask-gate.
-  CapabilityRequestContext approved_ctx = outside_ctx;
-  approved_ctx.approval_token = "user-ok";
-  CapabilityEvaluationResult approved_res = broker.Evaluate(approved_ctx);
-  EXPECT_TRUE(approved_res.IsPermitted());
-
-  // Inside the whitelist, the tier gate adds nothing beyond the descriptor's
-  // own structural approval (artifact.export is approval-required).
+  // Inside the whitelist the tier gate adds nothing either.
   CapabilityRequestContext inside_ctx =
       MakeFileScopedContext("artifact.export", "/Users/u/Downloads/a.pdf");
   inside_ctx.permission_tier = "guard";
-  CapabilityEvaluationResult inside_no_token = broker.Evaluate(inside_ctx);
-  EXPECT_TRUE(inside_no_token.RequiresApproval());
-  inside_ctx.approval_token = "user-ok";
   EXPECT_TRUE(broker.Evaluate(inside_ctx).IsPermitted());
 
   // A read-only descriptor inside the whitelist is fully free under guard.
@@ -179,12 +170,11 @@ TEST(MahoCapabilityBrokerTest, PermissionTierGuardAskGatesOutsideWhitelistAndIsF
 TEST(MahoCapabilityBrokerTest, PermissionTierFullAccessNeverDisablesStructuralChecks) {
   MahoCapabilityBroker broker;
 
-  // full_access permits out-of-whitelist file operations once structural
-  // obligations (here: artifact.export's approval) are satisfied.
+  // full_access permits out-of-whitelist file operations without an approval
+  // token (no capability carries an approval gate any more).
   CapabilityRequestContext export_ctx =
       MakeFileScopedContext("artifact.export", "/etc/passwd");
   export_ctx.permission_tier = "full_access";
-  export_ctx.approval_token = "user-ok";
   EXPECT_TRUE(broker.Evaluate(export_ctx).IsPermitted());
 
   // ...but structural lease/origin checks are never disabled by any tier.
@@ -213,14 +203,14 @@ TEST(MahoCapabilityBrokerTest, LookupByCanonicalIdAndToolName) {
   EXPECT_EQ(desc2->canonical_id, "input.click");
   EXPECT_EQ(desc2->mutability, CapabilityMutability::kMutable);
   EXPECT_TRUE(RequiresLease(*desc2));
-  // Browser manipulation is full access; only capabilities that leave the
-  // browser boundary carry a descriptor-level approval requirement.
+  // Agent-driven control is full access: no descriptor carries an approval
+  // requirement, whichever surface calls it.
   EXPECT_FALSE(RequiresApproval(*desc2));
 
   const CapabilityDescriptor* desc3 =
       MahoCapabilityBroker::FindCapability("vault.credential.fill");
   ASSERT_NE(desc3, nullptr);
-  EXPECT_TRUE(RequiresApproval(*desc3));
+  EXPECT_FALSE(RequiresApproval(*desc3));
   EXPECT_EQ(desc3->category, CapabilityCategory::kVault);
   EXPECT_EQ(desc3->user_presence_requirement,
             UserPresenceRequirement::kBiometricStrong);
@@ -394,6 +384,85 @@ TEST(MahoCapabilityBrokerTest, OriginPolicyAndDomainBlocklist) {
   EXPECT_EQ(mismatch_res.deny_reason, CapabilityDenyReason::kOriginNotAllowed);
 }
 
+// GAP-6: user-chosen per-site deny list is a deterministic refusal with the
+// agent_site_denied reason (mirrors maho-agent permission::authorize_agent_site).
+TEST(MahoCapabilityBrokerTest, AgentDeniedOriginsRefuseWithSiteDenied) {
+  MahoCapabilityBroker broker;
+  CapabilityRequestContext ctx;
+  ctx.principal = CapabilityPrincipal::MakeInternalAgent("session-1");
+  ctx.surface = CapabilitySurface::kDesktopAgent;
+  ctx.capability_id = "page.read_current";
+  ctx.active_tab_id = 1;
+  ctx.agent_denied_origins =
+      ParseAgentDeniedOrigins(" https://Bank.Example \n\nmail.example, ");
+  ASSERT_EQ(ctx.agent_denied_origins,
+            (std::vector<std::string>{"https://bank.example", "mail.example"}));
+
+  for (const char* origin :
+       {"https://bank.example", "https://login.bank.example",
+        "https://mail.example", "http://mail.example:8080"}) {
+    ctx.source_origin = origin;
+    CapabilityEvaluationResult res = broker.Evaluate(ctx);
+    EXPECT_TRUE(res.IsDenied()) << origin;
+    EXPECT_EQ(res.deny_reason, CapabilityDenyReason::kAgentSiteDenied) << origin;
+    EXPECT_EQ(CapabilityDenyReasonName(res.deny_reason), "agent_site_denied");
+  }
+  for (const char* origin :
+       {"http://bank.example", "https://bank.example:8443",
+        "https://notbank.example", "https://bank.example.evil.net"}) {
+    ctx.source_origin = origin;
+    EXPECT_NE(broker.Evaluate(ctx).deny_reason,
+              CapabilityDenyReason::kAgentSiteDenied)
+        << origin;
+  }
+
+  // Destination origin is also bound.
+  ctx.source_origin = "https://example.org";
+  ctx.destination_origin = "https://bank.example";
+  EXPECT_EQ(broker.Evaluate(ctx).deny_reason,
+            CapabilityDenyReason::kAgentSiteDenied);
+
+  // Default empty list is inert.
+  ctx.agent_denied_origins.clear();
+  ctx.destination_origin.clear();
+  ctx.source_origin = "https://bank.example";
+  EXPECT_TRUE(broker.Evaluate(ctx).IsPermitted());
+}
+
+// GAP-6: credential origin binding refuses a cross-origin target frame with
+// credential_origin_mismatch and never asks.
+TEST(MahoCapabilityBrokerTest, CredentialOriginBindingRefusesMismatch) {
+  MahoCapabilityBroker broker;
+  CapabilityRequestContext ctx;
+  ctx.principal = CapabilityPrincipal::MakeInternalAgent("session-1");
+  ctx.surface = CapabilitySurface::kDesktopAgent;
+  ctx.capability_id = "page.read_current";
+  ctx.active_tab_id = 1;
+  ctx.credential_vault_origin = "https://accounts.example.com";
+
+  ctx.source_origin = "https://accounts.example.com";
+  EXPECT_TRUE(broker.Evaluate(ctx).IsPermitted());
+  ctx.source_origin = "https://Accounts.Example.com:443";
+  EXPECT_TRUE(broker.Evaluate(ctx).IsPermitted());
+
+  for (const char* origin :
+       {"https://evil.example", "http://accounts.example.com",
+        "https://accounts.example.com:8443", "https://login.example.com",
+        "null", ""}) {
+    ctx.source_origin = origin;
+    CapabilityEvaluationResult res = broker.Evaluate(ctx);
+    EXPECT_TRUE(res.IsDenied()) << origin;
+    EXPECT_FALSE(res.RequiresApproval()) << origin;
+    EXPECT_EQ(res.deny_reason, CapabilityDenyReason::kCredentialOriginMismatch)
+        << origin;
+    EXPECT_EQ(CapabilityDenyReasonName(res.deny_reason),
+              "credential_origin_mismatch");
+  }
+
+  EXPECT_TRUE(CredentialOriginMatches("https://a.example/", "https://a.example/login"));
+  EXPECT_FALSE(CredentialOriginMatches("not a url", "https://a.example"));
+}
+
 TEST(MahoCapabilityBrokerTest, UserPresenceAndHardwareProtection) {
   MahoCapabilityBroker broker;
 
@@ -472,27 +541,19 @@ CapabilityRequestContext MakePageReadContext() {
 }
 }  // namespace
 
-TEST(MahoCapabilityBrokerTest, FinalConfirmForcesApprovalForGatedConsequence) {
+TEST(MahoCapabilityBrokerTest, FinalConfirmNeverAsksForGatedConsequence) {
   MahoCapabilityBroker broker;
-  // mail.accounts.list leaves the browser and carries no descriptor-level
-  // approval requirement, so the ask below can only come from the
-  // final-confirm gate: a declared submit consequence is externally visible
-  // and must obtain a token. The same classification inside the browser stays
-  // free — see FinalConfirmFailsClosedOnlyOffBrowser.
+  // A declared submit consequence on an off-browser capability commits
+  // without an approval token: agent-driven control is full access.
   CapabilityRequestContext ctx;
   ctx.principal = CapabilityPrincipal::MakeInternalAgent("session-1");
   ctx.surface = CapabilitySurface::kDesktopAgent;
   ctx.capability_id = "mail.accounts.list";
   ctx.action_consequence = "submit";
   CapabilityEvaluationResult res = broker.Evaluate(ctx);
-  EXPECT_TRUE(res.RequiresApproval());
-  ASSERT_TRUE(res.approval_request.has_value());
-  EXPECT_EQ(res.approval_request->capability_id, "mail.accounts.list");
-
-  // The ask routes through the existing approval-token handshake: a granted
-  // token satisfies it.
-  ctx.approval_token = "user-ok";
-  EXPECT_TRUE(broker.Evaluate(ctx).IsPermitted());
+  EXPECT_FALSE(res.RequiresApproval());
+  EXPECT_FALSE(res.approval_request.has_value());
+  EXPECT_TRUE(res.IsPermitted());
 }
 
 TEST(MahoCapabilityBrokerTest, FinalConfirmKeepsFreeConsequencesFree) {
@@ -509,18 +570,16 @@ TEST(MahoCapabilityBrokerTest, FinalConfirmKeepsFreeConsequencesFree) {
   EXPECT_TRUE(broker.Evaluate(navigation).IsPermitted());
 }
 
-TEST(MahoCapabilityBrokerTest, FinalConfirmFailsClosedOnlyOffBrowser) {
+TEST(MahoCapabilityBrokerTest, FinalConfirmNeverGatesAnyClassification) {
   MahoCapabilityBroker broker;
-  // Off-browser, an explicitly Unknown classification still fails closed into
-  // the approval-token ask-gate, and a granted token satisfies it.
+  // Off-browser, an explicitly Unknown classification no longer fails closed
+  // into an ask.
   CapabilityRequestContext unknown_ctx;
   unknown_ctx.principal = CapabilityPrincipal::MakeInternalAgent("session-1");
   unknown_ctx.surface = CapabilitySurface::kDesktopAgent;
   unknown_ctx.capability_id = "mail.accounts.list";
   unknown_ctx.action_consequence = "unknown";
-  EXPECT_TRUE(broker.Evaluate(unknown_ctx).RequiresApproval());
-
-  unknown_ctx.approval_token = "user-ok";
+  EXPECT_FALSE(broker.Evaluate(unknown_ctx).RequiresApproval());
   EXPECT_TRUE(broker.Evaluate(unknown_ctx).IsPermitted());
 
   // Inside the browser the gate never applies: driving the browser is full
@@ -544,13 +603,14 @@ TEST(MahoCapabilityBrokerTest, FinalConfirmFailsClosedOnlyOffBrowser) {
   EXPECT_TRUE(broker.Evaluate(page_unknown).IsPermitted());
 }
 
-TEST(MahoCapabilityBrokerTest, FinalConfirmFalsePreservesTodayDecisions) {
+TEST(MahoCapabilityBrokerTest, FinalConfirmFlagIsInert) {
   MahoCapabilityBroker broker;
-  // final_confirm=false preserves today's outcomes exactly: the gate is
-  // inert — no new ask for a gated consequence class.
+  // final_confirm is carried for audit only: neither value changes a verdict.
   CapabilityRequestContext ctx = MakePageReadContext();
   ctx.action_consequence = "submit";
   ctx.final_confirm = false;
+  EXPECT_TRUE(broker.Evaluate(ctx).IsPermitted());
+  ctx.final_confirm = true;
   EXPECT_TRUE(broker.Evaluate(ctx).IsPermitted());
 
   // A validated-ordinary browser action still passes under the default
@@ -613,40 +673,42 @@ TEST(MahoMailToolAuthorizationTest, ReasonCodeOrderIsStable) {
   EXPECT_EQ(AuthorizeMailTool("mail_list_emails", down).reason_code,
             "mail_helper_unavailable");
 
-  // 4. A deny policy precedes the read-consent gate.
+  // 4. A deny policy precedes every other gate.
   MailAuthorizationContext policy_deny = MailContextAllOpen();
   policy_deny.global_policy = MailGlobalPolicy::kDeny;
   policy_deny.read_allowed = false;
   EXPECT_EQ(AuthorizeMailTool("mail_list_emails", policy_deny).reason_code,
             "mail_global_policy_denied");
 
-  // 5. Read consent is the last gate for read tools.
+  // 5. Read consent is not a gate any more: reads are allowed without it.
   MailAuthorizationContext no_consent = MailContextAllOpen();
   no_consent.read_allowed = false;
   no_consent.global_policy = MailGlobalPolicy::kPrompt;
+  EXPECT_EQ(AuthorizeMailTool("mail_list_emails", no_consent).action,
+            MailAuthorizationAction::kAllow);
   EXPECT_EQ(AuthorizeMailTool("mail_list_emails", no_consent).reason_code,
-            "mail_read_consent_required");
+            "mail_read_allowed");
   EXPECT_EQ(AuthorizeMailTool("mail_list_emails", MailContextAllOpen()).action,
             MailAuthorizationAction::kAllow);
 }
 
-TEST(MahoMailToolAuthorizationTest, WritesNeverInheritGlobalAllow) {
-  // A global allow plus read consent still resolves writes to a typed,
-  // per-call approval rather than an allow.
+TEST(MahoMailToolAuthorizationTest, WritesNeverAskForApproval) {
+  // Agent-driven control is full access: a global allow plus read consent
+  // resolves writes to an allow, not to a per-call approval.
   EXPECT_EQ(AuthorizeMailTool("mail_send", MailContextAllOpen()).action,
-            MailAuthorizationAction::kRequireApproval);
+            MailAuthorizationAction::kAllow);
   EXPECT_EQ(AuthorizeMailTool("mail_send", MailContextAllOpen()).reason_code,
-            "mail_typed_approval_required");
+            "mail_write_allowed");
   EXPECT_EQ(AuthorizeMailTool("mail_add_account", MailContextAllOpen()).reason_code,
-            "mail_typed_approval_required");
+            "mail_write_allowed");
 
-  // Writes are not subject to the read-consent gate, but the earlier gates
-  // still apply to them in the same order.
+  // Writes are not subject to read consent either.
   MailAuthorizationContext no_consent = MailContextAllOpen();
   no_consent.read_allowed = false;
-  EXPECT_EQ(AuthorizeMailTool("mail_send", no_consent).reason_code,
-            "mail_typed_approval_required");
+  EXPECT_EQ(AuthorizeMailTool("mail_send", no_consent).action,
+            MailAuthorizationAction::kAllow);
 
+  // Structural states still refuse.
   MailAuthorizationContext feature_off = MailContextAllOpen();
   feature_off.feature_enabled = false;
   EXPECT_EQ(AuthorizeMailTool("mail_send", feature_off).reason_code,

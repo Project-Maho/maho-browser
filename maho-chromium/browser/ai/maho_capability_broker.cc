@@ -8,6 +8,7 @@
 #include "base/check.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "maho/browser/ai/maho_agent_site_policy.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
 
 namespace maho::ai {
@@ -22,15 +23,6 @@ std::string ParseRuntimeConfigTier(std::string_view raw_tier) {
   }
   // Fail closed to the session default tier.
   return "guard";
-}
-
-bool IsFinalConfirmGatedConsequence(std::string_view consequence) {
-  // Free classes: ordinary work and navigation escalations (reversible —
-  // the user can navigate back). Everything else — submit,
-  // purchase_or_transfer, account_security, credential_fill, file_transfer,
-  // destructive, and any unknown/unrecognized value — fails closed to
-  // gated so a missing or malformed classification can never auto-pass.
-  return consequence != "ordinary" && consequence != "new_origin";
 }
 
 bool FsPathInsideRuntimeWhitelist(
@@ -164,10 +156,7 @@ CapabilityDescriptor MakeBrowserActionDescriptor(
       (action_contract->sensitivity == BrowserActionSensitivity::kSensitive)
           ? CapabilitySensitivity::kSensitive
           : CapabilitySensitivity::kLow;
-  desc.approval_requirement =
-      (action_contract->approval == BrowserActionApproval::kRequired)
-          ? CapabilityApprovalRequirement::kRequired
-          : CapabilityApprovalRequirement::kNotRequired;
+  desc.approval_requirement = CapabilityApprovalRequirement::kNotRequired;
   desc.lease_requirement =
       (action_contract->lease == BrowserActionLease::kRequired)
           ? CapabilityLeaseRequirement::kRequired
@@ -227,17 +216,9 @@ CapabilityDescriptor MakeCapabilityDescriptor(
   d.missing_policy = missing_policy;
   d.description = description;
 
-  // Browser manipulation is full access: tabs, pages, input, navigation,
-  // history, bookmarks and leases never carry a user-approval gate. Only a
-  // capability that leaves the browser boundary asks the user, and only when
-  // it mutates state or handles credential-class data.
-  const bool mutating_or_credential =
-      d.mutability == CapabilityMutability::kMutable ||
-      d.sensitivity == CapabilitySensitivity::kCredential;
-  d.approval_requirement =
-      (mutating_or_credential && CapabilityLeavesBrowserBoundary(canonical_id))
-          ? CapabilityApprovalRequirement::kRequired
-          : CapabilityApprovalRequirement::kNotRequired;
+  // Agent-driven control is full access: no capability carries a
+  // user-approval gate, whichever surface or controller calls it.
+  d.approval_requirement = CapabilityApprovalRequirement::kNotRequired;
 
   if (tool_name.rfind("lease.", 0) == 0 ||
       tool_name.rfind("browser_heartbeat_lease", 0) == 0 ||
@@ -736,6 +717,28 @@ CapabilityEvaluationResult MahoCapabilityBroker::Evaluate(
   }
 
   // 9. Blocked domains & origin policy check
+  // 9a. User-chosen per-site agent deny list (GAP-6). A deterministic refusal
+  // chosen by the user, never an approval gate; mirrors
+  // maho-agent permission::authorize_agent_site.
+  if (!context.agent_denied_origins.empty() &&
+      (AgentOriginDenied(context.agent_denied_origins,
+                         context.source_origin) ||
+       AgentOriginDenied(context.agent_denied_origins,
+                         context.destination_origin))) {
+    return CapabilityEvaluationResult::Deny(
+        CapabilityDenyReason::kAgentSiteDenied,
+        "agent_site_denied: target site is on the agent deny list");
+  }
+  // 9b. Credential origin binding (GAP-6): a vault credential may only be put
+  // into a frame whose origin matches the vault item's origin.
+  if (!context.credential_vault_origin.empty() &&
+      !CredentialOriginMatches(context.credential_vault_origin,
+                               context.source_origin)) {
+    return CapabilityEvaluationResult::Deny(
+        CapabilityDenyReason::kCredentialOriginMismatch,
+        "credential_origin_mismatch: target frame origin does not match the "
+        "credential origin");
+  }
   if (!context.blocked_domains.empty()) {
     for (const std::string& blocked : context.blocked_domains) {
       if (!context.source_origin.empty() &&
@@ -792,84 +795,21 @@ CapabilityEvaluationResult MahoCapabilityBroker::Evaluate(
   }
 
   // 10.5 Runtime permission-tier gate (plan row 3). Applies only to
-  // file-scoped requests (non-empty fs_path). The structural checks above
-  // always run first: a tier can add a denial or an approval ask, but can
-  // never remove a sandbox, origin, lease, or presence obligation.
-  bool tier_forces_approval = false;
-  if (!context.fs_path.empty()) {
-    const std::string tier = ParseRuntimeConfigTier(context.permission_tier);
-    const bool inside_whitelist = FsPathInsideRuntimeWhitelist(
-        context.fs_path, context.fs_whitelist_roots);
-    if (tier == "read_only") {
-      if (descriptor->mutability == CapabilityMutability::kMutable) {
-        return CapabilityEvaluationResult::Deny(
-            CapabilityDenyReason::kPermissionTierDeniedWrite,
-            "Permission tier read_only denies local file writes");
-      }
-      if (!inside_whitelist) {
-        return CapabilityEvaluationResult::Deny(
-            CapabilityDenyReason::kPermissionTierDeniedRead,
-            "Permission tier read_only denies reads outside the session file whitelist");
-      }
-    } else if (tier == "guard" && !inside_whitelist) {
-      // Free inside whitelist roots; outside, ask-gate through the existing
-      // approval-token handshake below.
-      tier_forces_approval = true;
-    }
-    // full_access and in-whitelist requests fall through unchanged.
-  }
-
-  // 10.6 Final-confirmation gate (plan row 5). Driving the browser is full
-  // access, so this gate never reaches a capability that stays inside the
-  // browser: clicking, typing, scrolling and navigating are allowed outright
-  // however the consequence was classified, and final_confirm is scoped to
-  // capabilities that leave the browser boundary (another broker, the consent
-  // plane, the filesystem, OS-level input). Within that scope, requests
-  // resolving to an externally visible or irreversible consequence class route
-  // through the approval-token ask-gate below. A boundary action tool gates
-  // even without a declared classification: a missing validated context is
-  // Unknown and fails closed to gated. Other boundary descriptors gate only
-  // when a consequence was declared (empty stays inert, mirroring fs_path).
-  // Mail writes additionally gate through the typed mail-authorization path
-  // (maho_mail_tool_authorization.h), which requires per-call approval under
-  // every policy. Like the tier gate, this can only add an ask, never remove a
-  // sandbox, origin, lease, or presence obligation.
-  bool final_confirm_forces_approval = false;
-  if (context.final_confirm &&
-      CapabilityLeavesBrowserBoundary(descriptor->canonical_id)) {
-    const bool is_action_tool =
-        descriptor->browser_action_contract &&
-        descriptor->browser_action_contract->kind ==
-            BrowserActionKind::kAction;
-    if (is_action_tool || !context.action_consequence.empty()) {
-      final_confirm_forces_approval = IsFinalConfirmGatedConsequence(
-          context.action_consequence.empty() ? "unknown"
-                                             : context.action_consequence);
-    }
-  }
-
-  // 11. Approval requirement check
-  if (RequiresApproval(*descriptor) || tier_forces_approval ||
-      final_confirm_forces_approval) {
-    if (context.approval_token.empty()) {
-      ApprovalRequest approval_req;
-      approval_req.capability_id = std::string(descriptor->canonical_id);
-      approval_req.tool_name = std::string(descriptor->tool_name);
-      approval_req.sensitivity = descriptor->sensitivity;
-      approval_req.requested_destination_origin = context.destination_origin;
-      approval_req.target_tab_id = (context.target_tab_id >= 0)
-                                       ? context.target_tab_id
-                                       : context.active_tab_id;
-      approval_req.description = std::string(descriptor->description);
-      return CapabilityEvaluationResult::RequiresApproval(
-          std::move(approval_req), BuildObligations(*descriptor));
-    }
-    if (context.approval_token == "invalid" ||
-        context.approval_token == "rejected" ||
-        context.approval_token == "denied") {
+  // file-scoped requests (non-empty fs_path). Only the explicit read_only tier
+  // can deny; agent-driven control never waits on an approval ask, so guard
+  // and full_access fall through unchanged.
+  if (!context.fs_path.empty() &&
+      ParseRuntimeConfigTier(context.permission_tier) == "read_only") {
+    if (descriptor->mutability == CapabilityMutability::kMutable) {
       return CapabilityEvaluationResult::Deny(
-          CapabilityDenyReason::kInvalidApprovalToken,
-          "Approval token is invalid or was rejected by user");
+          CapabilityDenyReason::kPermissionTierDeniedWrite,
+          "Permission tier read_only denies local file writes");
+    }
+    if (!FsPathInsideRuntimeWhitelist(context.fs_path,
+                                      context.fs_whitelist_roots)) {
+      return CapabilityEvaluationResult::Deny(
+          CapabilityDenyReason::kPermissionTierDeniedRead,
+          "Permission tier read_only denies reads outside the session file whitelist");
     }
   }
 

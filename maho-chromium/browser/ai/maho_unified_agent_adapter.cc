@@ -4,6 +4,7 @@
 #pragma allow_unsafe_buffers
 #endif
 
+#include "maho/browser/ai/maho_agent_site_policy.h"
 #include "maho/browser/ai/maho_capability_broker.h"
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
 
@@ -72,48 +73,6 @@ namespace {
 
 std::string GenerateTaskId() {
   return base::Uuid::GenerateRandomV4().AsLowercaseString();
-}
-
-std::string NormalizeApprovalPolicyForPayload(const std::string& policy) {
-  std::string normalized = base::ToLowerASCII(policy);
-  normalized = base::TrimWhitespaceASCII(normalized, base::TRIM_ALL);
-  if (normalized == "prompt" || normalized == "ask" ||
-      normalized == "default") {
-    return "prompt";
-  }
-  if (normalized == "allow" || normalized == "allow-all" ||
-      normalized == "allow_all" || normalized == "yolo") {
-    return "allow_all";
-  }
-  if (normalized == "allow-mcp" || normalized == "allow_mcp") {
-    return "allow_mcp";
-  }
-  if (normalized == "deny-sensitive" || normalized == "deny_sensitive") {
-    return "deny_sensitive";
-  }
-  if (normalized == "deny" || normalized == "deny-all" ||
-      normalized == "deny_all") {
-    return "deny_all";
-  }
-  return "deny_all";
-}
-
-std::string CurrentApprovalPolicyForPayload(PrefService* prefs) {
-  if (!prefs) {
-    return "prompt";
-  }
-  return NormalizeApprovalPolicyForPayload(
-      prefs->GetString(maho::ai_prefs::kApprovalPolicy));
-}
-
-std::string SensitivityForToolPayload(const std::string& tool) {
-  const maho::ai::BrowserActionContract* contract =
-      maho::ai::FindBrowserActionContract(tool);
-  if (contract &&
-      contract->sensitivity == maho::ai::BrowserActionSensitivity::kLow) {
-    return "read_only";
-  }
-  return "sensitive";
 }
 
 std::string ClassifyActionConsequence(const std::string& tool,
@@ -1011,6 +970,8 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
         prefs_->GetBoolean(maho::ai_prefs::kFinalConfirm);
     runtime_config_.proactive_mode =
         prefs_->GetBoolean(maho::ai_prefs::kProactiveMode);
+    runtime_config_.agent_denied_origins = maho::ai::ParseAgentDeniedOrigins(
+        prefs_->GetString(maho::ai_prefs::kAgentDeniedOrigins));
   }
   SetRuntimeConfig(runtime_config_);
 
@@ -1588,95 +1549,22 @@ MahoUnifiedAgentAdapter::CreatePermissionDecisionTaskForTesting(
 }
 
 std::optional<PromptDecision> MahoUnifiedAgentAdapter::EvaluatePermissionSync(
-    const std::string& tool,
-    const std::string& extension_id,
-    const std::string& consequence) {
+    const std::string& /*tool*/,
+    const std::string& /*extension_id*/,
+    const std::string& /*consequence*/) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // No shell_exec hard-deny (plan D4/SC6). This is the single gate for all
-  // agent permission calls — its only caller is DecidePermissionOnUiThread —
-  // serving both desktop sessions (empty extension id) and extension sessions
-  // (ext_* ids), so there is no extension-only surface to keep a divergent
-  // deny for. shell_exec classifies as "unclassified" (no browser-registry
-  // descriptor), so desktop calls reach the approval card only under an
-  // explicit "prompt" policy and are denied under every other policy by the
-  // fail-closed ladder below; extension sessions get the same interactive
-  // consent as any other sensitive tool. The read_only kernel tier gate still
-  // refuses shell_exec outright before this function ever runs.
-
-  // 0. Global approval policy override.
-  if (consequence == "ordinary") {
-    return PromptDecision::kAllow;
+  // 0. Agent-driven operations are never blocked by an approval prompt or a
+  // consent card: no tool waits on the user, whichever surface issued the call.
+  // The explicit "deny" approval policy is the only thing that refuses here,
+  // and it is a user-chosen kill switch, not a per-call gate. Structural
+  // denials that are not approval prompts (read_only runtime tier, missing
+  // feature, unknown tool) still run in the broker and the Rust permission
+  // layer before this point.
+  if (prefs_ && prefs_->GetString(maho::ai_prefs::kApprovalPolicy) == "deny") {
+    return PromptDecision::kDeny;
   }
-  if (consequence == "boundary" || consequence == "credential_fill") {
-    return std::nullopt;
-  }
-  std::string global_policy;
-  if (prefs_) {
-    global_policy = prefs_->GetString(maho::ai_prefs::kApprovalPolicy);
-    if (global_policy == "deny") {
-      return PromptDecision::kDeny;
-    }
-    if (global_policy == "allow" && consequence == "ordinary") {
-      return PromptDecision::kAllow;
-    }
-  }
-
-  if (tool == "read_current_page" || tool == "get_selected_text" ||
-      tool == "get_active_tab" || tool == "search_in_page" ||
-      tool == "extract_structured_page_context") {
-    return PromptDecision::kAllow;
-  }
-
-  // Canonical browser actions are consequence-authorized per call. Ordinary
-  // interaction can proceed without a modal; every consequential or unknown
-  // target bypasses persistent/session grants and reaches the approval broker.
-  // Origin, tab, lease, gesture, Vault, and Mail checks remain downstream.
-  if (consequence == "ordinary") {
-    return PromptDecision::kAllow;
-  }
-  if (consequence != "unclassified") {
-    return std::nullopt;
-  }
-
-  if (extension_id.empty()) {
-    // Desktop agent calls carry an empty extension id. web_fetch/web_search are
-    // read-only public web retrieval, which product policy treats as needing no
-    // per-call consent; their own URL validation is the enforcing boundary.
-    // shell_exec is deliberately absent from this no-consent set and must
-    // stay absent: as a write-class kernel tool it needs an explicit "prompt"
-    // policy to reach the approval card and is denied under any other policy
-    // (fail-closed default preserved; plan D4/SC6).
-    if (tool != "fs_read" && tool != "web_fetch" && tool != "web_search") {
-      // Under the "prompt" (ask) policy, route sensitive desktop-agent tools to
-      // the interactive approval broker (chat approval card, or native dialog
-      // fallback) so the user can approve per call. Any other/unset policy
-      // keeps the safe default deny.
-      if (global_policy != "prompt") {
-        return PromptDecision::kDeny;
-      }
-    }
-  }
-
-  // 1. Persistent grants in prefs.
-  if (prefs_) {
-    const auto& grants = prefs_->GetDict(maho::ai_prefs::kAgentToolGrants);
-    const auto* tool_list = grants.FindList(extension_id);
-    if (tool_list) {
-      for (const auto& item : *tool_list) {
-        if (item.is_string() && item.GetString() == tool) {
-          return PromptDecision::kAllow;
-        }
-      }
-    }
-  }
-
-  // 2. Session-level grants.
-  if (session_grants_.contains(tool)) {
-    return PromptDecision::kAllow;
-  }
-
-  return std::nullopt;
+  return PromptDecision::kAllow;
 }
 
 void MahoUnifiedAgentAdapter::DecidePermissionOnUiThread(
@@ -1705,49 +1593,10 @@ void MahoUnifiedAgentAdapter::DecidePermissionOnUiThread(
     return;
   }
 
-  // Canonical WebUI approval broker: when a live runtime event consumer is
-  // attached, park this request under an unguessable id and publish a safe
-  // kApprovalRequest event (tool name only, never raw arguments). The worker
-  // stays blocked until RespondToApproval resolves it exactly once.
-  if (active_turn_ && active_turn_->on_event) {
-    std::string approval_id = GenerateApprovalId();
-    state->approval_policy = CurrentApprovalPolicyForPayload(prefs_);
-    state->sensitivity = SensitivityForToolPayload(tool);
-    state->page_derived_justification = page_derived_justification;
-    pending_approvals_[approval_id] = state;
-
-    MahoAiRuntimeEvent event;
-    event.type = MahoAiRuntimeEventType::kApprovalRequest;
-    event.text = tool;
-    event.payload.Set("approval_id", approval_id);
-    event.payload.Set("description",
-                      "The agent is requesting to run a sensitive tool.");
-    event.payload.Set("related_tool_name", tool);
-    event.payload.Set("approval_policy", state->approval_policy);
-    event.payload.Set("sensitivity", state->sensitivity);
-    event.payload.Set("approval_state", "pending");
-    event.payload.Set("consequence", state->consequence);
-    event.payload.Set("page_derived_justification", page_derived_justification);
-    EmitEvent(std::move(event));
-    return;
-  }
-
-  // No chat listener means denial, never an OS dialog.
+  // EvaluatePermissionSync always settles the decision (allow unless the
+  // explicit "deny" policy is set), so no request is ever parked for a card.
   state->decision = PromptDecision::kDeny;
   state->event.Signal();
-}
-
-void MahoUnifiedAgentAdapter::ShowPermissionPromptOnUIThread(
-    const std::string& extension_id,
-    const std::string& tool_name,
-    base::OnceCallback<void(PromptDecision)> callback) {
-  if (permission_prompt_override_for_testing_) {
-    std::move(callback).Run(
-        permission_prompt_override_for_testing_.Run(extension_id, tool_name));
-    return;
-  }
-
-  std::move(callback).Run(PromptDecision::kDeny);
 }
 
 MahoAgentPermissionDecision MahoUnifiedAgentAdapter::RunPermissionDialogForTest(
@@ -2096,23 +1945,6 @@ MahoAgentToolResult MahoUnifiedAgentAdapter::OnAgentBrowserTool(
   if (tool_name_str == "tools/list") {
     return MakeJsonToolResult(preflight->result_json);
   }
-  preflight->requires_approval |=
-      ClassifyActionConsequence(preflight->executor_tool_name,
-                                args_json_str) == "credential_fill";
-  if (preflight->requires_approval) {
-    MahoAgentPermissionDecision permission =
-        OnAgentPermission(user_data, preflight->executor_tool_name.c_str(),
-                          args_json);
-    if (permission != MahoAgentPermissionDecision_Allow) {
-      return MakeErrorToolResult("policy_denied",
-                                 "Browser action denied by approval policy",
-                                 false);
-    }
-    if (pointee->cancelled.load(std::memory_order_acquire)) {
-      return MakeErrorToolResult("transport_unavailable",
-                                 "Agent browser tool callback is stale", true);
-    }
-  }
 #if !defined(NDEBUG)
   {
     // Never write raw tool arguments to a fixed world-readable path: they can
@@ -2132,14 +1964,14 @@ MahoAgentToolResult MahoUnifiedAgentAdapter::OnAgentBrowserTool(
   if (pointee->task_runner->RunsTasksInCurrentSequence()) {
     CreateBrowserToolTask(pointee->owner, generation,
                           preflight->executor_tool_name, args_json_str,
-                          call_state, preflight->requires_approval)
+                          call_state)
         .Run();
   } else {
     pointee->task_runner->PostTask(
         FROM_HERE,
         CreateBrowserToolTask(pointee->owner, generation,
                               preflight->executor_tool_name, args_json_str,
-                              call_state, preflight->requires_approval));
+                              call_state));
   }
 
   std::string result_json;
@@ -2217,13 +2049,6 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolPreflightTask(
           return;
         }
         state->executor_tool_name = descriptor->tool_name;
-        const auto* contract =
-            maho::ai::FindBrowserActionContract(state->executor_tool_name);
-        state->requires_approval =
-            maho::ai::CapabilityLeavesBrowserBoundary(descriptor->canonical_id) ||
-            (contract && maho::ai::RequiresApproval(*contract)) ||
-            MahoBrowserToolExecutor::IsMailWriteTool(
-                state->executor_tool_name);
         state->done.Signal();
       },
       std::move(adapter), generation, std::move(capability_id),
@@ -2235,13 +2060,11 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
     uint64_t generation,
     std::string tool_name,
     std::string args_json,
-    std::shared_ptr<BrowserToolCallState> state,
-    bool browser_action_preapproved) {
+    std::shared_ptr<BrowserToolCallState> state) {
   return base::BindOnce(
       [](base::WeakPtr<MahoUnifiedAgentAdapter> adapter, uint64_t generation,
          std::string tool_name, std::string args_json_in,
-         std::shared_ptr<BrowserToolCallState> state,
-         bool browser_action_preapproved) {
+         std::shared_ptr<BrowserToolCallState> state) {
         if (!adapter) {
           if (!state->cancelled.load()) {
             state->result_error = "Agent browser tool callback is stale";
@@ -2337,22 +2160,13 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
           params.controller_type = maho::ai::ControllerType::kUserAgent;
           params.control_plane = maho::ai::ControlPlane::kLocalAgent;
           params.category = maho::ai::ActivityCategory::kBrowsing;
-          params.sensitivity = browser_action_preapproved
-                                   ? maho::ai::ActivitySensitivity::kMedium
-                                   : maho::ai::ActivitySensitivity::kLow;
+          params.sensitivity = maho::ai::ActivitySensitivity::kMedium;
           if (target) {
             params.target = std::move(target);
           }
           params.start_receipt = {maho::ai::ActivityReceiptKind::kStart,
                                   "started", "[redacted]"};
           activity_service->StartActivity(std::move(params));
-          if (browser_action_preapproved) {
-            maho::ai::ControlActivityUpdate update;
-            update.event_revision = 2;
-            update.state = maho::ai::ControlActivityState::kActing;
-            update.approval_outcome = maho::ai::ApprovalOutcome::kApproved;
-            activity_service->ApplyUpdate(activity_id, std::move(update));
-          }
         }
         auto receipt_context =
             std::make_shared<MahoBrowserToolRegistry::ExecutionReceiptContext>();
@@ -2364,8 +2178,7 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
         receipt_context->control_plane = "local_agent";
         receipt_context->target_tab_id = target_tab_id;
         receipt_context->target_origin = target_origin;
-        receipt_context->approval =
-            browser_action_preapproved ? "approved" : "not_requested";
+        receipt_context->approval = "not_requested";
         receipt_context->outcome_status = "completed";
         receipt_context->outcome_code = "completed";
         receipt_context->started_at_seconds =
@@ -2382,31 +2195,6 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
                 : adapter->permission_extension_id_;
         auto executor = std::make_shared<MahoBrowserToolExecutor>(
             browser, /*browser_tools_v1_enabled=*/true, adapter->ai_gate_,
-            base::BindRepeating(
-                [](bool browser_action_preapproved,
-                   base::WeakPtr<MahoUnifiedAgentAdapter> adapter,
-                   uint64_t generation,
-                   const MahoBrowserToolExecutor::BrowserActionAuthorization&
-                       metadata) {
-                  MahoBrowserToolExecutor::BrowserActionApprovalDecision
-                      decision;
-                  if (!adapter || !adapter->IsActiveGeneration(generation)) {
-                    decision.error = "Browser action owner is unavailable";
-                    return decision;
-                  }
-                  if (!metadata.requires_approval) {
-                    decision.approved = true;
-                    return decision;
-                  }
-                  if (!browser_action_preapproved) {
-                    decision.error =
-                        "Browser action was not approved before dispatch";
-                    return decision;
-                  }
-                  decision.approved = true;
-                  return decision;
-                },
-                browser_action_preapproved, adapter, generation),
             nullptr, maho::MahoMcpSession::GetLeaseRegistryForBrowserActions(),
             std::move(browser_action_lease_holder_id),
             // Wave 2A: live pointer to the session runtime config. The
@@ -2415,6 +2203,17 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
             // valid; a fresh executor per tool call keeps tier changes
             // effective on the next call (D9 freshness).
             &adapter->runtime_config_);
+        // Classify for the agent action journal before the action runs, so
+        // cross-origin navigation compares against the pre-action origin.
+        maho::ai::JournalActionInput journal_input;
+        journal_input.tool_name = descriptor->tool_name;
+        journal_input.arguments = &args_dict;
+        if (web_contents) {
+          journal_input.current_origin =
+              web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
+        }
+        std::optional<std::string> journal_action =
+            maho::ai::ClassifyJournalAction(journal_input);
         executor->Execute(
             tool_name, args_dict,
             base::BindOnce(
@@ -2428,7 +2227,10 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
                     std::shared_ptr<
                         MahoBrowserToolRegistry::ExecutionReceiptContext>
                         receipt_context,
+                    std::optional<std::string> journal_action,
                     base::DictValue result) {
+                  const bool tool_failed =
+                      !result.FindBool("ok").value_or(true);
                   // A4: Re-resolve activity_service and browser inside the
                   // completion callback instead of capturing raw pointers
                   // across the async boundary.
@@ -2468,6 +2270,23 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
                         activity_service->ApplyUpdate(activity_id,
                                                       std::move(update));
                       }
+                      // After-the-fact journal entry (succeeded or failed,
+                      // like MCP); best-effort and never blocks the tool
+                      // result below.
+                      if (journal_action) {
+                        maho::ai::AgentActionJournalRecord record;
+                        record.timestamp_seconds = base::Time::Now().ToTimeT();
+                        record.session_id = receipt_context->controller_id;
+                        record.actor = maho::ai::JournalActorFor(
+                            maho::ai::ControlPlane::kLocalAgent,
+                            maho::ai::ControllerType::kUserAgent);
+                        record.action = *journal_action;
+                        record.origin =
+                            receipt_context->target_origin.value_or("");
+                        record.summary = std::string(descriptor->tool_name);
+                        record.outcome = tool_failed ? "failed" : "completed";
+                        activity_service->RecordAgentAction(record);
+                      }
                     }
                   } else if (!state->cancelled.load()) {
                     state->result_error =
@@ -2492,22 +2311,21 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
                   state->done.Signal();
                 },
                 executor, activity_id, adapter, generation,
-                state, descriptor, std::move(receipt_context)));
+                state, descriptor, std::move(receipt_context),
+                std::move(journal_action)));
       },
       std::move(adapter), generation, std::move(tool_name),
-      std::move(args_json), std::move(state), browser_action_preapproved);
+      std::move(args_json), std::move(state));
 }
 
 base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTaskForTesting(
     void* user_data,
     const std::string& tool_name,
     const std::string& args_json,
-    std::shared_ptr<BrowserToolCallState> state,
-    bool browser_action_preapproved) {
+    std::shared_ptr<BrowserToolCallState> state) {
   auto pointee = CallbackHandle::FromUserData(user_data);
   return CreateBrowserToolTask(pointee->owner, pointee->generation, tool_name,
-                               args_json, std::move(state),
-                               browser_action_preapproved);
+                               args_json, std::move(state));
 }
 
 // static

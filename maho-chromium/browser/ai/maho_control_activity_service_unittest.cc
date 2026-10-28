@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "base/functional/bind.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
@@ -220,6 +222,18 @@ TEST_F(MahoControlActivityServiceTest, ReadCanCompleteWithTerminalReceipt) {
   EXPECT_EQ(activity->receipts.back().code, "completed");
 }
 
+TEST(MahoControlActivityStateTest, TerminalStatesNoLongerControlTarget) {
+  EXPECT_FALSE(IsTerminalControlActivityState(ControlActivityState::kReading));
+  EXPECT_FALSE(IsTerminalControlActivityState(ControlActivityState::kActing));
+  EXPECT_FALSE(
+      IsTerminalControlActivityState(ControlActivityState::kWaitingApproval));
+  EXPECT_FALSE(IsTerminalControlActivityState(ControlActivityState::kPaused));
+  EXPECT_TRUE(
+      IsTerminalControlActivityState(ControlActivityState::kDisconnected));
+  EXPECT_TRUE(IsTerminalControlActivityState(ControlActivityState::kCompleted));
+  EXPECT_TRUE(IsTerminalControlActivityState(ControlActivityState::kFailed));
+}
+
 TEST_F(MahoControlActivityServiceTest,
        RedactsSecretsAndRejectsDuplicateTerminalEvent) {
   auto params = StartParams("secret");
@@ -238,6 +252,165 @@ TEST_F(MahoControlActivityServiceTest,
     EXPECT_EQ(receipt.summary.find(kSecret), std::string::npos);
     EXPECT_EQ(receipt.summary, "[redacted]");
   }
+}
+
+AgentActionJournalRecord JournalRecord(std::string action,
+                                       std::string outcome = "completed") {
+  AgentActionJournalRecord record;
+  record.timestamp_seconds = 1700000000;
+  record.session_id = "journal-session";
+  record.actor = "panel";
+  record.action = std::move(action);
+  record.origin = "https://shop.example";
+  record.summary = "agent action";
+  record.outcome = std::move(outcome);
+  return record;
+}
+
+class ScopedJournalSinks {
+ public:
+  ScopedJournalSinks(MahoControlActivityService::AgentActionJournalWriter w,
+                     MahoControlActivityService::AgentActionNoticePresenter p) {
+    MahoControlActivityService::SetAgentActionJournalWriter(std::move(w));
+    MahoControlActivityService::SetAgentActionNoticePresenter(std::move(p));
+  }
+  ~ScopedJournalSinks() {
+    MahoControlActivityService::SetAgentActionJournalWriter({});
+    MahoControlActivityService::SetAgentActionNoticePresenter({});
+  }
+};
+
+std::optional<std::string> Classify(std::string_view tool,
+                                    base::DictValue args,
+                                    std::string_view consequence = {},
+                                    const char* current = nullptr) {
+  JournalActionInput input;
+  input.tool_name = tool;
+  input.arguments = &args;
+  input.action_consequence = consequence;
+  if (current) {
+    input.current_origin = url::Origin::Create(GURL(current));
+  }
+  return ClassifyJournalAction(input);
+}
+
+TEST(MahoAgentActionJournalMappingTest, ClassifiesRealCatalogToolsByArgs) {
+  EXPECT_EQ(Classify("mail_queue_email", base::DictValue()), "mail_send");
+  EXPECT_EQ(Classify("vault_fill_totp", base::DictValue()),
+            "credential_typing");
+  EXPECT_EQ(Classify("browser_type", base::DictValue()
+                                         .Set("allow_credentials", true)
+                                         .Set("submit", true)),
+            "credential_typing");
+  EXPECT_EQ(Classify("browser_type", base::DictValue().Set("submit", true)),
+            "form_submit");
+  EXPECT_FALSE(Classify("browser_type", base::DictValue()).has_value());
+  EXPECT_EQ(Classify("browser_act_and_observe",
+                     base::DictValue().Set("action", "type").Set("submit", true)),
+            "form_submit");
+  EXPECT_EQ(Classify("browser_click", base::DictValue(), "submit"),
+            "form_submit");
+  EXPECT_FALSE(
+      Classify("browser_click", base::DictValue(), "ordinary").has_value());
+  EXPECT_EQ(Classify("browser_navigate",
+                     base::DictValue().Set("url", "https://other.test/x"), {},
+                     "https://example.test"),
+            "cross_origin_navigation");
+  EXPECT_FALSE(Classify("browser_navigate",
+                        base::DictValue().Set("url", "https://example.test/x"),
+                        {}, "https://example.test")
+                   .has_value());
+  EXPECT_FALSE(Classify("browser_navigate",
+                        base::DictValue().Set("url", "https://other.test"))
+                   .has_value())
+      << "unknown current origin is not guessed";
+  EXPECT_EQ(Classify("browser_act_and_observe",
+                     base::DictValue()
+                         .Set("action", "navigate")
+                         .Set("url", "https://other.test"),
+                     {}, "https://example.test"),
+            "cross_origin_navigation");
+  for (const char* phantom :
+       {"browser_form_submit", "browser_submit", "browser_purchase",
+        "browser_checkout", "browser_navigate_cross_origin",
+        "browser_file_upload", "mail_delete", "mail_delete_email",
+        "mail_trash"}) {
+    EXPECT_FALSE(JournalActionForTool(phantom).has_value()) << phantom;
+  }
+  EXPECT_TRUE(IsReservedJournalAction("purchase"));
+  EXPECT_TRUE(IsReservedJournalAction("mail_delete"));
+  EXPECT_FALSE(IsReservedJournalAction("mail_send"));
+}
+
+TEST(MahoAgentActionJournalMappingTest, MapsConsequentialToolsOnly) {
+  EXPECT_EQ(JournalActionForTool("mail_send"), "mail_send");
+  EXPECT_EQ(JournalActionForTool("vault_fill_credential"),
+            "credential_typing");
+  EXPECT_EQ(JournalActionForTool("browser_file_upload_select"),
+            "file_upload");
+  EXPECT_FALSE(JournalActionForTool("browser_scroll").has_value());
+  EXPECT_TRUE(ShouldShowAgentActionNotice("purchase"));
+  EXPECT_TRUE(ShouldShowAgentActionNotice("credential_typing"));
+  EXPECT_TRUE(ShouldShowAgentActionNotice("mail_send"));
+  EXPECT_FALSE(ShouldShowAgentActionNotice("form_submit"));
+  EXPECT_EQ(JournalActorFor(ControlPlane::kLocalAgent,
+                            ControllerType::kUserAgent),
+            "panel");
+  EXPECT_EQ(JournalActorFor(ControlPlane::kMcp, ControllerType::kAutomation),
+            "cli");
+  EXPECT_EQ(JournalActorFor(ControlPlane::kMcp, ControllerType::kRemoteClient),
+            "mcp");
+}
+
+TEST_F(MahoControlActivityServiceTest, RecordsJournalAndRaisesNotice) {
+  std::vector<AgentActionJournalRecord> written;
+  int notices = 0;
+  ScopedJournalSinks sinks(
+      base::BindLambdaForTesting(
+          [&](const AgentActionJournalRecord& r) {
+            written.push_back(r);
+            return true;
+          }),
+      base::BindLambdaForTesting(
+          [&](Profile*, const AgentActionJournalRecord&) { ++notices; }));
+  EXPECT_TRUE(service_.RecordAgentAction(JournalRecord("purchase")));
+  EXPECT_TRUE(service_.RecordAgentAction(JournalRecord("form_submit")));
+  ASSERT_EQ(written.size(), 2u);
+  EXPECT_EQ(notices, 1) << "only purchase/credential/mail-send raise a notice";
+}
+
+TEST_F(MahoControlActivityServiceTest, JournalWriteFailureIsNonBlocking) {
+  int notices = 0;
+  ScopedJournalSinks sinks(
+      base::BindRepeating([](const AgentActionJournalRecord&) { return false; }),
+      base::BindLambdaForTesting(
+          [&](Profile*, const AgentActionJournalRecord&) { ++notices; }));
+  ASSERT_TRUE(service_.StartActivity(StartParams("journal-fail")));
+  EXPECT_FALSE(service_.RecordAgentAction(JournalRecord("mail_send")));
+  // The agent action still completes and the user is still told about it.
+  EXPECT_TRUE(Update("journal-fail", 2, ControlActivityState::kCompleted,
+                     ApprovalOutcome::kNotRequested,
+                     Receipt(ActivityReceiptKind::kResult, "completed", "")));
+  EXPECT_EQ(notices, 1);
+}
+
+TEST(MahoAgentActionJournalOtrTest, NothingRecordedFromOffTheRecordProfile) {
+  content::BrowserTaskEnvironment task_environment;
+  TestingProfile profile;
+  Profile* otr = profile.GetPrimaryOTRProfile(/*create_if_needed=*/true);
+  MahoControlActivityService service(otr);
+  int writes = 0;
+  int notices = 0;
+  ScopedJournalSinks sinks(
+      base::BindLambdaForTesting([&](const AgentActionJournalRecord&) {
+        ++writes;
+        return true;
+      }),
+      base::BindLambdaForTesting(
+          [&](Profile*, const AgentActionJournalRecord&) { ++notices; }));
+  EXPECT_FALSE(service.RecordAgentAction(JournalRecord("purchase")));
+  EXPECT_EQ(writes, 0);
+  EXPECT_EQ(notices, 0);
 }
 
 } // namespace

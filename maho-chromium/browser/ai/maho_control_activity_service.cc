@@ -8,11 +8,13 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile_selections.h"
 #include "content/public/browser/browser_context.h"
+#include "url/gurl.h"
 
 namespace maho::ai {
 namespace {
@@ -56,12 +58,6 @@ class MahoControlActivityServiceFactory : public ProfileKeyedServiceFactory {
     return std::make_unique<MahoControlActivityService>(profile);
   }
 };
-
-bool IsTerminal(ControlActivityState state) {
-  return state == ControlActivityState::kDisconnected ||
-         state == ControlActivityState::kCompleted ||
-         state == ControlActivityState::kFailed;
-}
 
 bool IsValidTarget(const ControlTarget& target) {
   // The origin is allowed to be opaque here: a freshly created tab has no
@@ -112,7 +108,7 @@ bool IsResolvedApproval(ApprovalOutcome approval_outcome) {
 bool IsLegalTransition(ControlActivityState from,
                        ControlActivityState to,
                        ApprovalOutcome approval_outcome) {
-  if (IsTerminal(from) || from == to) {
+  if (IsTerminalControlActivityState(from) || from == to) {
     return false;
   }
   if (to == ControlActivityState::kDisconnected) {
@@ -158,7 +154,126 @@ base::TimeDelta ClampLeaseDuration(base::TimeDelta lease_duration) {
                     MahoControlActivityService::kMaxLeaseDuration);
 }
 
+MahoControlActivityService::AgentActionJournalWriter& JournalWriter() {
+  static base::NoDestructor<MahoControlActivityService::AgentActionJournalWriter>
+      writer;
+  return *writer;
+}
+
+MahoControlActivityService::AgentActionNoticePresenter& NoticePresenter() {
+  static base::NoDestructor<
+      MahoControlActivityService::AgentActionNoticePresenter>
+      presenter;
+  return *presenter;
+}
+
 }  // namespace
+
+namespace {
+
+bool ArgBool(const base::DictValue* args, std::string_view key) {
+  return args && args->FindBool(key).value_or(false);
+}
+
+const std::string* ArgString(const base::DictValue* args,
+                             std::string_view key) {
+  return args ? args->FindString(key) : nullptr;
+}
+
+bool IsCrossOriginTarget(const std::string* target_url,
+                         const url::Origin& current_origin) {
+  if (!target_url || current_origin.opaque()) {
+    return false;
+  }
+  const GURL target(*target_url);
+  if (!target.is_valid()) {
+    return false;
+  }
+  const url::Origin target_origin = url::Origin::Create(target);
+  return !target_origin.opaque() && !target_origin.IsSameOriginWith(current_origin);
+}
+
+}  // namespace
+
+bool IsReservedJournalAction(std::string_view action) {
+  return action == "purchase" || action == "mail_delete";
+}
+
+std::optional<std::string> ClassifyJournalAction(
+    const JournalActionInput& input) {
+  const std::string_view tool = input.tool_name;
+  const base::DictValue* args = input.arguments;
+  if (tool == "mail_send" || tool == "mail_queue_email") {
+    return "mail_send";
+  }
+  if (tool == "vault_fill_credential" || tool == "vault_fill_totp") {
+    return "credential_typing";
+  }
+  if (tool == "browser_file_upload_select") {
+    return "file_upload";
+  }
+  if (tool == "browser_type" || tool == "browser_locator_type") {
+    if (ArgBool(args, "allow_credentials")) {
+      return "credential_typing";
+    }
+    if (ArgBool(args, "submit")) {
+      return "form_submit";
+    }
+    return std::nullopt;
+  }
+  if (tool == "browser_click" || tool == "browser_locator_click" ||
+      tool == "browser_visual_click") {
+    if (input.action_consequence == "submit") {
+      return "form_submit";
+    }
+    return std::nullopt;
+  }
+  if (tool == "browser_act_and_observe") {
+    const std::string* action = ArgString(args, "action");
+    if (!action) {
+      return std::nullopt;
+    }
+    if (*action == "type" && ArgBool(args, "submit")) {
+      return "form_submit";
+    }
+    if (*action == "click" && input.action_consequence == "submit") {
+      return "form_submit";
+    }
+    if (*action == "navigate" &&
+        IsCrossOriginTarget(ArgString(args, "url"), input.current_origin)) {
+      return "cross_origin_navigation";
+    }
+    return std::nullopt;
+  }
+  if (tool == "browser_navigate" &&
+      IsCrossOriginTarget(ArgString(args, "url"), input.current_origin)) {
+    return "cross_origin_navigation";
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> JournalActionForTool(std::string_view tool_name) {
+  return ClassifyJournalAction({.tool_name = tool_name});
+}
+
+bool ShouldShowAgentActionNotice(std::string_view action) {
+  return action == "purchase" || action == "credential_typing" ||
+         action == "mail_send";
+}
+
+std::string JournalActorFor(ControlPlane plane,
+                            ControllerType controller_type) {
+  if (plane == ControlPlane::kLocalAgent) {
+    return "panel";
+  }
+  return controller_type == ControllerType::kAutomation ? "cli" : "mcp";
+}
+
+bool IsTerminalControlActivityState(ControlActivityState state) {
+  return state == ControlActivityState::kDisconnected ||
+         state == ControlActivityState::kCompleted ||
+         state == ControlActivityState::kFailed;
+}
 
 ControlActivity::ControlActivity() = default;
 ControlActivity::ControlActivity(const ControlActivity&) = default;
@@ -275,8 +390,8 @@ bool MahoControlActivityService::BindTarget(std::string_view session_id,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto it = activities_.find(session_id);
   if (it == activities_.end() || it->second.target ||
-      IsTerminal(it->second.state) || !IsValidTarget(target) ||
-      event_revision != it->second.event_revision + 1) {
+      IsTerminalControlActivityState(it->second.state) ||
+      !IsValidTarget(target) || event_revision != it->second.event_revision + 1) {
     return false;
   }
 
@@ -312,7 +427,7 @@ bool MahoControlActivityService::RequestImmediateStop(int64_t tab_id) {
   bool stopped = false;
   const base::TimeTicks now = tick_clock_->NowTicks();
   for (auto& [session_id, activity] : activities_) {
-    if (IsTerminal(activity.state) || !activity.target ||
+    if (IsTerminalControlActivityState(activity.state) || !activity.target ||
         activity.target->tab_id != tab_id) {
       continue;
     }
@@ -338,7 +453,7 @@ void MahoControlActivityService::OnTargetClosed(int64_t tab_id) {
   bool changed = false;
   const base::TimeTicks now = tick_clock_->NowTicks();
   for (auto& [session_id, activity] : activities_) {
-    if (IsTerminal(activity.state) || !activity.target ||
+    if (IsTerminalControlActivityState(activity.state) || !activity.target ||
         activity.target->tab_id != tab_id) {
       continue;
     }
@@ -352,6 +467,40 @@ void MahoControlActivityService::OnTargetClosed(int64_t tab_id) {
   if (changed) {
     ScheduleNextExpiry();
   }
+}
+
+// static
+void MahoControlActivityService::SetAgentActionJournalWriter(
+    AgentActionJournalWriter writer) {
+  JournalWriter() = std::move(writer);
+}
+
+// static
+void MahoControlActivityService::SetAgentActionNoticePresenter(
+    AgentActionNoticePresenter presenter) {
+  NoticePresenter() = std::move(presenter);
+}
+
+bool MahoControlActivityService::RecordAgentAction(
+    const AgentActionJournalRecord& record) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Nothing is recorded from incognito / off-the-record profiles.
+  if (profile_->IsOffTheRecord()) {
+    return false;
+  }
+  bool persisted = false;
+  if (JournalWriter()) {
+    persisted = JournalWriter().Run(record);
+    if (!persisted) {
+      LOG(WARNING) << "[maho-agent-journal] write failed for action="
+                   << record.action << "; agent action continues";
+    }
+  }
+  if (record.outcome == "completed" &&
+      ShouldShowAgentActionNotice(record.action) && NoticePresenter()) {
+    NoticePresenter().Run(profile_, record);
+  }
+  return persisted;
 }
 
 std::optional<ControlActivity> MahoControlActivityService::GetActivity(
@@ -391,7 +540,7 @@ bool MahoControlActivityService::Transition(
   activity.approval_outcome = approval_outcome;
   activity.event_revision = event_revision;
   activity.updated_at = now;
-  activity.lease_expires_at = IsTerminal(state)
+  activity.lease_expires_at = IsTerminalControlActivityState(state)
                                   ? base::TimeTicks()
                                   : now + ClampLeaseDuration(lease_duration);
   if (receipt) {
@@ -414,7 +563,7 @@ void MahoControlActivityService::ScheduleNextExpiry() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   std::optional<base::TimeTicks> next_expiry;
   for (const auto& [session_id, activity] : activities_) {
-    if (IsTerminal(activity.state) || activity.lease_expires_at.is_null()) {
+    if (IsTerminalControlActivityState(activity.state) || activity.lease_expires_at.is_null()) {
       continue;
     }
     if (!next_expiry || activity.lease_expires_at < *next_expiry) {
@@ -437,7 +586,7 @@ void MahoControlActivityService::ExpireLeases() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const base::TimeTicks now = tick_clock_->NowTicks();
   for (auto& [session_id, activity] : activities_) {
-    if (IsTerminal(activity.state) || activity.lease_expires_at.is_null() ||
+    if (IsTerminalControlActivityState(activity.state) || activity.lease_expires_at.is_null() ||
         now < activity.lease_expires_at) {
       continue;
     }
