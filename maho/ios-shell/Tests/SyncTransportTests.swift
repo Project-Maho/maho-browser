@@ -11,8 +11,38 @@ private final class InMemoryRelayAuthStore: RelayAuthStoreProtocol {
     func clearSession() throws { session = nil }
 }
 
+private final class InMemorySyncSeedStore: SyncSeedStoreProtocol {
+    var seed: String?
+    var accountID: String?
+    var clearCount = 0
+
+    func loadSeed(accountID: String?) -> String? {
+        guard self.accountID == accountID else { return nil }
+        return seed
+    }
+
+    func saveSeed(_ seed: String, accountID: String?) throws {
+        self.seed = seed
+        self.accountID = accountID
+    }
+
+    func clearSeed() throws {
+        clearCount += 1
+        seed = nil
+        accountID = nil
+    }
+}
+
 private enum RelayAuthStoreTestError: Error {
     case persistenceFailed
+}
+
+private final class ClearFailingRelayAuthStore: RelayAuthStoreProtocol {
+    var session: RelayAuthSession?
+
+    func loadSession() -> RelayAuthSession? { session }
+    func saveSession(_ session: RelayAuthSession) throws { self.session = session }
+    func clearSession() throws { throw RelayAuthStoreTestError.persistenceFailed }
 }
 
 private final class FailingRelayAuthStore: RelayAuthStoreProtocol {
@@ -142,7 +172,9 @@ private final class StubRelayAPIClient: RelayAPIClientProtocol {
         createdAt: nil
     )
     var bootstrapRequestCount = 0
+    var putBootstrapCount = 0
     var bootstrapUnauthorizedOnce = false
+    var onBootstrapFetch: (() async -> Void)?
 
     func authenticate(
         mode: RelayAuthMode,
@@ -166,6 +198,10 @@ private final class StubRelayAPIClient: RelayAPIClientProtocol {
 
     func getSyncBootstrap(session: RelayAuthSession) async throws -> RelaySyncBootstrap {
         bootstrapRequestCount += 1
+        if let onBootstrapFetch {
+            self.onBootstrapFetch = nil
+            await onBootstrapFetch()
+        }
         if bootstrapUnauthorizedOnce {
             bootstrapUnauthorizedOnce = false
             throw RelayAPIError.unauthorized
@@ -177,7 +213,8 @@ private final class StubRelayAPIClient: RelayAPIClientProtocol {
         _ bootstrap: RelaySyncBootstrap,
         session: RelayAuthSession
     ) async throws -> RelaySyncBootstrap {
-        bootstrap
+        putBootstrapCount += 1
+        return bootstrap
     }
 
     func push(
@@ -230,6 +267,7 @@ final class SyncTransportTests: XCTestCase {
     private var authStore: InMemoryRelayAuthStore!
     private var api: StubRelayAPIClient!
     private var core: FakeSyncCore!
+    private var seedStore: InMemorySyncSeedStore!
     private var transport: SyncTransport!
 
     override func setUp() {
@@ -237,8 +275,9 @@ final class SyncTransportTests: XCTestCase {
         authStore = InMemoryRelayAuthStore()
         api = StubRelayAPIClient()
         core = FakeSyncCore()
+        seedStore = InMemorySyncSeedStore()
         authStore.session = makeSession(accessToken: "access")
-        transport = SyncTransport(authStore: authStore, apiClient: api, core: core)
+        transport = SyncTransport(authStore: authStore, apiClient: api, core: core, seedStore: seedStore)
         transport.connect()
     }
 
@@ -293,6 +332,117 @@ final class SyncTransportTests: XCTestCase {
             Array(core.calls.prefix(5)),
             ["signIn", "configureBootstrap", "setSyncEnabled:true", "roomID", "lease"]
         )
+    }
+
+    func testSecondSyncStartAfterRefreshUsesStoredSeedWithoutBootstrapFetch() async {
+        let first = await transport.runCycle()
+        XCTAssertEqual(first, .completed(pushed: 0, applied: 0))
+        XCTAssertEqual(api.bootstrapRequestCount, 1)
+        XCTAssertEqual(seedStore.seed, api.bootstrap.seed)
+
+        // Relaunch: a fresh transport with an expired access token refreshes first.
+        api.bootstrapRequestCount = 0
+        core.calls = []
+        authStore.session = makeSession(accessToken: "stale", expiresAt: Date().addingTimeInterval(-60))
+        let relaunched = SyncTransport(authStore: authStore, apiClient: api, core: core, seedStore: seedStore)
+        relaunched.connect()
+
+        let second = await relaunched.runCycle()
+
+        XCTAssertEqual(second, .completed(pushed: 0, applied: 0))
+        XCTAssertEqual(api.refreshCount, 1)
+        XCTAssertEqual(api.bootstrapRequestCount, 0)
+        XCTAssertEqual(core.configuredBootstrap?.seed, api.bootstrap.seed)
+        XCTAssertEqual(core.calls.filter { $0 == "configureBootstrap" }.count, 1)
+        relaunched.disconnect()
+    }
+
+    func testMissingStoredSeedFetchesBootstrapExactlyOnceAndStoresIt() async {
+        XCTAssertNil(seedStore.seed)
+
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .completed(pushed: 0, applied: 0))
+        XCTAssertEqual(api.bootstrapRequestCount, 1)
+        XCTAssertEqual(seedStore.seed, api.bootstrap.seed)
+        XCTAssertEqual(seedStore.accountID, makeSession(accessToken: "access").account.id)
+    }
+
+    func testStoredSeedForAnotherAccountIsIgnoredAndRefetched() async {
+        try? seedStore.saveSeed("other-account-seed", accountID: "other-account")
+
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .completed(pushed: 0, applied: 0))
+        XCTAssertEqual(api.bootstrapRequestCount, 1)
+        XCTAssertEqual(core.configuredBootstrap?.seed, api.bootstrap.seed)
+    }
+
+    func testInteractiveSignInFetchesBootstrapEvenWithStoredSeed() async throws {
+        try seedStore.saveSeed("old-seed", accountID: makeSession(accessToken: "x").account.id)
+        authStore.session = nil
+
+        try await transport.activateAuthenticatedSession(makeSession(accessToken: "fresh-access"))
+
+        XCTAssertEqual(api.bootstrapRequestCount, 1)
+        XCTAssertEqual(core.configuredBootstrap?.seed, api.bootstrap.seed)
+        XCTAssertEqual(seedStore.seed, api.bootstrap.seed)
+    }
+
+    func testSignOutRemovesStoredSeed() async {
+        _ = await transport.runCycle()
+        XCTAssertNotNil(seedStore.seed)
+
+        transport.clearRelaySession()
+
+        XCTAssertNil(seedStore.seed)
+        XCTAssertNil(authStore.session)
+        XCTAssertTrue(core.calls.contains("signOut"))
+    }
+
+    func testSignOutDuringInFlightBootstrapFetchDiscardsFetchedSeed() async {
+        api.onBootstrapFetch = { [transport] in
+            await transport?.clearRelaySession()
+        }
+
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(api.bootstrapRequestCount, 1)
+        XCTAssertNil(seedStore.seed, "a fetch that outlived sign-out must not re-persist the seed")
+        XCTAssertNil(core.configuredBootstrap)
+        XCTAssertNotEqual(outcome, .completed(pushed: 0, applied: 0))
+    }
+
+    func testSignOutClearsSeedEvenWhenSessionClearFails() throws {
+        let failingStore = ClearFailingRelayAuthStore()
+        failingStore.session = makeSession(accessToken: "access")
+        try seedStore.saveSeed("seed", accountID: failingStore.session?.account.id)
+        let failingTransport = SyncTransport(
+            authStore: failingStore,
+            apiClient: api,
+            core: core,
+            seedStore: seedStore
+        )
+
+        failingTransport.clearRelaySession()
+
+        XCTAssertNil(seedStore.seed)
+        XCTAssertNotNil(failingStore.session)
+    }
+
+    func testKeychainSeedStoreRoundTripsBindsAccountAndClears() throws {
+        let store = SyncSeedStore(service: "dev.maho.browser.sync-seed.tests.\(UUID().uuidString)")
+        defer { try? store.clearSeed() }
+
+        XCTAssertNil(store.loadSeed(accountID: "account-1"))
+        try store.saveSeed("seed-1", accountID: "account-1")
+        XCTAssertEqual(store.loadSeed(accountID: "account-1"), "seed-1")
+        XCTAssertNil(store.loadSeed(accountID: "account-2"))
+        try store.saveSeed("seed-2", accountID: "account-1")
+        XCTAssertEqual(store.loadSeed(accountID: "account-1"), "seed-2")
+        try store.clearSeed()
+        XCTAssertNil(store.loadSeed(accountID: "account-1"))
+        try store.clearSeed()
     }
 
     func testRevokedAccessTokenRefreshesOnceAndResumesSync() async {
@@ -364,7 +514,12 @@ final class SyncTransportTests: XCTestCase {
 
     func testAuthenticatedActivationRollsBackCoreWhenSessionPersistenceFails() async {
         let failingStore = FailingRelayAuthStore()
-        let failingTransport = SyncTransport(authStore: failingStore, apiClient: api, core: core)
+        let failingTransport = SyncTransport(
+            authStore: failingStore,
+            apiClient: api,
+            core: core,
+            seedStore: seedStore
+        )
 
         do {
             try await failingTransport.activateAuthenticatedSession(makeSession(accessToken: "fresh-access"))
@@ -535,12 +690,163 @@ final class SyncTransportTests: XCTestCase {
         XCTAssertTrue(core.applied.isEmpty)
     }
 
-    private func makeSession(accessToken: String) -> RelayAuthSession {
+    // MARK: - Client-held keys (key_mode client_held / 410 room_retired)
+
+    private static let clientHeldRoomID = "fedcba9876543210fedcba9876543210"
+
+    private func decodeClientHeldBootstrap() throws -> RelaySyncBootstrap {
+        // Exact relay shape: GET /sync/bootstrap for a client-held account has no seed.
+        try RelayCoding.decoder.decode(
+            RelaySyncBootstrap.self,
+            from: Data(#"{"key_mode":"client_held","room_id":"\#(Self.clientHeldRoomID)"}"#.utf8)
+        )
+    }
+
+    func testClientHeldBootstrapDecodesWithoutSeed() throws {
+        let bootstrap = try decodeClientHeldBootstrap()
+        XCTAssertTrue(bootstrap.isClientHeld)
+        XCTAssertNil(bootstrap.seed)
+        XCTAssertNil(bootstrap.version)
+        XCTAssertEqual(bootstrap.roomId, Self.clientHeldRoomID)
+
+        let explicitNull = try RelayCoding.decoder.decode(
+            RelaySyncBootstrap.self,
+            from: Data(#"{"key_mode":"client_held","room_id":"abc","seed_b64":null,"seed":null}"#.utf8)
+        )
+        XCTAssertTrue(explicitNull.isClientHeld)
+        XCTAssertNil(explicitNull.seed)
+    }
+
+    func testClientHeldBootstrapRequiresRecoveryPhraseWithoutGeneratingOrUploadingSeed() async throws {
+        api.bootstrap = try decodeClientHeldBootstrap()
+
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .failed(message: SyncRecoveryRequirement.clientHeldBootstrap.message))
+        XCTAssertEqual(transport.recoveryRequirement, .clientHeldBootstrap)
+        XCTAssertEqual(api.putBootstrapCount, 0, "a client-held account must never get a new seed uploaded")
+        XCTAssertNil(core.configuredBootstrap)
+        XCTAssertNil(seedStore.seed)
+        XCTAssertFalse(core.calls.contains("lease"))
+        XCTAssertTrue(api.pushRequests.isEmpty)
+        XCTAssertTrue(api.pullAfterSequences.isEmpty)
+        XCTAssertTrue(SyncRecoveryRequirement.clientHeldBootstrap.message.contains("24-word recovery phrase"))
+
+        // Paused: the next cycle fails fast without touching the relay.
+        api.bootstrapRequestCount = 0
+        let paused = await transport.runCycle()
+        XCTAssertEqual(paused, .failed(message: SyncRecoveryRequirement.clientHeldBootstrap.message))
+        XCTAssertEqual(api.bootstrapRequestCount, 0)
+    }
+
+    func testInteractiveSignInToClientHeldAccountKeepsSessionAndAsksForPhrase() async throws {
+        authStore.session = nil
+        api.bootstrap = try decodeClientHeldBootstrap()
+        let session = makeSession(accessToken: "fresh-access")
+
+        try await transport.activateAuthenticatedSession(session)
+
+        XCTAssertEqual(authStore.loadSession(), session)
+        XCTAssertEqual(transport.recoveryRequirement, .clientHeldBootstrap)
+        XCTAssertEqual(api.putBootstrapCount, 0)
+        XCTAssertNil(core.configuredBootstrap)
+        XCTAssertFalse(core.calls.contains("signOut"))
+    }
+
+    func testClientHeldAccountSyncsAfterMatchingRecoveryPhraseJoin() async throws {
+        api.bootstrap = try decodeClientHeldBootstrap()
+        _ = await transport.runCycle()
+        XCTAssertEqual(transport.recoveryRequirement, .clientHeldBootstrap)
+
+        // Core joined with the phrase and now derives the account's room.
+        core.roomID = Self.clientHeldRoomID
+        transport.recoveryPhraseJoined()
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .completed(pushed: 0, applied: 0))
+        XCTAssertNil(transport.recoveryRequirement)
+        XCTAssertEqual(api.putBootstrapCount, 0)
+        XCTAssertNil(seedStore.seed)
+        XCTAssertEqual(api.pullAfterSequences, [0])
+    }
+
+    func testWrongRecoveryPhraseShowsMismatchAndDoesNotCreateRoom() async throws {
+        api.bootstrap = try decodeClientHeldBootstrap()
+        _ = await transport.runCycle()
+
+        // The phrase derived some other room than the account's client-held room.
+        core.roomID = "00000000000000000000000000000000"
+        transport.recoveryPhraseJoined()
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .failed(message: SyncRecoveryRequirement.recoveryPhraseMismatch.message))
+        XCTAssertEqual(transport.recoveryRequirement, .recoveryPhraseMismatch)
+        XCTAssertEqual(api.putBootstrapCount, 0)
+        XCTAssertTrue(api.pushRequests.isEmpty)
+        XCTAssertTrue(api.pullAfterSequences.isEmpty)
+    }
+
+    func testRelayMaps410RoomRetiredBodyToRoomRetiredError() {
+        let body = Data(#"{"error":"room_retired","code":"room_retired"}"#.utf8)
+        XCTAssertTrue(RelayAPIClient.isRoomRetired(statusCode: 410, data: body))
+        XCTAssertFalse(RelayAPIClient.isRoomRetired(statusCode: 409, data: body))
+        XCTAssertFalse(RelayAPIClient.isRoomRetired(statusCode: 410, data: Data(#"{"code":"gone"}"#.utf8)))
+    }
+
+    func testRoomRetiredPushPausesSyncAndAsksForRecoveryPhrase() async {
+        let outgoing = envelope(id: "550e8400-e29b-41d4-a716-446655440000")
+        core.outgoing = [outgoing]
+        try? seedStore.saveSeed("escrow-seed", accountID: makeSession(accessToken: "x").account.id)
+        api.pushResponses = [.failure(RelayAPIError.roomRetired)]
+
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .failed(message: SyncRecoveryRequirement.roomRetired.message))
+        XCTAssertEqual(transport.recoveryRequirement, .roomRetired)
+        XCTAssertEqual(
+            SyncRecoveryRequirement.roomRetired.message,
+            "This account now uses your own keys - enter your recovery phrase to continue."
+        )
+        XCTAssertNil(seedStore.seed, "the retired room's escrow seed must not be reused")
+        XCTAssertEqual(core.requeueCount, 1, "the leased batch stays durable for the new room")
+        XCTAssertEqual(core.outgoing, [outgoing])
+        XCTAssertEqual(api.putBootstrapCount, 0)
+
+        let paused = await transport.runCycle()
+        XCTAssertEqual(paused, .failed(message: SyncRecoveryRequirement.roomRetired.message))
+        XCTAssertEqual(api.pushRequests.count, 1, "sync stays paused until the phrase is entered")
+    }
+
+    func testRoomRetiredPullPausesSyncAndAsksForRecoveryPhrase() async {
+        api.pullResponses = [.failure(RelayAPIError.roomRetired)]
+
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .failed(message: SyncRecoveryRequirement.roomRetired.message))
+        XCTAssertEqual(transport.recoveryRequirement, .roomRetired)
+        XCTAssertEqual(core.cursor, 0)
+        XCTAssertEqual(api.putBootstrapCount, 0)
+    }
+
+    func testSignOutClearsRecoveryRequirement() async {
+        api.pullResponses = [.failure(RelayAPIError.roomRetired)]
+        _ = await transport.runCycle()
+        XCTAssertNotNil(transport.recoveryRequirement)
+
+        transport.clearRelaySession()
+
+        XCTAssertNil(transport.recoveryRequirement)
+    }
+
+    private func makeSession(
+        accessToken: String,
+        expiresAt: Date = Date().addingTimeInterval(3_600)
+    ) -> RelayAuthSession {
         RelayAuthSession(
             accessToken: accessToken,
             refreshToken: "refresh",
             tokenType: "Bearer",
-            expiresAt: Date().addingTimeInterval(3_600),
+            expiresAt: expiresAt,
             refreshExpiresAt: Date().addingTimeInterval(86_400),
             account: RelayAccount(email: "sync@example.com", displayName: "Sync"),
             device: RelayDevice(id: "device-1", name: "Test Device", deviceType: "ios"),

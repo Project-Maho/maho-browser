@@ -1,5 +1,9 @@
 // Keep the existing JNI surface intact and add the mobile browser-tool bridge
 // without rewriting the large generated/native binding file.
+// lib.rs is textually included and carries its own test module, so the bridge
+// items below necessarily follow it.
+#![allow(clippy::items_after_test_module)]
+
 include!("lib.rs");
 
 static ANDROID_AGENT_BRIDGE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
@@ -47,8 +51,8 @@ fn call_android_browser_tool_callback(
         "invokeAgentBrowserTool",
         "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
         &[
-            jni::objects::JValue::Object(tool.as_ref()).into(),
-            jni::objects::JValue::Object(arguments.as_ref()).into(),
+            jni::objects::JValue::Object(tool.as_ref()),
+            jni::objects::JValue::Object(arguments.as_ref()),
         ],
     );
     let value = match value {
@@ -167,6 +171,11 @@ impl maho_agent::BrowserToolBridge for AndroidBrowserToolBridge {
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; `session_handle` must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_bridge_BridgeAgent_nativeEnableAgenticBrowsing<
     'local,

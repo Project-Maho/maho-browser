@@ -20,12 +20,39 @@ enum SyncCycleOutcome: Equatable {
     }
 }
 
+/// Why sync is paused until the user enters their 24-word recovery phrase.
+/// The relay no longer holds this account's seed, so the shell must never
+/// generate or upload a replacement bootstrap seed.
+enum SyncRecoveryRequirement: Equatable {
+    /// `GET /sync/bootstrap` returned `key_mode: "client_held"` and this
+    /// device has not joined the account's room yet.
+    case clientHeldBootstrap
+    /// A push or pull answered `410 room_retired`: the account switched to
+    /// client-held keys after this device joined.
+    case roomRetired
+    /// A recovery phrase was entered but it derives a different room than the
+    /// account's client-held room.
+    case recoveryPhraseMismatch
+
+    var message: String {
+        switch self {
+        case .clientHeldBootstrap:
+            return "This account uses your own keys \u{2014} enter your 24-word recovery phrase to join sync."
+        case .roomRetired:
+            return "This account now uses your own keys - enter your recovery phrase to continue."
+        case .recoveryPhraseMismatch:
+            return "That recovery phrase does not match this account. Enter this account's 24-word recovery phrase to join sync."
+        }
+    }
+}
+
 /// Errors raised by the transport itself (as opposed to relay/core errors).
 enum SyncTransportError: LocalizedError, Equatable {
     case notAuthenticated
     case sessionExpired
     case cancelled
     case protocolViolation(String)
+    case recoveryPhraseRequired(SyncRecoveryRequirement)
 
     var errorDescription: String? {
         switch self {
@@ -37,6 +64,8 @@ enum SyncTransportError: LocalizedError, Equatable {
             return "Sync was cancelled."
         case .protocolViolation(let detail):
             return "Relay sync protocol error: \(detail)"
+        case .recoveryPhraseRequired(let requirement):
+            return requirement.message
         }
     }
 }
@@ -74,23 +103,35 @@ final class SyncTransport {
     private let authStore: RelayAuthStoreProtocol
     private let apiClient: RelayAPIClientProtocol
     private let core: SyncCoreClient
+    private let seedStore: SyncSeedStoreProtocol
     private let log = Logger(subsystem: "dev.maho.browser", category: "SyncTransport")
 
     private var isStarted = false
     private var shouldEnableCoreSync = false
     private var runningCycle: Task<SyncCycleOutcome, Never>?
     private var hasHydratedSnapshot = false
+    /// Bumped on every sign-out so a bootstrap fetch that was in flight when the
+    /// session was cleared cannot re-persist its seed afterwards.
+    private var sessionGeneration = 0
 
     private(set) var lastCycleOutcome: SyncCycleOutcome?
+    /// Non-nil while sync is paused waiting for the recovery phrase. Cycles
+    /// fail fast with the requirement message until `recoveryPhraseJoined()`.
+    private(set) var recoveryRequirement: SyncRecoveryRequirement?
+    /// Set by `recoveryPhraseJoined()` so a room mismatch on the next bootstrap
+    /// check is reported as a wrong phrase rather than a missing one.
+    private var awaitingRecoveryJoinVerification = false
 
     init(
         authStore: RelayAuthStoreProtocol = RelayAuthStore.shared,
         apiClient: RelayAPIClientProtocol = RelayAPIClient(),
-        core: SyncCoreClient = MahoBridge.shared
+        core: SyncCoreClient = MahoBridge.shared,
+        seedStore: SyncSeedStoreProtocol = SyncSeedStore.shared
     ) {
         self.authStore = authStore
         self.apiClient = apiClient
         self.core = core
+        self.seedStore = seedStore
     }
 
     // MARK: - Lifecycle
@@ -128,6 +169,15 @@ final class SyncTransport {
 
     func clearRelaySession() {
         hasHydratedSnapshot = false
+        recoveryRequirement = nil
+        awaitingRecoveryJoinVerification = false
+        sessionGeneration += 1
+        // The seed is removed even when clearing the session fails.
+        do {
+            try seedStore.clearSeed()
+        } catch {
+            log.error("Failed clearing stored Sync seed: \(error.localizedDescription)")
+        }
         do {
             try authStore.clearSession()
             core.signOut()
@@ -160,12 +210,20 @@ final class SyncTransport {
         )
 
         do {
-            try await configureCoreBootstrap(session: session)
-            try core.setSyncEnabled(true)
+            // Interactive sign-in: always fetch the bootstrap from the relay.
+            do {
+                try await configureCoreBootstrap(session: session, useStoredSeed: false)
+                try core.setSyncEnabled(true)
+            } catch SyncTransportError.recoveryPhraseRequired(let requirement) {
+                // Client-held account: stay signed in, but sync waits for the
+                // recovery phrase instead of creating a new bootstrap seed.
+                requireRecoveryPhrase(requirement)
+            }
             try authStore.saveSession(session)
             shouldEnableCoreSync = true
             postStatusChanged()
         } catch {
+            try? seedStore.clearSeed()
             core.signOut()
             throw error
         }
@@ -196,6 +254,10 @@ final class SyncTransport {
             return finish(.skipped(reason: "Sync is not enabled."))
         }
 
+        if let recoveryRequirement {
+            return finish(.failed(message: recoveryRequirement.message))
+        }
+
         let task = Task { @MainActor [weak self] in
             guard let self else { return SyncCycleOutcome.skipped(reason: "Transport released.") }
             return await self.performCycle()
@@ -204,6 +266,33 @@ final class SyncTransport {
         let outcome = await task.value
         runningCycle = nil
         return outcome
+    }
+
+    // MARK: - Recovery phrase gate
+
+    /// Pauses sync until the user enters the account recovery phrase. Drops the
+    /// device-local escrow seed: it either never existed (client-held) or now
+    /// points at a retired room.
+    func requireRecoveryPhrase(_ requirement: SyncRecoveryRequirement) {
+        recoveryRequirement = requirement
+        awaitingRecoveryJoinVerification = false
+        hasHydratedSnapshot = false
+        do {
+            try seedStore.clearSeed()
+        } catch {
+            log.error("Failed clearing stored Sync seed: \(error.localizedDescription)")
+        }
+        postStatusChanged()
+    }
+
+    /// Call after core joined sync with the user's recovery phrase. Lifts the
+    /// pause; the next cycle verifies the joined room against the relay's
+    /// client-held room before any push or pull.
+    func recoveryPhraseJoined() {
+        recoveryRequirement = nil
+        awaitingRecoveryJoinVerification = true
+        hasHydratedSnapshot = false
+        postStatusChanged()
     }
 
     /// Fire-and-forget cycle for UI call sites that must not await.
@@ -240,6 +329,9 @@ final class SyncTransport {
                 try await self.prepareCore(session: activeSession)
                 return activeSession
             }
+        } catch SyncTransportError.recoveryPhraseRequired(let requirement) {
+            requireRecoveryPhrase(requirement)
+            return finish(.failed(message: requirement.message))
         } catch {
             return finish(.failed(message: message(for: error)))
         }
@@ -273,6 +365,9 @@ final class SyncTransport {
             return finish(.completed(pushed: pushed, applied: applied))
         } catch is CancellationError {
             return finish(.skipped(reason: SyncTransportError.cancelled.localizedDescription))
+        } catch RelayAPIError.roomRetired {
+            requireRecoveryPhrase(.roomRetired)
+            return finish(.failed(message: SyncRecoveryRequirement.roomRetired.message))
         } catch {
             return finish(.failed(message: message(for: error)))
         }
@@ -297,6 +392,8 @@ final class SyncTransport {
                 }
             }
             hasHydratedSnapshot = true
+        } catch RelayAPIError.roomRetired {
+            throw RelayAPIError.roomRetired
         } catch RelayAPIError.http(let statusCode, _) where statusCode == 404 {
             // No snapshot on relay; proceed with incremental sync
             hasHydratedSnapshot = true
@@ -314,11 +411,26 @@ final class SyncTransport {
             deviceId: session.device?.id
         )
 
-        try await configureCoreBootstrap(session: session)
+        try await configureCoreBootstrap(session: session, useStoredSeed: true)
         try core.setSyncEnabled(shouldEnableCoreSync)
     }
 
-    private func configureCoreBootstrap(session: RelayAuthSession) async throws {
+    /// Configures core with the account Sync seed. Sync restarts reuse the
+    /// device-local seed; the relay bootstrap is fetched only after an
+    /// interactive sign-in or when no usable seed is stored.
+    private func configureCoreBootstrap(session: RelayAuthSession, useStoredSeed: Bool) async throws {
+        let serverURL = RelayAPIClient.currentBaseURLString()
+        let generation = sessionGeneration
+        if useStoredSeed, let seed = seedStore.loadSeed(accountID: session.account.id) {
+            do {
+                try core.configureSyncBootstrap(serverURL: serverURL, seed: seed)
+                return
+            } catch {
+                log.warning("Stored Sync seed rejected by core; fetching bootstrap: \(error.localizedDescription, privacy: .public)")
+                try? seedStore.clearSeed()
+            }
+        }
+
         let bootstrap: RelaySyncBootstrap
         do {
             bootstrap = try await apiClient.getSyncBootstrap(session: session)
@@ -331,10 +443,32 @@ final class SyncTransport {
             }
         }
 
-        try core.configureSyncBootstrap(
-            serverURL: RelayAPIClient.currentBaseURLString(),
-            seed: bootstrap.seed
-        )
+        // Signed out while the fetch was in flight: discard the fetched seed.
+        guard generation == sessionGeneration else {
+            throw SyncTransportError.notAuthenticated
+        }
+
+        if bootstrap.isClientHeld {
+            // The relay holds no seed. Only a recovery-phrase join that derived
+            // this exact room may sync; never generate or upload a new seed.
+            try? seedStore.clearSeed()
+            if let joinedRoom = try? core.syncRoomID(), joinedRoom == bootstrap.roomId {
+                awaitingRecoveryJoinVerification = false
+                return
+            }
+            let requirement: SyncRecoveryRequirement = awaitingRecoveryJoinVerification
+                ? .recoveryPhraseMismatch
+                : .clientHeldBootstrap
+            awaitingRecoveryJoinVerification = false
+            throw SyncTransportError.recoveryPhraseRequired(requirement)
+        }
+
+        guard let seed = bootstrap.seed, !seed.isEmpty else {
+            throw SyncTransportError.protocolViolation("escrow bootstrap is missing its seed")
+        }
+        awaitingRecoveryJoinVerification = false
+        try core.configureSyncBootstrap(serverURL: serverURL, seed: seed)
+        try seedStore.saveSeed(seed, accountID: session.account.id)
     }
 
     /// Runs `operation`; on relay 401 refreshes the session exactly once,

@@ -715,7 +715,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeToggleReaderMode<'
         Ok(id) => id,
         Err(_) => return jni::sys::JNI_FALSE,
     };
-    if core.toggle_reader_mode(&tab_id.to_string()) {
+    if core.toggle_reader_mode(tab_id.as_ref()) {
         jni::sys::JNI_TRUE
     } else {
         jni::sys::JNI_FALSE
@@ -741,7 +741,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeIsReaderMode<'loca
         Ok(id) => id,
         Err(_) => return jni::sys::JNI_FALSE,
     };
-    if core.is_reader_mode(&tab_id.to_string()) {
+    if core.is_reader_mode(tab_id.as_ref()) {
         jni::sys::JNI_TRUE
     } else {
         jni::sys::JNI_FALSE
@@ -873,16 +873,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeStartDownload<'loc
         Some(s) => s,
         None => return std::ptr::null_mut(),
     };
-    let mime_type = match get_rust_string(&mut env, &content_type) {
-        Some(s) => {
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        }
-        None => None,
-    };
+    let mime_type = get_rust_string(&mut env, &content_type).filter(|s| !s.is_empty());
     let download_id =
         core.start_download(&filename_str, &url_str, 0, None, mime_type.as_deref(), None);
     match env.new_string(&download_id) {
@@ -2958,7 +2949,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeResolveShortcut<'l
 
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
@@ -2993,7 +2984,7 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
         }
     }
     let bytes = input.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
     let mut result = Vec::with_capacity(bytes.len() / 4 * 3);
@@ -3424,8 +3415,8 @@ fn call_android_permission_callback(tool_name: &str, arguments: &str) -> i32 {
         "requestAgentPermission",
         "(Ljava/lang/String;Ljava/lang/String;)I",
         &[
-            jni::objects::JValue::Object(tool_jstr.as_ref()).into(),
-            jni::objects::JValue::Object(args_jstr.as_ref()).into(),
+            jni::objects::JValue::Object(tool_jstr.as_ref()),
+            jni::objects::JValue::Object(args_jstr.as_ref()),
         ],
     );
 
@@ -3436,14 +3427,10 @@ fn call_android_permission_callback(tool_name: &str, arguments: &str) -> i32 {
 }
 
 fn call_android_secure_storage_callback(provider: &str) -> Option<String> {
-    let Some(mut env_guard) = get_jni_env() else {
-        return None;
-    };
+    let mut env_guard = get_jni_env()?;
     let env = &mut *env_guard;
 
-    let Some(cls_ref) = MAHO_BRIDGE_CLASS.get() else {
-        return None;
-    };
+    let cls_ref = MAHO_BRIDGE_CLASS.get()?;
     let cls = unsafe {
         &*(cls_ref.as_obj() as *const jni::objects::JObject as *const jni::objects::JClass)
     };
@@ -3456,7 +3443,7 @@ fn call_android_secure_storage_callback(provider: &str) -> Option<String> {
         cls,
         "getAgentSecureStorage",
         "(Ljava/lang/String;)Ljava/lang/String;",
-        &[jni::objects::JValue::Object(provider_jstr.as_ref()).into()],
+        &[jni::objects::JValue::Object(provider_jstr.as_ref())],
     );
 
     match val {
@@ -3523,9 +3510,9 @@ fn jni_permission_handler(
 }
 
 fn jni_secure_storage_handler(provider: &str) -> Result<maho_agent::SecureKeyBundle, AgentError> {
-    let response = call_android_secure_storage_callback(provider).ok_or_else(|| {
-        AgentError::Credential(maho_agent::CredentialError::SecureStoreUnavailable)
-    })?;
+    let response = call_android_secure_storage_callback(provider).ok_or(
+        AgentError::Credential(maho_agent::CredentialError::SecureStoreUnavailable),
+    )?;
     parse_android_secure_storage_response(&response)
 }
 
@@ -3790,6 +3777,11 @@ fn read_nofollow_file(
     Ok(bytes)
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreateSession<'local>(
     mut env: JNIEnv<'local>,
@@ -3829,14 +3821,14 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
     let db_path = std::path::Path::new(&db_path_str);
     let workspace_root = db_path.parent().unwrap_or(db_path).to_path_buf();
 
-    let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path_str) {
+    let storage = match maho_storage::sqlite::SqliteStorage::open(db_path_str) {
         Ok(s) => s,
         Err(_) => return 0,
     };
 
     let agent_storage = Arc::new(MutexAgentStorage(Arc::new(Mutex::new(storage))));
 
-    let permission_cb = Box::new(|req| jni_permission_handler(req));
+    let permission_cb = Box::new(jni_permission_handler);
     let runtime = maho_agent::omo::factory::create_agent_runtime(
         agent_storage.clone(),
         Some(permission_cb),
@@ -3871,6 +3863,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
     })
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentFreeSession(
     _env: JNIEnv,
@@ -3892,6 +3889,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentFreeSe
     );
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentSendMessage<'local>(
     mut env: JNIEnv<'local>,
@@ -3966,6 +3968,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentSendMe
     1
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCancel(
     _env: JNIEnv,
@@ -3989,9 +3996,14 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCancel
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListTools<'local>(
-    mut env: JNIEnv<'local>,
+    env: JNIEnv<'local>,
     _class: JClass<'local>,
     session_ptr: jlong,
 ) -> jstring {
@@ -4016,6 +4028,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListTo
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListArtifacts<'local>(
     env: JNIEnv<'local>,
@@ -4045,6 +4062,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListAr
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentReadArtifact<'local>(
     mut env: JNIEnv<'local>,
@@ -4235,6 +4257,11 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentTestSeedArtif
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentPollEvent<'local>(
     env: JNIEnv<'local>,
@@ -4261,6 +4288,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentPollEv
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeQueryFilterDecision<'local>(
     mut env: JNIEnv<'local>,
@@ -4295,6 +4327,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeQueryFilter
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateConversation<'local>(
     mut env: JNIEnv<'local>,
@@ -4330,9 +4367,14 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateConve
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConversations<'local>(
-    mut env: JNIEnv<'local>,
+    env: JNIEnv<'local>,
     _class: JClass<'local>,
     ptr: jlong,
     limit: jlong,
@@ -4359,6 +4401,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConvers
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConversationsV2<'local>(
     mut env: JNIEnv<'local>,
@@ -4410,6 +4457,11 @@ fn conversation_list_json(
     serde_json::to_string(&rows).ok()
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeArchiveConversation<'local>(
     mut env: JNIEnv<'local>,
@@ -4425,6 +4477,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeArchiveConv
     core.archive_conversation_persisted(&id) as jboolean
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeUnarchiveConversation<
     'local,
@@ -4442,6 +4499,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeUnarchiveCo
     core.unarchive_conversation_persisted(&id) as jboolean
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeApplyConversationBulkOperation<
     'local,
@@ -4487,6 +4549,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeApplyConver
         .map_or(std::ptr::null_mut(), |value| value.into_raw())
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversationAutoArchivePolicy<
     'local,
@@ -4501,6 +4568,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversa
         .unwrap_or(-1)
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSetConversationAutoArchivePolicy<
     'local,
@@ -4514,6 +4586,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSetConversa
     get_core(ptr).is_some_and(|core| core.set_conversation_auto_archive_policy(days)) as jboolean
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAutoArchiveConversations<
     'local,
@@ -4531,6 +4608,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAutoArchive
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversationMessages<
     'local,
@@ -4563,6 +4645,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversa
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSaveConversationMessage<
     'local,
@@ -4606,6 +4693,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSaveConvers
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDeleteConversation<'local>(
     mut env: JNIEnv<'local>,
@@ -4629,6 +4721,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDeleteConve
     }
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConversationProjects<
     'local,
@@ -4647,6 +4744,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConvers
         .map_or(std::ptr::null_mut(), |value| value.into_raw())
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateConversationProject<
     'local,
@@ -4673,6 +4775,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateConve
         .map_or(std::ptr::null_mut(), |value| value.into_raw())
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRenameConversationProject<
     'local,
@@ -4694,6 +4801,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRenameConve
     core.rename_conversation_project_persisted(&id, &name) as jboolean
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDeleteConversationProject<
     'local,
@@ -4711,6 +4823,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDeleteConve
     core.delete_conversation_project_persisted(&id) as jboolean
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeMoveConversationsToProject<
     'local,
@@ -4753,6 +4870,11 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeMoveConvers
         .map_or(std::ptr::null_mut(), |value| value.into_raw())
 }
 
+/// # Safety
+///
+/// JNI entry point: the JVM must pass a valid `JNIEnv` for the calling thread
+/// and live local references; any `jlong` handle must come from the matching
+/// native constructor and not have been freed.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRenameConversation<'local>(
     mut env: JNIEnv<'local>,
@@ -5283,7 +5405,6 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeChatAppendAssistan
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use maho_agent::{AgentRuntime, AgentStorage};
 
     fn temporary_artifact_root(test_name: &str) -> std::path::PathBuf {

@@ -44,6 +44,7 @@ struct SyncSettingsView: View {
     @State private var isSubmittingAuth = false
     @State private var pendingDeviceDeletion: IndexSet?
     @State private var showRemoveDeviceConfirmation = false
+    @State private var recoveryRequirement: SyncRecoveryRequirement?
 
     init(
         authStore: RelayAuthStoreProtocol = RelayAuthStore.shared,
@@ -63,6 +64,7 @@ struct SyncSettingsView: View {
     var body: some View {
         Form {
             accountSection
+            recoveryPhraseRequiredSection
             syncToggleSection
             syncStatusSection
             devicesSection
@@ -194,6 +196,28 @@ struct SyncSettingsView: View {
             }
         } header: {
             Text("Relay Account")
+        }
+    }
+
+    /// Shown when the account holds its own keys (bootstrap `key_mode:
+    /// client_held`) or the relay retired this device's room (410). Sync stays
+    /// paused until the phrase is entered; no new seed is ever generated.
+    @ViewBuilder
+    private var recoveryPhraseRequiredSection: some View {
+        if relaySession != nil, let recoveryRequirement {
+            Section {
+                Text(recoveryRequirement.message)
+                    .font(.body)
+                SecureField("24-word Recovery Phrase", text: $recoveryPhraseInput)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Join Sync with Recovery Phrase") {
+                    joinWithRecoveryPhrase()
+                }
+                .disabled(recoveryPhraseInput.isEmpty)
+            } header: {
+                Text("Recovery Phrase Required")
+            }
         }
     }
 
@@ -374,19 +398,49 @@ struct SyncSettingsView: View {
                 TextField("Recovery Phrase", text: $recoveryPhraseInput)
                     .textInputAutocapitalization(.never)
                 Button("Join with Recovery Phrase") {
-                    guard !recoveryPhraseInput.isEmpty else { return }
-                    joinResult = bridge.joinSync(recoveryPhrase: recoveryPhraseInput)
-                    showJoinResult = true
-                    if joinResult != nil {
-                        recoveryPhraseInput = ""
-                        refresh()
-                    }
+                    joinWithRecoveryPhrase()
                 }
                 .disabled(recoveryPhraseInput.isEmpty)
             } header: {
                 Text("Sync Key")
             }
         }
+    }
+
+    private func joinWithRecoveryPhrase() {
+        let phrase = recoveryPhraseInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !phrase.isEmpty else { return }
+        let result = bridge.joinSync(recoveryPhrase: phrase)
+        if Self.joinSucceeded(result) {
+            recoveryPhraseInput = ""
+            joinResult = "Joined sync with your recovery phrase."
+            // Lift the pause; the next cycle verifies the joined room against
+            // the account's client-held room before pushing or pulling.
+            SyncTransport.shared.recoveryPhraseJoined()
+            if syncEnabled {
+                SyncManager.shared.syncNow()
+            }
+        } else {
+            joinResult = Self.joinErrorMessage(result) ?? "Failed to join sync."
+        }
+        showJoinResult = true
+        refresh()
+    }
+
+    private static func joinSucceeded(_ result: String?) -> Bool {
+        guard let data = result?.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        return json["success"] as? Bool == true
+    }
+
+    private static func joinErrorMessage(_ result: String?) -> String? {
+        guard let data = result?.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return json["error"] as? String
     }
 
     private var isAuthActionDisabled: Bool {
@@ -417,6 +471,7 @@ struct SyncSettingsView: View {
 
     private func refresh() {
         relaySession = authStore.loadSession()
+        recoveryRequirement = SyncTransport.shared.recoveryRequirement
         syncEnabled = SyncManager.shared.isSyncEnabled && relaySession != nil
 
         if let activeProfileId = bridge.getActiveProfileId() {
@@ -512,18 +567,22 @@ struct SyncSettingsView: View {
             deviceId: session.device?.id,
         )
         do {
-            try await configureAccountSync(session)
-            try bridge.setSyncEnabled(true)
+            if try await configureAccountSync(session) {
+                try bridge.setSyncEnabled(true)
+            }
             try authStore.saveSession(session)
             relaySession = session
             SyncManager.shared.relayAuthenticationSucceeded()
         } catch {
+            try? SyncSeedStore.shared.clearSeed()
             bridge.signOut()
             throw error
         }
     }
 
-    private func configureAccountSync(_ session: RelayAuthSession) async throws {
+    /// Returns `false` when the account holds its own keys and sync must wait
+    /// for the recovery phrase (no seed is generated or uploaded).
+    private func configureAccountSync(_ session: RelayAuthSession) async throws -> Bool {
         let bootstrap: RelaySyncBootstrap
         do {
             bootstrap = try await apiClient.getSyncBootstrap(session: session)
@@ -541,10 +600,25 @@ struct SyncSettingsView: View {
             }
         }
 
+        if bootstrap.isClientHeld {
+            try? SyncSeedStore.shared.clearSeed()
+            if let joinedRoom = try? bridge.syncRoomID(), joinedRoom == bootstrap.roomId {
+                return true
+            }
+            SyncTransport.shared.requireRecoveryPhrase(.clientHeldBootstrap)
+            return false
+        }
+
+        guard let seed = bootstrap.seed, !seed.isEmpty else {
+            throw SyncTransportError.protocolViolation("escrow bootstrap is missing its seed")
+        }
         try bridge.configureSyncBootstrap(
             serverURL: RelayAPIClient.currentBaseURLString(),
-            seed: bootstrap.seed
+            seed: seed
         )
+        // Sync restarts reuse this device-local seed instead of re-fetching the bootstrap.
+        try SyncSeedStore.shared.saveSeed(seed, accountID: session.account.id)
+        return true
     }
 
     private func signOut() async {

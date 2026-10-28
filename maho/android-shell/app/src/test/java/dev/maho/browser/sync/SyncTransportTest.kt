@@ -69,11 +69,20 @@ private class InMemoryV2SessionPersistence(
     override fun getServerUrl(defaultUrl: String): String = session?.serverUrl ?: defaultUrl
 }
 
+private class InMemoryRecoveryGate : SyncRecoveryGate {
+    var requirement: SyncRecoveryRequirement? = null
+    override fun current(): SyncRecoveryRequirement? = requirement
+    override fun require(requirement: SyncRecoveryRequirement) {
+        this.requirement = requirement
+    }
+}
+
 class SyncTransportTest {
     private lateinit var server: MockWebServer
     private lateinit var bridge: FakeV2BridgeAdapter
     private lateinit var persistence: InMemoryV2SessionPersistence
     private lateinit var transport: SyncTransport
+    private lateinit var recoveryGate: InMemoryRecoveryGate
 
     @Before
     fun setUp() {
@@ -101,10 +110,12 @@ class SyncTransportTest {
                 serverUrl = server.url("/").newBuilder().scheme("https").build().toString(),
             ),
         )
+        recoveryGate = InMemoryRecoveryGate()
         transport = SyncTransport(
             bridgeAdapter = bridge,
             authClient = authClient,
             sessionPersistence = persistence,
+            recoveryGate = recoveryGate,
         )
     }
 
@@ -320,5 +331,59 @@ class SyncTransportTest {
         assertTrue(result.error!!.contains("recovery phrase"))
         assertEquals(0, server.requestCount)
         assertFalse(bridge.states.isEmpty())
+    }
+
+    @Test
+    fun room_retired_push_pauses_sync_and_asks_for_recovery_phrase() {
+        val outgoing = SyncEnvelopeV2(
+            protocolVersion = SYNC_PROTOCOL_VERSION,
+            deliveryId = "550e8400-e29b-41d4-a716-446655440000",
+            payload = "AA==",
+        )
+        bridge.outgoing = mutableListOf(outgoing)
+        server.enqueue(
+            MockResponse().setResponseCode(410).setBody("""{"error":"room_retired","code":"room_retired"}"""),
+        )
+
+        val result = transport.runBoundedCycle()
+
+        assertEquals(SyncCycleOutcome.PERMANENT_FAILURE, result.outcome)
+        assertEquals(SyncRecoveryRequirement.ROOM_RETIRED, result.recoveryRequirement)
+        assertEquals(SyncRecoveryRequirement.ROOM_RETIRED, recoveryGate.requirement)
+        assertEquals(SyncRecoveryRequirement.ROOM_RETIRED.message, result.error)
+        assertEquals(1, bridge.requeueCount)
+        assertEquals(listOf(outgoing), bridge.outgoing)
+        assertEquals(1, server.requestCount)
+
+        // Paused: the next cycle never reaches the relay.
+        val paused = transport.runBoundedCycle()
+        assertEquals(SyncRecoveryRequirement.ROOM_RETIRED, paused.recoveryRequirement)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun room_retired_pull_pauses_sync_and_asks_for_recovery_phrase() {
+        server.enqueue(
+            MockResponse().setResponseCode(410).setBody("""{"error":"room_retired","code":"room_retired"}"""),
+        )
+
+        val result = transport.runBoundedCycle()
+
+        assertEquals(SyncCycleOutcome.PERMANENT_FAILURE, result.outcome)
+        assertEquals(SyncRecoveryRequirement.ROOM_RETIRED, recoveryGate.requirement)
+        assertTrue(server.takeRequest(5, TimeUnit.SECONDS)!!.path!!.contains("/sync/pull"))
+        assertEquals(0L, bridge.cursor)
+        assertTrue(bridge.states.last().lastError!!.contains("recovery phrase"))
+    }
+
+    @Test
+    fun plain_410_without_room_retired_code_is_not_a_recovery_pause() {
+        server.enqueue(MockResponse().setResponseCode(410).setBody("Gone"))
+
+        val result = transport.runBoundedCycle()
+
+        assertEquals(SyncCycleOutcome.PERMANENT_FAILURE, result.outcome)
+        assertEquals(null, result.recoveryRequirement)
+        assertEquals(null, recoveryGate.requirement)
     }
 }

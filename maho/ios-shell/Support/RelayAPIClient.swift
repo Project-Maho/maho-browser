@@ -68,10 +68,29 @@ struct RelayPullResponse: Codable, Equatable {
 }
 
 struct RelaySyncBootstrap: Codable, Equatable {
-    let version: Int
+    static let clientHeldKeyMode = "client_held"
+
+    /// Absent for client-held accounts, which return only `key_mode` + `room_id`.
+    let version: Int?
     let roomId: String
-    let seed: String
+    /// The escrowed account seed; `nil` when the account holds its own keys.
+    let seed: String?
     let createdAt: Int?
+    /// `"client_held"` when the relay no longer holds the seed; absent (escrow) otherwise.
+    let keyMode: String?
+
+    init(version: Int?, roomId: String, seed: String?, createdAt: Int?, keyMode: String? = nil) {
+        self.version = version
+        self.roomId = roomId
+        self.seed = seed
+        self.createdAt = createdAt
+        self.keyMode = keyMode
+    }
+
+    /// The account holds its own keys: only the recovery phrase can join sync.
+    var isClientHeld: Bool {
+        keyMode == Self.clientHeldKeyMode
+    }
 }
 
 struct RelaySyncBootstrapRequest: Codable, Equatable {
@@ -103,6 +122,9 @@ enum RelayAPIError: LocalizedError {
     case server(message: String)
     case http(statusCode: Int, message: String)
     case missingRefreshToken
+    /// HTTP 410 `room_retired`: the account switched to client-held keys and
+    /// the room this device syncs to no longer accepts pushes or pulls.
+    case roomRetired
 
     var errorDescription: String? {
         switch self {
@@ -118,6 +140,8 @@ enum RelayAPIError: LocalizedError {
             return "Relay request failed (\(statusCode)): \(message)"
         case .missingRefreshToken:
             return "Missing relay refresh token."
+        case .roomRetired:
+            return SyncRecoveryRequirement.roomRetired.message
         }
     }
 }
@@ -296,13 +320,16 @@ final class RelayAPIClient: RelayAPIClientProtocol {
         _ bootstrap: RelaySyncBootstrap,
         session: RelayAuthSession
     ) async throws -> RelaySyncBootstrap {
-        try await sendJSONRequest(
+        guard let seed = bootstrap.seed, !bootstrap.isClientHeld else {
+            throw RelayAPIError.server(message: "A client-held Sync account never uploads a seed.")
+        }
+        return try await sendJSONRequest(
             endpoint: .bootstrap,
             method: "PUT",
             body: RelaySyncBootstrapRequest(
-                version: bootstrap.version,
+                version: bootstrap.version ?? 1,
                 roomId: bootstrap.roomId,
-                seed: bootstrap.seed
+                seed: seed
             ),
             authorizedSession: session
         )
@@ -376,6 +403,8 @@ final class RelayAPIClient: RelayAPIClientProtocol {
             return try RelayCoding.decoder.decode(Response.self, from: data)
         case 401:
             throw RelayAPIError.unauthorized
+        case _ where Self.isRoomRetired(statusCode: httpResponse.statusCode, data: data):
+            throw RelayAPIError.roomRetired
         default:
             if let message = parseServerMessage(from: data) {
                 throw RelayAPIError.http(statusCode: httpResponse.statusCode, message: message)
@@ -440,6 +469,15 @@ final class RelayAPIClient: RelayAPIClientProtocol {
         }
 
         return trimmed
+    }
+
+    /// The relay answers a retired room with `410 {"code":"room_retired"}`.
+    static func isRoomRetired(statusCode: Int, data: Data) -> Bool {
+        guard statusCode == 410,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        return json["code"] as? String == "room_retired" || json["error"] as? String == "room_retired"
     }
 
     private func parseServerMessage(from data: Data) -> String? {

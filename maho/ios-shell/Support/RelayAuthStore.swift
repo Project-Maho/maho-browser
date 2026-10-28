@@ -209,6 +209,95 @@ protocol RelayAuthStoreProtocol: AnyObject {
     func clearSession() throws
 }
 
+/// Device-local copy of the account Sync bootstrap seed, so sync restarts do
+/// not re-fetch `GET /sync/bootstrap` after every token refresh. The seed is
+/// bound to the relay account it was fetched for.
+protocol SyncSeedStoreProtocol: AnyObject {
+    func loadSeed(accountID: String?) -> String?
+    func saveSeed(_ seed: String, accountID: String?) throws
+    func clearSeed() throws
+}
+
+private struct StoredSyncSeed: Codable {
+    let accountID: String?
+    let seed: String
+}
+
+final class SyncSeedStore: SyncSeedStoreProtocol {
+    static let shared = SyncSeedStore()
+
+    private let service: String
+    private let account = "sync-bootstrap-seed"
+
+    init(service: String = "dev.maho.browser.sync-seed") {
+        self.service = service
+    }
+
+    func loadSeed(accountID: String?) -> String? {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: account,
+            kSecReturnData: true,
+            kSecMatchLimit: kSecMatchLimitOne
+        ]
+
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data,
+              let stored = try? JSONDecoder().decode(StoredSyncSeed.self, from: data),
+              !stored.seed.isEmpty,
+              stored.accountID == accountID else {
+            return nil
+        }
+        return stored.seed
+    }
+
+    func saveSeed(_ seed: String, accountID: String?) throws {
+        guard let data = try? JSONEncoder().encode(StoredSyncSeed(accountID: accountID, seed: seed)) else {
+            throw RelayAuthStoreError.encodingFailed
+        }
+
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: account
+        ]
+        let attributes: [CFString: Any] = [
+            kSecValueData: data,
+            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecItemNotFound {
+            var createQuery = query
+            createQuery[kSecValueData] = data
+            createQuery[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            let createStatus = SecItemAdd(createQuery as CFDictionary, nil)
+            guard createStatus == errSecSuccess else {
+                throw RelayAuthStoreError.unexpectedKeychainStatus(createStatus)
+            }
+            return
+        }
+
+        guard updateStatus == errSecSuccess else {
+            throw RelayAuthStoreError.unexpectedKeychainStatus(updateStatus)
+        }
+    }
+
+    func clearSeed() throws {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: account
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw RelayAuthStoreError.unexpectedKeychainStatus(status)
+        }
+    }
+}
+
 @MainActor
 struct RelaySignOutFlow {
     private let apiClient: RelayAPIClientProtocol

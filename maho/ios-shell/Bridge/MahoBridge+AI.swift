@@ -33,6 +33,13 @@ private func ffiByokValidateKey(
     _ key: UnsafePointer<CChar>?
 ) -> Bool
 
+@_silgen_name("maho_core_byok_set_validated_key")
+private func ffiByokSetValidatedKey(
+    _ ptr: OpaquePointer?,
+    _ provider: UnsafePointer<CChar>?,
+    _ key: UnsafePointer<CChar>?
+) -> Bool
+
 @_silgen_name("maho_core_get_space_ai_config")
 private func ffiGetSpaceAIConfig(
     _ ptr: OpaquePointer?,
@@ -73,11 +80,49 @@ extension MahoBridge {
     }
 
     func byokSetKey(provider: String, key: String) -> Bool {
-        return BYOKKeychain.set(provider: provider, key: key)
+        let saved = BYOKKeychain.set(provider: provider, key: key)
+        if saved {
+            syncByokKeyToCore(provider: provider, key: key)
+        }
+        return saved
     }
 
     func byokDeleteKey(provider: String) -> Bool {
-        return BYOKKeychain.delete(provider: provider)
+        let deleted = BYOKKeychain.delete(provider: provider)
+        syncByokKeyToCore(provider: provider, key: nil)
+        return deleted
+    }
+
+    /// Mirrors a keychain BYOK key into core so a validated key unlocks BYOK
+    /// agent features (Routines, Skills, deep research, premium search). The
+    /// key is validated against the provider off the main thread and stored in
+    /// core only on success; a nil key clears core's copy and validation.
+    private func syncByokKeyToCore(provider: String, key: String?) {
+        guard let key, !key.isEmpty else {
+            _ = withCore { ptr in
+                FFIString.withCString(provider) { providerPointer in
+                    ffiByokSetValidatedKey(ptr, providerPointer, nil)
+                }
+            }
+            return
+        }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let valid = FFIString.withCString(provider) { providerPointer in
+                FFIString.withCString(key) { keyPointer in
+                    ffiByokValidateKey(nil, providerPointer, keyPointer)
+                }
+            }
+            _ = self?.withCore { ptr in
+                FFIString.withCString(provider) { providerPointer in
+                    if valid {
+                        return FFIString.withCString(key) { keyPointer in
+                            ffiByokSetValidatedKey(ptr, providerPointer, keyPointer)
+                        }
+                    }
+                    return ffiByokSetValidatedKey(ptr, providerPointer, nil)
+                }
+            }
+        }
     }
 
     func byokValidateKey(provider: String, key: String) -> Bool {
