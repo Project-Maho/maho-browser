@@ -349,7 +349,7 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeTrustedInputBrowserTest,
 
   // This factory returns the production delegate; only unused Mail callbacks
   // are replaceable. Resolve the hosted target from its real MCP inventory.
-  auto delegate = CreateMailDelegateForTesting({}, {});
+  auto delegate = CreateMailDelegateForTesting({});
   int tab_id = 0;
   for (const auto& tab : delegate->GetTabList()) {
     if (tab.url == contents->GetLastCommittedURL().spec()) {
@@ -624,19 +624,6 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeProviderRestartBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoWelcomeProviderRestartBrowserTest,
-                       PRE_MissingNativeVaultReopensSetup) {
-  PersistCompletedWithoutNativeVault("maho_native");
-}
-
-IN_PROC_BROWSER_TEST_F(MahoWelcomeProviderRestartBrowserTest,
-                       MissingNativeVaultReopensSetup) {
-  ExpectVaultOperation(base::BindOnce(&maho_vault_status_json), "uninitialized");
-  EXPECT_FALSE(profile_->GetPrefs()->GetBoolean(maho::welcome::kWelcomeCompleted));
-  EXPECT_TRUE(profile_->GetPrefs()->GetBoolean(maho::welcome::kLoginGateActive));
-  EXPECT_TRUE(maho::MahoWelcomeWindow::GetHostedWebContents());
-}
-
-IN_PROC_BROWSER_TEST_F(MahoWelcomeProviderRestartBrowserTest,
                        PRE_LockedNativeVaultKeepsCompletionAndUnlocks) {
   PersistCompletedWithoutNativeVault("maho_native");
   ExpectVaultOperation(
@@ -732,6 +719,20 @@ class MahoWelcomeIncompleteRestartBrowserTest
     EXPECT_EQ(content::Visibility::VISIBLE, contents->GetVisibility());
   }
 
+  // Completed profile whose stored relay session has fully expired (access and
+  // 30-day refresh token both in the past). Saves core and prefs.
+  void PersistExpiredCompletedProfile() {
+    PrefService* prefs = profile_->GetPrefs();
+    prefs->SetString(account_prefs::kRelayAccessTokenEncryptedB64,
+                     "synthetic-onboarding-access-token");
+    prefs->SetInt64(account_prefs::kRelayAccessTokenExpiresAt, 0);
+    prefs->SetString(account_prefs::kRelayRefreshTokenEncryptedB64,
+                     "synthetic-onboarding-refresh-token");
+    prefs->SetInt64(account_prefs::kRelayRefreshTokenExpiresAt, 1);
+    ASSERT_FALSE(auth::HasValidRelaySession(prefs));
+    ASSERT_NO_FATAL_FAILURE(PersistCompletedWithoutNativeVault("bitwarden"));
+  }
+
   void PersistAuthenticatedProfile(bool completed) {
     PrefService* prefs = profile_->GetPrefs();
     // Opaque, synthetic values satisfy only local validity: no encryption,
@@ -806,6 +807,45 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeIncompleteRestartBrowserTest,
   ASSERT_TRUE(auth::HasValidRelaySession(profile_->GetPrefs()));
   ASSERT_NO_FATAL_FAILURE(ExpectCompletedWithoutNativeVault("bitwarden"));
   EXPECT_FALSE(MahoWelcomeWindow::GetHostedWebContents());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoWelcomeIncompleteRestartBrowserTest,
+                       PRE_CompletedProfileWithExpiredSessionStaysUngated) {
+  ASSERT_NO_FATAL_FAILURE(ExpectVisibleWelcome());
+  ASSERT_NO_FATAL_FAILURE(PersistExpiredCompletedProfile());
+}
+
+// An expired relay session pauses sync and locks the account-escrowed Vault;
+// it must not send an onboarded profile back through the login gate.
+IN_PROC_BROWSER_TEST_F(MahoWelcomeIncompleteRestartBrowserTest,
+                       CompletedProfileWithExpiredSessionStaysUngated) {
+  ASSERT_FALSE(base::CommandLine::ForCurrentProcess()->HasSwitch(
+      kDisableLoginGateSwitch));
+  ASSERT_FALSE(auth::HasValidRelaySession(profile_->GetPrefs()));
+  ASSERT_NO_FATAL_FAILURE(ExpectCompletedWithoutNativeVault("bitwarden"));
+  EXPECT_FALSE(MahoWelcomeWindow::GetHostedWebContents());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoWelcomeIncompleteRestartBrowserTest,
+                       PRE_MissingNativeVaultKeepsCompletion) {
+  ASSERT_NO_FATAL_FAILURE(ExpectVisibleWelcome());
+  ASSERT_NO_FATAL_FAILURE(PersistCompletedWithoutNativeVault("maho_native"));
+}
+
+// Without the test-only bypass and without any relay session, a completed
+// profile whose native Vault was never provisioned keeps its completion and is
+// not re-gated: account escrow repairs the Vault at the next sign-in.
+IN_PROC_BROWSER_TEST_F(MahoWelcomeIncompleteRestartBrowserTest,
+                       MissingNativeVaultKeepsCompletion) {
+  ASSERT_FALSE(base::CommandLine::ForCurrentProcess()->HasSwitch(
+      kDisableLoginGateSwitch));
+  ASSERT_FALSE(auth::HasValidRelaySession(profile_->GetPrefs()));
+  ExpectVaultOperation(base::BindOnce(&maho_vault_status_json), "uninitialized");
+  EXPECT_TRUE(profile_->GetPrefs()->GetBoolean(welcome::kWelcomeCompleted));
+  EXPECT_FALSE(profile_->GetPrefs()->GetBoolean(welcome::kLoginGateActive));
+  EXPECT_FALSE(MahoWelcomeWindow::GetHostedWebContents());
+  ASSERT_TRUE(browser());
+  EXPECT_TRUE(browser()->GetWindow()->IsVisible());
 }
 
 class MahoWelcomeIncompleteBypassRestartBrowserTest
@@ -1235,7 +1275,7 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeByokBrowserTest,
     })()
   )JS", content::EXECUTE_SCRIPT_NO_USER_GESTURE));
 
-  auto delegate = CreateMailDelegateForTesting({}, {});
+  auto delegate = CreateMailDelegateForTesting({});
   int tab_id = 0;
   for (const auto& tab : delegate->GetTabList()) {
     if (tab.url == contents->GetLastCommittedURL().spec()) {
@@ -1343,7 +1383,7 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeByokBrowserTest,
   auto* contents = MahoWelcomeWindow::GetByokSettingsDialogWebContents();
   ASSERT_TRUE(contents);
   ASSERT_TRUE(content::WaitForLoadStop(contents));
-  auto delegate = CreateMailDelegateForTesting({}, {});
+  auto delegate = CreateMailDelegateForTesting({});
   int tab_id = 0;
   for (const auto& tab : delegate->GetTabList()) {
     if (tab.url == contents->GetLastCommittedURL().spec()) {
