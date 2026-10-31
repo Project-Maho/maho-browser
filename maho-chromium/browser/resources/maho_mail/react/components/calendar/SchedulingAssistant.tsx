@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, TriangleAlert } from "lucide-react";
 import * as api from "../../api";
 import { useToast } from "../ui/Toast";
 
@@ -228,8 +228,8 @@ export function SchedulingAssistant({ accountId, attendees, onPickSlot, duration
       </div>
 
       {warnings.length > 0 && (
-        <p className="text-[10px] text-amber-500 font-medium bg-amber-500/10 rounded p-1.5 border border-amber-500/20">
-          ⚠️ Cannot check availability for: {warnings.join(", ")}
+        <p className="flex items-start gap-1.5 text-[11px] text-amber-500 font-medium bg-amber-500/10 rounded-lg px-2.5 py-2 border border-amber-500/20">
+          <TriangleAlert size={12} className="mt-px shrink-0" aria-hidden="true" /> Cannot check availability for: {warnings.join(", ")}
         </p>
       )}
 

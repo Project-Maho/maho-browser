@@ -93,6 +93,15 @@ using RefreshCallback =
     base::OnceCallback<void(bool success,
                             int http_status,
                             std::optional<RefreshedTokens> tokens)>;
+// Persists a /auth/refresh result while keeping the stored user identity. The
+// relay rotates the refresh token on every refresh and invalidates the one it
+// consumed, so every refresh caller must persist the result or the profile is
+// left holding a dead refresh token.
+StoreTokensParams BuildRefreshedRelayTokenParams(PrefService* prefs,
+                                                const RefreshedTokens& tokens);
+bool StoreRefreshedRelayTokens(PrefService* prefs,
+                               const os_crypt_async::Encryptor& encryptor,
+                               const RefreshedTokens& tokens);
 void RefreshAccessToken(
     const std::string& current_refresh_token,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
@@ -100,6 +109,18 @@ void RefreshAccessToken(
 
 using LoginResultCallback =
     base::OnceCallback<void(bool ok, const std::string& error_message)>;
+
+namespace testing {
+
+// Enters the same create-when-missing bootstrap path used after a new account
+// login, without requiring a relay account whose bootstrap can be cleared.
+void FetchAccountSyncBootstrapForTesting(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const std::string& access_token,
+    LoginResultCallback callback);
+
+}  // namespace testing
+
 void MahoRelayLogin(
     PrefService* prefs,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,

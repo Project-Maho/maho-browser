@@ -352,8 +352,12 @@ pub enum AssistantMessageEvent {
         reason: Option<String>,
     },
     Error {
+        /// pi-ai `StopReason`: the literal `"error"` or `"aborted"`, never the cause.
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        /// The failed assistant message; its `errorMessage` carries the provider's text.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<serde_json::Value>,
     },
     #[serde(other)]
     Other,
@@ -389,9 +393,21 @@ pub enum RpcEvent {
         #[serde(rename = "sessionId")]
         session_id: String,
     },
+    /// omo ended the session handle (explicit close or idle eviction, `reason:
+    /// "idle_evicted"`). The handle is dead; the session reopens by path.
     SessionClosed {
         #[serde(rename = "sessionId")]
         session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// omo's idle sweep parked a retained session back on disk. The handle is dead
+    /// exactly as with `session_closed`; the file reopens with `open_session`.
+    SessionParked {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "sessionPath", skip_serializing_if = "Option::is_none")]
+        session_path: Option<String>,
     },
     SessionAbort {
         #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
@@ -515,9 +531,9 @@ pub enum RpcEvent {
 impl RpcEvent {
     pub fn session_id(&self) -> Option<&str> {
         match self {
-            Self::SessionOpened { session_id } | Self::SessionClosed { session_id } => {
-                Some(session_id.as_str())
-            }
+            Self::SessionOpened { session_id }
+            | Self::SessionClosed { session_id, .. }
+            | Self::SessionParked { session_id, .. } => Some(session_id.as_str()),
             Self::SessionAbort { session_id }
             | Self::SessionReplaced { session_id, .. }
             | Self::AgentStart { session_id }

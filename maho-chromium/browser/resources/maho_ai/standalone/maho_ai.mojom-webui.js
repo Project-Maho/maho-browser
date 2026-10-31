@@ -514,12 +514,12 @@ export class PageHandlerRemote {
     };
   }
 
-  async setAISelection(providerId, modelId, reasoningEffort) {
+  async setDefaultAISelection(providerId, modelId, reasoningEffort) {
     this.aiSettings.activeProviderId = providerId;
     this.aiSettings.activeModelId = modelId;
     this.aiSettings.activeReasoningEffort = reasoningEffort;
     const action = {
-      action: 'setAISelection',
+      action: 'setDefaultAISelection',
       providerId,
       modelId,
       reasoningEffort,

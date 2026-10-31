@@ -60,9 +60,6 @@ MahoFavoritesContextMenu::BuildMenuModel() {
 
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
-  model->AddItem(IDC_MAHO_FAV_CHANGE_ICON, u"Change Icon...");
-  model->AddItem(IDC_MAHO_FAV_RENAME, u"Rename...");
-
   edit_pinned_submenu_ = std::make_unique<ui::SimpleMenuModel>(this);
   edit_pinned_submenu_->AddItem(IDC_MAHO_FAV_EDIT_PINNED_REPLACE,
                                 u"Replace Pinned URL with Current");
@@ -233,16 +230,6 @@ void MahoFavoritesContextMenu::ExecuteCommand(int command_id,
         delegate_->OnFavoriteShareRequested();
       }
       break;
-    case IDC_MAHO_FAV_CHANGE_ICON:
-      if (delegate_) {
-        delegate_->OnFavoriteIconChangeRequested();
-      }
-      break;
-    case IDC_MAHO_FAV_RENAME:
-      if (delegate_) {
-        delegate_->OnFavoriteRenameRequested();
-      }
-      break;
     case IDC_MAHO_FAV_EDIT_PINNED_REPLACE: {
       content::WebContents* contents =
           maho::context_menu::GetWebContentsForTabId(browser_, tab_id_);
@@ -332,8 +319,6 @@ bool MahoFavoritesContextMenu::IsCommandIdEnabled(int command_id) const {
     case IDC_MAHO_FAV_UNMUTE:
       // Only actionable when the favorite is a live tab in the current strip.
       return HasLiveTab();
-    case IDC_MAHO_FAV_CHANGE_ICON:
-    case IDC_MAHO_FAV_RENAME:
     case IDC_MAHO_FAV_EDIT_PINNED:
     case IDC_MAHO_FAV_EDIT_PINNED_EDIT:
     case IDC_MAHO_FAV_REMOVE:

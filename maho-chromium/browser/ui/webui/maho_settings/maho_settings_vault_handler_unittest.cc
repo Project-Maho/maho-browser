@@ -1,4 +1,5 @@
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "ui/base/clipboard/test/test_clipboard.h"
 #include <limits>
 #include <memory>
@@ -11,6 +12,7 @@
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_routines_scheduler.h"
@@ -51,11 +53,12 @@ maho_settings::mojom::VaultOperationResultPtr AddVaultLoginInCore(
     const std::string& title,
     const std::vector<std::string>& origins,
     const std::string& username,
-    const std::string& password) {
+    const std::string& password,
+    const std::optional<std::string>& notes = std::nullopt) {
   GrantSettingsAuthorization(
       maho::passwords::PasswordAuthorizationAction::kAdd);
   return maho_settings_password_helpers::AddVaultLoginInCore(
-      kSettingsAuthorizationProfile, title, origins, username, password);
+      kSettingsAuthorizationProfile, title, origins, username, password, notes);
 }
 
 maho_settings::mojom::VaultOperationResultPtr UpdateVaultLoginInCore(
@@ -64,12 +67,13 @@ maho_settings::mojom::VaultOperationResultPtr UpdateVaultLoginInCore(
     const std::string& title,
     const std::vector<std::string>& origins,
     const std::string& username,
-    const std::optional<std::string>& password) {
+    const std::optional<std::string>& password,
+    const std::optional<std::string>& notes = std::nullopt) {
   GrantSettingsAuthorization(
       maho::passwords::PasswordAuthorizationAction::kUpdate);
   return maho_settings_password_helpers::UpdateVaultLoginInCore(
       kSettingsAuthorizationProfile, item_id, expected_revision, title,
-      origins, username, password);
+      origins, username, password, notes);
 }
 
 maho_settings::mojom::VaultOperationResultPtr DeleteVaultItemInCore(
@@ -266,9 +270,17 @@ class MahoSettingsVaultHandlerTest : public testing::Test {
     ASSERT_NE(core_, nullptr);
     core_override_ = std::make_unique<ScopedCoreOverride>(core_);
     ui::TestClipboard::CreateForCurrentThread();
+    // The authorization service is a process-wide singleton: start every test
+    // with no grants and device re-auth required so unauthorized calls are
+    // rejected regardless of test order.
+    auto* authorization =
+        maho::passwords::MahoPasswordAuthorizationService::Get();
+    authorization->ResetForTesting();
+    authorization->SetDeviceReauthRequiredForTesting(true);
   }
 
   void TearDown() override {
+    maho::passwords::MahoPasswordAuthorizationService::Get()->ResetForTesting();
     ui::Clipboard::DestroyClipboardForCurrentThread();
     core_override_.reset();
     maho_core_free(core_);
@@ -426,6 +438,25 @@ TEST_F(MahoSettingsVaultHandlerTest, WrongPassphraseReturnsSafeFailure) {
   EXPECT_EQ("invalid_credentials", result->error_code);
   EXPECT_EQ("Vault operation failed.", result->error_message);
   EXPECT_FALSE(result->status);
+}
+
+TEST_F(MahoSettingsVaultHandlerTest, VaultTrustSettingsDefaultAndRoundTrip) {
+  ASSERT_NE(nullptr, core());
+
+  EXPECT_EQ(15u,
+            ReadVaultAutoLockMinutesFromCore().value_or(0u));
+  EXPECT_TRUE(ReadVaultDeviceAuthRequiredFromCore());
+
+  EXPECT_TRUE(UpdateVaultAutoLockMinutesInCore(60u));
+  EXPECT_EQ(60u, ReadVaultAutoLockMinutesFromCore().value_or(0u));
+  EXPECT_FALSE(UpdateVaultAutoLockMinutesInCore(7u));
+  EXPECT_EQ(60u, ReadVaultAutoLockMinutesFromCore().value_or(0u));
+
+  EXPECT_TRUE(UpdateVaultDeviceAuthRequiredInCore(false));
+  EXPECT_FALSE(ReadVaultDeviceAuthRequiredFromCore());
+
+  EXPECT_TRUE(UpdateVaultAutoLockMinutesInCore(0u));
+  EXPECT_EQ(0u, ReadVaultAutoLockMinutesFromCore().value_or(1u));
 }
 
 TEST_F(MahoSettingsVaultHandlerTest,
@@ -678,9 +709,14 @@ TEST_F(MahoSettingsVaultHandlerTest, UpdateAndDeleteReturnOnlyMetadata) {
                                         "renamed@example.test", std::nullopt);
   ASSERT_TRUE(updated->success);
   ASSERT_TRUE(updated->item);
-  EXPECT_EQ("Updated", updated->item->title);
+  // Mutation responses carry only id + revision (VaultMutationResult); the
+  // updated metadata is observable through a metadata list read.
   EXPECT_GT(updated->item->revision, added->item->revision);
   EXPECT_NE(kSentinel, updated->item->username_hint);
+  auto after_update = ListVaultItemsFromCore(std::nullopt, {}, std::nullopt, 50);
+  ASSERT_TRUE(after_update->success);
+  ASSERT_EQ(1u, after_update->items.size());
+  EXPECT_EQ("Updated", after_update->items[0]->title);
 
   auto deleted =
       DeleteVaultItemInCore(updated->item->id, updated->item->revision);
@@ -715,6 +751,7 @@ TEST_F(MahoSettingsVaultHandlerTest,
       maho::passwords::MahoPasswordAuthorizationService::Get();
   service->ResetForTesting();
   service->SetVaultLockedForTesting(false);
+  service->SetDeviceReauthRequiredForTesting(true);
 
   auto missing = maho_settings_password_helpers::AddVaultLoginInCore(
       kSettingsAuthorizationProfile, "Denied", {"https://denied.example"},
@@ -774,6 +811,765 @@ TEST_F(MahoSettingsVaultHandlerTest, UseVaultSecretReturnsOnlyStatus) {
 }
 
 TEST_F(MahoSettingsVaultHandlerTest,
+       TrashRestoreAndEmptyTrashCycleWithExclusion) {
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+
+  auto login1 = AddVaultLoginInCore("Item 1", {"https://one.example"},
+                                    "user1@example.test", kSentinel);
+  ASSERT_TRUE(login1->success);
+  ASSERT_TRUE(login1->item);
+
+  auto login2 = AddVaultLoginInCore("Item 2", {"https://two.example"},
+                                    "user2@example.test", kSentinel);
+  ASSERT_TRUE(login2->success);
+  ASSERT_TRUE(login2->item);
+
+  // 1. Unauthorized trash fails with reauth_required.
+  auto unauth_trash = maho_settings_password_helpers::TrashVaultItemInCore(
+      kSettingsAuthorizationProfile, login1->item->id, login1->item->revision);
+  EXPECT_FALSE(unauth_trash->success);
+  EXPECT_EQ("reauth_required", unauth_trash->error_code);
+
+  // 2. CAS conflict on trash with full uint64 revision.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  auto conflict_trash = maho_settings_password_helpers::TrashVaultItemInCore(
+      kSettingsAuthorizationProfile, login1->item->id,
+      std::numeric_limits<uint64_t>::max());
+  EXPECT_FALSE(conflict_trash->success);
+  EXPECT_EQ("revision_conflict", conflict_trash->error_code);
+
+  // 3. Authorized trash succeeds and marks trashed_at.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  auto trashed = maho_settings_password_helpers::TrashVaultItemInCore(
+      kSettingsAuthorizationProfile, login1->item->id, login1->item->revision);
+  ASSERT_TRUE(trashed->success);
+  ASSERT_TRUE(trashed->item);
+  EXPECT_GT(trashed->item->revision, login1->item->revision);
+
+  // 4. Trashed item is excluded from normal list, included in trash_only list.
+  auto normal_list = ListVaultItemsFromCore(
+      std::nullopt, {}, std::nullopt, 50, /*trash_only=*/false,
+      /*favorites_only=*/false);
+  ASSERT_TRUE(normal_list->success);
+  ASSERT_EQ(1u, normal_list->items.size());
+  EXPECT_EQ(login2->item->id, normal_list->items[0]->id);
+
+  auto trash_list = ListVaultItemsFromCore(
+      std::nullopt, {}, std::nullopt, 50, /*trash_only=*/true,
+      /*favorites_only=*/false);
+  ASSERT_TRUE(trash_list->success);
+  ASSERT_EQ(1u, trash_list->items.size());
+  EXPECT_EQ(login1->item->id, trash_list->items[0]->id);
+  EXPECT_TRUE(trash_list->items[0]->trashed_at.has_value());
+
+  // 5. Unauthorized restore fails with reauth_required.
+  auto unauth_restore = maho_settings_password_helpers::RestoreVaultItemInCore(
+      kSettingsAuthorizationProfile, login1->item->id, trashed->item->revision);
+  EXPECT_FALSE(unauth_restore->success);
+  EXPECT_EQ("reauth_required", unauth_restore->error_code);
+
+  // 6. CAS conflict on restore.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  auto conflict_restore = maho_settings_password_helpers::RestoreVaultItemInCore(
+      kSettingsAuthorizationProfile, login1->item->id,
+      std::numeric_limits<uint64_t>::max());
+  EXPECT_FALSE(conflict_restore->success);
+  EXPECT_EQ("revision_conflict", conflict_restore->error_code);
+
+  // 7. Authorized restore succeeds and clears trashed_at.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  auto restored = maho_settings_password_helpers::RestoreVaultItemInCore(
+      kSettingsAuthorizationProfile, login1->item->id, trashed->item->revision);
+  ASSERT_TRUE(restored->success);
+  ASSERT_TRUE(restored->item);
+  EXPECT_FALSE(restored->item->trashed_at.has_value());
+  EXPECT_GT(restored->item->revision, trashed->item->revision);
+
+  auto normal_list_after_restore = ListVaultItemsFromCore(
+      std::nullopt, {}, std::nullopt, 50, /*trash_only=*/false,
+      /*favorites_only=*/false);
+  ASSERT_TRUE(normal_list_after_restore->success);
+  EXPECT_EQ(2u, normal_list_after_restore->items.size());
+
+  auto trash_list_after_restore = ListVaultItemsFromCore(
+      std::nullopt, {}, std::nullopt, 50, /*trash_only=*/true,
+      /*favorites_only=*/false);
+  ASSERT_TRUE(trash_list_after_restore->success);
+  EXPECT_TRUE(trash_list_after_restore->items.empty());
+
+  // 8. Re-trash both items and test EmptyVaultTrashInCore.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  ASSERT_TRUE(maho_settings_password_helpers::TrashVaultItemInCore(
+                  kSettingsAuthorizationProfile, login1->item->id,
+                  restored->item->revision)
+                  ->success);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  ASSERT_TRUE(maho_settings_password_helpers::TrashVaultItemInCore(
+                  kSettingsAuthorizationProfile, login2->item->id,
+                  login2->item->revision)
+                  ->success);
+
+  auto full_trash = ListVaultItemsFromCore(
+      std::nullopt, {}, std::nullopt, 50, /*trash_only=*/true,
+      /*favorites_only=*/false);
+  ASSERT_TRUE(full_trash->success);
+  EXPECT_EQ(2u, full_trash->items.size());
+
+  // Empty trash without authorization fails. Grants stay valid for their
+  // lifetime, so revoke the kDelete grants used above first.
+  auto* authorization =
+      maho::passwords::MahoPasswordAuthorizationService::Get();
+  authorization->ResetForTesting();
+  authorization->SetVaultLockedForTesting(false);
+  authorization->SetDeviceReauthRequiredForTesting(true);
+  auto unauth_empty = maho_settings_password_helpers::EmptyVaultTrashInCore(
+      kSettingsAuthorizationProfile);
+  EXPECT_FALSE(unauth_empty->success);
+  EXPECT_EQ("reauth_required", unauth_empty->error_code);
+
+  // Empty trash with authorization permanently tombstones all trashed items.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  auto emptied = maho_settings_password_helpers::EmptyVaultTrashInCore(
+      kSettingsAuthorizationProfile);
+  EXPECT_TRUE(emptied->success);
+
+  auto trash_after_empty = ListVaultItemsFromCore(
+      std::nullopt, {}, std::nullopt, 50, /*trash_only=*/true,
+      /*favorites_only=*/false);
+  ASSERT_TRUE(trash_after_empty->success);
+  EXPECT_TRUE(trash_after_empty->items.empty());
+
+  auto normal_after_empty = ListVaultItemsFromCore(
+      std::nullopt, {}, std::nullopt, 50, /*trash_only=*/false,
+      /*favorites_only=*/false);
+  ASSERT_TRUE(normal_after_empty->success);
+  EXPECT_TRUE(normal_after_empty->items.empty());
+}
+
+TEST_F(MahoSettingsVaultHandlerTest, FavoriteSettingAndFilteringWithCas) {
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+
+  auto login1 = AddVaultLoginInCore("Fav 1", {"https://fav1.example"},
+                                    "user1@example.test", kSentinel);
+  ASSERT_TRUE(login1->success);
+  ASSERT_TRUE(login1->item);
+  EXPECT_FALSE(login1->item->favorite);
+
+  auto login2 = AddVaultLoginInCore("Fav 2", {"https://fav2.example"},
+                                    "user2@example.test", kSentinel);
+  ASSERT_TRUE(login2->success);
+
+  // 1. Unauthorized favorite mutation fails.
+  auto unauth = maho_settings_password_helpers::SetVaultItemFavoriteInCore(
+      kSettingsAuthorizationProfile, login1->item->id, login1->item->revision,
+      true);
+  EXPECT_FALSE(unauth->success);
+  EXPECT_EQ("reauth_required", unauth->error_code);
+
+  // 2. CAS revision conflict with full uint64 revision.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  auto conflict = maho_settings_password_helpers::SetVaultItemFavoriteInCore(
+      kSettingsAuthorizationProfile, login1->item->id,
+      std::numeric_limits<uint64_t>::max(), true);
+  EXPECT_FALSE(conflict->success);
+  EXPECT_EQ("revision_conflict", conflict->error_code);
+
+  // 3. Authorized favorite mutation succeeds.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  auto favorited = maho_settings_password_helpers::SetVaultItemFavoriteInCore(
+      kSettingsAuthorizationProfile, login1->item->id, login1->item->revision,
+      true);
+  ASSERT_TRUE(favorited->success);
+  ASSERT_TRUE(favorited->item);
+  EXPECT_GT(favorited->item->revision, login1->item->revision);
+
+  // 4. List with favorites_only = true returns only login1.
+  auto fav_only = ListVaultItemsFromCore(
+      std::nullopt, {}, std::nullopt, 50, /*trash_only=*/false,
+      /*favorites_only=*/true);
+  ASSERT_TRUE(fav_only->success);
+  ASSERT_EQ(1u, fav_only->items.size());
+  EXPECT_EQ(login1->item->id, fav_only->items[0]->id);
+  EXPECT_TRUE(fav_only->items[0]->favorite);
+
+  // 5. Unfavorite login1.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  auto unfav = maho_settings_password_helpers::SetVaultItemFavoriteInCore(
+      kSettingsAuthorizationProfile, login1->item->id, favorited->item->revision,
+      false);
+  ASSERT_TRUE(unfav->success);
+  ASSERT_TRUE(unfav->item);
+  EXPECT_FALSE(unfav->item->favorite);
+
+  auto fav_none = ListVaultItemsFromCore(
+      std::nullopt, {}, std::nullopt, 50, /*trash_only=*/false,
+      /*favorites_only=*/true);
+  ASSERT_TRUE(fav_none->success);
+  EXPECT_TRUE(fav_none->items.empty());
+}
+
+TEST_F(MahoSettingsVaultHandlerTest, LoginNotesAddUpdateClearAndRead) {
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+
+  // 1. Add login with notes.
+  auto added = AddVaultLoginInCore(
+      "Note Login", {"https://notes.example"}, "user@example.test", kSentinel,
+      std::optional<std::string>("Initial login note secret"));
+  ASSERT_TRUE(added->success);
+  ASSERT_TRUE(added->item);
+  auto metadata = ListVaultItemsFromCore(std::nullopt, {}, std::nullopt, 50);
+  ASSERT_TRUE(metadata->success);
+  ASSERT_EQ(1u, metadata->items.size());
+  EXPECT_TRUE(metadata->items[0]->has_notes);
+
+  // 2. Read notes from core.
+  auto notes_res = GetVaultItemNotesFromCore(added->item->id);
+  EXPECT_TRUE(notes_res.success);
+  ASSERT_TRUE(notes_res.notes.has_value());
+  EXPECT_EQ("Initial login note secret", *notes_res.notes);
+  // The detail/edit surfaces need the stored username, not the masked hint.
+  ASSERT_TRUE(notes_res.username.has_value());
+  EXPECT_EQ("user@example.test", *notes_res.username);
+
+  // 3. Update login notes.
+  auto updated = UpdateVaultLoginInCore(
+      added->item->id, added->item->revision, "Note Login",
+      {"https://notes.example"}, "user@example.test", std::nullopt,
+      std::optional<std::string>("Revised login note secret"));
+  ASSERT_TRUE(updated->success) << updated->error_code.value_or("");
+  ASSERT_TRUE(updated->item);
+  metadata = ListVaultItemsFromCore(std::nullopt, {}, std::nullopt, 50);
+  ASSERT_TRUE(metadata->success);
+  ASSERT_EQ(1u, metadata->items.size());
+  EXPECT_TRUE(metadata->items[0]->has_notes);
+
+  auto updated_notes_res = GetVaultItemNotesFromCore(added->item->id);
+  EXPECT_TRUE(updated_notes_res.success);
+  ASSERT_TRUE(updated_notes_res.notes.has_value());
+  EXPECT_EQ("Revised login note secret", *updated_notes_res.notes);
+
+  // Omitting notes preserves the existing text rather than clearing it.
+  auto preserved = UpdateVaultLoginInCore(
+      added->item->id, updated->item->revision, "Renamed login",
+      {"https://notes.example"}, "user@example.test", std::nullopt);
+  ASSERT_TRUE(preserved->success);
+  ASSERT_TRUE(preserved->item);
+  auto preserved_notes = GetVaultItemNotesFromCore(added->item->id);
+  ASSERT_TRUE(preserved_notes.success);
+  ASSERT_TRUE(preserved_notes.notes);
+  EXPECT_EQ("Revised login note secret", *preserved_notes.notes);
+
+  // 4. Clear notes by passing empty string.
+  auto cleared = UpdateVaultLoginInCore(
+      added->item->id, preserved->item->revision, "Note Login",
+      {"https://notes.example"}, "user@example.test", std::nullopt,
+      std::optional<std::string>(""));
+  ASSERT_TRUE(cleared->success);
+  ASSERT_TRUE(cleared->item);
+  metadata = ListVaultItemsFromCore(std::nullopt, {}, std::nullopt, 50);
+  ASSERT_TRUE(metadata->success);
+  ASSERT_EQ(1u, metadata->items.size());
+  EXPECT_FALSE(metadata->items[0]->has_notes);
+
+  auto cleared_notes_res = GetVaultItemNotesFromCore(added->item->id);
+  EXPECT_TRUE(cleared_notes_res.success);
+  ASSERT_TRUE(cleared_notes_res.notes.has_value());
+  EXPECT_TRUE(cleared_notes_res.notes->empty());
+}
+
+TEST_F(MahoSettingsVaultHandlerTest, SecureNoteAddUpdateAndNotesIsolation) {
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+
+  // 1. Unauthorized add fails.
+  auto unauth_add = maho_settings_password_helpers::AddVaultSecureNoteInCore(
+      kSettingsAuthorizationProfile, "Confidential note",
+      "High security secret body");
+  EXPECT_FALSE(unauth_add->success);
+  EXPECT_EQ("reauth_required", unauth_add->error_code);
+
+  // 2. Authorized add succeeds.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kAdd);
+  auto added = maho_settings_password_helpers::AddVaultSecureNoteInCore(
+      kSettingsAuthorizationProfile, "Confidential note",
+      "High security secret body");
+  ASSERT_TRUE(added->success);
+  ASSERT_TRUE(added->item);
+  auto metadata = ListVaultItemsFromCore(std::nullopt, {}, std::nullopt, 50);
+  ASSERT_TRUE(metadata->success);
+  ASSERT_EQ(1u, metadata->items.size());
+  EXPECT_EQ("Confidential note", metadata->items[0]->title);
+  EXPECT_EQ(maho_settings::mojom::VaultItemKind::kSecureItem,
+            metadata->items[0]->item_kind);
+  EXPECT_TRUE(metadata->items[0]->has_notes);
+  EXPECT_NE("High security secret body", added->item->title);
+  EXPECT_NE("High security secret body", added->item->username_hint);
+
+  // 3. Read notes via GetVaultItemNotesFromCore.
+  auto read_notes = GetVaultItemNotesFromCore(added->item->id);
+  EXPECT_TRUE(read_notes.success);
+  ASSERT_TRUE(read_notes.notes.has_value());
+  EXPECT_EQ("High security secret body", *read_notes.notes);
+
+  // 4. Unauthorized update fails.
+  auto unauth_update =
+      maho_settings_password_helpers::UpdateVaultSecureNoteInCore(
+          kSettingsAuthorizationProfile, added->item->id, added->item->revision,
+          "Updated title", "Updated secret body");
+  EXPECT_FALSE(unauth_update->success);
+  EXPECT_EQ("reauth_required", unauth_update->error_code);
+
+  // 5. CAS revision conflict on update.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  auto conflict = maho_settings_password_helpers::UpdateVaultSecureNoteInCore(
+      kSettingsAuthorizationProfile, added->item->id,
+      std::numeric_limits<uint64_t>::max(), "Updated title",
+      "Updated secret body");
+  EXPECT_FALSE(conflict->success);
+  EXPECT_EQ("revision_conflict", conflict->error_code);
+
+  // 6. Authorized update succeeds.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  auto updated = maho_settings_password_helpers::UpdateVaultSecureNoteInCore(
+      kSettingsAuthorizationProfile, added->item->id, added->item->revision,
+      "Updated title", "Updated secret body");
+  ASSERT_TRUE(updated->success);
+  ASSERT_TRUE(updated->item);
+  metadata = ListVaultItemsFromCore(std::nullopt, {}, std::nullopt, 50);
+  ASSERT_TRUE(metadata->success);
+  ASSERT_EQ(1u, metadata->items.size());
+  EXPECT_EQ("Updated title", metadata->items[0]->title);
+  EXPECT_GT(updated->item->revision, added->item->revision);
+
+  auto read_updated = GetVaultItemNotesFromCore(added->item->id);
+  EXPECT_TRUE(read_updated.success);
+  ASSERT_TRUE(read_updated.notes.has_value());
+  EXPECT_EQ("Updated secret body", *read_updated.notes);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  auto trashed = maho_settings_password_helpers::TrashVaultItemInCore(
+      kSettingsAuthorizationProfile, added->item->id, updated->item->revision);
+  ASSERT_TRUE(trashed->success);
+  auto trashed_notes = GetVaultItemNotesFromCore(added->item->id);
+  EXPECT_FALSE(trashed_notes.success);
+  EXPECT_FALSE(trashed_notes.notes);
+  EXPECT_EQ("not_found", trashed_notes.error_code);
+}
+
+TEST_F(MahoSettingsVaultHandlerTest, TotpSetReadLifecycleAndTrashedExclusion) {
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+
+  auto added = AddVaultLoginInCore("Authenticator item",
+                                   {"https://totp.example"},
+                                   "user@example.test", kSentinel);
+  ASSERT_TRUE(added->success);
+  ASSERT_TRUE(added->item);
+  EXPECT_FALSE(added->item->has_totp);
+
+  // 1. Unauthorized TOTP set fails.
+  auto unauth = maho_settings_password_helpers::SetVaultLoginTotpInCore(
+      kSettingsAuthorizationProfile, added->item->id, added->item->revision,
+      "JBSWY3DPEHPK3PXP");
+  EXPECT_FALSE(unauth->success);
+  EXPECT_EQ("reauth_required", unauth->error_code);
+
+  // 2. CAS revision conflict on TOTP set.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  auto conflict = maho_settings_password_helpers::SetVaultLoginTotpInCore(
+      kSettingsAuthorizationProfile, added->item->id,
+      std::numeric_limits<uint64_t>::max(), "JBSWY3DPEHPK3PXP");
+  EXPECT_FALSE(conflict->success);
+  EXPECT_EQ("revision_conflict", conflict->error_code);
+
+  // 3. Authorized TOTP set succeeds.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  auto set_totp = maho_settings_password_helpers::SetVaultLoginTotpInCore(
+      kSettingsAuthorizationProfile, added->item->id, added->item->revision,
+      "JBSWY3DPEHPK3PXP");
+  ASSERT_TRUE(set_totp->success);
+  ASSERT_TRUE(set_totp->item);
+  auto metadata = ListVaultItemsFromCore(std::nullopt, {}, std::nullopt, 50);
+  ASSERT_TRUE(metadata->success);
+  ASSERT_EQ(1u, metadata->items.size());
+  EXPECT_TRUE(metadata->items[0]->has_totp);
+  EXPECT_GT(set_totp->item->revision, added->item->revision);
+
+  // 4. Read TOTP code.
+  auto code_res = GetVaultTotpCodeFromCore(added->item->id);
+  ASSERT_TRUE(code_res->success);
+  ASSERT_TRUE(code_res->code.has_value());
+  EXPECT_EQ(6u, code_res->code->size());
+  for (char c : *code_res->code) {
+    EXPECT_TRUE(c >= '0' && c <= '9');
+  }
+  EXPECT_GT(code_res->seconds_remaining, 0u);
+  EXPECT_LE(code_res->seconds_remaining, 30u);
+  EXPECT_EQ(30u, code_res->period);
+
+  // 5. Trashed item excludes TOTP generation.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  auto trashed = maho_settings_password_helpers::TrashVaultItemInCore(
+      kSettingsAuthorizationProfile, added->item->id, set_totp->item->revision);
+  ASSERT_TRUE(trashed->success);
+
+  auto trashed_totp = GetVaultTotpCodeFromCore(added->item->id);
+  EXPECT_FALSE(trashed_totp->success);
+  EXPECT_EQ("not_found", trashed_totp->error_code);
+}
+
+TEST_F(MahoSettingsVaultHandlerTest, PasswordGenerationAndStrengthEvaluation) {
+  // 1. Password strength estimation works without unlock.
+  auto weak = EstimatePasswordStrengthInCore("123456");
+  EXPECT_LE(weak.first, 1u);
+  EXPECT_GE(weak.second, 0.0);
+
+  auto strong = EstimatePasswordStrengthInCore(
+      "Tr0ub4dor&3#CorrectHorseBatteryStaple99!");
+  EXPECT_GE(strong.first, 3u);
+  EXPECT_GT(strong.second, 40.0);
+
+  // 2. Generate password mode.
+  maho_settings::mojom::PasswordGeneratorOptions options;
+  options.mode = "password";
+  options.length = 24;
+  options.include_lowercase = true;
+  options.include_uppercase = true;
+  options.include_digits = true;
+  options.include_symbols = true;
+  options.avoid_ambiguous = false;
+
+  auto gen = GeneratePasswordInCore(options);
+  ASSERT_TRUE(gen->success);
+  ASSERT_TRUE(gen->password.has_value());
+  EXPECT_EQ(24u, gen->password->size());
+  EXPECT_LE(gen->strength_score, 4u);
+  EXPECT_EQ(EstimatePasswordStrengthInCore(*gen->password).first,
+            gen->strength_score);
+  EXPECT_NE(std::string::npos, gen->password->find_first_of("abcdefghijklmnopqrstuvwxyz"));
+  EXPECT_NE(std::string::npos, gen->password->find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"));
+  EXPECT_NE(std::string::npos, gen->password->find_first_of("0123456789"));
+  EXPECT_NE(std::string::npos, gen->password->find_first_not_of(
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"));
+
+  // 3. Generate passphrase mode.
+  maho_settings::mojom::PasswordGeneratorOptions passphrase_opts;
+  passphrase_opts.mode = "passphrase";
+  passphrase_opts.word_count = 5;
+  passphrase_opts.separator = "-";
+  passphrase_opts.capitalize = true;
+  passphrase_opts.include_number = true;
+
+  auto gen_passphrase = GeneratePasswordInCore(passphrase_opts);
+  ASSERT_TRUE(gen_passphrase->success);
+  ASSERT_TRUE(gen_passphrase->password.has_value());
+  EXPECT_FALSE(gen_passphrase->password->empty());
+
+  // 4. Invalid options rejection.
+  options.length = 129;
+  auto invalid_len = GeneratePasswordInCore(options);
+  EXPECT_FALSE(invalid_len->success);
+
+  passphrase_opts.word_count = 13;
+  auto invalid_words = GeneratePasswordInCore(passphrase_opts);
+  EXPECT_FALSE(invalid_words->success);
+}
+
+TEST_F(MahoSettingsVaultHandlerTest,
+       VaultHealthReportIdentifiesWeakReusedAndExcludesTrashed) {
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+
+  auto login1 = AddVaultLoginInCore("Weak One", {"https://weak1.example"},
+                                    "u1@example.test", "password");
+  ASSERT_TRUE(login1->success);
+  ASSERT_TRUE(login1->item);
+
+  auto login2 = AddVaultLoginInCore("Weak Two", {"https://weak2.example"},
+                                    "u2@example.test", "password");
+  ASSERT_TRUE(login2->success);
+  ASSERT_TRUE(login2->item);
+
+  auto login3 = AddVaultLoginInCore(
+      "Strong Three", {"https://strong3.example"}, "u3@example.test",
+      "Tr0ub4dor&3#CorrectHorseBatteryStaple99!");
+  ASSERT_TRUE(login3->success);
+  ASSERT_TRUE(login3->item);
+
+  // 1. Initial health report has 3 logins, 2 weak, 1 reused group with 2 items.
+  auto report = GetVaultHealthReportFromCore();
+  ASSERT_TRUE(report->success);
+  EXPECT_EQ(3u, report->total_logins);
+  EXPECT_EQ(2u, report->weak_item_ids.size());
+  ASSERT_EQ(1u, report->reused_groups.size());
+  EXPECT_EQ(2u, report->reused_groups[0].size());
+
+  // 2. Trash login2. Trashed items must be completely excluded from health audit.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  auto trashed = maho_settings_password_helpers::TrashVaultItemInCore(
+      kSettingsAuthorizationProfile, login2->item->id, login2->item->revision);
+  ASSERT_TRUE(trashed->success);
+
+  auto report_after_trash = GetVaultHealthReportFromCore();
+  ASSERT_TRUE(report_after_trash->success);
+  EXPECT_EQ(2u, report_after_trash->total_logins);
+  EXPECT_EQ(1u, report_after_trash->weak_item_ids.size());
+  EXPECT_EQ(login1->item->id, report_after_trash->weak_item_ids[0]);
+  EXPECT_TRUE(report_after_trash->reused_groups.empty());
+}
+
+TEST_F(MahoSettingsVaultHandlerTest,
+       SecretActionRevealCallbackExecutesWithoutClipboardLeak) {
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+
+  auto added = AddVaultLoginInCore("Secret item", {"https://reveal.example"},
+                                   "user@example.test", kSentinel);
+  ASSERT_TRUE(added->success);
+  ASSERT_TRUE(added->item);
+
+  // 1. Unauthorized reveal fails with reauth_required.
+  auto unauth = maho_settings_password_helpers::UseVaultSecretInCore(
+      kSettingsAuthorizationProfile, added->item->id, added->item->revision,
+      maho_settings::mojom::SecretAction::kReveal,
+      base::BindOnce([](const char*) { return true; }));
+  EXPECT_FALSE(unauth->success);
+  EXPECT_EQ("reauth_required", unauth->error_code);
+
+  base::test::TestFuture<std::u16string> initial_clipboard_future;
+  ui::Clipboard::GetForCurrentThread()->ReadText(
+      ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/std::nullopt,
+      initial_clipboard_future.GetCallback());
+  const std::u16string initial_clipboard = initial_clipboard_future.Get();
+
+  // 2. Authorized reveal invokes callback with plaintext, but does not touch clipboard.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kCopy);
+  std::string revealed_secret;
+  auto revealed = maho_settings_password_helpers::UseVaultSecretInCore(
+      kSettingsAuthorizationProfile, added->item->id, added->item->revision,
+      maho_settings::mojom::SecretAction::kReveal,
+      base::BindOnce(
+          [](std::string* out, const char* secret) {
+            if (secret) {
+              *out = secret;
+            }
+            return true;
+          },
+          &revealed_secret));
+  ASSERT_TRUE(revealed->success);
+  EXPECT_EQ(kSentinel, revealed_secret);
+
+  base::test::TestFuture<std::u16string> after_clipboard_future;
+  ui::Clipboard::GetForCurrentThread()->ReadText(
+      ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/std::nullopt,
+      after_clipboard_future.GetCallback());
+  const std::u16string after_clipboard = after_clipboard_future.Get();
+  EXPECT_EQ(initial_clipboard, after_clipboard);
+  EXPECT_EQ(std::string::npos,
+            base::UTF16ToUTF8(after_clipboard).find(kSentinel));
+  auto current = ListVaultItemsFromCore(std::nullopt, {}, std::nullopt, 50);
+  ASSERT_TRUE(current->success);
+  ASSERT_EQ(1u, current->items.size());
+
+  // 3. Callback returning false reports action_failed.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kCopy);
+  auto rejected = maho_settings_password_helpers::UseVaultSecretInCore(
+      kSettingsAuthorizationProfile, added->item->id, current->items[0]->revision,
+      maho_settings::mojom::SecretAction::kReveal,
+      base::BindOnce([](const char*) { return false; }));
+  EXPECT_FALSE(rejected->success);
+  EXPECT_EQ("action_failed", rejected->error_code);
+  current = ListVaultItemsFromCore(std::nullopt, {}, std::nullopt, 50);
+  ASSERT_TRUE(current->success);
+  ASSERT_EQ(1u, current->items.size());
+
+  // 4. Trashed item secret cannot be revealed.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  auto trashed = maho_settings_password_helpers::TrashVaultItemInCore(
+      kSettingsAuthorizationProfile, added->item->id, current->items[0]->revision);
+  ASSERT_TRUE(trashed->success);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kCopy);
+  auto trashed_reveal = maho_settings_password_helpers::UseVaultSecretInCore(
+      kSettingsAuthorizationProfile, added->item->id, trashed->item->revision,
+      maho_settings::mojom::SecretAction::kReveal,
+      base::BindOnce([](const char*) { return true; }));
+  EXPECT_FALSE(trashed_reveal->success);
+  EXPECT_EQ("secret_unavailable", trashed_reveal->error_code);
+}
+
+TEST_F(MahoSettingsVaultHandlerTest,
+       LockedVaultDeniesAllNewVaultOperations) {
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+
+  auto login = AddVaultLoginInCore("Account", {"https://example.test"},
+                                   "user@example.test", kSentinel);
+  ASSERT_TRUE(login->success);
+  ASSERT_TRUE(login->item);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kAdd);
+  auto note = maho_settings_password_helpers::AddVaultSecureNoteInCore(
+      kSettingsAuthorizationProfile, "Note title", "Note content");
+  ASSERT_TRUE(note->success);
+  ASSERT_TRUE(note->item);
+
+  // Lock the vault.
+  ASSERT_TRUE(LockVaultInCore()->success);
+
+  // Verify all data helpers return "locked" error code.
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  EXPECT_EQ("locked", maho_settings_password_helpers::TrashVaultItemInCore(
+                          kSettingsAuthorizationProfile, login->item->id,
+                          login->item->revision)
+                          ->error_code);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  EXPECT_EQ("locked", maho_settings_password_helpers::RestoreVaultItemInCore(
+                          kSettingsAuthorizationProfile, login->item->id,
+                          login->item->revision)
+                          ->error_code);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  EXPECT_EQ("locked", maho_settings_password_helpers::EmptyVaultTrashInCore(
+                          kSettingsAuthorizationProfile)
+                          ->error_code);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  EXPECT_EQ("locked",
+            maho_settings_password_helpers::SetVaultItemFavoriteInCore(
+                kSettingsAuthorizationProfile, login->item->id,
+                login->item->revision, true)
+                ->error_code);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kAdd);
+  EXPECT_EQ("locked", maho_settings_password_helpers::AddVaultSecureNoteInCore(
+                          kSettingsAuthorizationProfile, "Locked note", "Body")
+                          ->error_code);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  EXPECT_EQ("locked",
+            maho_settings_password_helpers::UpdateVaultSecureNoteInCore(
+                kSettingsAuthorizationProfile, note->item->id,
+                note->item->revision, "New title", "New body")
+                ->error_code);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  EXPECT_EQ("locked", maho_settings_password_helpers::SetVaultLoginTotpInCore(
+                          kSettingsAuthorizationProfile, login->item->id,
+                          login->item->revision, "JBSWY3DPEHPK3PXP")
+                          ->error_code);
+
+  EXPECT_EQ("locked", GetVaultItemNotesFromCore(login->item->id).error_code);
+  EXPECT_EQ("locked", GetVaultTotpCodeFromCore(login->item->id)->error_code);
+  EXPECT_EQ("locked", GetVaultHealthReportFromCore()->error_code);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kCopy);
+  EXPECT_EQ("locked",
+            maho_settings_password_helpers::UseVaultSecretInCore(
+                kSettingsAuthorizationProfile, login->item->id,
+                login->item->revision,
+                maho_settings::mojom::SecretAction::kReveal,
+                base::BindOnce([](const char*) { return true; }))
+                ->error_code);
+
+  // Generator and strength evaluation still succeed while locked.
+  maho_settings::mojom::PasswordGeneratorOptions options;
+  options.length = 16;
+  auto gen = GeneratePasswordInCore(options);
+  EXPECT_TRUE(gen->success);
+
+  auto strength = EstimatePasswordStrengthInCore("password-candidate");
+  EXPECT_GE(strength.first, 0u);
+}
+
+TEST_F(MahoSettingsVaultHandlerTest,
+       FullUint64RevisionDecimalRoundTripCAS) {
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+
+  auto login = AddVaultLoginInCore("CAS item", {"https://cas.example"},
+                                   "cas@example.test", kSentinel);
+  ASSERT_TRUE(login->success);
+  ASSERT_TRUE(login->item);
+
+  const uint64_t full_uint64_max = std::numeric_limits<uint64_t>::max();
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  EXPECT_EQ("revision_conflict",
+            maho_settings_password_helpers::SetVaultItemFavoriteInCore(
+                kSettingsAuthorizationProfile, login->item->id, full_uint64_max,
+                true)
+                ->error_code);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  EXPECT_EQ("revision_conflict",
+            maho_settings_password_helpers::TrashVaultItemInCore(
+                kSettingsAuthorizationProfile, login->item->id, full_uint64_max)
+                ->error_code);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  EXPECT_EQ("revision_conflict",
+            maho_settings_password_helpers::RestoreVaultItemInCore(
+                kSettingsAuthorizationProfile, login->item->id, full_uint64_max)
+                ->error_code);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  EXPECT_EQ("revision_conflict",
+            maho_settings_password_helpers::SetVaultLoginTotpInCore(
+                kSettingsAuthorizationProfile, login->item->id, full_uint64_max,
+                "JBSWY3DPEHPK3PXP")
+                ->error_code);
+
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  EXPECT_EQ("revision_conflict",
+            maho_settings_password_helpers::UpdateVaultSecureNoteInCore(
+                kSettingsAuthorizationProfile, login->item->id, full_uint64_max,
+                "Title", "Notes")
+                ->error_code);
+}
+
+TEST_F(MahoSettingsVaultHandlerTest,
        SavedPasswordLibraryAdapterListsAndSearchesMetadataOnly) {
   ASSERT_TRUE(
       InitializeVaultInCore("correct passphrase", "recovery key")->success);
@@ -821,8 +1617,12 @@ TEST_F(MahoSettingsVaultHandlerTest,
       {"https://crud.example"}, "second@example.test", std::nullopt);
   ASSERT_TRUE(updated->success);
   ASSERT_TRUE(updated->item);
-  EXPECT_EQ("Updated", updated->item->title);
   EXPECT_GT(updated->item->revision, added->item->revision);
+  auto after_update = ListSavedPasswordLibraryItemsFromCore(std::nullopt,
+                                                            std::nullopt, 50);
+  ASSERT_TRUE(after_update->success);
+  ASSERT_EQ(1u, after_update->items.size());
+  EXPECT_EQ("Updated", after_update->items[0]->title);
 
   auto deleted = DeleteSavedPasswordLibraryItemInCore(updated->item->id,
                                                       updated->item->revision);
@@ -1049,16 +1849,24 @@ TEST_F(MahoSettingsVaultHandlerTest,
   EXPECT_FALSE(invalid_limit->success);
   EXPECT_EQ("invalid_limit", invalid_limit->error_code);
 
-  auto unsupported_update =
-      UpdateVaultLoginInCore("item-1", std::numeric_limits<uint64_t>::max(),
-                             "Title", {}, "user", std::nullopt);
-  EXPECT_FALSE(unsupported_update->success);
-  EXPECT_EQ("unsupported_revision", unsupported_update->error_code);
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+  auto added = AddVaultLoginInCore("Example account", {"https://example.test"},
+                                   "person@example.test", kSentinel);
+  ASSERT_TRUE(added->success);
+  ASSERT_TRUE(added->item);
+  const std::string item_id = added->item->id;
 
-  auto unsupported_delete =
-      DeleteVaultItemInCore("item-1", std::numeric_limits<uint64_t>::max());
-  EXPECT_FALSE(unsupported_delete->success);
-  EXPECT_EQ("unsupported_revision", unsupported_delete->error_code);
+  auto conflict_update =
+      UpdateVaultLoginInCore(item_id, std::numeric_limits<uint64_t>::max(),
+                             "Title", {}, "user", std::nullopt);
+  EXPECT_FALSE(conflict_update->success);
+  EXPECT_EQ("revision_conflict", conflict_update->error_code);
+
+  auto conflict_delete =
+      DeleteVaultItemInCore(item_id, std::numeric_limits<uint64_t>::max());
+  EXPECT_FALSE(conflict_delete->success);
+  EXPECT_EQ("revision_conflict", conflict_delete->error_code);
 }
 
 TEST_F(MahoSettingsVaultHandlerTest, SecretBearingBridgeItemIsRejected) {

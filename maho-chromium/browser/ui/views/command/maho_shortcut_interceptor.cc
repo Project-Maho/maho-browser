@@ -375,6 +375,25 @@ bool MahoShortcutInterceptor::MaybeHandleKeyEvent(
     return false;
   }
 
+  // Dismiss a visible command overlay on Escape from WebContents focus.
+  if (event.windows_key_code == ui::VKEY_ESCAPE &&
+      !(event.GetModifiers() & (blink::WebInputEvent::kAltKey |
+                                blink::WebInputEvent::kControlKey |
+                                blink::WebInputEvent::kMetaKey |
+                                blink::WebInputEvent::kShiftKey))) {
+    if (browser) {
+      if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser)) {
+        if (auto* controller =
+                browser_view->GetMahoCommandOverlayControllerForTesting()) {
+          if (controller->IsVisible()) {
+            controller->Hide();
+            return true;
+          }
+        }
+      }
+    }
+  }
+
   if (g_recording_mode) {
     std::string key = VKeyToString(event.windows_key_code);
     if (!key.empty()) {

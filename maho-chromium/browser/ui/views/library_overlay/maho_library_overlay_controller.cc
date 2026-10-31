@@ -9,6 +9,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/compositor/layer.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/view.h"
@@ -74,6 +75,9 @@ void MahoLibraryOverlayController::Show(views::Widget* parent_widget,
           weak_factory_.GetWeakPtr()),
       restore_callback_, delete_callback_);
   overlay_view->SetPalette(palette_);
+  overlay_view->set_palette_refresh_callback(base::BindRepeating(
+      &MahoLibraryOverlayController::RefreshPaletteFromSidebar,
+      base::Unretained(this)));
 
   widget_ = std::make_unique<views::Widget>();
   views::Widget::InitParams params(
@@ -126,6 +130,21 @@ void MahoLibraryOverlayController::SetPalette(
   if (overlay_view_) {
     overlay_view_->SetPalette(palette_);
   }
+}
+
+void MahoLibraryOverlayController::RefreshPaletteFromSidebar() {
+  if (!sidebar_container_) {
+    return;
+  }
+  auto* sidebar = views::AsViewClass<MahoSidebarView>(
+      sidebar_container_->sidebar_view());
+  if (!sidebar) {
+    return;
+  }
+  // The rail is the palette authority; re-apply its live snapshot so this
+  // widget's own theme-change notification can never leave the overlay painted
+  // from a palette the rail has already replaced.
+  SetPalette(sidebar->sidebar_palette());
 }
 
 void MahoLibraryOverlayController::Dismiss(DismissReason reason) {

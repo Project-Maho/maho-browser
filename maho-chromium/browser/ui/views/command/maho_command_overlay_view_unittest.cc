@@ -418,7 +418,8 @@ class MahoCommandOverlayRemoteViewTest : public BrowserWithTestWindowTest {
     views::Widget::InitParams params(
         views::Widget::InitParams::CLIENT_OWNS_WIDGET,
         views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    params.context = browser()->window()->GetNativeWindow();
+    // TestBrowserWindow has no native window; use the harness root context.
+    params.context = GetContext();
     widget_ = std::make_unique<views::Widget>();
     widget_->Init(std::move(params));
 
@@ -559,6 +560,9 @@ TEST_F(MahoCommandOverlayRemoteViewTest,
        EnterNavigatesExactEncodedRemoteDestination) {
   AddTab(browser(), GURL("about:blank"));
   auto* view = CreateBrowserView();
+  // Same as above: stop the continuous selector animation so mock-time
+  // draining terminates.
+  view->GetActionSelectorForTesting()->SetVisible(false);
   view->GetModelForTesting()->SetRemoteSearchSourceForTesting(
       std::make_unique<OverlayFakeRemoteSource>(&remote_state_));
   StartViewQuery(view, u"weather seoul");
@@ -579,7 +583,7 @@ TEST_F(MahoCommandOverlayRemoteViewTest,
             model->results()[model->selected_index()].key);
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_NE(nullptr, contents);
 
   EXPECT_TRUE(SendKey(view, ui::VKEY_RETURN));
@@ -590,6 +594,56 @@ TEST_F(MahoCommandOverlayRemoteViewTest,
 
   EXPECT_EQ(destination, contents->GetLastCommittedURL());
   EXPECT_EQ(1, dismiss_count());
+}
+
+TEST(MahoCommandOverlayInlineCompletionTest, CompletesHostFromHistory) {
+  CommandSuggestion history;
+  history.type = CommandSuggestionType::kHistory;
+  history.key = "history:gh";
+  history.execution_payload = "https://www.github.com/maho/repo";
+  const std::vector<CommandSuggestion> results = {history};
+
+  EXPECT_EQ("github.com", MahoCommandOverlayView::ComputeInlineCompletion(
+                              "git", results));
+  EXPECT_EQ("www.github.com", MahoCommandOverlayView::ComputeInlineCompletion(
+                                  "www.g", results));
+  EXPECT_EQ("github.com/maho/repo",
+            MahoCommandOverlayView::ComputeInlineCompletion("github.com/m",
+                                                            results));
+  // Case of the typed prefix is preserved.
+  EXPECT_EQ("GIThub.com", MahoCommandOverlayView::ComputeInlineCompletion(
+                              "GIT", results));
+  EXPECT_FALSE(
+      MahoCommandOverlayView::ComputeInlineCompletion("hub", results));
+  EXPECT_FALSE(MahoCommandOverlayView::ComputeInlineCompletion("github.com",
+                                                               results));
+  EXPECT_FALSE(
+      MahoCommandOverlayView::ComputeInlineCompletion("git hub", results));
+
+  CommandSuggestion search;
+  search.type = CommandSuggestionType::kSearch;
+  search.execution_payload = "https://www.google.com/search?q=git";
+  EXPECT_FALSE(MahoCommandOverlayView::ComputeInlineCompletion("goo",
+                                                               {search}));
+}
+
+TEST(MahoCommandOverlayInlineCompletionTest, SelectionTextForSuggestions) {
+  CommandSuggestion search;
+  search.type = CommandSuggestionType::kSearch;
+  search.key = "search:cats";
+  search.execution_payload = "https://www.google.com/search?q=cats";
+  EXPECT_EQ("cats", MahoCommandOverlayView::TextfieldTextForSuggestion(search));
+
+  CommandSuggestion tab;
+  tab.type = CommandSuggestionType::kTab;
+  tab.execution_payload = "https://example.com/";
+  EXPECT_EQ("https://example.com/",
+            MahoCommandOverlayView::TextfieldTextForSuggestion(tab));
+
+  CommandSuggestion action;
+  action.type = CommandSuggestionType::kAction;
+  action.execution_payload = "new_tab";
+  EXPECT_EQ("", MahoCommandOverlayView::TextfieldTextForSuggestion(action));
 }
 
 }  // namespace

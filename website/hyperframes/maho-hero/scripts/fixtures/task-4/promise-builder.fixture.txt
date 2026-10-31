@@ -1,7 +1,0 @@
-<link rel="stylesheet" href="../shared/frame.css" />
-<div class="maho-frame" data-composition-id="spaces" data-width="1920" data-height="1080" data-fps="30">
-  <img class="maho-background-layer maho-background-image" data-maho-background src="../assets/originals/water-lilies.jpg" alt="" />
-  <div class="maho-browser-camera" data-maho-camera-wrapper="spaces"><video class="clip maho-source-video" src="../assets/originals/spaces.mov" data-start="0" data-duration="12.733333" data-track-index="1" muted playsinline></video></div>
-</div>
-<script src="../node_modules/gsap/dist/gsap.min.js"></script><script src="../shared/frame.js"></script>
-<script>MahoHeroFrame.registerCameraTimeline("spaces", (camera) => { Promise.resolve().then(() => camera.to({ x: 1, duration: 1 }, 0)); });</script>

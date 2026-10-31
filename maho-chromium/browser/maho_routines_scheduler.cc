@@ -27,10 +27,34 @@ void MahoRoutinesScheduler::Start() {
 
 void MahoRoutinesScheduler::Stop() {
   timer_.Stop();
+  weak_factory_.InvalidateWeakPtrs();
+  tick_in_flight_ = false;
 }
 
 void MahoRoutinesScheduler::OnTick() {
-  RunTick(base::Time::Now().InSecondsFSinceUnixEpoch());
+  if (tick_in_flight_) {
+    return;
+  }
+  tick_in_flight_ = true;
+  const uint64_t generation = GetCoreGeneration();
+  PostCoreTask<std::optional<bool>>(
+      FROM_HERE,
+      base::BindOnce([](uint64_t generation, int64_t now_sec) {
+        if (generation != GetCoreGeneration()) {
+          return std::optional<bool>();
+        }
+        return EvaluateTick(GetCore(), now_sec);
+      }, generation, base::Time::Now().InSecondsFSinceUnixEpoch()),
+      base::BindOnce([](base::WeakPtr<MahoRoutinesScheduler> owner,
+                        uint64_t generation, std::optional<bool> locked) {
+        if (!owner) {
+          return;
+        }
+        owner->tick_in_flight_ = false;
+        if (generation == GetCoreGeneration() && locked) {
+          NotifyVaultLockStateChanged(*locked);
+        }
+      }, weak_factory_.GetWeakPtr(), generation));
 }
 
 void MahoRoutinesScheduler::RunTickForTesting(int64_t now_sec) {
@@ -57,34 +81,25 @@ bool MahoRoutinesScheduler::IsLockedVaultStatusJson(
   return !lock_state || *lock_state != "unlocked";
 }
 
-void MahoRoutinesScheduler::PublishVaultLockState() {
-  if (!core_) {
-    return;
+void MahoRoutinesScheduler::RunTick(int64_t now_sec) {
+  if (auto locked = EvaluateTick(core_, now_sec)) {
+    NotifyVaultLockStateChanged(*locked);
   }
-  char* status_json = maho_vault_status_json(core_);
-  if (!status_json) {
-    // The status read itself failed; publish the fail-closed state rather than
-    // leaving a stale "unlocked" broadcast in place.
-    maho::NotifyVaultLockStateChanged(/*locked=*/true);
-    return;
-  }
-  const std::string status(status_json);
-  maho_string_free(status_json);
-  maho::NotifyVaultLockStateChanged(IsLockedVaultStatusJson(status));
 }
 
-void MahoRoutinesScheduler::RunTick(int64_t now_sec) {
-  if (!core_) {
-    return;
+std::optional<bool> MahoRoutinesScheduler::EvaluateTick(
+    MahoCore* core, int64_t now_sec) {
+  if (!core) {
+    return std::nullopt;
   }
-  maho_routines_tick(core_, now_sec);
+  maho_routines_tick(core, now_sec);
   const int32_t archived_count =
-      maho_core_auto_archive_conversations(core_, now_sec);
+      maho_core_auto_archive_conversations(core, now_sec);
   // -2 means the user-disabled policy had no archive work. Other negative
   // values are genuine failures, so stop the pass rather than operating on a
   // core whose scheduled maintenance just failed.
   if (archived_count < 0 && archived_count != -2) {
-    return;
+    return std::nullopt;
   }
 
   // Desktop's only driver of the core periodic tick, which is where the Vault
@@ -95,13 +110,19 @@ void MahoRoutinesScheduler::RunTick(int64_t now_sec) {
   // so running it on the scheduler cadence cannot postpone an auto-lock. The
   // returned update JSON is owned by the caller; nothing here consumes it, so
   // free it immediately.
-  if (char* updates_json = maho_core_tick_at(core_, now_sec)) {
+  if (char* updates_json = maho_core_tick_at(core, now_sec)) {
     maho_string_free(updates_json);
   }
 
   // Broadcast whatever lock state the tick left behind, so UI surfaces holding
   // transient secret state re-gate as soon as the Vault auto-locks.
-  PublishVaultLockState();
+  char* status_json = maho_vault_status_json(core);
+  if (!status_json) {
+    return true;
+  }
+  const bool locked = IsLockedVaultStatusJson(status_json);
+  maho_string_free(status_json);
+  return locked;
 }
 
 }  // namespace maho

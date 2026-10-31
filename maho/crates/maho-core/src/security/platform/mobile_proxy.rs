@@ -15,28 +15,60 @@ use crate::security::{
     AuthenticatedKeyOperationCompletion, AuthenticatedKeyOperationKind,
     AuthenticatedKeyOperationRequest, AuthenticatedKeyOperationResult, BiometricAuthenticator,
     DeviceKeyStore, HardwareOperationId, HardwareSecurityCapabilities, HardwareSecurityError,
-    HardwareSecurityProvider, ProtectionLevel, UserPresenceAvailability,
-    UserPresenceCompletion, UserPresencePolicy, UserPresenceRequest, UserPresenceResult,
+    HardwareSecurityProvider, ProtectionLevel, UserPresenceAvailability, UserPresenceCompletion,
+    UserPresencePolicy, UserPresenceRequest, UserPresenceResult,
 };
 use maho_types::hardware_security::{
-    DeviceKeyHandle, DeviceKeyPolicy, DeviceSignature,
-    HardwareProviderKind, PlatformWrappedKey, UserVerificationKind,
+    DeviceKeyHandle, DeviceKeyPolicy, DeviceSignature, HardwareProviderKind, PlatformWrappedKey,
+    UserVerificationKind,
 };
 
 /// Mobile platform delegate trait that Swift (iOS) or Kotlin (Android) shell wires into Rust core.
 pub trait MobilePlatformDelegate: Send + Sync {
     fn capabilities(&self) -> HardwareSecurityCapabilities;
-    fn get_or_create_key(&self, label: &str, policy: &DeviceKeyPolicy) -> Result<DeviceKeyHandle, HardwareSecurityError>;
-    fn wrap_key_material(&self, key: &DeviceKeyHandle, plaintext: &[u8], aad: &[u8]) -> Result<PlatformWrappedKey, HardwareSecurityError>;
-    fn unwrap_key_material(&self, key: &DeviceKeyHandle, wrapped: &PlatformWrappedKey, aad: &[u8]) -> Result<Zeroizing<Vec<u8>>, HardwareSecurityError>;
-    fn sign_challenge(&self, key: &DeviceKeyHandle, challenge: &[u8]) -> Result<DeviceSignature, HardwareSecurityError>;
+    fn get_or_create_key(
+        &self,
+        label: &str,
+        policy: &DeviceKeyPolicy,
+    ) -> Result<DeviceKeyHandle, HardwareSecurityError>;
+    fn wrap_key_material(
+        &self,
+        key: &DeviceKeyHandle,
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> Result<PlatformWrappedKey, HardwareSecurityError>;
+    fn unwrap_key_material(
+        &self,
+        key: &DeviceKeyHandle,
+        wrapped: &PlatformWrappedKey,
+        aad: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, HardwareSecurityError>;
+    fn sign_challenge(
+        &self,
+        key: &DeviceKeyHandle,
+        challenge: &[u8],
+    ) -> Result<DeviceSignature, HardwareSecurityError>;
     fn delete_key(&self, key: &DeviceKeyHandle) -> Result<(), HardwareSecurityError>;
 
-    fn check_presence_availability(&self, policy: &UserPresencePolicy) -> Result<UserPresenceAvailability, HardwareSecurityError>;
-    fn begin_presence_authentication(&self, request: UserPresenceRequest, completion: UserPresenceCompletion) -> Result<HardwareOperationId, HardwareSecurityError>;
-    fn cancel_presence_authentication(&self, operation: HardwareOperationId) -> Result<(), HardwareSecurityError>;
+    fn check_presence_availability(
+        &self,
+        policy: &UserPresencePolicy,
+    ) -> Result<UserPresenceAvailability, HardwareSecurityError>;
+    fn begin_presence_authentication(
+        &self,
+        request: UserPresenceRequest,
+        completion: UserPresenceCompletion,
+    ) -> Result<HardwareOperationId, HardwareSecurityError>;
+    fn cancel_presence_authentication(
+        &self,
+        operation: HardwareOperationId,
+    ) -> Result<(), HardwareSecurityError>;
 
-    fn begin_authenticated_key_operation(&self, request: AuthenticatedKeyOperationRequest, completion: AuthenticatedKeyOperationCompletion) -> Result<HardwareOperationId, HardwareSecurityError>;
+    fn begin_authenticated_key_operation(
+        &self,
+        request: AuthenticatedKeyOperationRequest,
+        completion: AuthenticatedKeyOperationCompletion,
+    ) -> Result<HardwareOperationId, HardwareSecurityError>;
 }
 
 /// Fallback mobile in-memory store when no native delegate is yet registered.
@@ -375,7 +407,9 @@ impl HardwareSecurityProvider for MobileHardwareSecurityProxy {
                     &request.input_payload,
                     &request.aad,
                 ) {
-                    Ok(wrapped) => completion(Ok(AuthenticatedKeyOperationResult::Wrapped(wrapped))),
+                    Ok(wrapped) => {
+                        completion(Ok(AuthenticatedKeyOperationResult::Wrapped(wrapped)))
+                    }
                     Err(e) => completion(Err(e)),
                 }
             }
@@ -386,14 +420,10 @@ impl HardwareSecurityProvider for MobileHardwareSecurityProxy {
                     iv_or_nonce: None,
                     platform_metadata: None,
                 };
-                match self.unwrap_key_material(
-                    &request.key_handle,
-                    &wrapped,
-                    &request.aad,
-                ) {
-                    Ok(unwrapped) => {
-                        completion(Ok(AuthenticatedKeyOperationResult::Unwrapped(unwrapped.to_vec())))
-                    }
+                match self.unwrap_key_material(&request.key_handle, &wrapped, &request.aad) {
+                    Ok(unwrapped) => completion(Ok(AuthenticatedKeyOperationResult::Unwrapped(
+                        unwrapped.to_vec(),
+                    ))),
                     Err(e) => completion(Err(e)),
                 }
             }

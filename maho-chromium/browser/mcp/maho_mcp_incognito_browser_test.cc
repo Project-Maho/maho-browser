@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <utility>
+
 #include <unistd.h>
 
 #include <memory>
@@ -18,6 +20,9 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -146,7 +151,7 @@ const base::DictValue* FindNodeForElementId(const base::Value& node,
 }
 
 int ActiveTabSessionId(Browser* browser) {
-  content::WebContents* wc = browser->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* wc = browser->GetTabStripModel()->GetActiveWebContents();
   if (!wc) {
     return 0;
   }
@@ -159,7 +164,7 @@ using MahoMcpIncognitoBrowserTest = InProcessBrowserTest;
 
 IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
                        NormalTransportPositiveControl) {
-  const int regular_id = ActiveTabSessionId(browser());
+  const int regular_id = ActiveTabSessionId(static_cast<Browser*>(browser()));
   ASSERT_NE(regular_id, 0);
 
   auto session = MakeInitializedSession();
@@ -184,7 +189,7 @@ IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest, OtrTargetsAreNonEnumerable) {
-  Browser* incognito = CreateIncognitoBrowser();
+  Browser* incognito = static_cast<Browser*>(CreateIncognitoBrowser());
   ASSERT_TRUE(incognito);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, GURL("about:blank")));
   const int otr_id = ActiveTabSessionId(incognito);
@@ -204,7 +209,7 @@ IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest, OtrTargetsAreNonEnumerable) 
 
 IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
                        DirectOtrIdIsNonRevealingNotFound) {
-  Browser* incognito = CreateIncognitoBrowser();
+  Browser* incognito = static_cast<Browser*>(CreateIncognitoBrowser());
   ASSERT_TRUE(incognito);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, GURL("about:blank")));
   const int otr_id = ActiveTabSessionId(incognito);
@@ -233,7 +238,7 @@ IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
                        ZeroAndOmittedWithOtrActiveAreDenied) {
-  Browser* incognito = CreateIncognitoBrowser();
+  Browser* incognito = static_cast<Browser*>(CreateIncognitoBrowser());
   ASSERT_TRUE(incognito);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, GURL("about:blank")));
 
@@ -256,7 +261,7 @@ IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
                        ActiveSwitchRaceCannotRetarget) {
-  const int regular_id = ActiveTabSessionId(browser());
+  const int regular_id = ActiveTabSessionId(static_cast<Browser*>(browser()));
   ASSERT_NE(regular_id, 0);
 
   auto session = MakeInitializedSession();
@@ -266,7 +271,7 @@ IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
   ASSERT_TRUE(before.GetDict().FindDict("result"));
 
   // Switch the active/frontmost window to an OTR window.
-  Browser* incognito = CreateIncognitoBrowser();
+  Browser* incognito = static_cast<Browser*>(CreateIncognitoBrowser());
   ASSERT_TRUE(incognito);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, GURL("about:blank")));
   const int otr_id = ActiveTabSessionId(incognito);
@@ -296,9 +301,9 @@ IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
       browser(), GURL("about:blank"),
       WindowOpenDisposition::NEW_FOREGROUND_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-  const int tab_id = ActiveTabSessionId(browser());
+  const int tab_id = ActiveTabSessionId(static_cast<Browser*>(browser()));
   ASSERT_NE(tab_id, 0);
-  const int closed_index = browser()->tab_strip_model()->active_index();
+  const int closed_index = browser()->GetTabStripModel()->active_index();
 
   auto session = MakeInitializedSession();
   base::Value before =
@@ -306,7 +311,7 @@ IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
                base::StringPrintf(R"({"tab_id":%d})", tab_id), 2);
   ASSERT_TRUE(before.GetDict().FindDict("result"));
 
-  browser()->tab_strip_model()->CloseWebContentsAt(
+  browser()->GetTabStripModel()->CloseWebContentsAt(
       closed_index, TabCloseTypes::CLOSE_NONE);
 
   base::Value after =
@@ -323,7 +328,7 @@ IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(),
       GURL("data:text/html,<input%20id%3D'mcp-target'%20aria-label%3D'MCP%20target'>")));
-  const int tab_id = ActiveTabSessionId(browser());
+  const int tab_id = ActiveTabSessionId(static_cast<Browser*>(browser()));
   ASSERT_NE(tab_id, 0);
 
   auto session = MakeInitializedTrustedCliSession();
@@ -395,7 +400,7 @@ IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(),
       GURL("data:text/html,<input%20id%3D'mcp-target'%20aria-label%3D'MCP%20target'>")));
-  const int tab_id = ActiveTabSessionId(browser());
+  const int tab_id = ActiveTabSessionId(static_cast<Browser*>(browser()));
   ASSERT_NE(tab_id, 0);
 
   auto session = MakeInitializedTrustedCliSession();
@@ -434,7 +439,7 @@ IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
       "</body></html>";
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(html)));
 
-  int tab_id = GetActiveTabId();
+  const int tab_id = ActiveTabSessionId(static_cast<Browser*>(browser()));
   ASSERT_GT(tab_id, 0);
 
   auto session = MakeInitializedTrustedCliSession();

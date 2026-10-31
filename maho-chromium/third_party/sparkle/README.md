@@ -11,8 +11,8 @@ delegate (`maho-chromium/browser/updates/maho_update_delegate_mac.mm`).
 
 - `sparkle-version.txt` — pinned version string (CI drift check reads this)
 - `LICENSE` — Sparkle MIT license (redistribution requirement)
-- `Sparkle.framework` — the framework binary (added during Phase A.4 build wiring;
-  fetched from the pinned release tarball, NOT committed as source)
+- `Sparkle.framework` — the framework binary (fetched from the pinned release
+  tarball, vendored as a binary, NOT committed as source)
 
 ## Why 2.9.4 (minimum 2.9.2)
 
@@ -26,12 +26,15 @@ hardening:
 
 ## Signing key
 
-The Sparkle EdDSA signing key for Maho was generated 2026-07-11 via this
-release's `bin/generate_keys` tool.
+The release pipeline signs update appcasts with an EdDSA key (standard Sparkle
+`sign_update`).
 
 - **SUPublicEDKey** (embedded in `Info.plist`): `iwdrdct4loEJl8WbHsfhhHMNcUygZ54N6uIveroNTbw=`
-- Private key: stored locally in `.secrets/signing/sparkle_ed_private.pem`
-  (gitignored) and in the macOS login Keychain of the release operator.
+  — the public key that verifies update signatures. It ships in every official
+  build and is safe to publish.
+- The private signing key is not part of this repository. Third-party builds
+  should not sign update feeds as Maho; produce your own signing key for your
+  own update channel.
 
 ## Upgrade procedure
 
@@ -39,11 +42,11 @@ release's `bin/generate_keys` tool.
 2. Update `sparkle-version.txt`.
 3. Replace `Sparkle.framework` with the new version.
 4. Update the security note above with any new hardening fixes.
-5. Re-run the macOS build + notarization smoke test (Phase E.3).
+5. Re-run the macOS build + notarization smoke test.
 6. The signing key does NOT change on framework upgrade — only the framework binary.
 
 ## Appcast signing
 
 Release artifacts are signed with `bin/sign_update <file> <private-key>` during
-the release workflow (D.5). The generated EdDSA signature goes into the
-`appcast.xml` `sparkle:edSignature` attribute.
+the release pipeline. The generated EdDSA signature goes into the `appcast.xml`
+`sparkle:edSignature` attribute.

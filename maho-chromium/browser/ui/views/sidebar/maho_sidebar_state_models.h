@@ -44,11 +44,11 @@ inline bool IsNtpOrBlankUrl(const GURL& url) {
 // navigable web content: NTP, about: pages, chrome:// surfaces, devtools://,
 // chrome-extension://, chrome-untrusted://, and chrome-native:// pages.
 //
-// Used in two enforcement points:
-//   Opener-side  — BrowserView::ShowMahoCommandOverlayForCurrentTab() must not
-//                  pre-fill the textfield with a raw internal URL.
-//   Overlay-side — InitializeCurrentTabSeedState() must not enter seeded state
-//                  for internal pages that arrive (e.g. via history seeds).
+// Used by MahoAiSecurityUtils to keep internal browser pages out of AI page
+// context. The command palette's current-tab prefill does NOT use this
+// helper: BrowserView::ShowMahoCommandOverlayForCurrentTab() (patched via
+// apply_chromium_src_overrides.py) only drops javascript:, data: and
+// about:blank, so chrome:// pages are still prefilled there.
 inline bool IsInternalBrowserPage(const GURL& url) {
   if (!url.is_valid() || url.is_empty()) {
     return true;
@@ -129,34 +129,7 @@ inline std::u16string ResolveTabDisplayText(
 
 }  // namespace MahoDisplayPolicy
 
-enum class MahoSidebarAddressDisplayMode {
-  kSearchPlaceholder,
-  kAddressCard,
-};
-
-struct MahoSidebarTopBarModel {
-  bool navigation_enabled = false;
-  bool can_go_back = false;
-  bool can_go_forward = false;
-  bool can_reload = false;
-  bool is_loading = false;
-};
-
-struct MahoSidebarSearchModel {
-  MahoSidebarSearchModel();
-  MahoSidebarSearchModel(const MahoSidebarSearchModel&);
-  MahoSidebarSearchModel& operator=(const MahoSidebarSearchModel&);
-  ~MahoSidebarSearchModel();
-
-  std::u16string idle_text;
-  std::string current_url;
-  bool has_active_tab = false;
-  bool force_placeholder_for_empty_favorites = false;
-  bool translation_available = false;
-  bool is_page_translated = false;
-  MahoSidebarAddressDisplayMode display_mode =
-      MahoSidebarAddressDisplayMode::kSearchPlaceholder;
-};
+struct MahoSidebarTopBarModel {};
 
 struct MahoSidebarFavoriteItemModel {
   MahoSidebarFavoriteItemModel();
@@ -310,6 +283,11 @@ struct MahoSidebarTabListModel {
 
   // Active space's display name. Empty if no active space resolved.
   std::u16string active_space_name;
+
+  // True when the core could not produce this space's tree at all (null v2
+  // payload: core swapped, import gate raised, ...). Distinct from an empty
+  // tree, which is real data and must render; views keep what they show.
+  bool tree_unavailable = false;
 };
 
 // --- Drag/Drop payload ---
@@ -384,7 +362,6 @@ struct MahoSidebarViewStateModel {
   ~MahoSidebarViewStateModel();
 
   MahoSidebarTopBarModel top_bar;
-  MahoSidebarSearchModel search;
   MahoSidebarFavoritesModel favorites;
   MahoSidebarTabListModel tab_list;
   MahoSidebarFooterModel footer;

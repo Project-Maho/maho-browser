@@ -7,6 +7,7 @@
 #include "base/base64.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -235,8 +236,9 @@ bool MigrateModelsSettingsV1Sync(PrefService* prefs,
   return true;
 }
 
-void OnEncryptorReadyForMigration(base::WeakPtr<Profile> weak_profile,
-                                  os_crypt_async::Encryptor encryptor) {
+void OnEncryptorReadyForMigration(
+    base::WeakPtr<Profile> weak_profile,
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   if (!weak_profile) {
     return;
   }
@@ -244,7 +246,7 @@ void OnEncryptorReadyForMigration(base::WeakPtr<Profile> weak_profile,
   if (!prefs) {
     return;
   }
-  MigrateModelsSettingsV1Sync(prefs, &encryptor);
+  MigrateModelsSettingsV1Sync(prefs, encryptor.get());
 }
 
 }  // namespace
@@ -281,8 +283,7 @@ void MigrateModelsSettingsV1(Profile* profile) {
 
   if (g_browser_process && g_browser_process->os_crypt_async()) {
     g_browser_process->os_crypt_async()->GetInstance(
-        base::BindOnce(&OnEncryptorReadyForMigration, profile->GetWeakPtr()),
-        os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+        base::BindOnce(&OnEncryptorReadyForMigration, profile->GetWeakPtr()));
   }
 }
 

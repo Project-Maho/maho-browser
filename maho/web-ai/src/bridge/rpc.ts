@@ -1,15 +1,8 @@
 import { detectPlatform } from './platform-detect';
-import type { BridgeError } from './types';
+import type { BridgeError, CallOptions } from './types';
 import { parseCredentialErrorCode, type CredentialErrorCode } from '../screens/credential-error';
 
 export { detectPlatform };
-
-interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  id: string;
-  method: string;
-  params: Record<string, unknown> | unknown[];
-}
 
 interface JsonRpcResponse {
   jsonrpc: '2.0';
@@ -21,9 +14,85 @@ interface JsonRpcResponse {
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
+  timer: ReturnType<typeof setTimeout> | null;
+  signal: AbortSignal | null;
+  onAbort: (() => void) | null;
+  resourceCreating: boolean;
+  settled: boolean;
 }
 
 const _pending = new Map<string, PendingCall>();
+
+// U15 bounded pending-call lifetime: at most 256 in-flight calls; overloaded
+// callers get a typed rejection instead of unbounded queue growth.
+const MAX_PENDING_CALLS = 256;
+const DEFAULT_CALL_TIMEOUT_MS = 30_000;
+const LONG_CALL_TIMEOUT_MS = 300_000;
+const FAST_CALL_TIMEOUT_MS = 10_000;
+const LONG_TIMEOUT_METHODS: ReadonlySet<string> = new Set([
+  'agentCreateSession',
+  'chatSessionStart',
+  'chatSessionResume',
+  'browserToolInvoke',
+  'capturePhoto',
+  'artifactShare',
+  'relaySignInWithGoogle',
+  'openDefaultBrowserSettings',
+]);
+const FAST_TIMEOUT_METHODS: ReadonlySet<string> = new Set([
+  'agentPollEvent',
+  'chatPollEvents',
+]);
+const RESOURCE_CREATING_METHODS: ReadonlySet<string> = new Set([
+  'agentCreateSession',
+  'chatSessionStart',
+  'chatSessionResume',
+  'capturePhoto',
+  'artifactShare',
+]);
+
+let _documentDisposed = false;
+
+function defaultTimeoutFor(method: string): number {
+  if (LONG_TIMEOUT_METHODS.has(method)) return LONG_CALL_TIMEOUT_MS;
+  if (FAST_TIMEOUT_METHODS.has(method)) return FAST_CALL_TIMEOUT_MS;
+  return DEFAULT_CALL_TIMEOUT_MS;
+}
+
+function rpcControlError(code: string): Error {
+  const err = new Error(code);
+  (err as unknown as { code: string }).code = code;
+  return err;
+}
+
+/// Exactly-once settlement: removes the pending entry and every deadline/
+/// abort resource before rejecting. A late duplicate response finds no entry.
+function settleCall(id: string, error: Error): void {
+  const entry = _pending.get(id);
+  if (!entry || entry.settled) return;
+  entry.settled = true;
+  if (entry.timer !== null) {
+    clearTimeout(entry.timer);
+    entry.timer = null;
+  }
+  if (entry.signal !== null && entry.onAbort !== null) {
+    entry.signal.removeEventListener('abort', entry.onAbort);
+  }
+  _pending.delete(id);
+  entry.reject(error);
+}
+
+/// Best-effort internal control notification to the native host. Losing this
+/// message is a transport failure, not a promise of a usable session.
+function notifyNativeControl(method: 'bridgeResourceClaim' | 'bridgeRequestAbandon', requestId: string): void {
+  try {
+    sendNative(
+      JSON.stringify({ jsonrpc: '2.0', id: uuidv4(), method, params: { requestId } }),
+    );
+  } catch {
+    // Transport unavailable: the caller's own settlement still happened.
+  }
+}
 
 export class BridgeRpcError extends Error {
   bridgeError: BridgeError;
@@ -52,8 +121,16 @@ export function isBridgeRpcError(err: unknown): err is BridgeRpcError {
     return;
   }
 
-  const callObj = _pending.get(parsed.id);
-  if (!callObj) return;
+  const entry = _pending.get(parsed.id);
+  if (!entry || entry.settled) return;
+  entry.settled = true;
+  if (entry.timer !== null) {
+    clearTimeout(entry.timer);
+    entry.timer = null;
+  }
+  if (entry.signal !== null && entry.onAbort !== null) {
+    entry.signal.removeEventListener('abort', entry.onAbort);
+  }
   _pending.delete(parsed.id);
 
   if (parsed.error) {
@@ -66,9 +143,14 @@ export function isBridgeRpcError(err: unknown): err is BridgeRpcError {
       ? { ...parsed.error, reason: genericMessage }
       : parsed.error;
     (err as unknown as { bridgeError: BridgeError }).bridgeError = bridgeError;
-    callObj.reject(err);
+    entry.reject(err);
   } else {
-    callObj.resolve(parsed.result);
+    // Claim resource-creating results with the native owner ledger BEFORE the
+    // caller's promise resolves, so a later abandonment can free the handle.
+    if (entry.resourceCreating) {
+      notifyNativeControl('bridgeResourceClaim', parsed.id);
+    }
+    entry.resolve(parsed.result);
   }
 };
 
@@ -114,28 +196,80 @@ function sendNative(envelope: string): void {
   }
 }
 
-export function call<T>(method: string, params?: Record<string, unknown> | unknown[]): Promise<T> {
+export function call<T>(
+  method: string,
+  params?: Record<string, unknown> | unknown[],
+  options?: CallOptions,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    if (_documentDisposed) {
+      reject(rpcControlError('bridge_disposed'));
+      return;
+    }
+    if (_pending.size >= MAX_PENDING_CALLS) {
+      reject(rpcControlError('rpc_overloaded'));
+      return;
+    }
     const id = uuidv4();
-    _pending.set(id, {
+
+    // Serialize BEFORE retaining a pending entry: a serialization failure
+    // rejects immediately and retains nothing.
+    let envelope: string;
+    try {
+      envelope = JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? [] });
+    } catch (err) {
+      reject(
+        new Error(
+          `rpc serialization failed for ${method}: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+      return;
+    }
+
+    const entry: PendingCall = {
       resolve: (v) => resolve(v as T),
       reject,
-    });
-
-    const request: JsonRpcRequest = {
-      jsonrpc: '2.0',
-      id,
-      method,
-      params: params ?? [],
+      timer: null,
+      signal: null,
+      onAbort: null,
+      resourceCreating: RESOURCE_CREATING_METHODS.has(method),
+      settled: false,
     };
-    const json = JSON.stringify(request);
+    _pending.set(id, entry);
+
+    const timeoutMs = options?.timeoutMs ?? defaultTimeoutFor(method);
+    entry.timer = setTimeout(() => {
+      // Timeout abandons the caller's wait. For resource-creating requests it
+      // also notifies the native request ledger so a late completion frees the
+      // created handle immediately. The timeout NEVER claims native work was
+      // cancelled.
+      if (entry.resourceCreating) {
+        notifyNativeControl('bridgeRequestAbandon', id);
+      }
+      settleCall(id, rpcControlError('rpc_timeout'));
+    }, timeoutMs);
+
+    if (options?.signal !== undefined) {
+      if (options.signal.aborted) {
+        // Aborted before the request was ever sent: nothing to abandon.
+        settleCall(id, rpcControlError('rpc_aborted'));
+        return;
+      }
+      entry.signal = options.signal;
+      entry.onAbort = () => {
+        if (entry.resourceCreating) {
+          notifyNativeControl('bridgeRequestAbandon', id);
+        }
+        settleCall(id, rpcControlError('rpc_aborted'));
+      };
+      options.signal.addEventListener('abort', entry.onAbort, { once: true });
+    }
 
     try {
-      sendNative(json);
+      sendNative(envelope);
     } catch (err) {
-      _pending.delete(id);
       const msg = err instanceof Error ? err.message : String(err);
-      reject(new Error(`${msg} (method: ${method})`));
+      settleCall(id, new Error(`${msg} (method: ${method})`));
     }
   });
 }
@@ -145,7 +279,31 @@ export function callBridge<T>(method: string, params: unknown[] = []): Promise<T
   return call<T>(method, params);
 }
 
+// U15 document disposal: settles every pending call exactly once with a typed
+// bridge_disposed error and rejects further calls until state reset.
+export function disposeDocumentBridge(): void {
+  _documentDisposed = true;
+  for (const id of Array.from(_pending.keys())) {
+    settleCall(id, rpcControlError('bridge_disposed'));
+  }
+}
+
+// Native host invalidation and page lifecycle share the same disposal path.
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', disposeDocumentBridge);
+}
+
+// Internal test observation seams
+export function _getPendingCountForTest(): number {
+  return _pending.size;
+}
+
+export function _getPendingIdsForTest(): string[] {
+  return Array.from(_pending.keys());
+}
+
 // Internal reset for tests
 export function _resetBridgeStateForTest(): void {
+  _documentDisposed = false;
   _pending.clear();
 }

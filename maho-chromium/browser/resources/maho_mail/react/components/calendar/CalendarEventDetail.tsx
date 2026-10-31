@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Calendar, Clock, MapPin, User, FileText, Pencil, Trash2, BellOff, Copy, Download } from "lucide-react";
+import { Calendar, Clock, MapPin, User, FileText, Pencil, Trash2, BellOff, Copy, Download, Tag, Car, Ban, Target, Video } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -126,22 +126,22 @@ export function CalendarEventDetail({
             <span>{event.summary}</span>
             {event.category && (
               <Badge variant="outline" className="border-primary/45 text-primary text-[10px] font-semibold h-5">
-                🏷️ {event.category}
+                <Tag size={10} aria-hidden="true" /> {event.category}
               </Badge>
             )}
             {event.travel_time_minutes ? (
               <Badge variant="outline" className="border-indigo-500/40 text-indigo-600 dark:text-indigo-400 text-[10px] font-semibold h-5">
-                🚗 Travel: {event.travel_time_minutes}m
+                <Car size={10} aria-hidden="true" /> Travel: {event.travel_time_minutes}m
               </Badge>
             ) : null}
             {isOoo && (
               <Badge variant="outline" className="border-rose-500/40 text-rose-600 dark:text-rose-400 text-[10px] font-semibold h-5">
-                🚫 Out of Office
+                <Ban size={10} aria-hidden="true" /> Out of Office
               </Badge>
             )}
             {isFocus && (
               <Badge variant="outline" className="border-purple-500/40 text-purple-600 dark:text-purple-400 text-[10px] font-semibold h-5">
-                🎯 Focus Time
+                <Target size={10} aria-hidden="true" /> Focus Time
               </Badge>
             )}
           </DialogTitle>
@@ -195,7 +195,7 @@ export function CalendarEventDetail({
 
           {event.hangout_link && (
             <div className="flex items-start gap-3">
-              <div className="mt-0.5 shrink-0 text-muted-foreground">📹</div>
+              <Video size={16} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true" />
               <div className="space-y-1 w-full animate-fade-in">
                 <p className="text-xs font-medium text-muted-foreground">{t("calendar.videoCall") || "Video Call"}</p>
                 <button

@@ -4,9 +4,10 @@ interface UndoSendToastProps {
   delaySeconds: number;
   onUndo: () => void;
   onComplete: () => void;
+  offsetIndex?: number;
 }
 
-export function UndoSendToast({ delaySeconds, onUndo, onComplete }: UndoSendToastProps) {
+export function UndoSendToast({ delaySeconds, onUndo, onComplete, offsetIndex = 0 }: UndoSendToastProps) {
   const [remaining, setRemaining] = useState(delaySeconds);
   const [cancelled, setCancelled] = useState(false);
   const cancelledRef = useRef(false);
@@ -18,7 +19,6 @@ export function UndoSendToast({ delaySeconds, onUndo, onComplete }: UndoSendToas
       setRemaining((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          if (!cancelledRef.current) onCompleteRef.current();
           return 0;
         }
         return prev - 1;
@@ -27,6 +27,12 @@ export function UndoSendToast({ delaySeconds, onUndo, onComplete }: UndoSendToas
 
     return () => clearInterval(interval);
   }, [delaySeconds]);
+
+  useEffect(() => {
+    if (remaining === 0 && !cancelledRef.current) {
+      onCompleteRef.current();
+    }
+  }, [remaining]);
 
   const handleUndo = useCallback(() => {
     cancelledRef.current = true;
@@ -39,8 +45,11 @@ export function UndoSendToast({ delaySeconds, onUndo, onComplete }: UndoSendToas
   const progress = ((delaySeconds - remaining) / delaySeconds) * 100;
 
   return (
-    <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
-      <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-xl">
+    <div
+      className="fixed left-1/2 z-50 -translate-x-1/2"
+      style={{ bottom: `${24 + offsetIndex * 60}px` }}
+    >
+      <div className="toast-enter flex items-center gap-3 rounded-2xl border border-border bg-popover/95 px-4 py-3 shadow-xl backdrop-blur-md">
         <div className="relative h-8 w-8">
           <svg className="h-8 w-8 -rotate-90" viewBox="0 0 32 32">
             <circle
@@ -61,7 +70,7 @@ export function UndoSendToast({ delaySeconds, onUndo, onComplete }: UndoSendToas
               strokeWidth="2"
               strokeDasharray={`${2 * Math.PI * 13}`}
               strokeDashoffset={`${2 * Math.PI * 13 * (1 - progress / 100)}`}
-              className="text-primary transition-all duration-1000 ease-linear"
+              className="text-primary transition-[stroke-dashoffset] duration-1000 ease-linear"
             />
           </svg>
           <span className="absolute inset-0 flex items-center justify-center text-[10px] font-semibold text-muted-foreground">
@@ -72,7 +81,7 @@ export function UndoSendToast({ delaySeconds, onUndo, onComplete }: UndoSendToas
         <button
           type="button"
           onClick={handleUndo}
-          className="rounded-lg bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+          className="mail-pressable flex h-8 items-center rounded-lg bg-primary px-3.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           Undo
         </button>

@@ -7,7 +7,6 @@
 #include "base/functional/bind.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/grit/maho_boost_resources.h"
 #include "chrome/grit/maho_boost_resources_map.h"
 #include "content/public/browser/web_contents.h"

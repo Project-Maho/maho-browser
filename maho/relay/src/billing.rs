@@ -105,13 +105,18 @@ fn verify_signature(secret: &str, body: &[u8], signature_hex: &str) -> bool {
 }
 
 fn hex_decode(hex_str: &str) -> Option<Vec<u8>> {
-    if !hex_str.len().is_multiple_of(2) {
+    let hex_bytes = hex_str.as_bytes();
+    if !hex_bytes.len().is_multiple_of(2) {
         return None;
     }
-    let mut bytes = Vec::new();
-    for i in (0..hex_str.len()).step_by(2) {
-        let res = u8::from_str_radix(&hex_str[i..i + 2], 16).ok()?;
-        bytes.push(res);
+    // Decode over BYTES, never string slices: `len()` counts bytes while `&s[i..i + 2]`
+    // slices on char boundaries, so a multi-byte character at an even offset panics on
+    // this unauthenticated webhook input.
+    let mut bytes = Vec::with_capacity(hex_bytes.len() / 2);
+    for pair in hex_bytes.chunks_exact(2) {
+        let hi = (pair[0] as char).to_digit(16)?;
+        let lo = (pair[1] as char).to_digit(16)?;
+        bytes.push(((hi << 4) | lo) as u8);
     }
     Some(bytes)
 }
@@ -653,28 +658,17 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
         // must charge back the delta, not the full order total. event_id is the
         // order id for order events.
         let new_refunded_cents = payload.data.attributes.refunded_amount.unwrap_or(0) as i64;
-        match db::record_refund_delta(&db, event_id, new_refunded_cents, now_sec).await {
-            Ok(Some(delta_cents)) => {
-                let refund_amount_usd = delta_cents as f64 / 100.0;
-                match db::chargeback_credit(&db, user_id, refund_amount_usd, now_sec).await {
-                    Ok(new_balance) => {
-                        console_log!("REFUND: -${refund_amount_usd} user={user_id} event={event_id} balance=${new_balance}");
-                        notify_proxy_credits_update(&env, user_id, new_balance, -refund_amount_usd)
-                            .await;
-                    }
-                    Err(e) => {
-                        console_error!(
-                            "chargeback_credit failed user={user_id} event={event_id}: {e}"
-                        );
-                        return Err(AppError::Internal(format!("failed to refund credit: {e}")));
-                    }
-                }
+        match db::apply_refund(&db, user_id, event_id, new_refunded_cents, now_sec).await {
+            Ok(Some(effect)) => {
+                let refund_amount_usd = effect.delta_cents as f64 / 100.0;
+                notify_proxy_credits_update(&env, user_id, effect.balance_usd, -refund_amount_usd)
+                    .await;
             }
             Ok(None) => {
                 console_log!("order_refunded no new refund delta user={user_id} event={event_id}");
             }
             Err(e) => {
-                console_error!("record_refund_delta failed user={user_id} event={event_id}: {e}");
+                console_error!("apply_refund failed user={user_id} event={event_id}: {e}");
                 return Err(AppError::Internal(format!("failed to record refund: {e}")));
             }
         }
@@ -770,8 +764,7 @@ pub async fn invoices(req: Request, env: Env) -> Result<Response> {
     let mut init = RequestInit::new();
     init.with_method(Method::Get).with_headers(headers);
 
-    let email_encoded = urlencoding_encode(&user.email);
-    let url = format!("https://api.lemonsqueezy.com/v1/orders?filter[user_email]={email_encoded}");
+    let url = invoice_lookup_url(&user.email, user.email_verified)?;
     let request = Request::new_with_init(&url, &init)?;
 
     match Fetch::Request(request).send().await {
@@ -825,6 +818,14 @@ pub async fn invoices(req: Request, env: Env) -> Result<Response> {
     }
 
     Response::from_json(&empty).map_err(AppError::from)
+}
+
+fn invoice_lookup_url(email: &str, email_verified: f64) -> Result<String> {
+    if email_verified == 0.0 {
+        return Err(AppError::Auth("email_verification_required".to_string()));
+    }
+    let email_encoded = urlencoding_encode(email);
+    Ok(format!("https://api.lemonsqueezy.com/v1/orders?filter[user_email]={email_encoded}"))
 }
 
 fn urlencoding_encode(s: &str) -> String {
@@ -984,6 +985,37 @@ pub async fn consume_credit(mut req: Request, env: Env) -> Result<Response> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invoice_lookup_requires_proven_email_ownership() {
+        assert!(invoice_lookup_url("victim@example.com", 0.0).is_err());
+        assert!(invoice_lookup_url("owner@example.com", 1.0).unwrap().ends_with("owner%40example.com"));
+    }
+
+    #[test]
+    fn hex_decode_rejects_non_ascii_signatures_without_panicking() {
+        // Given: an attacker-supplied X-Signature header on the UNAUTHENTICATED
+        // billing webhook. `hex_str.len()` counts BYTES, but `&hex_str[i..i + 2]`
+        // slices on CHAR boundaries, so a multi-byte char straddling an even
+        // offset panics instead of failing authentication.
+        // "a\u{e9}x" is 4 bytes (even, so the length guard passes) but byte
+        // offset 2 lands inside the 2-byte 'é'.
+        let malformed = "a\u{e9}x";
+        assert!(malformed.len().is_multiple_of(2));
+
+        // When/Then: decoding must return None rather than panic.
+        assert_eq!(hex_decode(malformed), None);
+
+        // And the real entry point must reject it as an authentication failure.
+        assert!(!verify_signature("secret", b"body", malformed));
+    }
+
+    #[test]
+    fn hex_decode_still_accepts_valid_ascii_hex() {
+        assert_eq!(hex_decode("00ff10"), Some(vec![0x00, 0xff, 0x10]));
+        assert_eq!(hex_decode("0f1"), None);
+        assert_eq!(hex_decode("zz"), None);
+    }
 
     #[test]
     fn cancelled_subscription_keeps_paid_tier_until_period_end() {

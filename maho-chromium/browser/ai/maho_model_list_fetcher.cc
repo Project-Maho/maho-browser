@@ -45,8 +45,7 @@ MahoModelListFetcher::MahoModelListFetcher(
   if (g_browser_process && g_browser_process->os_crypt_async()) {
     g_browser_process->os_crypt_async()->GetInstance(
         base::BindOnce(&MahoModelListFetcher::OnOsCryptReady,
-                       weak_factory_.GetWeakPtr()),
-        os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+                       weak_factory_.GetWeakPtr()));
   }
 }
 
@@ -348,7 +347,8 @@ std::vector<std::string> MahoModelListFetcher::GetHardcodedFallback(
   return {};
 }
 
-void MahoModelListFetcher::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {
+void MahoModelListFetcher::OnOsCryptReady(
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   local_encryptor_ = std::move(encryptor);
   for (auto& pf : pending_fetches_) {

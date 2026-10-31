@@ -567,4 +567,82 @@ describe("stripTrackers", () => {
       expect(doc.querySelector("form")?.getAttribute("action")).toBe("/relative/submit");
     });
   });
+
+  describe("unknown-domain non-image external resources default blocking (trackers-only mode)", () => {
+    it("blocks unknown-domain link stylesheet in trackers-only mode", () => {
+      const html = '<html><head><link rel="stylesheet" href="https://unknown-domain.com/style.css"></head><body></body></html>';
+      const result = stripTrackers(html);
+      const doc = new DOMParser().parseFromString(result.html, "text/html");
+      expect(doc.querySelector("link")?.hasAttribute("href")).toBe(false);
+    });
+
+    it("blocks unknown-domain audio src in trackers-only mode", () => {
+      const html = '<audio src="https://unknown-domain.com/audio.mp3"></audio>';
+      const result = stripTrackers(html);
+      const doc = new DOMParser().parseFromString(result.html, "text/html");
+      expect(doc.querySelector("audio")?.hasAttribute("src")).toBe(false);
+    });
+
+    it("blocks unknown-domain video src and source src in trackers-only mode", () => {
+      const html = `
+        <video src="https://unknown-domain.com/video.mp4">
+          <source src="https://unknown-domain.com/clip.mp4" type="video/mp4">
+        </video>
+      `;
+      const result = stripTrackers(html);
+      const doc = new DOMParser().parseFromString(result.html, "text/html");
+      expect(doc.querySelector("video")?.hasAttribute("src")).toBe(false);
+      expect(doc.querySelector("source")?.hasAttribute("src")).toBe(false);
+    });
+
+    it("blocks unknown-domain embed and object in trackers-only mode", () => {
+      const html = `
+        <div>
+          <embed src="https://unknown-domain.com/flash.swf">
+          <object data="https://unknown-domain.com/data.obj"></object>
+        </div>
+      `;
+      const result = stripTrackers(html);
+      const doc = new DOMParser().parseFromString(result.html, "text/html");
+      expect(doc.querySelector("embed")?.hasAttribute("src")).toBe(false);
+      expect(doc.querySelector("object")?.hasAttribute("data")).toBe(false);
+    });
+
+    it("blocks unknown-domain iframe and form action in trackers-only mode", () => {
+      const html = `
+        <div>
+          <iframe src="https://unknown-domain.com/frame.html"></iframe>
+          <form action="https://unknown-domain.com/submit"></form>
+        </div>
+      `;
+      const result = stripTrackers(html);
+      const doc = new DOMParser().parseFromString(result.html, "text/html");
+      expect(doc.querySelector("iframe")?.hasAttribute("src")).toBe(false);
+      expect(doc.querySelector("form")?.hasAttribute("action")).toBe(false);
+    });
+
+    it("blocks unknown-domain @import in <style> in trackers-only mode", () => {
+      const html = `
+        <style>
+          @import "https://unknown-domain.com/style.css";
+          body { color: blue; }
+        </style>
+      `;
+      const result = stripTrackers(html);
+      expect(result.html).not.toContain("unknown-domain.com");
+    });
+
+    it("blocks unknown-domain SVG <use> and <feImage> in trackers-only mode", () => {
+      const html = `
+        <svg>
+          <use href="https://unknown-domain.com/sprite.svg#icon"></use>
+          <filter><feImage href="https://unknown-domain.com/filter.png"/></filter>
+        </svg>
+      `;
+      const result = stripTrackers(html);
+      const doc = new DOMParser().parseFromString(result.html, "text/html");
+      expect(doc.querySelector("use")?.hasAttribute("href")).toBe(false);
+      expect(doc.querySelector("feImage, feimage")?.hasAttribute("href")).toBe(false);
+    });
+  });
 });

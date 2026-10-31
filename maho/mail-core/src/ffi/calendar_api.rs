@@ -847,17 +847,7 @@ async fn deliver_calendar_mutation(
         .get("references")
         .and_then(|v| v.as_str())
         .map(str::to_owned);
-    let creds = {
-        let db = ctx
-            .pool
-            .get()
-            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-        crate::ffi::compose_api::get_smtp_credentials(
-            &db,
-            &ctx.credential_key,
-            &mutation.account_id,
-        )?
-    };
+    let creds = crate::ffi::compose_api::smtp_credentials_async(ctx, &mutation.account_id).await?;
     let use_xoauth2 = matches!(&creds.auth, crate::account::ImapAuth::OAuth2 { .. });
     let from = match display_name.filter(|s| !s.is_empty()) {
         Some(name) => format!("\"{}\" <{}>", name.replace('"', "\\\""), attendee_email),
@@ -1275,6 +1265,61 @@ async fn fetch_calendars(
         .collect())
 }
 
+/// Calendar-level fields of an events.list response.
+#[derive(Debug, Deserialize)]
+struct GEventsCalendarMeta {
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default, rename = "accessRole")]
+    access_role: Option<String>,
+}
+
+/// Calendar-list entry for the user's primary calendar. Its ID is the account
+/// email, as calendarList reports it; "primary" is the API alias otherwise.
+fn primary_calendar_entry(account_email: Option<&str>, meta: GEventsCalendarMeta) -> GCalListItem {
+    GCalListItem {
+        id: account_email
+            .filter(|email| !email.is_empty())
+            .unwrap_or("primary")
+            .to_string(),
+        summary: meta.summary,
+        primary: Some(true),
+        access_role: meta.access_role,
+        background_color: None,
+        foreground_color: None,
+    }
+}
+
+/// The user's primary calendar, read through events.list: calendar.events
+/// authorizes it, while calendarList needs a calendar-list scope.
+async fn fetch_primary_calendar(
+    client: &reqwest::Client,
+    access_token: &str,
+    account_email: Option<&str>,
+) -> std::result::Result<GCalListItem, MailFfiError> {
+    let resp = client
+        .get("https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=1&fields=summary,accessRole")
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Network(format!("primary calendar request: {}", e))))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(MailFfiError::Core(maho_core::error::AppError::Network(
+            format!("primary calendar HTTP {}: {}", status, truncate(&text, 300)),
+        )));
+    }
+    let meta: GEventsCalendarMeta = serde_json::from_str(&text).map_err(|e| {
+        MailFfiError::Core(maho_core::error::AppError::Network(format!(
+            "primary calendar JSON: {}",
+            e
+        )))
+    })?;
+    Ok(primary_calendar_entry(account_email, meta))
+}
+
 #[derive(Debug)]
 enum FetchEventsOutcome {
     Done {
@@ -1670,6 +1715,20 @@ pub(crate) async fn sync_internal(
     let (client, access_token) = get_client_and_token(ctx, account_id).await?;
 
     let calendars = match fetch_calendars(&client, &access_token).await {
+        // calendarList needs a calendar-list scope that Maho does not request,
+        // while calendar.events still covers events.* on the primary calendar.
+        // Re-consent would grant the same scopes, so sync the primary calendar
+        // instead of asking the user to reauthorize.
+        Err(MailFfiError::Core(maho_core::error::AppError::Network(msg)))
+            if msg.contains("HTTP 403") =>
+        {
+            fetch_primary_calendar(&client, &access_token, account_email.as_deref())
+                .await
+                .map(|primary| vec![primary])
+        }
+        other => other,
+    };
+    let calendars = match calendars {
         Ok(c) => c,
         Err(MailFfiError::Core(maho_core::error::AppError::Network(msg)))
             if msg.contains("HTTP 401") || msg.contains("HTTP 403") =>
@@ -4885,6 +4944,21 @@ mod tests {
             assert_eq!(events.len(), 1);
             assert_eq!(events[0].sequence, None);
         }
+    }
+
+    #[test]
+    fn primary_calendar_entry_maps_events_list_metadata() {
+        let meta: GEventsCalendarMeta =
+            serde_json::from_str(r#"{"summary":"Work","accessRole":"owner"}"#).unwrap();
+        let entry = primary_calendar_entry(Some("user@example.com"), meta);
+        assert_eq!(entry.id, "user@example.com");
+        assert_eq!(entry.summary.as_deref(), Some("Work"));
+        assert_eq!(entry.primary, Some(true));
+        assert_eq!(entry.access_role.as_deref(), Some("owner"));
+
+        let entry = primary_calendar_entry(None, serde_json::from_str("{}").unwrap());
+        assert_eq!(entry.id, "primary");
+        assert_eq!(entry.access_role, None);
     }
 }
 

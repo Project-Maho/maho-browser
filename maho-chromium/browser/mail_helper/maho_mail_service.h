@@ -14,6 +14,7 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
@@ -263,7 +264,8 @@ class MahoMailService : public KeyedService,
                       MahoMailAttachmentRegistry::ConsumeCallback callback);
   void SaveAttachment(const std::string& capability_token,
                       MahoMailAttachmentRegistry::SaveCallback callback);
-  void ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, MailReadCallback callback);
+  void ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, const std::string& page_origin, MailReadCallback callback);
+  void ExtractMessagesOtp(int64_t max_age_seconds, const std::string& page_origin, MailReadCallback callback);
   void SnoozeEmail(const std::string& email_id, const std::string& snooze_until, MailReadCallback callback);
   void UnsnoozeEmail(const std::string& email_id, MailReadCallback callback);
   void ListSnoozedEmails(const std::string& account_id, MailReadCallback callback);
@@ -428,6 +430,8 @@ class MahoMailService : public KeyedService,
   void OnTrackedReplyComplete();
   void NotifyLifecycleChanged();
   void StartGeneration();
+  void OnMailKeysReadFromFile(std::pair<std::string, std::string> keys);
+  void OnMailKeyFileWritten(bool written);
   void BeginDrain(LifecycleState terminal_state);
   void OnGenerationDrained(uint64_t generation);
   bool IsEnabled() const;
@@ -468,7 +472,7 @@ class MahoMailService : public KeyedService,
 
   MailUnreadBadgeState unread_badge_state_;
 
-  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+  void OnOsCryptReady(scoped_refptr<os_crypt_async::Encryptor> encryptor);
 
   SEQUENCE_CHECKER(sequence_checker_);
   raw_ptr<Profile> profile_ = nullptr;
@@ -478,7 +482,7 @@ class MahoMailService : public KeyedService,
   LauncherFactory launcher_factory_;
   PrefChangeRegistrar mail_pref_registrar_;
 
-  std::optional<os_crypt_async::Encryptor> encryptor_;
+  scoped_refptr<os_crypt_async::Encryptor> encryptor_;
 
   struct PendingLaunch {
     std::string expected_version;
@@ -520,6 +524,14 @@ std::optional<bool> GetDesktopNotificationPreference(
 
 std::optional<bool> GetUnreadBadgePreference(
     const std::string& behavior_prefs_json);
+
+// The helper's app-setting read answers with the JSON encoding of an
+// `Option<String>`: `null` when the row does not exist, otherwise a JSON
+// *string* carrying the stored text. Returns the stored text, or nullopt when
+// the row is unset or the payload is not a JSON string. Every consumer of
+// `MahoMailService::GetAppSetting` must decode through this helper before
+// treating the payload as stored content.
+std::optional<std::string> DecodeAppSettingRead(const std::string& result_json);
 
 std::optional<MailBehaviorSnapshot> ParseMailBehaviorSnapshot(
     const std::string& behavior_prefs_json,

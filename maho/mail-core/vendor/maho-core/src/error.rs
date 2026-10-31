@@ -23,6 +23,9 @@ pub enum AppError {
     #[error("Network error: {0}")]
     Network(String),
 
+    #[error("Delivery uncertain: {0}")]
+    DeliveryUncertain(String),
+
     #[error("AI error: {0}")]
     Ai(String),
 

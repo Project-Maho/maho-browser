@@ -64,7 +64,10 @@ bool IsTerminal(ControlActivityState state) {
 }
 
 bool IsValidTarget(const ControlTarget& target) {
-  return target.window_id > 0 && target.tab_id > 0 && !target.origin.opaque();
+  // The origin is allowed to be opaque here: a freshly created tab has no
+  // committed navigation yet, and control attribution (window/tab/title) is
+  // still meaningful for the user-visible control surfaces.
+  return target.window_id > 0 && target.tab_id > 0;
 }
 
 bool IsAllowedReceiptCode(std::string_view code) {

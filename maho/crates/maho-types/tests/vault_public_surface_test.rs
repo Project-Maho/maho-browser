@@ -34,8 +34,12 @@ fn vault_representative_public_surface_is_secret_free() {
             auto_lock_minutes: 15,
             failed_unlock_count: 0,
             retry_at: None,
+            account_escrowed: false,
         },
         "item": VaultItemPublicDto {
+            favorite: false,
+            trashed_at: None,
+            has_notes: false,
             schema_version: VaultSchemaVersion::V1,
             id: item_id,
             revision: VaultRevision::new(4),
@@ -100,6 +104,9 @@ fn vault_backend_operation_surface_is_secret_free() {
     let first_id = VaultItemId::from_uuid(uuid("018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6c"));
     let second_id = VaultItemId::from_uuid(uuid("018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6d"));
     let item = VaultItemPublicDto {
+        favorite: false,
+        trashed_at: None,
+        has_notes: false,
         schema_version: VaultSchemaVersion::V1,
         id: first_id,
         revision: VaultRevision::new(4),

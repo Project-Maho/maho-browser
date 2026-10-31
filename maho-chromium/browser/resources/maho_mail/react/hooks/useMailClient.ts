@@ -30,18 +30,70 @@ function isAuthenticationError(message: string): boolean {
   return /authenticationfailed|invalid credentials|auth error|invalid_grant|sign-in expired/i.test(message);
 }
 
+// Last landing view (aggregate Inbox), painted on the first render of a fresh
+// Mail tab while the helper round-trips (accounts -> folders -> emails)
+// refresh it. Without it every open showed the boot screen, then a skeleton.
+export const MAIL_LIST_SNAPSHOT_KEY = "maho-mail-list-snapshot-v1";
+const SNAPSHOT_EMAIL_LIMIT = 50;
+
+interface MailListSnapshot {
+  accounts: AccountSummary[];
+  accountFolders: AccountFolders[];
+  emails: EmailSummary[];
+}
+
+const LANDING_SELECTION: MailboxSelection = { type: "aggregate", folderType: "Inbox" };
+
+function isLandingSelection(selection: MailboxSelection): boolean {
+  return selection?.type === "aggregate" && selection.folderType === "Inbox";
+}
+
+function readMailListSnapshot(): MailListSnapshot | null {
+  try {
+    const raw = localStorage.getItem(MAIL_LIST_SNAPSHOT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<MailListSnapshot>;
+    if (
+      !Array.isArray(parsed.accounts) || parsed.accounts.length === 0 ||
+      !Array.isArray(parsed.accountFolders) || parsed.accountFolders.length === 0 ||
+      !Array.isArray(parsed.emails)
+    ) {
+      return null;
+    }
+    return parsed as MailListSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+function writeMailListSnapshot(snapshot: MailListSnapshot | null): void {
+  try {
+    if (snapshot) {
+      localStorage.setItem(MAIL_LIST_SNAPSHOT_KEY, JSON.stringify(snapshot));
+    } else {
+      localStorage.removeItem(MAIL_LIST_SNAPSHOT_KEY);
+    }
+  } catch {
+    // Storage full or unavailable: the next open cold-boots, nothing breaks.
+  }
+}
+
 
 
 export function useMailClient(onError?: (message: string) => void) {
-  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [accountFolders, setAccountFolders] = useState<AccountFolders[]>([]);
-  const [selection, setSelection] = useState<MailboxSelection>(null);
-  const [emails, setEmails] = useState<EmailSummary[]>([]);
+  const [snapshot] = useState(readMailListSnapshot);
+  const [accounts, setAccounts] = useState<AccountSummary[]>(snapshot?.accounts ?? []);
+  const [accountFolders, setAccountFolders] = useState<AccountFolders[]>(snapshot?.accountFolders ?? []);
+  const [selection, setSelection] = useState<MailboxSelection>(snapshot ? LANDING_SELECTION : null);
+  const [emails, setEmails] = useState<EmailSummary[]>(snapshot?.emails ?? []);
   const [selectedEmail, setSelectedEmail] = useState<EmailDetail | null>(null);
   const [authRecoveryError, setAuthRecoveryError] = useState<MailAuthRecoveryError | null>(null);
   const [emailLoading, setEmailLoading] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [isBootstrappingAccounts, setIsBootstrappingAccounts] = useState(true);
+  const [isBootstrappingAccounts, setIsBootstrappingAccounts] = useState(snapshot === null);
+  // A snapshot paints stale folders; reload them once the live accounts land.
+  const revalidateFoldersRef = useRef(snapshot !== null);
+  const accountsFetchedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   
@@ -52,6 +104,14 @@ export function useMailClient(onError?: (message: string) => void) {
   onErrorRef.current = onError;
 
   const selectingRef = useRef<string | null>(null);
+  const loadedSelectionRef = useRef<MailboxSelection>(null);
+  const listGenerationRef = useRef(0);
+  useEffect(() => {
+    ++listGenerationRef.current;
+    return () => { ++listGenerationRef.current; };
+  }, [selection, accounts, accountFolders]);
+  const emailsRef = useRef(emails);
+  emailsRef.current = emails;
   const markReadTimerRef = useRef<any>(null);
   const deletedEmailsCacheRef = useRef<Map<string, { email: EmailSummary; index: number; selectedDetail: EmailDetail | null }>>(new Map());
 
@@ -111,13 +171,16 @@ export function useMailClient(onError?: (message: string) => void) {
 
     try {
       setLoading(true);
-      if (isBootstrap) {
+      if (isBootstrap && !revalidateFoldersRef.current) {
         setIsBootstrappingAccounts(true);
       }
       setError(null);
       const result = await api.listAccounts();
+      accountsFetchedRef.current = true;
       setAccounts(result);
       if (result.length === 0) {
+        revalidateFoldersRef.current = false;
+        writeMailListSnapshot(null);
         setSelection(null);
         setAccountFolders([]);
         setEmails([]);
@@ -174,8 +237,9 @@ export function useMailClient(onError?: (message: string) => void) {
 
       for (const account of accounts) {
         try {
-          const syncResult = await api.syncFolders(account.id);
-          const folders = Array.isArray(syncResult) ? syncResult : [];
+          await api.syncFolders(account.id);
+          const listResult = await api.listFolders(account.id);
+          const folders = Array.isArray(listResult) ? listResult : [];
           results.push({ account, folders });
         } catch (err) {
           reportError(`Failed to sync folders for ${account.email}`, err);
@@ -209,8 +273,9 @@ export function useMailClient(onError?: (message: string) => void) {
   const loadAggregateEmails = useCallback(
     async (
       folderType: FolderType,
-      limitPerAccount: number,
+      limitPerAccount: number | AggregateOffsets,
       offsets: AggregateOffsets,
+      isCurrent: () => boolean = () => true,
     ): Promise<{ results: AggregateAccountResult[]; hasMore: boolean }> => {
       const targets: { accountId: string; folderId: string }[] = [];
 
@@ -232,7 +297,9 @@ export function useMailClient(onError?: (message: string) => void) {
             .listEmails(
               t.accountId,
               t.folderId,
-              limitPerAccount,
+              typeof limitPerAccount === "number"
+                ? limitPerAccount
+                : Math.max(50, limitPerAccount[t.accountId] ?? 0),
               offsets[t.accountId] ?? 0,
             )
             .then((emails): AggregateAccountResult => ({
@@ -249,10 +316,13 @@ export function useMailClient(onError?: (message: string) => void) {
       results.forEach((result) => {
         if (result.status === "fulfilled") {
           accountResults.push(result.value);
-          if (result.value.emails.length === limitPerAccount) {
+          const limit = typeof limitPerAccount === "number"
+            ? limitPerAccount
+            : Math.max(50, limitPerAccount[result.value.accountId] ?? 0);
+          if (result.value.emails.length === limit) {
             hasMoreResults = true;
           }
-        } else {
+        } else if (isCurrent()) {
           reportError(`Failed to load emails from aggregate`, result.reason);
         }
       });
@@ -274,22 +344,35 @@ export function useMailClient(onError?: (message: string) => void) {
   // Main email loading effect based on selection
   useEffect(() => {
     if (!selection) return;
+    // Snapshot folders may be stale and the helper may still be starting; the
+    // list is refreshed once live folders replace them (loadAggregateEmails
+    // changes identity and re-runs this effect).
+    if (revalidateFoldersRef.current) return;
 
     let cancelled = false;
 
     const init = async () => {
+      const selectionChanged = loadedSelectionRef.current !== selection;
+      loadedSelectionRef.current = selection;
       try {
-        setLoading(true);
+        if (selectionChanged) setLoading(true);
         setError(null);
-        setHasMore(true);
-        setSelectedEmail(null);
+        if (selectionChanged) setSelectedEmail(null);
+        const limit = selectionChanged ? 50 : Math.max(50, emailsRef.current.length);
 
         if (selection.type === "aggregate") {
+          const loadedPerAccount: AggregateOffsets = {};
+          if (!selectionChanged) {
+            for (const email of emailsRef.current) {
+              loadedPerAccount[email.account_id] =
+                (loadedPerAccount[email.account_id] ?? 0) + 1;
+            }
+          }
           // Aggregate mode: load from all accounts with matching folder type
           // Use empty offsets (all start at 0) for initial load
           const { results, hasMore: more } = await loadAggregateEmails(
             selection.folderType,
-            50,
+            loadedPerAccount,
             {},
           );
           if (cancelled) return;
@@ -316,12 +399,12 @@ export function useMailClient(onError?: (message: string) => void) {
           const cached = await api.listEmails(
             selection.accountId,
             selection.folderId,
-            50,
+            limit,
             0,
           );
           if (cancelled) return;
           setEmails(cached);
-          setHasMore(cached.length === 50);
+          setHasMore(cached.length === limit);
         }
       } catch (err) {
         if (!cancelled) reportError("Failed to load emails", err);
@@ -339,6 +422,8 @@ export function useMailClient(onError?: (message: string) => void) {
 
   const loadMoreEmails = useCallback(async () => {
     if (!selection || loading) return;
+    const generation = listGenerationRef.current;
+    const isCurrent = () => generation === listGenerationRef.current;
 
     try {
       setLoading(true);
@@ -350,7 +435,9 @@ export function useMailClient(onError?: (message: string) => void) {
           selection.folderType,
           50,
           aggregateOffsets,
+          isCurrent,
         );
+        if (!isCurrent()) return;
 
         // Merge new emails with existing, deduplicate by id, and sort by date
         setEmails((prev) => {
@@ -385,6 +472,7 @@ export function useMailClient(onError?: (message: string) => void) {
           50,
           emails.length,
         );
+        if (!isCurrent()) return;
         setEmails((prev) =>
           [...prev, ...result].sort((a, b) => {
             const ta = new Date(b.date).getTime() || 0;
@@ -395,9 +483,9 @@ export function useMailClient(onError?: (message: string) => void) {
         setHasMore(result.length === 50);
       }
     } catch (err) {
-      reportError("Failed to load more emails", err);
+      if (isCurrent()) reportError("Failed to load more emails", err);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [
     selection,
@@ -470,6 +558,8 @@ export function useMailClient(onError?: (message: string) => void) {
 
   const syncCurrentFolder = useCallback(async () => {
     if (!selection) return;
+    const generation = listGenerationRef.current;
+    const isCurrent = () => generation === listGenerationRef.current;
 
     try {
       setLoading(true);
@@ -488,6 +578,7 @@ export function useMailClient(onError?: (message: string) => void) {
         const results = await Promise.allSettled(
           targets.map((t) => api.syncFolder(t.accountId, t.folderId)),
         );
+        if (!isCurrent()) return;
 
         let allEmails: EmailSummary[] = [];
         results.forEach((result) => {
@@ -503,14 +594,16 @@ export function useMailClient(onError?: (message: string) => void) {
         });
 
         setEmails(allEmails);
+        setAggregateOffsets({});
       } else {
         const result = await api.syncFolder(selection.accountId, selection.folderId);
+        if (!isCurrent()) return;
         setEmails(result);
       }
     } catch (err) {
-      reportError("Failed to sync folder", err);
+      if (isCurrent()) reportError("Failed to sync folder", err);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [selection, accountFolders, reportError]);
 
@@ -607,6 +700,19 @@ export function useMailClient(onError?: (message: string) => void) {
     [toggleStarMutation],
   );
 
+  const clearSelectedEmail = useCallback(() => {
+    selectingRef.current = null;
+    if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
+    setSelectedEmail(null);
+    setAuthRecoveryError(null);
+    setEmailLoading(false);
+  }, []);
+
+  const removeEmails = useCallback((ids: string[]) => {
+    setEmails(prev => prev.filter(email => !ids.includes(email.id)));
+    setSelectedEmail(prev => prev && ids.includes(prev.email.id) ? null : prev);
+  }, []);
+
   // Selection change handlers
   const selectAggregate = useCallback((folderType: FolderType) => {
     setSelection({ type: "aggregate", folderType });
@@ -654,6 +760,25 @@ export function useMailClient(onError?: (message: string) => void) {
     void loadAccounts({ bootstrap: true });
   }, [loadAccounts]);
 
+  // The app shell only loads folders when none are shown, which a snapshot
+  // defeats; refresh them here once the live account list has arrived.
+  useEffect(() => {
+    if (!revalidateFoldersRef.current || !accountsFetchedRef.current) return;
+    revalidateFoldersRef.current = false;
+    void loadAllFolders();
+  }, [accounts, loadAllFolders]);
+
+  // Persist the landing view for the next fresh open.
+  useEffect(() => {
+    if (!accountsFetchedRef.current || !isLandingSelection(selection)) return;
+    if (accounts.length === 0 || accountFolders.length === 0) return;
+    writeMailListSnapshot({
+      accounts,
+      accountFolders,
+      emails: emails.slice(0, SNAPSHOT_EMAIL_LIMIT),
+    });
+  }, [accounts, accountFolders, selection, emails]);
+
   return useMemo(() => ({
     // Core state
     accounts,
@@ -675,6 +800,8 @@ export function useMailClient(onError?: (message: string) => void) {
     folders,
 
     // Actions
+    clearSelectedEmail,
+    removeEmails,
     loadAccounts,
     loadAllFolders,
     syncAllFolders,
@@ -708,6 +835,8 @@ export function useMailClient(onError?: (message: string) => void) {
     selectedFolderType,
     folders,
     loadAccounts,
+    clearSelectedEmail,
+    removeEmails,
     loadAllFolders,
     syncAllFolders,
     loadMoreEmails,

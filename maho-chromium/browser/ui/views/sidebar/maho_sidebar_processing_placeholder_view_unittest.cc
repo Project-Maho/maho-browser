@@ -16,6 +16,7 @@
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/animation/animation_test_api.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/test/views_test_base.h"
@@ -393,6 +394,40 @@ TEST_F(MahoSidebarProcessingPlaceholderViewTest,
   task_environment()->FastForwardBy(base::Milliseconds(510));
 
   EXPECT_EQ(processing->phase_for_testing(), Phase::kResolvingFailure);
+}
+
+TEST_F(MahoSidebarProcessingPlaceholderViewTest,
+       CulledActionRowKeepsHeightAcrossSpaceRebuild) {
+  auto widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+  widget->SetBounds(gfx::Rect(0, 0, 320, 480));
+  widget->Show();
+  auto* tab_list = widget->SetContentsView(
+      std::make_unique<MahoSidebarTabListView>(nullptr));
+
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-a";
+  SidebarTreeNode tab;
+  tab.tab_id = "tab-1";
+  tab.title = u"One";
+  model.normal_tree.push_back(std::move(tab));
+
+  tab_list->RebuildRowsForTesting(model, nullptr);
+  views::View* action_row = tab_list->action_row_for_testing();
+  ASSERT_TRUE(action_row);
+  // The virtualizer hides an off-screen scaffold this way. A space switch
+  // rebuilds the same row and must not treat that hide as product visibility.
+  action_row->SetVisible(false);
+
+  model.active_space_id = "space-b";
+  tab_list->RebuildRowsForTesting(model, nullptr);
+  widget->LayoutRootViewIfNecessary();
+
+  action_row = tab_list->action_row_for_testing();
+  ASSERT_TRUE(action_row);
+  EXPECT_TRUE(action_row->GetVisible());
+  EXPECT_EQ(42, action_row->GetPreferredSize(views::SizeBounds()).height());
+  EXPECT_EQ(42, action_row->bounds().height());
 }
 
 }  // namespace

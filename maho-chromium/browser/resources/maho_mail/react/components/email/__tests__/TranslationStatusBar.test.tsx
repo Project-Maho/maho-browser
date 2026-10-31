@@ -58,4 +58,22 @@ describe("TranslationStatusBar", () => {
     render(<TranslationStatusBar {...baseProps} error="Network timeout" />);
     expect(screen.getByText(/ja.*en|JA.*EN/i)).toBeInTheDocument();
   });
+
+  it("lets the user pick the target language when languages are provided", () => {
+    const onChangeToLang = vi.fn();
+    render(
+      <TranslationStatusBar
+        {...baseProps}
+        languages={[
+          { code: "en", name: "English" },
+          { code: "ko", name: "Korean" },
+        ]}
+        onChangeToLang={onChangeToLang}
+      />,
+    );
+    const picker = screen.getByRole("combobox", { name: /translate into/i });
+    expect((picker as HTMLSelectElement).value).toBe("en");
+    fireEvent.change(picker, { target: { value: "ko" } });
+    expect(onChangeToLang).toHaveBeenCalledWith("ko");
+  });
 });

@@ -76,7 +76,7 @@ impl LLMProvider for AnthropicProvider {
             let res = match req.send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.try_send(Err(format!("Request failed: {}", e)));
+                    let _ = tx.send(Err(format!("Request failed: {}", e))).await;
                     return;
                 }
             };
@@ -84,11 +84,14 @@ impl LLMProvider for AnthropicProvider {
             if !res.status().is_success() {
                 let status = res.status();
                 let err_text = res.text().await.unwrap_or_default();
-                let _ = tx.try_send(Err(format!("HTTP error {}: {}", status, err_text)));
+                let _ = tx
+                    .send(Err(format!("HTTP error {}: {}", status, err_text)))
+                    .await;
                 return;
             }
 
             let mut bytes_stream = res.bytes_stream();
+            let mut utf8_pending = Vec::new();
             let mut sse_buffer = String::new();
 
             while let Some(chunk_result) = bytes_stream.next().await {
@@ -99,20 +102,20 @@ impl LLMProvider for AnthropicProvider {
                 let chunk = match chunk_result {
                     Ok(b) => b,
                     Err(e) => {
-                        let _ = tx.try_send(Err(format!("Stream error: {}", e)));
+                        let _ = tx.send(Err(format!("Stream error: {}", e))).await;
                         return;
                     }
                 };
 
-                let chunk_str = match std::str::from_utf8(&chunk) {
+                let chunk_str = match stream_utils::push_utf8_chunk(&mut utf8_pending, &chunk) {
                     Ok(s) => s,
                     Err(_) => {
-                        let _ = tx.try_send(Err("Invalid UTF-8 chunk".to_string()));
+                        let _ = tx.send(Err("Invalid UTF-8 chunk".to_string())).await;
                         return;
                     }
                 };
 
-                sse_buffer.push_str(chunk_str);
+                sse_buffer.push_str(&chunk_str);
 
                 // Anthropic SSE format: `event: <type>\ndata: <json>\n\n`
                 while let Some(pos) = sse_buffer.find("\n\n") {
@@ -154,11 +157,14 @@ impl LLMProvider for AnthropicProvider {
                                             delta.get("text").and_then(|t| t.as_str())
                                         {
                                             if !text.is_empty() {
-                                                let _ = tx.try_send(Ok(LLMStreamChunk::Token(
-                                                    text.to_string(),
-                                                )));
-                                                if tx.is_closed() {
-                                                    break;
+                                                if tx
+                                                    .send(Ok(LLMStreamChunk::Token(
+                                                        text.to_string(),
+                                                    )))
+                                                    .await
+                                                    .is_err()
+                                                {
+                                                    return;
                                                 }
                                             }
                                         }
@@ -172,14 +178,17 @@ impl LLMProvider for AnthropicProvider {
                                             .and_then(|p| p.as_str())
                                             .unwrap_or_default()
                                             .to_string();
-                                        let _ = tx.try_send(Ok(LLMStreamChunk::ToolCallDelta {
-                                            index,
-                                            id: None,
-                                            name: None,
-                                            arguments_delta: partial_json,
-                                        }));
-                                        if tx.is_closed() {
-                                            break;
+                                        if tx
+                                            .send(Ok(LLMStreamChunk::ToolCallDelta {
+                                                index,
+                                                id: None,
+                                                name: None,
+                                                arguments_delta: partial_json,
+                                            }))
+                                            .await
+                                            .is_err()
+                                        {
+                                            return;
                                         }
                                     }
                                     _ => {}
@@ -202,14 +211,17 @@ impl LLMProvider for AnthropicProvider {
                                         .get("name")
                                         .and_then(|n| n.as_str())
                                         .map(|s| s.to_string());
-                                    let _ = tx.try_send(Ok(LLMStreamChunk::ToolCallDelta {
-                                        index,
-                                        id,
-                                        name,
-                                        arguments_delta: String::new(),
-                                    }));
-                                    if tx.is_closed() {
-                                        break;
+                                    if tx
+                                        .send(Ok(LLMStreamChunk::ToolCallDelta {
+                                            index,
+                                            id,
+                                            name,
+                                            arguments_delta: String::new(),
+                                        }))
+                                        .await
+                                        .is_err()
+                                    {
+                                        return;
                                     }
                                 }
                             }
@@ -220,7 +232,7 @@ impl LLMProvider for AnthropicProvider {
                                 .and_then(|e| e.get("message"))
                                 .and_then(|m| m.as_str())
                                 .unwrap_or("Unknown Anthropic error");
-                            let _ = tx.try_send(Err(err_msg.to_string()));
+                            let _ = tx.send(Err(err_msg.to_string())).await;
                             return;
                         }
                         Some("message_stop") => {
@@ -229,6 +241,9 @@ impl LLMProvider for AnthropicProvider {
                         _ => {}
                     }
                 }
+            }
+            if !utf8_pending.is_empty() {
+                let _ = tx.send(Err("Incomplete UTF-8 stream".to_string())).await;
             }
         });
 

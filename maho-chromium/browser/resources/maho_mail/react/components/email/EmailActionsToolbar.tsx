@@ -92,11 +92,11 @@ function shouldShowLabelInPrimary(spec: ActionSpec): boolean {
 function primaryButtonClassName(variant: ActionSpec["variant"]): string {
   switch (variant) {
     case "primary":
-      return "flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary transition-colors hover:bg-primary/10 disabled:opacity-50";
+      return "mail-pressable flex h-9 items-center gap-2 rounded-lg bg-primary/10 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50";
     case "destructive":
-      return "flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-card hover:text-destructive";
+      return "mail-pressable flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive";
     default:
-      return "flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground transition-colors hover:bg-muted";
+      return "mail-pressable flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-foreground transition-colors hover:bg-surface-hover";
   }
 }
 
@@ -318,7 +318,7 @@ export function EmailActionsToolbar(props: EmailActionsToolbarProps) {
                       type="button"
                       onClick={() => hideAction(id)}
                       aria-label={`Hide ${resolveLabel(ACTION_BY_ID[id])}`}
-                      className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-destructive/60 bg-background text-destructive transition-colors hover:bg-destructive hover:text-white"
+                      className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-destructive/60 bg-background text-destructive transition-colors hover:bg-destructive hover:text-destructive-foreground"
                     >
                       <X size={10} />
                     </button>
@@ -345,7 +345,7 @@ export function EmailActionsToolbar(props: EmailActionsToolbarProps) {
                       if (renderableOverflow.length === 0) return;
                       openContextMenu(e, renderableOverflow[0], "overflow");
                     }}
-                    className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground transition-colors hover:bg-muted"
+                    className="mail-pressable flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-foreground hover:bg-surface-hover"
                   >
                     <MoreHorizontal size={16} />
                   </button>
@@ -370,7 +370,7 @@ export function EmailActionsToolbar(props: EmailActionsToolbarProps) {
           className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors ${
             editMode
               ? "bg-primary/10 text-primary hover:bg-primary/20"
-              : "text-muted-foreground hover:bg-card hover:text-foreground"
+              : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
           }`}
         >
           {editMode ? <Check size={12} /> : <Pencil size={12} />}

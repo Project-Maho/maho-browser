@@ -11,7 +11,11 @@
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -138,11 +142,11 @@ class MahoPeekInteractiveUiTest : public InProcessBrowserTest {
     embedded_test_server()->ServeFilesFromSourceDirectory("chrome/test/data");
     ASSERT_TRUE(embedded_test_server()->Start());
     InProcessBrowserTest::SetUpOnMainThread();
-    if (browser()->tab_strip_model()->empty()) {
+    if (browser()->GetTabStripModel()->empty()) {
       chrome::AddTabAt(browser(), GURL("about:blank"), /*index=*/-1,
                        /*foreground=*/true);
     }
-    ASSERT_TRUE(browser()->tab_strip_model()->GetActiveWebContents());
+    ASSERT_TRUE(browser()->GetTabStripModel()->GetActiveWebContents());
     ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   }
 
@@ -161,7 +165,7 @@ class MahoPeekInteractiveUiTest : public InProcessBrowserTest {
     return view ? view->GetOrCreateMahoPeekController() : nullptr;
   }
 
-  MahoPeekController* controller() { return ControllerFor(browser()); }
+  MahoPeekController* controller() { return ControllerFor(static_cast<Browser*>(browser())); }
 
   content::WebContents* OpenPeekIn(Browser* target_browser,
                                    content::WebContents* source = nullptr) {
@@ -186,14 +190,14 @@ class MahoPeekInteractiveUiTest : public InProcessBrowserTest {
   }
 
   content::WebContents* OpenPeek(content::WebContents* source = nullptr) {
-    return OpenPeekIn(browser(), source);
+    return OpenPeekIn(static_cast<Browser*>(browser()), source);
   }
 
   content::WebContents* NavigateToPopupOpener() {
     const GURL url = embedded_test_server()->GetURL(kPopupOpenerPath);
     EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
     content::WebContents* source =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     EXPECT_TRUE(source);
     EXPECT_EQ(url, source ? source->GetLastCommittedURL() : GURL());
     return source;
@@ -224,7 +228,7 @@ class MahoPeekInteractiveUiTest : public InProcessBrowserTest {
   void SendEscape() {
     base::RunLoop sent;
     ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
-        browser()->window()->GetNativeWindow(), ui::VKEY_ESCAPE, false, false,
+        browser()->GetWindow()->GetNativeWindow(), ui::VKEY_ESCAPE, false, false,
         false, false, sent.QuitClosure()));
     sent.Run();
   }
@@ -294,7 +298,7 @@ IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest, ScrimClickHidesOverlay) {
 
 IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
                        PromoteButtonMovesLivePageToTab) {
-  const int initial_tab_count = browser()->tab_strip_model()->count();
+  const int initial_tab_count = browser()->GetTabStripModel()->count();
   content::WebContents* contents = OpenPeek();
   ASSERT_TRUE(contents);
   EXPECT_FALSE(sessions::SessionTabHelper::FromWebContents(contents));
@@ -324,9 +328,9 @@ IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
                                   ui::EF_LEFT_MOUSE_BUTTON));
   overlay_destroyed.Wait();
 
-  EXPECT_EQ(initial_tab_count + 1, browser()->tab_strip_model()->count());
-  EXPECT_EQ(contents, browser()->tab_strip_model()->GetActiveWebContents());
-  EXPECT_EQ(static_cast<content::WebContentsDelegate*>(browser()),
+  EXPECT_EQ(initial_tab_count + 1, browser()->GetTabStripModel()->count());
+  EXPECT_EQ(contents, browser()->GetTabStripModel()->GetActiveWebContents());
+  EXPECT_EQ(BrowserWebContentsDelegate::From(browser()),
             contents->GetDelegate());
   EXPECT_TRUE(sessions::SessionTabHelper::FromWebContents(contents));
   EXPECT_EQ(promoted_url, contents->GetLastCommittedURL());
@@ -339,7 +343,7 @@ IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
 IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
                        SourceCloseDestroysTransientPeek) {
   content::WebContents* source =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(source);
   content::WebContents* contents = OpenPeek(source);
   ASSERT_TRUE(contents);
@@ -353,9 +357,9 @@ IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
   views::test::WidgetDestroyedWaiter overlay_destroyed(overlay);
 
   const int source_index =
-      browser()->tab_strip_model()->GetIndexOfWebContents(source);
+      browser()->GetTabStripModel()->GetIndexOfWebContents(source);
   ASSERT_NE(TabStripModel::kNoTab, source_index);
-  browser()->tab_strip_model()->CloseWebContentsAt(source_index,
+  browser()->GetTabStripModel()->CloseWebContentsAt(source_index,
                                                    TabCloseTypes::CLOSE_NONE);
   ASSERT_TRUE(
       base::test::RunUntil([&]() { return contents_destroyed.IsDestroyed(); }));
@@ -366,31 +370,43 @@ IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
-                       AdoptsPopupPreservingOpenerMessagingIdentityAndClose) {
+                       RoutesPopupToForegroundTabPreservingOpenerMessaging) {
+  LOG(INFO) << "[MahoTest] Step 1: Navigating to popup opener";
   content::WebContents* source = NavigateToPopupOpener();
   ASSERT_TRUE(source);
-  const int initial_tab_count = browser()->tab_strip_model()->count();
+  const int initial_tab_count = browser()->GetTabStripModel()->count();
+  LOG(INFO) << "[MahoTest] Step 1 done. Initial tab count: " << initial_tab_count;
 
+  LOG(INFO) << "[MahoTest] Step 2: Clicking open-popup button";
   content::WebContents* created = ClickPopupButton(source, "open-popup");
   ASSERT_TRUE(created);
-  MahoPeekController* peek = controller();
-  ASSERT_TRUE(peek);
+  LOG(INFO) << "[MahoTest] Step 2 done. Created contents: " << created;
+
+  LOG(INFO) << "[MahoTest] Step 3: Waiting for new tab activation and commit";
   ASSERT_TRUE(base::test::RunUntil([&]() {
-    return peek->state_for_testing() == MahoPeekController::State::Open &&
-           peek->peek_view_for_testing() &&
-           peek->peek_view_for_testing()->hosted_contents() == created &&
+    return browser()->GetTabStripModel()->count() == initial_tab_count + 1 &&
+           browser()->GetTabStripModel()->GetActiveWebContents() == created &&
            created->GetLastCommittedURL().path() == kPopupPath;
   }));
+  LOG(INFO) << "[MahoTest] Step 3 done. Tab count: "
+            << browser()->GetTabStripModel()->count();
 
-  EXPECT_EQ(initial_tab_count, browser()->tab_strip_model()->count());
-  EXPECT_EQ(created, peek->peek_view_for_testing()->hosted_contents());
+  EXPECT_EQ(BrowserWebContentsDelegate::From(browser()),
+            created->GetDelegate());
+  EXPECT_TRUE(sessions::SessionTabHelper::FromWebContents(created));
+  EXPECT_FALSE(controller()->SlotBusy());
+  LOG(INFO) << "[MahoTest] Step 4: Checking window.opener";
   EXPECT_EQ(true, content::EvalJs(created, "window.opener !== null"));
+
+  LOG(INFO) << "[MahoTest] Step 5: Waiting for popup-ready";
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return content::EvalJs(source,
                            "window.popupMessages.includes('popup-ready')")
         .ExtractBool();
   }));
+  LOG(INFO) << "[MahoTest] Step 5 done.";
 
+  LOG(INFO) << "[MahoTest] Step 6: Sending to popup";
   ASSERT_TRUE(content::ExecJs(source, "window.sendToPopup()"));
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return content::EvalJs(created, "window.receivedFromOpener").ExtractBool() &&
@@ -398,70 +414,72 @@ IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
                            "window.popupMessages.includes('popup-ack')")
                .ExtractBool();
   }));
+  LOG(INFO) << "[MahoTest] Step 6 done.";
 
-  views::Widget* overlay = peek->widget_for_testing();
-  ASSERT_TRUE(overlay);
+  LOG(INFO) << "[MahoTest] Step 7: Closing popup";
   content::WebContentsDestroyedWatcher contents_destroyed(created);
-  views::test::WidgetDestroyedWaiter overlay_destroyed(overlay);
-  content::SimulateMouseClickOrTapElementWithId(created, "close-popup");
+  ASSERT_TRUE(content::ExecJs(created, "window.close()"));
   ASSERT_TRUE(
       base::test::RunUntil([&]() { return contents_destroyed.IsDestroyed(); }));
-  overlay_destroyed.Wait();
-  EXPECT_EQ(MahoPeekController::State::Closed, peek->state_for_testing());
+  LOG(INFO) << "[MahoTest] Step 7 done. WebContents destroyed.";
+  EXPECT_EQ(initial_tab_count, browser()->GetTabStripModel()->count());
+  EXPECT_EQ(source, browser()->GetTabStripModel()->GetActiveWebContents());
+  LOG(INFO) << "[MahoTest] Test finished successfully!";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
-                       AdoptsNoopenerPopupWithoutInventingOpener) {
+                       RoutesNoopenerPopupToForegroundTab) {
   content::WebContents* source = NavigateToPopupOpener();
   ASSERT_TRUE(source);
+  const int initial_tab_count = browser()->GetTabStripModel()->count();
 
   content::WebContents* created = ClickPopupButton(source, "open-noopener");
   ASSERT_TRUE(created);
-  MahoPeekController* peek = controller();
-  ASSERT_TRUE(peek);
   ASSERT_TRUE(base::test::RunUntil([&]() {
-    return peek->peek_view_for_testing() &&
-           peek->peek_view_for_testing()->hosted_contents() == created &&
+    return browser()->GetTabStripModel()->count() == initial_tab_count + 1 &&
+           browser()->GetTabStripModel()->GetActiveWebContents() == created &&
            created->GetLastCommittedURL().path() == kPopupPath;
   }));
+  EXPECT_FALSE(controller()->SlotBusy());
   EXPECT_EQ(true, content::EvalJs(created, "window.opener === null"));
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
-                       OccupiedPeekRoutesSecondPopupToForegroundTab) {
+                       PopupDoesNotPreemptExistingPeekOverlay) {
   content::WebContents* source = NavigateToPopupOpener();
   ASSERT_TRUE(source);
-  ASSERT_TRUE(OpenPeek());
-  const int initial_tab_count = browser()->tab_strip_model()->count();
+  content::WebContents* peek_contents = OpenPeek();
+  ASSERT_TRUE(peek_contents);
+  const int initial_tab_count = browser()->GetTabStripModel()->count();
 
   content::WebContents* created = ClickPopupButton(source, "open-popup");
   ASSERT_TRUE(created);
   ASSERT_TRUE(base::test::RunUntil([&]() {
-    return browser()->tab_strip_model()->count() == initial_tab_count + 1 &&
-           browser()->tab_strip_model()->GetActiveWebContents() == created &&
+    return browser()->GetTabStripModel()->count() == initial_tab_count + 1 &&
+           browser()->GetTabStripModel()->GetActiveWebContents() == created &&
            created->GetLastCommittedURL().path() == kPopupPath;
   }));
-  EXPECT_FALSE(BrowserView::GetBrowserViewForBrowser(browser())
-                   ->GetOrCreateMahoPeekController()
-                   ->peek_view_for_testing()
-                   ->hosted_contents() == created);
+  MahoPeekView* peek_view = controller()->peek_view_for_testing();
+  ASSERT_TRUE(peek_view);
+  EXPECT_EQ(peek_contents, peek_view->hosted_contents());
+  EXPECT_NE(created, peek_view->hosted_contents());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
                        DisabledPopupRoutingUsesNormalPopupWindow) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       maho::sidebar_prefs::kPeekPopupRoutingEnabled, false);
   content::WebContents* source = NavigateToPopupOpener();
   ASSERT_TRUE(source);
 
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   content::SimulateMouseClickOrTapElementWithId(source, "open-popup");
-  Browser* popup_browser = browser_created_observer.Wait();
+  Browser* popup_browser = static_cast<Browser*>(browser_created_observer.Wait());
   ASSERT_TRUE(popup_browser);
-  EXPECT_TRUE(popup_browser->is_type_popup());
+  EXPECT_TRUE((popup_browser->GetType() == BrowserWindowInterface::TYPE_POPUP));
   ASSERT_TRUE(base::test::RunUntil([&]() {
     content::WebContents* created =
-        popup_browser->tab_strip_model()->GetActiveWebContents();
+        popup_browser->GetTabStripModel()->GetActiveWebContents();
     return created && created->GetLastCommittedURL().path() == kPopupPath;
   }));
   EXPECT_FALSE(controller()->SlotBusy());
@@ -470,7 +488,7 @@ IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
 
 IN_PROC_BROWSER_TEST_F(MahoPeekInteractiveUiTest,
                        BrowserWindowShutdownDestroysPeekWithoutUnloadPrompt) {
-  Browser* closing_browser = CreateBrowser(browser()->profile());
+  Browser* closing_browser = static_cast<Browser*>(CreateBrowser(browser()->GetProfile()));
   ASSERT_TRUE(closing_browser);
   content::WebContents* contents = OpenPeekIn(closing_browser);
   ASSERT_TRUE(contents);

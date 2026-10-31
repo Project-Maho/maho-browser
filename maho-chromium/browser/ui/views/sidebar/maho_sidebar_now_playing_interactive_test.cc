@@ -43,14 +43,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNowPlayingInteractiveTest, DelayedCreationAndR
   // Initially, before running run loop, registration should be deferred or completed
   base::RunLoop().RunUntilIdle();
 
-  auto* reg_coordinator = MahoNowPlayingCoordinatorFactory::GetForProfile(browser()->profile());
+  auto* reg_coordinator = MahoNowPlayingCoordinatorFactory::GetForProfile(browser()->GetProfile());
   ASSERT_TRUE(reg_coordinator);
 
   // We should have at least 1 host registered (the default browser window)
   EXPECT_EQ(1u, reg_coordinator->GetHostsForTesting().size());
 
   // Let's create a second browser window
-  Browser* browser2 = CreateBrowser(browser()->profile());
+  Browser* browser2 = static_cast<Browser*>(CreateBrowser(browser()->GetProfile()));
   base::RunLoop().RunUntilIdle();
 
   // Now we should have 2 hosts registered
@@ -65,7 +65,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNowPlayingInteractiveTest, DelayedCreationAndR
   base::RunLoop().RunUntilIdle();
 
   // Start playback in background tab
-  content::WebContents* video_contents = browser2->tab_strip_model()->GetWebContentsAt(0);
+  content::WebContents* video_contents = browser2->GetTabStripModel()->GetWebContentsAt(0);
   video_contents->GetPrimaryMainFrame()->ExecuteJavaScriptForTests(
       u"play()", base::NullCallback(), content::ISOLATED_WORLD_ID_GLOBAL);
 

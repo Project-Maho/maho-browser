@@ -25,11 +25,25 @@ impl MahoCore {
         let storage = self.storage_ref().ok_or_else(|| {
             VaultCrudError::Storage("vault policy storage is not configured".to_string())
         })?;
+        let profile_id = self.get_active_profile_id().cloned().unwrap_or_default();
+        let audit_context = crate::vault_runtime::audit::AuditContext::with_policy(
+            profile_id,
+            maho_types::vault::VaultAuditOperation::PolicyChanged,
+            policy.policy,
+        );
         let row = policy_to_row(&policy, Utc::now())?;
         storage
-            .save_vault_policy(&row)
+            .vault_audit_transaction(|tx| {
+                tx.upsert_policy(&row)?;
+                let record = audit_context.build_record(
+                    maho_types::vault::VaultAuditDecision::Allowed,
+                    None,
+                    Utc::now(),
+                );
+                crate::vault_runtime::audit::append_audit_tx(tx, record)?;
+                Ok(())
+            })
             .map_err(|error| VaultCrudError::Storage(error.to_string()))?;
-        self.record_vault_policy_changed_audit(policy.policy)?;
         self.resolve_vault_agent_policy(policy.item_id, policy.origin.as_ref(), Utc::now())
     }
 
@@ -79,27 +93,20 @@ impl MahoCore {
         let after_seq = audit_cursor(request.cursor.as_deref())?;
         let limit = usize::try_from(request.limit)
             .map_err(|_| VaultCrudError::Storage("audit limit is too large".to_string()))?;
-        let rows = storage
-            .list_vault_audit_events()
+        // Keyset page query in storage: bounded row materialization (limit + 1),
+        // positive limits clamped to 1,000, limit 0 mapped to the default page of
+        // 100, and a next cursor returned only when an extra row exists.
+        let (rows, next_cursor) = storage
+            .page_vault_audit_events(after_seq, limit)
             .map_err(|error| VaultCrudError::Storage(error.to_string()))?;
-        let mut filtered = rows
-            .into_iter()
-            .filter(|row| after_seq.is_none_or(|cursor| row.seq > cursor))
-            .collect::<Vec<_>>();
-        let next_cursor = if limit == 0 || filtered.len() <= limit {
-            None
-        } else {
-            filtered.truncate(limit);
-            filtered.last().map(|row| row.seq.to_string())
-        };
-        let entries = filtered
+        let entries = rows
             .into_iter()
             .map(row_to_public_audit)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(VaultAuditPageDto {
             schema_version: VaultSchemaVersion::CURRENT,
             entries,
-            next_cursor,
+            next_cursor: next_cursor.map(|seq| seq.to_string()),
         })
     }
 }
@@ -174,7 +181,7 @@ fn is_expired(policy: &VaultPolicy, now: DateTime<Utc>) -> bool {
 fn row_to_public_audit(row: VaultAuditRow) -> Result<VaultAuditPublicDto, VaultCrudError> {
     Ok(VaultAuditPublicDto {
         schema_version: schema_version(row.schema_version)?,
-        id: VaultAuditRecordId::from_str(&row.id).map_err(contract_error)?,
+        id: audit_record_id_from_stored(&row.id),
         timestamp: parse_time(&row.timestamp)?,
         task_id: row
             .task_id
@@ -205,10 +212,35 @@ fn audit_cursor(cursor: Option<&str>) -> Result<Option<i64>, VaultCrudError> {
     match cursor.filter(|value| !value.is_empty()) {
         Some(value) => value
             .parse::<i64>()
-            .map(Some)
-            .map_err(|_| VaultCrudError::Storage("invalid audit cursor".to_string())),
+            .map_err(|_| VaultCrudError::Storage("invalid audit cursor".to_string()))
+            .and_then(|parsed| {
+                if parsed < 0 {
+                    Err(VaultCrudError::Storage(
+                        "invalid audit cursor: must be nonnegative".to_string(),
+                    ))
+                } else {
+                    Ok(Some(parsed))
+                }
+            }),
         None => Ok(None),
     }
+}
+
+/// Stored audit ids are opaque TEXT at the storage layer; product-created rows
+/// carry UUID ids while imported/legacy rows may not. Map them deterministically
+/// into the typed public id (SHA-256 derived, RFC 4122 version-5 shaped) so
+/// paging over legacy data stays bounded and stable instead of failing the
+/// whole page.
+fn audit_record_id_from_stored(id: &str) -> VaultAuditRecordId {
+    VaultAuditRecordId::from_str(id).unwrap_or_else(|_| {
+        use sha2::{Digest, Sha256};
+        let digest: [u8; 32] = Sha256::digest(id.as_bytes()).into();
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        bytes[6] = (bytes[6] & 0x0f) | 0x50;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        VaultAuditRecordId::from_uuid(uuid::Uuid::from_bytes(bytes))
+    })
 }
 
 fn parse_time(value: &str) -> Result<DateTime<Utc>, VaultCrudError> {

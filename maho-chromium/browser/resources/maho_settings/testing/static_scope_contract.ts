@@ -35,7 +35,7 @@ function exposedSettingKeys(): string[] {
     ...handler.matchAll(/\{"([a-z][a-z0-9_-]*\.[a-z0-9_.-]+)"\s*,/g),
     ...handler.matchAll(/add\("([a-z][a-z0-9_-]*\.[a-z0-9_.-]+)"/g),
   ].map(match => match[1]!);
-  const namedKeys = [...handler.matchAll(/constexpr char k(?:HardwareAcceleration|PasswordProviderMode|PasswordsEnabled|MahoMailEnabled)MahoKey\[\]\s*=\s*"([^"]+)"/g)]
+  const namedKeys = [...handler.matchAll(/constexpr char k(?:HardwareAcceleration|MemorySaverMode|MemorySaverTimeout|PasswordProviderMode|PasswordsEnabled|MahoMailEnabled|VaultAutoLockMinutes|VaultDeviceAuthRequired)MahoKey\[\]\s*=\s*"([^"]+)"/g)]
       .map(match => match[1]!);
   return unique([...keys, ...namedKeys]).sort();
 }
@@ -49,6 +49,8 @@ if (process.argv.includes('--missing-scope-fixture')) {
 
 const expectedSettingScopes: Readonly<Record<string, SettingScope>> = {
   'advanced.hardware_acceleration': 'device',
+  'advanced.memory_saver_mode': 'device',
+  'advanced.memory_saver_timeout': 'device',
   'advanced.preload_pages': 'profile',
   'appearance.density': 'core-global',
   'appearance.sidebar_width': 'profile',
@@ -61,6 +63,8 @@ const expectedSettingScopes: Readonly<Record<string, SettingScope>> = {
   'atc.peek_popup_routing_enabled': 'profile',
   'autofill.password_provider': 'core-global',
   'autofill.passwords_enabled': 'core-global',
+  'autofill.vault_auto_lock_minutes': 'core-global',
+  'autofill.vault_require_device_auth': 'core-global',
   'conversation.auto_archive_after_days': 'core-global',
   'general.homepage': 'profile',
   'general.prompt_for_download': 'profile',
@@ -161,7 +165,7 @@ const expectedPaneSupport: Readonly<Record<string, SelectedProfileSupport>> = {
   'maho-ai': 'host-only', 'maho-ai-developers': 'host-only', 'maho-mini': 'host-only', notifications: 'supported',
   passwords: 'host-only', profiles: 'partial', 'saved-passwords': 'host-only', shortcuts: 'not-applicable', tabs: 'partial',
   'mail-accounts': 'host-only', 'mail-signatures': 'host-only', 'mail-rules': 'host-only', 'mail-calendar': 'host-only',
-  'mail-behavior': 'host-only', 'mail-ai': 'host-only', 'mail-security': 'host-only',
+  'mail-behavior': 'host-only', 'mail-ai': 'host-only', 'mail-security': 'host-only', import: 'host-only',
 };
 for (const pane of ALL_PANE_DEFINITIONS) {
   check(pane.selectedProfileSupport === expectedPaneSupport[pane.key], `${pane.key} selected-profile pane support drifted`);
@@ -170,7 +174,7 @@ check(ALL_PANE_DEFINITIONS.find(pane => pane.key === 'shortcuts')?.scope === 'pr
 check(ALL_PANE_DEFINITIONS.find(pane => pane.key === 'account')?.scope === 'account', 'account pane must be account scope');
 check(ALL_PANE_DEFINITIONS.find(pane => pane.key === 'billing')?.scope === 'account', 'billing pane must be account scope');
 check(ALL_PANE_DEFINITIONS.find(pane => pane.key === 'profiles')?.scope === 'core-global', 'profile catalog must be core-global scope');
-check(!panesForSettings(false).some(pane => pane.domain === 'mail'), 'Mail panes became reachable while disabled');
+check(!panesForSettings(false).some(pane => pane.domain === 'mail' && pane.key !== 'mail'), 'Mail panes became reachable while disabled');
 check(resolveReachablePaneKey('mail-accounts', false) === 'general', 'disabled Mail deep link must redirect to General');
 check(resolveReachablePaneKey('mail-accounts', true) === 'mail-accounts', 'enabled Mail deep link must remain reachable');
 check(resolveReachablePaneKey('privacy', false) === 'content-blocker', 'legacy pane alias must remain deterministic');

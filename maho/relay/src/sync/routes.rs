@@ -19,12 +19,16 @@ const DEFAULT_PULL_LIMIT: usize = 64;
 const SYNC_BOOTSTRAP_VERSION: u8 = 1;
 const SYNC_BOOTSTRAP_NONCE_LEN: usize = 12;
 const SYNC_BOOTSTRAP_SEED_LEN: usize = 32;
+const MAX_VAULT_ESCROW_KDF_BYTES: usize = 8 * 1024;
+const MAX_VAULT_ESCROW_WRAPPED_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub struct SyncBootstrapPutRequest {
     pub version: u8,
     pub room_id: String,
     pub seed: String,
+    #[serde(default)]
+    pub vault_escrow: Option<SyncBootstrapVaultEscrow>,
 }
 
 #[derive(Debug, Serialize)]
@@ -33,6 +37,23 @@ pub struct SyncBootstrapResponse {
     pub room_id: String,
     pub seed: String,
     pub created_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault_escrow: Option<SyncBootstrapVaultEscrow>,
+}
+
+/// The provisioning device's vault key escrow: Argon2 KDF parameters plus the
+/// account-seed-wrapped vault key envelope (both opaque base64 slot payloads).
+/// A later device adopts these so it unlocks the SAME vault key with zero input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncBootstrapVaultEscrow {
+    pub kdf_params: String,
+    pub wrapped_account_key: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredVaultEscrow {
+    kdf_params: String,
+    wrapped_account_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,17 +99,33 @@ impl SyncBootstrapCipher {
         user_id: i32,
         room_id: &str,
     ) -> std::result::Result<EncryptedSyncBootstrap, String> {
+        self.encrypt_with_aad(seed, &self.aad(user_id, room_id))
+    }
+
+    fn encrypt_escrow(
+        &self,
+        payload: &[u8],
+        user_id: i32,
+        room_id: &str,
+    ) -> std::result::Result<EncryptedSyncBootstrap, String> {
+        self.encrypt_with_aad(payload, &self.escrow_aad(user_id, room_id))
+    }
+
+    fn encrypt_with_aad(
+        &self,
+        message: &[u8],
+        aad: &[u8],
+    ) -> std::result::Result<EncryptedSyncBootstrap, String> {
         let mut nonce = [0u8; SYNC_BOOTSTRAP_NONCE_LEN];
         getrandom::getrandom(&mut nonce).map_err(|error| error.to_string())?;
         let key = self.key();
         let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
-        let aad = self.aad(user_id, room_id);
         let ciphertext = cipher
             .encrypt(
                 Nonce::from_slice(&nonce),
                 Payload {
-                    msg: seed,
-                    aad: &aad,
+                    msg: message,
+                    aad,
                 },
             )
             .map_err(|_| "failed to encrypt sync bootstrap".to_string())?;
@@ -104,23 +141,39 @@ impl SyncBootstrapCipher {
         user_id: i32,
         room_id: &str,
     ) -> std::result::Result<[u8; SYNC_BOOTSTRAP_SEED_LEN], String> {
+        let decrypted = self.decrypt_with_aad(encrypted, &self.aad(user_id, room_id))?;
+        decrypted
+            .try_into()
+            .map_err(|_| "invalid encrypted sync bootstrap".to_string())
+    }
+
+    fn decrypt_escrow(
+        &self,
+        encrypted: &EncryptedSyncBootstrap,
+        user_id: i32,
+        room_id: &str,
+    ) -> std::result::Result<Vec<u8>, String> {
+        self.decrypt_with_aad(encrypted, &self.escrow_aad(user_id, room_id))
+    }
+
+    fn decrypt_with_aad(
+        &self,
+        encrypted: &EncryptedSyncBootstrap,
+        aad: &[u8],
+    ) -> std::result::Result<Vec<u8>, String> {
         if encrypted.nonce.len() != SYNC_BOOTSTRAP_NONCE_LEN {
             return Err("invalid encrypted sync bootstrap".to_string());
         }
         let key = self.key();
         let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
-        let aad = self.aad(user_id, room_id);
-        let decrypted = cipher
+        cipher
             .decrypt(
                 Nonce::from_slice(&encrypted.nonce),
                 Payload {
                     msg: &encrypted.ciphertext,
-                    aad: &aad,
+                    aad,
                 },
             )
-            .map_err(|_| "invalid encrypted sync bootstrap".to_string())?;
-        decrypted
-            .try_into()
             .map_err(|_| "invalid encrypted sync bootstrap".to_string())
     }
 
@@ -133,6 +186,10 @@ impl SyncBootstrapCipher {
 
     fn aad(&self, user_id: i32, room_id: &str) -> Vec<u8> {
         format!("maho-sync-bootstrap-v1:{user_id}:{room_id}").into_bytes()
+    }
+
+    fn escrow_aad(&self, user_id: i32, room_id: &str) -> Vec<u8> {
+        format!("maho-sync-bootstrap-v1:{user_id}:{room_id}:vault-escrow").into_bytes()
     }
 }
 
@@ -148,6 +205,49 @@ fn parse_sync_bootstrap_request(
         .map_err(|_| "invalid_bootstrap_seed")?;
     let seed = decoded.try_into().map_err(|_| "invalid_bootstrap_seed")?;
     Ok(ParsedSyncBootstrap { room_id, seed })
+}
+
+fn parse_vault_escrow(
+    escrow: &SyncBootstrapVaultEscrow,
+) -> std::result::Result<(Vec<u8>, Vec<u8>), &'static str> {
+    let kdf_params = STANDARD
+        .decode(escrow.kdf_params.as_bytes())
+        .map_err(|_| "invalid_vault_escrow")?;
+    if kdf_params.is_empty() || kdf_params.len() > MAX_VAULT_ESCROW_KDF_BYTES {
+        return Err("invalid_vault_escrow");
+    }
+    let wrapped_account_key = STANDARD
+        .decode(escrow.wrapped_account_key.as_bytes())
+        .map_err(|_| "invalid_vault_escrow")?;
+    if wrapped_account_key.is_empty() || wrapped_account_key.len() > MAX_VAULT_ESCROW_WRAPPED_BYTES {
+        return Err("invalid_vault_escrow");
+    }
+    Ok((kdf_params, wrapped_account_key))
+}
+
+fn encode_vault_escrow(
+    kdf_params: &[u8],
+    wrapped_account_key: &[u8],
+) -> std::result::Result<Vec<u8>, String> {
+    serde_json::to_vec(&StoredVaultEscrow {
+        kdf_params: STANDARD.encode(kdf_params),
+        wrapped_account_key: STANDARD.encode(wrapped_account_key),
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn decode_vault_escrow(payload: &[u8]) -> std::result::Result<SyncBootstrapVaultEscrow, String> {
+    let stored: StoredVaultEscrow =
+        serde_json::from_slice(payload).map_err(|error| error.to_string())?;
+    parse_vault_escrow(&SyncBootstrapVaultEscrow {
+        kdf_params: stored.kdf_params.clone(),
+        wrapped_account_key: stored.wrapped_account_key.clone(),
+    })
+    .map_err(|error| error.to_string())?;
+    Ok(SyncBootstrapVaultEscrow {
+        kdf_params: stored.kdf_params,
+        wrapped_account_key: stored.wrapped_account_key,
+    })
 }
 
 fn bootstrap_response(
@@ -167,11 +267,27 @@ fn bootstrap_response(
     let seed = cipher
         .decrypt(&encrypted, user_id, &record.room_id)
         .map_err(AppError::Internal)?;
+    let vault_escrow = match (record.vault_escrow_ciphertext, record.vault_escrow_nonce) {
+        (Some(ciphertext), Some(nonce)) => {
+            let encrypted = EncryptedSyncBootstrap { ciphertext, nonce };
+            let payload = cipher
+                .decrypt_escrow(&encrypted, user_id, &record.room_id)
+                .map_err(AppError::Internal)?;
+            Some(decode_vault_escrow(&payload).map_err(AppError::Internal)?)
+        }
+        (None, None) => None,
+        _ => {
+            return Err(AppError::Internal(
+                "incomplete stored vault escrow record".to_string(),
+            ))
+        }
+    };
     Ok(SyncBootstrapResponse {
         version: SYNC_BOOTSTRAP_VERSION,
         room_id: record.room_id,
         seed: STANDARD.encode(seed),
         created_at: record.created_at,
+        vault_escrow,
     })
 }
 
@@ -381,6 +497,18 @@ pub async fn put_bootstrap(mut req: Request, env: Env) -> Result<Response> {
     })?;
     let parsed = parse_sync_bootstrap_request(&request)
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    let escrow = match request.vault_escrow.as_ref() {
+        Some(escrow) => {
+            let (kdf_params, wrapped_account_key) = parse_vault_escrow(escrow)
+                .map_err(|error| AppError::BadRequest(error.to_string()))?;
+            Some((
+                encode_vault_escrow(&kdf_params, &wrapped_account_key)
+                    .map_err(AppError::Internal)?,
+                escrow.clone(),
+            ))
+        }
+        None => None,
+    };
     let now = chrono::Utc::now().timestamp();
     authorize_room(&db, &parsed.room_id, auth.user.id, now).await?;
     let cipher = SyncBootstrapCipher::from_env(&env)?;
@@ -414,6 +542,27 @@ pub async fn put_bootstrap(mut req: Request, env: Env) -> Result<Response> {
             "sync_bootstrap_already_configured".to_string(),
         ));
     }
+    let mut response = response;
+    if let Some((payload, escrow)) = escrow {
+        // Only a caller that proved ownership of the canonical room + seed may
+        // publish or replace the vault escrow record.
+        let encrypted = cipher
+            .encrypt_escrow(&payload, auth.user.id, &parsed.room_id)
+            .map_err(AppError::Internal)?;
+        let stored = db::set_sync_bootstrap_vault_escrow(
+            &db,
+            auth.user.id,
+            encrypted.ciphertext,
+            encrypted.nonce,
+        )
+        .await?;
+        if !stored {
+            return Err(AppError::Internal(
+                "sync bootstrap disappeared during escrow update".to_string(),
+            ));
+        }
+        response.vault_escrow = Some(escrow);
+    }
     let status = if did_create { 201 } else { 200 };
     Response::from_json(&response)
         .map(|response| response.with_status(status))
@@ -444,7 +593,8 @@ pub async fn push(mut req: Request, env: Env) -> Result<Response> {
         return Err(AppError::BadRequest("too_many_messages".to_string()));
     }
 
-    let max_message_bytes = crate::config::RelayConfig::from_env(&env).max_message_size_bytes;
+    let config = crate::config::RelayConfig::from_env(&env);
+    let max_message_bytes = config.max_message_size_bytes;
     let mut decoded_batch = Vec::with_capacity(payload.messages.len());
     for envelope in &payload.messages {
         let bytes = envelope
@@ -455,7 +605,11 @@ pub async fn push(mut req: Request, env: Env) -> Result<Response> {
 
     let mut acks = Vec::with_capacity(decoded_batch.len());
     for (delivery_id, bytes) in decoded_batch {
-        let seq = db::store_message_with_delivery_id(&db, &room_id, &delivery_id, bytes).await?;
+        let seq = persist_and_notify(
+            db::store_message_with_delivery_id(&db, &room_id, &delivery_id, bytes,
+                config.max_room_size_mb as i64 * 1_048_576),
+            || notify_room(&env, &req, &room_id, &delivery_id),
+        ).await?;
         acks.push(RelayAckV2 { delivery_id, seq });
     }
 
@@ -463,6 +617,33 @@ pub async fn push(mut req: Request, env: Env) -> Result<Response> {
         db::touch_session_and_device(&db, auth.user.id, auth.session.id, auth.device.id, now).await;
 
     Response::from_json(&PushResponse { acks }).map_err(AppError::from)
+}
+
+async fn persist_and_notify<S, N, F>(store: S, notify: N) -> Result<i64>
+where
+    S: std::future::Future<Output = Result<i64>>,
+    N: FnOnce() -> F,
+    F: std::future::Future<Output = Result<()>>,
+{
+    let seq = store.await?;
+    notify().await?;
+    Ok(seq)
+}
+
+async fn notify_room(env: &Env, req: &Request, room: &str, delivery: &str) -> Result<()> {
+    let namespace = env.durable_object("ROOM")?;
+    let stub = namespace.id_from_name(room)?.get_stub()?;
+    let headers = Headers::new();
+    headers.set("Authorization", &req.headers().get("Authorization")?.unwrap_or_default())?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post).with_headers(headers);
+    let notification = Request::new_with_init(
+        &format!("https://room.internal/internal/sync/notify?key={room}&delivery_id={delivery}"), &init)?;
+    let response = stub.fetch_with_request(notification).await?;
+    if response.status_code() != 200 {
+        return Err(AppError::Internal("room_notification_failed".to_string()));
+    }
+    Ok(())
 }
 
 /// Authenticated paginated read of the same shared room log the WebSocket
@@ -621,6 +802,20 @@ pub async fn latest_snapshot(req: Request, env: Env) -> Result<Response> {
 mod v2_tests {
     use super::*;
 
+    #[test]
+    fn rest_ack_waits_for_live_room_notification() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+        let notified = std::cell::Cell::new(false);
+        let mut push = std::pin::pin!(persist_and_notify(async { Ok(42) }, || async {
+            notified.set(true);
+            Ok(())
+        }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(push.as_mut().poll(&mut cx), Poll::Ready(Ok(42))));
+        assert!(notified.get(), "REST acknowledged without notifying live readers");
+    }
+
     const DELIVERY_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
     const SHARED_V2_FIXTURE: &str =
         include_str!("../../../tests/fixtures/sync-v2/protocol.json");
@@ -728,6 +923,7 @@ mod v2_tests {
             version: 1,
             room_id: "0123456789abcdef0123456789abcdef".to_string(),
             seed: STANDARD.encode(seed),
+            vault_escrow: None,
         };
 
         let parsed = parse_sync_bootstrap_request(&request).expect("valid bootstrap request");
@@ -754,6 +950,7 @@ mod v2_tests {
             room_id: parsed.room_id.clone(),
             seed: STANDARD.encode(seed),
             created_at: 42,
+            vault_escrow: None,
         };
         assert_eq!(
             serde_json::to_value(response).unwrap(),
@@ -769,10 +966,89 @@ mod v2_tests {
             version: 1,
             room_id: request.room_id,
             seed: STANDARD.encode([0x5au8; 31]),
+            vault_escrow: None,
         };
         assert_eq!(
             parse_sync_bootstrap_request(&malformed),
             Err("invalid_bootstrap_seed")
+        );
+    }
+
+    #[test]
+    fn vault_escrow_round_trips_under_its_own_cipher_context() {
+        let cipher = SyncBootstrapCipher::from_secret("test-only-bootstrap-secret-material")
+            .expect("valid test cipher");
+        let room = "0123456789abcdef0123456789abcdef";
+        let seed = [0x11u8; 32];
+        let kdf_params = b"{\"kdf\":\"params\"}".to_vec();
+        let wrapped = b"wrapped-account-key-envelope".to_vec();
+        let payload = encode_vault_escrow(&kdf_params, &wrapped).expect("encode escrow");
+
+        let encrypted = cipher
+            .encrypt_escrow(&payload, 7, room)
+            .expect("encrypt escrow");
+        let decrypted = cipher
+            .decrypt_escrow(&encrypted, 7, room)
+            .expect("decrypt escrow");
+        assert_eq!(decrypted, payload);
+        let decoded = decode_vault_escrow(&decrypted).expect("decode escrow");
+        assert_eq!(decoded.kdf_params, STANDARD.encode(&kdf_params));
+        assert_eq!(decoded.wrapped_account_key, STANDARD.encode(&wrapped));
+
+        assert!(
+            cipher.decrypt_escrow(&encrypted, 8, room).is_err(),
+            "escrow ciphertext must be bound to its account"
+        );
+
+        let seed_envelope = cipher.encrypt(&seed, 7, room).expect("encrypt seed");
+        assert!(
+            cipher.decrypt_escrow(&seed_envelope, 7, room).is_err(),
+            "a seed envelope must not decrypt as the vault escrow"
+        );
+        assert!(
+            cipher
+                .decrypt(&encrypted, 7, room)
+                .is_err(),
+            "an escrow envelope must not decrypt as the seed"
+        );
+    }
+
+    #[test]
+    fn vault_escrow_validation_rejects_malformed_and_oversized_payloads() {
+        let valid = SyncBootstrapVaultEscrow {
+            kdf_params: STANDARD.encode(b"kdf"),
+            wrapped_account_key: STANDARD.encode(b"wrapped"),
+        };
+        assert_eq!(
+            parse_vault_escrow(&valid),
+            Ok((b"kdf".to_vec(), b"wrapped".to_vec()))
+        );
+
+        let bad_base64 = SyncBootstrapVaultEscrow {
+            kdf_params: "%%%".to_string(),
+            wrapped_account_key: valid.wrapped_account_key.clone(),
+        };
+        assert_eq!(parse_vault_escrow(&bad_base64), Err("invalid_vault_escrow"));
+
+        let empty = SyncBootstrapVaultEscrow {
+            kdf_params: String::new(),
+            wrapped_account_key: valid.wrapped_account_key.clone(),
+        };
+        assert_eq!(parse_vault_escrow(&empty), Err("invalid_vault_escrow"));
+
+        let oversized = SyncBootstrapVaultEscrow {
+            kdf_params: STANDARD.encode(vec![0u8; MAX_VAULT_ESCROW_KDF_BYTES + 1]),
+            wrapped_account_key: valid.wrapped_account_key.clone(),
+        };
+        assert_eq!(parse_vault_escrow(&oversized), Err("invalid_vault_escrow"));
+
+        let oversized_wrapped = SyncBootstrapVaultEscrow {
+            kdf_params: valid.kdf_params.clone(),
+            wrapped_account_key: STANDARD.encode(vec![0u8; MAX_VAULT_ESCROW_WRAPPED_BYTES + 1]),
+        };
+        assert_eq!(
+            parse_vault_escrow(&oversized_wrapped),
+            Err("invalid_vault_escrow")
         );
     }
 }

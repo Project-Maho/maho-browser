@@ -198,7 +198,8 @@ pub(crate) fn describe(name: &str) -> Option<&'static str> {
              titles, URLs and folders."
         }
         "browser_bookmark_create" => {
-            "Save a bookmark. `folder` is optional and defaults to the bookmarks bar."
+            "Save a bookmark. `folder` is optional; without it the bookmark goes to \
+             Maho's default folder."
         }
         "browser_same_origin_fetch" => {
             "Fetch an HTTPS URL using the current tab's exact origin, so the page's \
@@ -466,17 +467,24 @@ fn repair_tab_id(schema: &mut Map<String, Value>) {
     tab_id.insert(
         "description".to_string(),
         Value::from(
-            "Browser tab id from browser_tab_list. Omit to target the active tab. \
-             Do not pass 0: it is the legacy active-tab sentinel and cannot address a real tab 0.",
+            "Browser tab id from browser_tab_list. Mutating tools require it: \
+             omitting one fails with -32013 instead of following the focused tab. \
+             Read-only tools omit it to target the active tab. Do not pass 0: it is \
+             the legacy active-tab sentinel and cannot address a real tab 0.",
         ),
     );
 }
 
 /// P1-5. The locator object declares every sub-field optional, so `{}` and
 /// `{"role":"button"}` both validate and both fail at runtime with
-/// `locator_not_found`. The description already states the real constraint —
-/// "ref, css, or role/name" — so publish it as `anyOf` and let the client
-/// reject an unsatisfiable locator before it costs a round-trip.
+/// `locator_not_found`. State the real constraint — "ref, css, or role/name"
+/// — in the description only.
+///
+/// It must NOT be published as `anyOf`/`oneOf` next to `properties`: Gemini's
+/// function-declaration converter rejects that shape for the whole request
+/// (`properties[locator].properties: only allowed for OBJECT type`), so every
+/// tool-bearing turn on a Gemini model failed with a 400. The browser parser
+/// still rejects an unsatisfiable locator at runtime.
 ///
 /// Parser: `maho_mcp_session.cc:3667-3686`.
 fn repair_locator(schema: &mut Map<String, Value>) {
@@ -486,10 +494,7 @@ fn repair_locator(schema: &mut Map<String, Value>) {
     if !locator.contains_key("properties") {
         return;
     }
-    if locator.contains_key("anyOf") {
-        return;
-    }
-    set_parsed(locator, "anyOf", LOCATOR_ANY_OF);
+    locator.remove("anyOf");
     locator.insert(
         "description".to_string(),
         Value::from(
@@ -499,10 +504,6 @@ fn repair_locator(schema: &mut Map<String, Value>) {
         ),
     );
 }
-
-/// The XOR the locator description has always asserted in prose.
-const LOCATOR_ANY_OF: &str =
-    r#"[{"required":["ref"]},{"required":["css"]},{"required":["role","name"]}]"#;
 
 /// P0-2. The browser reads `wait` as a dict only
 /// (`maho_mcp_session.cc:3813`), reading `mode`, `timeout_ms` and `selector`
@@ -608,8 +609,7 @@ const ACTION_PROPERTIES: &str = r#"{
         "css":{"type":"string","description":"CSS selector."},
         "role":{"type":"string","description":"Accessibility role."},
         "name":{"type":"string","description":"Accessible name."},
-        "exact":{"type":"boolean","description":"Require an exact accessible-name match."}},
-      "anyOf":[{"required":["ref"]},{"required":["css"]},{"required":["role","name"]}]}}"#;
+        "exact":{"type":"boolean","description":"Require an exact accessible-name match."}}}}"#;
 
 fn repair_action(name: &str, schema: &mut Map<String, Value>) {
     if name != "browser_act_and_observe" {
@@ -695,35 +695,55 @@ mod tests {
         value.as_object().cloned().expect("object schema")
     }
 
-    #[test]
-    fn locator_publishes_the_xor_constraint_its_description_already_asserts() {
-        let mut s = schema(json!({
-            "type": "object",
-            "properties": {
-                "locator": {
-                    "type": "object",
-                    "properties": {
-                        "ref": {"type": "integer"},
-                        "css": {"type": "string"},
-                        "role": {"type": "string"},
-                        "name": {"type": "string"}
-                    }
+    /// Gemini rejects a schema node that carries `properties` next to a
+    /// combinator (`properties[locator].properties: only allowed for OBJECT
+    /// type`), failing the whole request.
+    fn assert_no_combinator_beside_properties(path: &str, node: &Value) {
+        if let Some(obj) = node.as_object() {
+            if obj.contains_key("properties") {
+                for key in ["anyOf", "oneOf", "allOf"] {
+                    assert!(
+                        !obj.contains_key(key),
+                        "{path} publishes `{key}` beside `properties`"
+                    );
                 }
             }
-        }));
-        repair_descriptor("input.locator_click", &mut s);
-        let any_of = s["properties"]["locator"]["anyOf"]
-            .as_array()
-            .expect("locator publishes anyOf");
-        assert_eq!(
-            any_of,
-            &vec![
-                json!({"required": ["ref"]}),
-                json!({"required": ["css"]}),
-                json!({"required": ["role", "name"]}),
-            ],
-            "an empty locator must not validate"
-        );
+            for (k, v) in obj {
+                assert_no_combinator_beside_properties(&format!("{path}.{k}"), v);
+            }
+        } else if let Some(items) = node.as_array() {
+            for (i, v) in items.iter().enumerate() {
+                assert_no_combinator_beside_properties(&format!("{path}[{i}]"), v);
+            }
+        }
+    }
+
+    #[test]
+    fn locator_schemas_stay_gemini_compatible() {
+        for name in ["input.locator_click", "browser_act_and_observe"] {
+            let mut s = schema(json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "object"},
+                    "locator": {
+                        "type": "object",
+                        "properties": {
+                            "ref": {"type": "integer"},
+                            "css": {"type": "string"},
+                            "role": {"type": "string"},
+                            "name": {"type": "string"}
+                        },
+                        "anyOf": [{"required": ["ref"]}]
+                    }
+                }
+            }));
+            repair_descriptor(name, &mut s);
+            assert_no_combinator_beside_properties(name, &Value::Object(s.clone()));
+            let description = s["properties"]["locator"]["description"]
+                .as_str()
+                .expect("locator keeps the constraint in its description");
+            assert!(description.contains("`role` plus `name`"));
+        }
     }
 
     #[test]
@@ -905,7 +925,11 @@ mod tests {
             !description.contains("pass 0 for the active tab"),
             "0 must no longer be advertised as the way to say 'active'"
         );
-        assert!(description.contains("Omit"));
+        assert!(
+            description.contains("-32013"),
+            "mutations must be told the id is required, not that omitting it retargets the active tab"
+        );
+        assert!(description.contains("Read-only"));
     }
 
     /// P0-5. Every published output schema must match the versioned wire type

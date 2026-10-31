@@ -33,16 +33,16 @@ export function AdvancedSearchPanel({ filters, onChange }: AdvancedSearchProps) 
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={`relative rounded p-1 transition-colors ${
+        className={`mail-pressable relative flex h-7 w-7 items-center justify-center rounded-md ${
           activeCount > 0
             ? "text-primary hover:bg-primary/80/10"
-            : "text-muted-foreground hover:bg-card hover:text-foreground"
+            : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
         }`}
         title="Search filters"
       >
         <Filter size={14} />
         {activeCount > 0 && (
-          <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-primary text-[8px] font-bold text-white">
+          <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-primary text-[8px] font-bold text-primary-foreground tabular-nums">
             {activeCount}
           </span>
         )}

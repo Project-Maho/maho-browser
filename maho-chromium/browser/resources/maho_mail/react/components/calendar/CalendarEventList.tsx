@@ -239,7 +239,7 @@ export function CalendarEventList({ accountId, provider, accounts, onSelectEvent
                     key={event.id}
                     type="button"
                     onClick={() => onSelectEvent(event)}
-                    className="flex items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    className="flex items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                   >
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
                       <Calendar size={16} className="text-primary" />

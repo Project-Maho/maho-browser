@@ -64,7 +64,6 @@ constexpr int kCreatePanelCornerRadius = 18;
 constexpr int kThemePreviewDotCornerRadius = 7;
 constexpr char kDefaultProfileId[] = "default";
 constexpr int kProfileMenuCommandIdBase = 1000;
-constexpr char kSetSpaceIconKind[] = "set_space_icon";
 constexpr int kProfileChipCornerRadius = 11;
 constexpr int kProfileChipHeight = 24;
 constexpr int kProfileChipHorizontalInset = 10;
@@ -146,10 +145,14 @@ void ApplySpaceIconOnPool(const std::string& space_id, const std::string& icon) 
     return;
   }
 
+  // `update_space_config` is the core's icon seam (SpaceConfigUpdate.icon).
+  // There is no `set_space_icon` ShellEvent; that kind was silently dropped.
+  base::DictValue changes;
+  changes.Set("spaceId", space_id);
+  changes.Set("icon", icon);
   base::DictValue event;
-  event.Set("kind", kSetSpaceIconKind);
-  event.Set("space_id", space_id);
-  event.Set("icon", icon);
+  event.Set("kind", "update_space_config");
+  event.Set("changes", std::move(changes));
   std::string event_json;
   base::JSONWriter::Write(event, &event_json);
   char* result = maho_core_handle_event(core, event_json.c_str());
@@ -968,8 +971,8 @@ void MahoSidebarCreateSpaceView::ApplyPalette() {
   }
   if (name_field_) {
     name_field_->SetBackgroundColor(palette_.row_selected);
-    name_field_->SetTextColor(palette_.primary_text);
-    name_field_->set_placeholder_text_color(palette_.secondary_text);
+    name_field_->SetMahoResolvedTextColor(palette_.primary_text);
+    name_field_->SetMahoResolvedPlaceholderTextColor(palette_.secondary_text);
   }
   if (name_leading_icon_button_) {
     static_cast<SpaceIconPickerButton*>(name_leading_icon_button_.get())
@@ -991,7 +994,7 @@ void MahoSidebarCreateSpaceView::ApplyPalette() {
   }
   if (profile_disclosure_) {
     profile_disclosure_->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kExpandMoreIcon, palette_.secondary_text,
+        vector_icons::kExpandMoreOldIcon, palette_.secondary_text,
         kProfileDisclosureIconSize));
   }
   if (theme_button_) {
@@ -1007,8 +1010,21 @@ void MahoSidebarCreateSpaceView::ApplyPalette() {
   }
   if (theme_disclosure_) {
     theme_disclosure_->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kSubmenuArrowChromeRefreshIcon, palette_.secondary_text,
+        vector_icons::kSubmenuArrowChromeRefreshOldIcon, palette_.secondary_text,
         kThemeDisclosureIconSize));
+  }
+  // MdTextButton text, fill and stroke default to OS-theme ColorIds.
+  if (create_button_) {
+    create_button_->SetEnabledTextColors(palette_.primary_text);
+    create_button_->SetTextColor(views::Button::STATE_DISABLED,
+                                 palette_.disabled_text);
+    create_button_->SetBgColorOverrideDeprecated(palette_.row_selected);
+    create_button_->SetStrokeColorOverrideDeprecated(palette_.outline);
+  }
+  if (cancel_button_) {
+    cancel_button_->SetEnabledTextColors(palette_.secondary_text);
+    cancel_button_->SetTextColor(views::Button::STATE_DISABLED,
+                                 palette_.disabled_text);
   }
   SchedulePaint();
 }

@@ -146,7 +146,7 @@ export function TranslationSetupStep({ onComplete, onSkip }: TranslationSetupSte
           className={`rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:p-5 ${
             isByokSelected
               ? 'border-primary bg-primary/5 shadow-sm'
-              : 'border-border bg-card/40 hover:bg-card/60'
+              : 'border-border bg-card/40 hover:border-foreground/20 hover:bg-surface-hover'
           }`}
           aria-pressed={isByokSelected}
         >
@@ -181,7 +181,7 @@ export function TranslationSetupStep({ onComplete, onSkip }: TranslationSetupSte
           className={`rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:p-5 ${
             isSkipSelected
               ? 'border-primary bg-primary/5 shadow-sm'
-              : 'border-border bg-card/40 hover:bg-card/60'
+              : 'border-border bg-card/40 hover:border-foreground/20 hover:bg-surface-hover'
           }`}
           aria-pressed={isSkipSelected}
         >

@@ -19,6 +19,8 @@ pub struct VaultLoginInput {
 }
 
 pub struct VaultLoginUpdate {
+    /// Absent preserves notes; an empty value clears them.
+    pub notes: Option<Zeroizing<String>>,
     pub metadata: VaultItemPublicMetadata,
     pub username: String,
     pub password: Option<Zeroizing<String>>,

@@ -3,7 +3,7 @@ set -e
 
 export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/opt/homebrew/sbin:$HOME/.local/bin:$HOME/.cargo/bin:$HOME/depot_tools:$PATH"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
-export MAHO_NINJA_JOBS="${MAHO_NINJA_JOBS:-8}"
+export MAHO_NINJA_JOBS="${MAHO_NINJA_JOBS:-12}"
 
 export SCCACHE_BUCKET="${SCCACHE_BUCKET:-sccache}"
 export SCCACHE_ENDPOINT="${SCCACHE_ENDPOINT:-127.0.0.1:9000}"

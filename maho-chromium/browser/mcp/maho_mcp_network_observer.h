@@ -64,6 +64,27 @@ class MahoMcpNetworkObserver : public content::WebContentsObserver {
   void StopCapture();
   bool is_capturing() const { return capturing_; }
 
+  struct Snapshot {
+    Snapshot();
+    ~Snapshot();
+    Snapshot(Snapshot&&);
+    Snapshot& operator=(Snapshot&&);
+    Snapshot(const Snapshot&) = delete;
+    Snapshot& operator=(const Snapshot&) = delete;
+
+    std::vector<Entry> entries;
+    size_t dropped_entries = 0;
+    size_t retained_bytes = 0;
+    bool truncated = false;
+  };
+
+  // Detaches the observer and moves all recorded entries into an owned Snapshot.
+  // Leaves the observer empty.
+  Snapshot TakeSnapshot();
+
+  // Test-only observation helper.
+  size_t entry_count_for_testing() const { return entries_.size(); }
+
   // Returns HAR 1.2 JSON dict with "version", "creator", "entries" at root.
   // MUST be wrapped by MahoMcpFirewall::WrapHar before egress.
   // Test-only — do not call from production code.
@@ -79,17 +100,27 @@ class MahoMcpNetworkObserver : public content::WebContentsObserver {
   static base::DictValue BuildHarFromEntries(
       const std::vector<Entry>& entries);
 
+  // Static helper: builds HAR 1.2 dict from an owned moved snapshot.
+  static base::DictValue BuildHarFromSnapshot(Snapshot snapshot);
+
+  // Static helper: builds firewall-redacted HAR from an owned moved snapshot.
+  static Redacted<base::DictValue> BuildRedactedHarFromSnapshot(
+      Snapshot snapshot);
+
  private:
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
   void ResourceLoadComplete(
       content::RenderFrameHost* render_frame_host,
       const content::GlobalRequestID& request_id,
+      const GURL& original_url,
       const blink::mojom::ResourceLoadInfo& resource_load_info) override;
   void RecordEntry(Entry entry);
 
   bool capturing_ = false;
   std::vector<Entry> entries_;
+  size_t dropped_entries_ = 0;
+  size_t retained_bytes_ = 0;
   SEQUENCE_CHECKER(sequence_checker_);
 };
 

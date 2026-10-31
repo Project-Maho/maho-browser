@@ -176,7 +176,7 @@ export function AddressPopover({
                 onClick={() => {
                   void copy(address);
                 }}
-                className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                className="mail-pressable flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
                 aria-label={t("email.copyEmailAddress")}
                 title={t("email.copyEmailAddress")}
               >
@@ -187,7 +187,7 @@ export function AddressPopover({
               type="button"
               onClick={stubToast}
               aria-label={t("email.changeCategory")}
-              className="mt-2 inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-[13px] font-medium text-foreground hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              className="mt-2 inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-[13px] font-medium text-foreground transition-colors hover:bg-surface-selected focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             >
               <span>{category ?? t("email.uncategorized")}</span>
               <ChevronsUpDown className="h-3 w-3 text-muted-foreground" />
@@ -209,7 +209,7 @@ export function AddressPopover({
                   stubToast();
                 }
               }}
-              className="flex w-full items-center gap-3.5 px-5 py-3 text-left text-[15px] hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
+              className="flex w-full items-center gap-3.5 px-5 py-3 text-left text-[15px] transition-colors hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none"
             >
               <PencilLine className="h-5 w-5 shrink-0 text-muted-foreground" />
               <span className="flex-1 text-foreground">{t("email.composeEmail")}</span>
@@ -229,7 +229,7 @@ export function AddressPopover({
                   );
                 }
               }}
-              className="flex w-full items-start gap-3.5 px-5 py-3 text-left text-[15px] hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
+              className="flex w-full items-start gap-3.5 px-5 py-3 text-left text-[15px] transition-colors hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none"
             >
               <Search className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1">
@@ -244,7 +244,7 @@ export function AddressPopover({
             <button
               type="button"
               onClick={stubToast}
-              className="flex w-full items-start gap-3.5 px-5 py-3 text-left text-[15px] hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
+              className="flex w-full items-start gap-3.5 px-5 py-3 text-left text-[15px] transition-colors hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none"
             >
               <MailIcon className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1">

@@ -237,6 +237,9 @@ fn vault_backend_operation_contracts_serialize_with_stable_ordered_shapes() {
     let first_id = VaultItemId::from_uuid(uuid("018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6c"));
     let second_id = VaultItemId::from_uuid(uuid("018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6d"));
     let item = VaultItemPublicDto {
+        favorite: false,
+        trashed_at: None,
+        has_notes: false,
         schema_version: VaultSchemaVersion::V1,
         id: first_id,
         revision: VaultRevision::new(4),
@@ -314,4 +317,30 @@ fn vault_backend_operation_contracts_reject_unsupported_schema_versions() {
             .to_string()
             .contains("unknown field `secretResult`")
     );
+}
+
+#[test]
+fn vault_public_metadata_decodes_legacy_payload_with_absent_fields() {
+    // Given: legacy serialized public metadata without favorite, trashedAt, or hasNotes.
+    let legacy = json!({
+        "title": "Legacy Item",
+        "origins": ["https://example.com"],
+        "usernameHint": "u***@example.com",
+        "itemKind": "login",
+        "totp": null,
+        "passkey": null
+    });
+
+    // When: decoded into VaultItemPublicMetadata.
+    let decoded: VaultItemPublicMetadata = serde_json::from_value(legacy).unwrap();
+
+    // Then: newly added fields take their default values while existing fields deserialize correctly.
+    assert!(!decoded.favorite);
+    assert_eq!(decoded.trashed_at, None);
+    assert!(!decoded.has_notes);
+    assert_eq!(decoded.title, "Legacy Item");
+    assert_eq!(decoded.username_hint, "u***@example.com");
+    assert_eq!(decoded.item_kind, VaultItemKind::Login);
+    assert!(decoded.totp.is_none());
+    assert!(decoded.passkey.is_none());
 }

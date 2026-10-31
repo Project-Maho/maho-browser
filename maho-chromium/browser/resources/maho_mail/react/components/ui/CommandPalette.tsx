@@ -194,7 +194,7 @@ export function CommandPalette({ open, onClose, commands }: CommandPaletteProps)
                     className={`mx-1 flex w-[calc(100%-8px)] items-center justify-between rounded-md px-3 py-2 text-left transition-colors ${
                       index === activeIndex
                         ? 'bg-muted'
-                        : 'hover:bg-muted'
+                        : 'hover:bg-surface-hover'
                     }`}
                     role="option"
                     aria-selected={index === activeIndex}

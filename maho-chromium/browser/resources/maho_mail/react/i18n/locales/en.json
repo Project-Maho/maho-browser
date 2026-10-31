@@ -12,7 +12,9 @@
     "search": "Search",
     "noResults": "No results found",
     "retry": "Retry",
-    "reset": "Reset"
+    "reset": "Reset",
+    "back": "Back",
+    "copied": "Copied"
   },
   "sidebar": {
     "inbox": "Inbox",
@@ -621,7 +623,7 @@
     "smimeSigningFailed": "S/MIME signing failed",
     "smimeEncryptionFailed": "S/MIME encryption failed",
     "failedToSend": "Failed to send email",
-    "queuedOffline": "Email queued — will send when online",
+    "queuedOffline": "Email queued \u2014 will send when online",
     "failedToSaveDraft": "Failed to save draft",
     "failedToAdjustTone": "Failed to adjust tone",
     "formattingOptions": "Formatting options",
@@ -660,7 +662,10 @@
     "attachmentTotalTooLarge": "Total attachment size exceeds {{max}} MB",
     "invalidRecipients": "Invalid email addresses: {{addresses}}",
     "imageAltPrompt": "Enter alt text for the image (optional):",
-    "dropFilesHere": "Drop attachments here"
+    "dropFilesHere": "Drop attachments here",
+    "templateApplied": "Template applied",
+    "attachments": "Attachments",
+    "selectSignature": "Select signature"
   },
   "smime": {
     "title": "S/MIME Certificates",
@@ -692,7 +697,7 @@
     "loadingAccounts": "Loading accounts…",
     "dismiss": "Dismiss",
     "deleteEmailTitle": "Delete Email",
-    "deleteEmailConfirm": "Are you sure you want to delete this email? This action cannot be undone.",
+    "deleteEmailConfirm": "This email moves to Trash. Deleting it from Trash removes it permanently.",
     "emailPinned": "Email pinned",
     "emailUnpinned": "Email unpinned",
     "emailSnoozed": "Email snoozed",
@@ -751,7 +756,8 @@
     "markUnread": "Mark unread",
     "toggleRead": "Toggle read/unread",
     "sendEmail": "Send email",
-    "showShortcuts": "Show shortcuts"
+    "showShortcuts": "Show shortcuts",
+    "summarizeStarted": "Summarizing…"
   },
   "offline": {
     "banner": "You are offline",
@@ -778,7 +784,20 @@
     "editEventDescription": "Update the event details below.",
     "emptyTitle": "No upcoming events",
     "emptyDescription": "Create an event to see it here.",
-    "fields": "Details",
+    "fields": {
+      "summary": "Title",
+      "summaryPlaceholder": "Add a title",
+      "description": "Description",
+      "descriptionPlaceholder": "Add a description",
+      "startDate": "Start",
+      "endDate": "End",
+      "location": "Location",
+      "locationPlaceholder": "Add a location",
+      "attendees": "Attendees",
+      "allDay": "All day",
+      "addMeet": "Add Google Meet video conferencing",
+      "color": "Color"
+    },
     "description": "Description",
     "location": "Location",
     "startDate": "Start",
@@ -841,6 +860,20 @@
     },
     "filter": {
       "label": "Calendars:"
-    }
+    },
+    "snoozed": "Reminder snoozed for {{minutes}} minutes",
+    "videoCall": "Video call",
+    "joinMeet": "Join with Google Meet",
+    "unknownAttendee": "Unknown attendee",
+    "organizerBadge": "Organizer",
+    "selectStartToFindTime": "Select a start time to find a free slot",
+    "enterAttendeesToFindTime": "Add attendees to find a time that works",
+    "details": "Details",
+    "findTime": "Find a time",
+    "schedulingHelp": "Maho checks attendee availability and suggests open slots.",
+    "bulkDeleted_one": "Deleted {{count}} event",
+    "bulkDeleted_other": "Deleted {{count}} events",
+    "eventsDeleted_one": "{{count}} event deleted",
+    "eventsDeleted_other": "{{count}} events deleted"
   }
 }

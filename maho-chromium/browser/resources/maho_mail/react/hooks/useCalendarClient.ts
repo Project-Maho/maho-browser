@@ -112,6 +112,14 @@ export function useCalendarClient({
     }
   }, [accounts, effectiveAccountId, toast, t, currentDate, currentView]);
 
+  const reloadEvents = useCallback(async () => {
+    // Mutations invalidate the TTL cache: without this the next fetchEvents()
+    // is served from eventCacheRef and the new/changed event stays invisible
+    // for up to CACHE_TTL.
+    eventCacheRef.current.clear();
+    await fetchEvents();
+  }, [fetchEvents]);
+
   const loadPreferences = useCallback(async () => {
     try {
       const hw = await api.getAppSetting("calendar.hide_weekends");
@@ -133,7 +141,7 @@ export function useCalendarClient({
   const handleRefresh = useCallback(async () => {
     const targets = gmailAccounts.map((a) => a.id);
     if (targets.length === 0) {
-      await fetchEvents();
+      await reloadEvents();
       return;
     }
     setSyncing(true);
@@ -155,30 +163,30 @@ export function useCalendarClient({
       } else {
         setReauthRequired(false);
         if (total > 0) toast("success", t("calendar.refreshSuccess", { count: total }));
-        await fetchEvents();
+        await reloadEvents();
       }
     } finally {
       setSyncing(false);
     }
-  }, [gmailAccounts, fetchEvents, t, toast]);
+  }, [gmailAccounts, reloadEvents, t, toast]);
 
   const toggleCalendar = useCallback(async (cal: GoogleCalendarEntry) => {
     const next = !cal.visible;
     setCalendars((prev) => prev.map((c) => (c.id === cal.id ? { ...c, visible: next } : c)));
     try {
       await api.setCalendarVisibility(cal.id, next);
-      await fetchEvents();
+      await reloadEvents();
     } catch (err) {
       setCalendars((prev) => prev.map((c) => (c.id === cal.id ? { ...c, visible: cal.visible } : c)));
       toast("error", err instanceof Error ? err.message : t("common.error"));
     }
-  }, [fetchEvents, t, toast]);
+  }, [reloadEvents, t, toast]);
 
   const handleDuplicateEvent = async (eventId: string) => {
     try {
       await api.duplicateCalendarEvent(eventId);
       toast("success", "Event duplicated!");
-      void fetchEvents();
+      await reloadEvents();
     } catch (err) {
       toast("error", err instanceof Error ? err.message : String(err));
     }
@@ -293,7 +301,7 @@ export function useCalendarClient({
           ids.forEach(id => delete next[id]);
           return next;
         });
-        void fetchEvents();
+        void reloadEvents();
       } catch (err) {
         toast("error", err instanceof Error ? err.message : String(err));
         setEvents(prev => {
@@ -332,7 +340,7 @@ export function useCalendarClient({
         }
       }
     });
-  }, [selectedEventIds, events, fetchEvents, t, toast]);
+  }, [selectedEventIds, events, reloadEvents, t, toast]);
 
   const [quickAddPreview, setQuickAddPreview] = useState<any>(null);
 
@@ -446,7 +454,7 @@ export function useCalendarClient({
 
       toast("success", `Event "${parsed.summary}" created!`);
       setQuickAddText("");
-      void fetchEvents();
+      await reloadEvents();
     } catch (err) {
       toast("error", err instanceof Error ? err.message : String(err));
     }
@@ -591,6 +599,7 @@ export function useCalendarClient({
     contextMenu,
     setContextMenu,
     fetchEvents,
+    reloadEvents,
     loadPreferences,
     handleRefresh,
     toggleCalendar,

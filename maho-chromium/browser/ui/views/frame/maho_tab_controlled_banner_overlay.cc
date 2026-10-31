@@ -3,9 +3,11 @@
 #include <utility>
 
 #include "base/task/single_thread_task_runner.h"
+#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/web_contents.h"
@@ -17,12 +19,12 @@ MahoTabControlledBannerOverlay::MahoTabControlledBannerOverlay(Browser* browser)
     : BrowserUserData<MahoTabControlledBannerOverlay>(browser),
       browser_(browser) {
   if (browser_) {
-    if (browser_->tab_strip_model()) {
-      browser_->tab_strip_model()->AddObserver(this);
+    if (browser_->GetTabStripModel()) {
+      browser_->GetTabStripModel()->AddObserver(this);
     }
-    if (browser_->profile()) {
+    if (browser_->GetProfile()) {
       if (auto* service =
-              maho::ai::MahoControlActivityService::GetForProfile(browser_->profile())) {
+              maho::ai::MahoControlActivityService::GetForProfile(browser_->GetProfile())) {
         control_observation_.Observe(service);
       }
     }
@@ -44,6 +46,8 @@ MahoTabControlledBannerOverlay::~MahoTabControlledBannerOverlay() {
 void MahoTabControlledBannerOverlay::ShowBanner(
     int64_t tab_id,
     const std::u16string& controller_name) {
+  LOG(INFO) << "[maho-control-activity] banner show tab=" << tab_id
+            << " controller=" << controller_name;
   current_controlled_tab_id_ = tab_id;
   current_controller_name_ = controller_name;
 
@@ -137,9 +141,9 @@ gfx::Rect MahoTabControlledBannerOverlay::ComputeTargetBounds() const {
 }
 
 void MahoTabControlledBannerOverlay::OnStopRequested(int64_t tab_id) {
-  if (browser_ && browser_->profile()) {
+  if (browser_ && browser_->GetProfile()) {
     if (auto* service =
-            maho::ai::MahoControlActivityService::GetForProfile(browser_->profile())) {
+            maho::ai::MahoControlActivityService::GetForProfile(browser_->GetProfile())) {
       service->RequestImmediateStop(tab_id);
     }
   }
@@ -171,13 +175,20 @@ void MahoTabControlledBannerOverlay::OnWidgetBoundsChanged(
 
 void MahoTabControlledBannerOverlay::OnControlActivityChanged(
     const maho::ai::ControlActivity& activity) {
+  LOG(INFO) << "[maho-control-activity] overlay event id=" << activity.session_id
+            << " plane=" << static_cast<int>(activity.control_plane)
+            << " state=" << static_cast<int>(activity.state)
+            << " has_target=" << activity.target.has_value()
+            << " target_window="
+            << (activity.target ? activity.target->window_id : 0)
+            << " my_browser=" << (browser_ ? browser_->GetSessionID().id() : 0);
   if (!browser_) {
     return;
   }
 
   const bool is_controlling =
       activity.target.has_value() &&
-      activity.target->window_id == browser_->session_id().id() &&
+      activity.target->window_id == browser_->GetSessionID().id() &&
       activity.state != maho::ai::ControlActivityState::kDisconnected &&
       activity.state != maho::ai::ControlActivityState::kFailed;
 
@@ -186,11 +197,15 @@ void MahoTabControlledBannerOverlay::OnControlActivityChanged(
     return;
   }
 
+  // Direct control (Maho CLI tools, repl, pipe, remote MCP clients) is not
+  // agent delegation: it only surfaces through this banner and the sidebar
+  // control indicator, never by opening the AI side panel. Only an explicit
+  // hand-off to the built-in agent (maho_agent_delegate) opens the panel.
   int64_t target_tab_id = activity.target->tab_id;
   std::u16string controller_name =
       base::UTF8ToUTF16(activity.controller_display_name);
 
-  TabStripModel* tab_strip = browser_->tab_strip_model();
+  TabStripModel* tab_strip = browser_->GetTabStripModel();
   content::WebContents* active_contents =
       tab_strip ? tab_strip->GetActiveWebContents() : nullptr;
   auto* helper =
@@ -210,9 +225,9 @@ void MahoTabControlledBannerOverlay::OnTabStripModelChanged(
     const TabStripModelChange& change,
     const TabStripSelectionChange& selection) {
   if (selection.active_tab_changed()) {
-    if (browser_ && browser_->profile()) {
+    if (browser_ && browser_->GetProfile()) {
       if (auto* service =
-              maho::ai::MahoControlActivityService::GetForProfile(browser_->profile())) {
+              maho::ai::MahoControlActivityService::GetForProfile(browser_->GetProfile())) {
         const auto activity =
             service->GetActivity(base::NumberToString(current_controlled_tab_id_));
         if (activity) {
@@ -236,7 +251,7 @@ void MahoTabControlledBannerOverlay::OnTabStripModelChanged(
 }
 
 void MahoTabControlledBannerOverlay::OnBrowserClosed(BrowserWindowInterface* browser) {
-  if (browser && browser->GetBrowserForMigrationOnly() == browser_) {
+  if (browser && browser == browser_) {
     HideBanner();
   }
 }

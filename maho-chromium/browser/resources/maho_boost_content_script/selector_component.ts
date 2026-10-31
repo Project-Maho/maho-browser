@@ -341,9 +341,15 @@ class SelectorComponent {
   private handleSelectAction(policy: MatchPolicy): void {
     const initialSelection = this.selectionFor(policy);
     const target = this.selectedElement;
+    const level = this.clamp(Math.round(this.relatedValueIndex), 1, 7);
+    const anchor = policy === POLICIES.RELATED && (level === 1 || level === 5) &&
+        this.isPageTarget(target) && this.isPageTarget(target.parentElement)
+      ? target.parentElement : target;
     const selection = initialSelection.kind === 'valid'
-      ? this.validateCandidate(initialSelection.selector, target, policy)
-      : this.findSelection(target, policy);
+      ? this.validateCandidate(initialSelection.selector, anchor, policy)
+      : policy === POLICIES.RELATED
+        ? this.findRelatedSelection(target, this.relatedValueIndex)
+        : this.findSelection(target, policy);
 
     if (selection.kind === 'invalid') {
       this.renderStatus(selection.status);

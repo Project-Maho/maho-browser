@@ -274,7 +274,7 @@ export function ReaderWindow({ emailId }: ReaderWindowProps) {
               <button
                 type="button"
                 onClick={() => void handleToggleStar()}
-                className="rounded-lg border border-border bg-background/70 p-2 text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
+                className="mail-pressable flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background/70 text-muted-foreground hover:border-foreground/20 hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label={email.is_starred ? "Unstar" : "Star"}
                 title={email.is_starred ? "Unstar" : "Star"}
               >
@@ -313,7 +313,7 @@ export function ReaderWindow({ emailId }: ReaderWindowProps) {
             type="button"
             onClick={() => void handleQuickReply()}
             disabled={quickReplySending || !quickReplyText.trim()}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-white transition-colors hover:bg-primary/80 disabled:opacity-50"
+            className="flex h-9 w-9 shrink-0 items-center justify-center mail-pressable rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             aria-label="Send reply"
           >
             {quickReplySending ? (
@@ -329,7 +329,7 @@ export function ReaderWindow({ emailId }: ReaderWindowProps) {
         <button
           type="button"
           onClick={() => void handleReply()}
-          className="flex items-center gap-2 rounded-lg bg-card px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted"
+          className="mail-pressable flex h-9 items-center gap-2 rounded-lg px-4 text-sm text-foreground hover:bg-surface-hover"
         >
           <Reply size={16} />
           Reply
@@ -337,7 +337,7 @@ export function ReaderWindow({ emailId }: ReaderWindowProps) {
         <button
           type="button"
           onClick={() => void handleForward()}
-          className="flex items-center gap-2 rounded-lg bg-card px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted"
+          className="mail-pressable flex h-9 items-center gap-2 rounded-lg px-4 text-sm text-foreground hover:bg-surface-hover"
         >
           <Forward size={16} />
           Forward
@@ -346,7 +346,7 @@ export function ReaderWindow({ emailId }: ReaderWindowProps) {
         <button
           type="button"
           onClick={() => void handleDelete()}
-          className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-muted-foreground transition-colors hover:bg-card hover:text-destructive"
+          className="mail-pressable flex h-9 items-center gap-2 rounded-lg px-4 text-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
         >
           <Trash2 size={16} />
           Delete

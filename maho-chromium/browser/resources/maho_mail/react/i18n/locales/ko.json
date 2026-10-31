@@ -692,7 +692,7 @@
     "loadingAccounts": "계정 로딩 중…",
     "dismiss": "닫기",
     "deleteEmailTitle": "이메일 삭제",
-    "deleteEmailConfirm": "이 이메일을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+    "deleteEmailConfirm": "이 이메일은 휴지통으로 이동합니다. 휴지통에서 삭제하면 영구적으로 제거됩니다.",
     "emailPinned": "이메일이 고정되었습니다",
     "emailUnpinned": "이메일 고정이 해제되었습니다",
     "emailSnoozed": "이메일이 다시 알림 설정되었습니다",

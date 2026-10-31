@@ -391,8 +391,6 @@
         "MahoSidebarContractTest.InFolderChildReorderChangesChildOrderInViewState",
         "MahoSidebarContractTest.FavoritesNoOpSameIndexStabilityAfterRefresh",
         "MahoSidebarContractTest.FooterAndBoardPreserveCanonicalThemeData",
-        "MahoSidebarContractTest.BuildSearchModelNullBrowserHasNoActiveTab",
-        "MahoSidebarContractTest.BuildSearchModelWithTabStripEntryHasActiveTab",
         "MahoSidebarContractTest.TabActivationUsesHelperIdentityOnly",
         "MahoSidebarContractTest.InternalTabHasHelperIdentity",
         "MahoSidebarContractTest.ResolveTabStripIndexUsesHelperScan",
@@ -409,7 +407,7 @@
         "MahoSidebarContractTest.TabScrollView_ScrollBarConfig",
         "MahoSidebarContractTest.WellFormedShellEventsDoNotProduceParseErrors"
       ],
-      "expected_count": 37,
+      "expected_count": 35,
       "artifact_type": "gtest"
     },
     "task-12-visual-contract": {

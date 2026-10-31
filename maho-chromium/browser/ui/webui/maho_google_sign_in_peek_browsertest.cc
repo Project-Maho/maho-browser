@@ -7,7 +7,11 @@
 #include "base/command_line.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -59,11 +63,11 @@ class MahoGoogleSignInPeekBrowserTest : public InProcessBrowserTest {
         base::BindRepeating(&HandleFakeOAuthRequest));
     ASSERT_TRUE(embedded_test_server()->Start());
     InProcessBrowserTest::SetUpOnMainThread();
-    if (browser()->tab_strip_model()->empty()) {
+    if (browser()->GetTabStripModel()->empty()) {
       chrome::AddTabAt(browser(), GURL("about:blank"), /*index=*/-1,
                        /*foreground=*/true);
     }
-    ASSERT_TRUE(browser()->tab_strip_model()->GetActiveWebContents());
+    ASSERT_TRUE(browser()->GetTabStripModel()->GetActiveWebContents());
   }
 
  protected:
@@ -113,28 +117,32 @@ class MahoGoogleSignInPeekBrowserTest : public InProcessBrowserTest {
 IN_PROC_BROWSER_TEST_F(MahoGoogleSignInPeekBrowserTest,
                        SettingsOriginatedUsesExplicitTabBrowserHost) {
   content::WebContents* settings_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(settings_contents);
-  Browser* settings_host = chrome::FindBrowserWithTab(settings_contents);
+  Browser* settings_host = static_cast<Browser*>(
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          settings_contents));
   ASSERT_EQ(browser(), settings_host);
   ASSERT_TRUE(maho::IsPeekEligible(settings_host));
 
-  ASSERT_TRUE(NavigateAndExpectHostedInPeek(browser()->profile(),
+  ASSERT_TRUE(NavigateAndExpectHostedInPeek(browser()->GetProfile(),
                                             settings_host));
 }
 
 // Deferred execution: shared *browsertests targets currently do not link.
 IN_PROC_BROWSER_TEST_F(MahoGoogleSignInPeekBrowserTest,
                        WelcomeOriginatedUsesLastActiveExactProfileBrowser) {
-  Profile* flow_profile = browser()->profile();
+  Profile* flow_profile = browser()->GetProfile();
+  ProfileBrowserCollection* collection =
+      ProfileBrowserCollection::GetForProfile(flow_profile);
   BrowserWindowInterface* last_active =
-      chrome::FindLastActiveWithProfile(flow_profile);
+      collection ? collection->GetLastActiveBrowser() : nullptr;
   ASSERT_TRUE(last_active);
-  Browser* welcome_host = last_active->GetBrowserForMigrationOnly();
+  Browser* welcome_host = static_cast<Browser*>(last_active);
   ASSERT_TRUE(maho::IsPeekEligible(welcome_host));
-  ASSERT_EQ(flow_profile, welcome_host->profile());
+  ASSERT_EQ(flow_profile, welcome_host->GetProfile());
   ASSERT_EQ(static_cast<content::BrowserContext*>(flow_profile),
-            welcome_host->profile());
+            welcome_host->GetProfile());
 
   ASSERT_TRUE(NavigateAndExpectHostedInPeek(flow_profile, welcome_host));
 }
@@ -142,43 +150,43 @@ IN_PROC_BROWSER_TEST_F(MahoGoogleSignInPeekBrowserTest,
 // Deferred execution: shared *browsertests targets currently do not link.
 IN_PROC_BROWSER_TEST_F(MahoGoogleSignInPeekBrowserTest,
                        BusyOrDisabledOrMissingHostFallsBackToPopup) {
-  MahoPeekController* controller = PeekControllerFor(browser());
+  MahoPeekController* controller = PeekControllerFor(static_cast<Browser*>(browser()));
   ASSERT_TRUE(controller);
   ASSERT_TRUE(controller->ShowUrl(nullptr,
                                   embedded_test_server()->GetURL("/busy")));
 
   ui_test_utils::BrowserCreatedObserver busy_popup_observer;
   content::WebContents* busy_fallback = NavigateToGoogleSignInForTesting(
-      browser()->profile(), browser(), FakeOAuthUrl());
-  Browser* busy_popup = busy_popup_observer.Wait();
+      browser()->GetProfile(), static_cast<Browser*>(browser()), FakeOAuthUrl());
+  Browser* busy_popup = static_cast<Browser*>(busy_popup_observer.Wait());
   ASSERT_TRUE(busy_popup);
-  EXPECT_TRUE(busy_popup->is_type_popup());
+  EXPECT_TRUE((busy_popup->GetType() == BrowserWindowInterface::TYPE_POPUP));
   EXPECT_EQ(busy_fallback,
-            busy_popup->tab_strip_model()->GetActiveWebContents());
+            busy_popup->GetTabStripModel()->GetActiveWebContents());
   CloseBrowserSynchronously(busy_popup);
   controller->Hide();
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       maho::sidebar_prefs::kPeekEnabled, false);
   ui_test_utils::BrowserCreatedObserver disabled_popup_observer;
   content::WebContents* disabled_fallback = NavigateToGoogleSignInForTesting(
-      browser()->profile(), browser(), FakeOAuthUrl());
-  Browser* disabled_popup = disabled_popup_observer.Wait();
+      browser()->GetProfile(), static_cast<Browser*>(browser()), FakeOAuthUrl());
+  Browser* disabled_popup = static_cast<Browser*>(disabled_popup_observer.Wait());
   ASSERT_TRUE(disabled_popup);
-  EXPECT_TRUE(disabled_popup->is_type_popup());
+  EXPECT_TRUE((disabled_popup->GetType() == BrowserWindowInterface::TYPE_POPUP));
   EXPECT_EQ(disabled_fallback,
-            disabled_popup->tab_strip_model()->GetActiveWebContents());
+            disabled_popup->GetTabStripModel()->GetActiveWebContents());
   CloseBrowserSynchronously(disabled_popup);
 
   ui_test_utils::BrowserCreatedObserver missing_host_popup_observer;
   content::WebContents* missing_host_fallback =
-      NavigateToGoogleSignInForTesting(browser()->profile(), nullptr,
+      NavigateToGoogleSignInForTesting(browser()->GetProfile(), nullptr,
                                        FakeOAuthUrl());
-  Browser* missing_host_popup = missing_host_popup_observer.Wait();
+  Browser* missing_host_popup = static_cast<Browser*>(missing_host_popup_observer.Wait());
   ASSERT_TRUE(missing_host_popup);
-  EXPECT_TRUE(missing_host_popup->is_type_popup());
+  EXPECT_TRUE((missing_host_popup->GetType() == BrowserWindowInterface::TYPE_POPUP));
   EXPECT_EQ(missing_host_fallback,
-            missing_host_popup->tab_strip_model()->GetActiveWebContents());
+            missing_host_popup->GetTabStripModel()->GetActiveWebContents());
   CloseBrowserSynchronously(missing_host_popup);
 }
 

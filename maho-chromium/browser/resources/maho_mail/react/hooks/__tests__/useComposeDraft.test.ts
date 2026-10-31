@@ -94,6 +94,37 @@ describe("useComposeDraft", () => {
     expect(result.current.draftSavedAt).not.toBeNull();
   });
 
+  it("includes attachments and read_receipt in saveDraft / buildRequest", async () => {
+    const mockAttachments = [
+      { filename: "doc.pdf", mime_type: "application/pdf", data: "base64data" },
+    ];
+    const { result } = renderHook(() =>
+      useComposeDraft({
+        ...defaultProps(),
+        attachments: mockAttachments,
+        requestReadReceipt: true,
+      }),
+    );
+
+    act(() => {
+      result.current.isDirtyRef.current = true;
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(saveDraftMock).toHaveBeenCalledTimes(1);
+    expect(saveDraftMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id: "acc-1",
+        to: ["alice@example.com"],
+        attachments: mockAttachments,
+        read_receipt: true,
+      }),
+    );
+  });
+
   it("calls updateDraft when draftId already exists", async () => {
     const { result } = renderHook(() => useComposeDraft(defaultProps()));
 

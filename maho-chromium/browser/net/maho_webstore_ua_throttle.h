@@ -7,6 +7,10 @@
 
 #include "third_party/blink/public/common/loader/url_loader_throttle.h"
 
+namespace network {
+struct HttpRequestHeadersUpdateParams;
+}
+
 // Strips the "Maho/1.0" token from User-Agent on Chrome Web Store and
 // CRX-download domains so that Google does not block extension installs.
 class MahoWebStoreUAThrottle : public blink::URLLoaderThrottle {
@@ -24,9 +28,7 @@ class MahoWebStoreUAThrottle : public blink::URLLoaderThrottle {
       net::RedirectInfo* redirect_info,
       const network::mojom::URLResponseHead& response_head,
       bool* defer,
-      std::vector<std::string>* to_be_removed_request_headers,
-      net::HttpRequestHeaders* modified_request_headers,
-      net::HttpRequestHeaders* modified_cors_exempt_request_headers) override;
+      network::HttpRequestHeadersUpdateParams* headers_update_params) override;
 
   void WillProcessResponse(const GURL& response_url,
                            network::mojom::URLResponseHead* response_head,

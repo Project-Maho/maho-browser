@@ -197,14 +197,19 @@ fn apply_fixes(report: &mut DoctorReport) {
                 RepointAction::AlreadyCurrent => {
                     report.fixes.push(FixRecord {
                         action: "repoint-cargo-bin".into(),
-                        detail: format!("{} already links to {}", cargo_bin.display(), helper.display()),
+                        detail: format!(
+                            "{} already links to {}",
+                            cargo_bin.display(),
+                            helper.display()
+                        ),
                         applied: false,
                     });
                 }
                 RepointAction::Repoint => {
                     let remove_res = std::fs::remove_file(&cargo_bin);
                     #[cfg(unix)]
-                    let symlink_res = remove_res.and_then(|_| std::os::unix::fs::symlink(helper, &cargo_bin));
+                    let symlink_res =
+                        remove_res.and_then(|_| std::os::unix::fs::symlink(helper, &cargo_bin));
                     #[cfg(not(unix))]
                     let symlink_res: std::io::Result<()> = Ok(());
 
@@ -212,7 +217,11 @@ fn apply_fixes(report: &mut DoctorReport) {
                         Ok(_) => {
                             report.fixes.push(FixRecord {
                                 action: "repoint-cargo-bin".into(),
-                                detail: format!("re-pointed {} -> {}", cargo_bin.display(), helper.display()),
+                                detail: format!(
+                                    "re-pointed {} -> {}",
+                                    cargo_bin.display(),
+                                    helper.display()
+                                ),
                                 applied: true,
                             });
                         }
@@ -261,7 +270,10 @@ fn apply_fixes(report: &mut DoctorReport) {
         BridgeAction::BridgedElsewhere(target) => {
             report.fixes.push(FixRecord {
                 action: "bridge-socket".into(),
-                detail: format!("Maho/maho.sock links to {}; leaving untouched", target.display()),
+                detail: format!(
+                    "Maho/maho.sock links to {}; leaving untouched",
+                    target.display()
+                ),
                 applied: false,
             });
         }
@@ -285,7 +297,11 @@ fn apply_fixes(report: &mut DoctorReport) {
                 Ok(_) => {
                     report.fixes.push(FixRecord {
                         action: "bridge-socket".into(),
-                        detail: format!("created symlink {} -> {}", branded.display(), unbranded.display()),
+                        detail: format!(
+                            "created symlink {} -> {}",
+                            branded.display(),
+                            unbranded.display()
+                        ),
                         applied: true,
                     });
                 }
@@ -321,7 +337,9 @@ async fn probe(override_path: Option<&str>) -> ProbeReport {
     match browser::connect(override_path).await {
         Ok(client) => {
             let kind = client.session_info().await.map(|info| info.controller_kind);
-            let trusted = kind.as_ref().map(|k| !matches!(k, ControllerKind::ThirdParty));
+            let trusted = kind
+                .as_ref()
+                .map(|k| !matches!(k, ControllerKind::ThirdParty));
             let name = kind.as_ref().map(controller_wire_name).map(str::to_string);
             ProbeReport {
                 connected: true,
@@ -363,9 +381,15 @@ async fn gather(override_path: Option<&str>) -> DoctorReport {
     };
 
     let helper_candidates = bundle_helper_candidates();
-    let existing_helper = helper_candidates.iter().find(|p| p.exists()).map(|p| p.display().to_string());
+    let existing_helper = helper_candidates
+        .iter()
+        .find(|p| p.exists())
+        .map(|p| p.display().to_string());
     let bundle_helper = HelperReport {
-        candidates: helper_candidates.iter().map(|p| p.display().to_string()).collect(),
+        candidates: helper_candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
         existing: existing_helper,
     };
 
@@ -379,9 +403,11 @@ async fn gather(override_path: Option<&str>) -> DoctorReport {
             path: p.display().to_string(),
         })
         .collect();
-    let default_resolved = override_path
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| maho_browser_mcp::paths::default_socket_path().display().to_string());
+    let default_resolved = override_path.map(|p| p.to_string()).unwrap_or_else(|| {
+        maho_browser_mcp::paths::default_socket_path()
+            .display()
+            .to_string()
+    });
     let socket = SocketReport {
         env_override,
         default_resolved,
@@ -406,7 +432,10 @@ async fn gather(override_path: Option<&str>) -> DoctorReport {
 
 fn print_human(r: &DoctorReport) {
     println!("maho doctor");
-    println!("  executable      : {} ({})", r.executable.resolved_path, r.executable.class);
+    println!(
+        "  executable      : {} ({})",
+        r.executable.resolved_path, r.executable.class
+    );
     let helper_status = r
         .bundle_helper
         .existing
@@ -421,7 +450,10 @@ fn print_human(r: &DoctorReport) {
         .as_deref()
         .map(|e| format!(" [via MAHO_MCP_SOCKET_PATH={e}]"))
         .unwrap_or_default();
-    println!("  socket target   : {}{}", r.socket.default_resolved, env_note);
+    println!(
+        "  socket target   : {}{}",
+        r.socket.default_resolved, env_note
+    );
     for c in &r.socket.candidates {
         let mark = if c.exists { "✓" } else { "✗" };
         println!("    [{mark}] {}", c.path);
@@ -515,7 +547,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_plan_cargo_bin_repoint() {
-        let temp_dir = std::env::temp_dir().join(format!("maho_doctor_test_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("maho_doctor_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -526,16 +559,28 @@ mod tests {
 
         let link = temp_dir.join("maho_symlink");
 
-        assert_eq!(plan_cargo_bin_repoint(&link, &helper_a), RepointAction::MissingEntry);
+        assert_eq!(
+            plan_cargo_bin_repoint(&link, &helper_a),
+            RepointAction::MissingEntry
+        );
 
         let real_file = temp_dir.join("real_bin");
         std::fs::write(&real_file, b"").unwrap();
-        assert_eq!(plan_cargo_bin_repoint(&real_file, &helper_a), RepointAction::RealBinaryRefuse);
+        assert_eq!(
+            plan_cargo_bin_repoint(&real_file, &helper_a),
+            RepointAction::RealBinaryRefuse
+        );
 
         std::os::unix::fs::symlink(&helper_a, &link).unwrap();
-        assert_eq!(plan_cargo_bin_repoint(&link, &helper_b), RepointAction::Repoint);
+        assert_eq!(
+            plan_cargo_bin_repoint(&link, &helper_b),
+            RepointAction::Repoint
+        );
 
-        assert_eq!(plan_cargo_bin_repoint(&link, &helper_a), RepointAction::AlreadyCurrent);
+        assert_eq!(
+            plan_cargo_bin_repoint(&link, &helper_a),
+            RepointAction::AlreadyCurrent
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -543,7 +588,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_plan_socket_bridge() {
-        let temp_dir = std::env::temp_dir().join(format!("maho_bridge_test_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("maho_bridge_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 

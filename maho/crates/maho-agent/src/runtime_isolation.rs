@@ -32,12 +32,29 @@ impl SessionRuntime {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
-        // We run the future on the runtime.
-        // Catch unwind is used to handle panics gracefully.
-        let handle = self.handle.clone();
-        let join_handle = handle.spawn(async move { future.await });
+        // Handle::block_on panics when the calling thread is already inside a
+        // tokio runtime. A multi-thread worker may hand its slot off with
+        // block_in_place; a current-thread runtime cannot block at all, so
+        // that case is an error instead of a process-killing panic.
+        let in_multi_thread_runtime = match tokio::runtime::Handle::try_current() {
+            Err(_) => false,
+            Ok(current)
+                if current.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread =>
+            {
+                true
+            }
+            Ok(_) => {
+                return Err(AgentError::ExecutionError(
+                    "SessionRuntime::block_on called from a current-thread tokio runtime"
+                        .to_string(),
+                ))
+            }
+        };
 
-        self.handle.block_on(async {
+        // We run the future on the runtime; a panicking task surfaces as a
+        // JoinError and is mapped to an error below.
+        let join_handle = self.handle.spawn(future);
+        let wait = async {
             match join_handle.await {
                 Ok(res) => Ok(res),
                 Err(join_err) => {
@@ -50,7 +67,12 @@ impl SessionRuntime {
                     }
                 }
             }
-        })
+        };
+        if in_multi_thread_runtime {
+            tokio::task::block_in_place(|| self.handle.block_on(wait))
+        } else {
+            self.handle.block_on(wait)
+        }
     }
 
     /// Runs a future with a timeout
@@ -105,6 +127,32 @@ mod tests {
         assert!(res.is_err());
         let err = res.unwrap_err();
         assert!(err.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn block_on_inside_current_thread_runtime_errors_instead_of_panicking() {
+        let session = SessionRuntime::new().unwrap();
+        let outer = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let res = outer.block_on(async { session.block_on(async { 1 }) });
+        let err = res.expect_err("current-thread caller must get an error");
+        assert!(err.to_string().contains("current-thread"), "{err}");
+    }
+
+    #[test]
+    fn block_on_inside_multi_thread_runtime_completes() {
+        let session = SessionRuntime::new().unwrap();
+        let outer = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let res = outer.block_on(async {
+            tokio::spawn(async move { session.block_on(async { 7 }) })
+                .await
+                .expect("worker task must not panic")
+        });
+        assert_eq!(res.unwrap(), 7);
     }
 
     #[test]

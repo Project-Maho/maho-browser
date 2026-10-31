@@ -79,12 +79,32 @@ impl BoundedBackoffConfig {
             return 0;
         }
         let exp = (attempt - 1) as i32;
+        let max = self.max_backoff_ms as f64;
         let base_backoff = (self.initial_backoff_ms as f64) * self.backoff_factor.powi(exp);
-        let clamped = base_backoff.min(self.max_backoff_ms as f64);
+        // A non-finite base (NaN/inf factor, overflow) must not collapse to a zero delay.
+        let clamped = if base_backoff.is_finite() {
+            base_backoff.min(max)
+        } else {
+            max
+        };
 
-        let jitter_range = clamped * self.jitter_ratio;
+        // A non-finite jitter input falls back to the neutral midpoint instead of
+        // poisoning the arithmetic (NaN would otherwise saturate to a 0 ms delay).
+        let jitter_factor = if jitter_factor.is_finite() {
+            jitter_factor.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+        let jitter_ratio = if self.jitter_ratio.is_finite() {
+            self.jitter_ratio.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        let jitter_range = clamped * jitter_ratio;
         let jitter_offset = (jitter_factor * 2.0 - 1.0) * jitter_range;
         let final_backoff = (clamped + jitter_offset).max(0.0);
+        // Cap is applied after jitter so the configured maximum is a hard bound.
         (final_backoff as u64).min(self.max_backoff_ms)
     }
 }
@@ -219,17 +239,19 @@ impl RetryPolicy {
             }
         }
 
-        // Guardrail 3: Check attempt cap (1-based current_attempt; max_attempts is the total attempts allowed)
+        // Guardrail 3: a non-retryable class fails fast. This precedes the attempt cap so
+        // an exhausted non-retryable error is never reported as "retries exhausted"
+        // (which would recommend switching to a fallback target).
+        if !self.retryable_classes.contains(&error_class) {
+            return Err(DoNotRetryReason::NonRetryableClass(error_class));
+        }
+
+        // Guardrail 4: Check attempt cap (1-based current_attempt; max_attempts is the total attempts allowed)
         if current_attempt >= self.max_attempts {
             return Err(DoNotRetryReason::MaxAttemptsExceeded {
                 attempts: current_attempt,
                 max_attempts: self.max_attempts,
             });
-        }
-
-        // Check if class is retryable
-        if !self.retryable_classes.contains(&error_class) {
-            return Err(DoNotRetryReason::NonRetryableClass(error_class));
         }
 
         // Calculate bounded backoff with jitter
@@ -251,6 +273,13 @@ impl RetryPolicy {
     ) -> RetryDecision {
         match self.evaluate(error_class, idempotency, current_attempt, jitter_factor) {
             Ok(decision) => decision,
+            // Replaying a non-idempotent mutation on another target is as unsafe as
+            // retrying it on this one: require confirmation instead of switching.
+            Err(DoNotRetryReason::MaxAttemptsExceeded { .. })
+                if idempotency == IdempotencyClass::NonIdempotentMutation =>
+            {
+                RetryDecision::RequiresConfirmation
+            }
             Err(DoNotRetryReason::MaxAttemptsExceeded { attempts, .. }) => {
                 RetryDecision::SwitchFallback(FallbackSwitchReason {
                     original_target: original_target.to_string(),
@@ -459,5 +488,64 @@ mod tests {
             }
             other => panic!("Expected SwitchFallback, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_exhausted_non_retryable_class_fails_fast_instead_of_switching_fallback() {
+        let policy = RetryPolicy {
+            max_attempts: 3,
+            ..Default::default()
+        };
+        // ContextTooLarge is not retryable: past the cap it must not recommend a fallback switch.
+        let decision = policy.evaluate_with_fallback(
+            ErrorClass::ContextTooLarge,
+            IdempotencyClass::ReadOnly,
+            3,
+            0.5,
+            "primary",
+            "fallback",
+        );
+        assert!(matches!(decision, RetryDecision::FailFast(_)), "{decision:?}");
+    }
+
+    #[test]
+    fn test_exhausted_non_idempotent_mutation_never_switches_fallback() {
+        let policy = RetryPolicy {
+            max_attempts: 3,
+            allow_uncertain_mutation_retry: true,
+            ..Default::default()
+        };
+        let decision = policy.evaluate_with_fallback(
+            ErrorClass::TransientNetwork,
+            IdempotencyClass::NonIdempotentMutation,
+            3,
+            0.5,
+            "primary",
+            "fallback",
+        );
+        assert_eq!(decision, RetryDecision::RequiresConfirmation);
+    }
+
+    #[test]
+    fn test_non_finite_jitter_is_clamped_and_cap_is_hard_bound() {
+        let config = BoundedBackoffConfig {
+            initial_backoff_ms: 100,
+            max_backoff_ms: 1000,
+            backoff_factor: 2.0,
+            jitter_ratio: 0.2,
+        };
+        // NaN jitter -> neutral midpoint (100 ms), not a 0 ms delay.
+        assert_eq!(config.calculate_backoff(1, f64::NAN), 100);
+        assert_eq!(config.calculate_backoff(1, f64::INFINITY), 100);
+        // Out-of-range jitter is clamped into [0, 1].
+        assert_eq!(config.calculate_backoff(1, 5.0), 120);
+        assert_eq!(config.calculate_backoff(1, -5.0), 80);
+        // Cap is a hard bound even with maximal upward jitter at the ceiling.
+        assert_eq!(config.calculate_backoff(20, 1.0), 1000);
+        let bad_ratio = BoundedBackoffConfig {
+            jitter_ratio: f64::NAN,
+            ..config
+        };
+        assert_eq!(bad_ratio.calculate_backoff(1, 0.9), 100);
     }
 }

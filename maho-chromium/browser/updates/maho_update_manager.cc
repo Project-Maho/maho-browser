@@ -12,6 +12,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
 #include "maho/browser/updates/crash_loop_sentinel.h"
+#include "maho/browser/updates/maho_product_version.h"
 #include "maho/browser/updates/maho_update_pref_names.h"
 #include "maho/browser/updates/maho_update_server_url.h"
 #include "maho/browser/updates/platform_updater_delegate.h"
@@ -85,6 +86,8 @@ class StubPlatformUpdaterDelegate : public PlatformUpdaterDelegate {
   void ApplyUpdateAndRestart() override {
     LOG(INFO) << "Stub update delegate apply and restart triggered.";
   }
+
+  std::string GetUpdateGuidance() const override { return std::string(); }
 };
 
 std::string ChannelToString(UpdateChannel channel) {
@@ -131,7 +134,7 @@ void MahoUpdateManager::Initialize(Profile* profile, PrefService* local_state) {
   initialized_ = true;
   profile_ = profile;
 
-  std::string current_version(version_info::GetVersionNumber());
+  std::string current_version(updates::kMahoProductVersion);
 
   // Kill-switch: when maho.update.enabled is false (default), the entire
   // update subsystem stays inert. No delegate is created, no checks run,
@@ -237,6 +240,9 @@ void MahoUpdateManager::InitializePlatformUpdater() {
   }
   delegate_->Initialize();
   delegate_->SetChannel(ChannelToString(channel_));
+  if (version_history_handler_) {
+    delegate_->SetVersionHistoryHandler(version_history_handler_);
+  }
 }
 
 void MahoUpdateManager::CheckForUpdates(bool manual_check) {
@@ -269,6 +275,15 @@ void MahoUpdateManager::ApplyUpdateAndRestart() {
   }
 }
 
+void MahoUpdateManager::SetVersionHistoryHandler(
+    base::RepeatingClosure handler) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  version_history_handler_ = std::move(handler);
+  if (delegate_) {
+    delegate_->SetVersionHistoryHandler(version_history_handler_);
+  }
+}
+
 void MahoUpdateManager::SetChannel(UpdateChannel channel) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   channel_ = channel;
@@ -296,6 +311,11 @@ UpdateChannel MahoUpdateManager::GetChannel() const {
   return channel_;
 }
 
+bool MahoUpdateManager::IsEnabled() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return !is_disabled_;
+}
+
 void MahoUpdateManager::AddObserver(MahoUpdateObserver* observer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   observers_.AddObserver(observer);
@@ -314,6 +334,11 @@ UpdateState MahoUpdateManager::GetState() const {
 UpdateError MahoUpdateManager::GetLastError() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return last_error_;
+}
+
+std::string MahoUpdateManager::GetUpdateGuidance() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return delegate_ ? delegate_->GetUpdateGuidance() : std::string();
 }
 
 const std::string& MahoUpdateManager::GetServerBaseUrl() const {
@@ -374,6 +399,9 @@ void MahoUpdateManager::SetDelegateForTesting(std::unique_ptr<PlatformUpdaterDel
   if (delegate_) {
     delegate_->Initialize();
     delegate_->SetChannel(ChannelToString(channel_));
+    if (version_history_handler_) {
+      delegate_->SetVersionHistoryHandler(version_history_handler_);
+    }
   }
 }
 
@@ -390,6 +418,7 @@ void MahoUpdateManager::ResetForTesting() {
   server_base_url_.clear();
   auto_check_timer_.Stop();
   auto_check_interval_for_testing_ = base::TimeDelta();
+  version_history_handler_ = base::RepeatingClosure();
   delegate_.reset();
   profile_ = nullptr;
   while (!observers_.empty()) {

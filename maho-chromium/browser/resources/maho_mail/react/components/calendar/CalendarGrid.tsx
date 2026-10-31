@@ -5,7 +5,7 @@ import { format, parse, startOfWeek, endOfWeek, getDay, addMonths, subMonths, ad
 import { enUS, ko } from "date-fns/locale";
 import { useTranslation } from "react-i18next";
 import { resolveDragAndDrop } from "./dragAndDropImport";
-import { RefreshCw, Search, ChevronLeft, ChevronRight, X, Calendar as CalendarIcon, Printer } from "lucide-react";
+import { RefreshCw, Search, ChevronLeft, ChevronRight, X, Calendar as CalendarIcon, Printer, Lock, Repeat, Video, MapPin, Copy, Download, Globe, Trash2 } from "lucide-react";
 import { Button } from "../ui/Button";
 import { useToast } from "../ui/Toast";
 import * as api from "../../api";
@@ -163,6 +163,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
     setSelectedEventIds,
 
     fetchEvents,
+    reloadEvents,
     loadPreferences,
     handleRefresh,
     toggleCalendar,
@@ -227,7 +228,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, []);
+  }, [selectedEventIds, events, handleDeleteEvent, handleDuplicateEvent, onSelectEvent]);
 
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 640);
@@ -282,11 +283,12 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (typeof detail === "string" && detail !== effectiveAccountId) return;
-      void fetchEvents();
+      // Another surface mutated calendar state, so the TTL cache is stale.
+      void reloadEvents();
     };
     window.addEventListener("calendar-events-changed", handler);
     return () => window.removeEventListener("calendar-events-changed", handler);
-  }, [effectiveAccountId, fetchEvents]);
+  }, [effectiveAccountId, reloadEvents]);
 
   useEffect(() => {
     const handler = () => {
@@ -323,7 +325,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
           setView("week");
           break;
         case "d":
-          setView("day");
+          if (selectedEventIds.length === 0) setView("day");
           break;
         case "a":
           setView("agenda");
@@ -338,7 +340,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
     
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleNavigate, onCreateEvent]);
+  }, [handleNavigate, onCreateEvent, selectedEventIds]);
 
   const handleSearchChange = useCallback(async (val: string) => {
     setSearchQuery(val);
@@ -468,11 +470,11 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
         });
         toast("success", t("calendar.eventUpdated"));
       }
-      await fetchEvents();
+      await reloadEvents();
     } catch (err) {
       toast("error", err instanceof Error ? err.message : String(err));
     }
-  }, [fetchEvents, t, toast, altKeyPressed, selectedTimezone]);
+  }, [reloadEvents, t, toast, altKeyPressed, selectedTimezone]);
 
   type ResizeArgs = {
     event: RbcEvent;
@@ -494,11 +496,11 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
         time_zone: resource.all_day ? undefined : selectedTimezone,
       });
       toast("success", t("calendar.eventUpdated"));
-      await fetchEvents();
+      await reloadEvents();
     } catch (err) {
       toast("error", err instanceof Error ? err.message : String(err));
     }
-  }, [fetchEvents, t, toast, selectedTimezone]);
+  }, [reloadEvents, t, toast, selectedTimezone]);
 
   const handleOpenInGoogleCalendar = async (externalId: string, calendarId: string) => {
     try {
@@ -615,7 +617,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                             key={cal.id}
                             type="button"
                             onClick={() => void toggleCalendar(cal)}
-                            className={`flex items-center gap-2 w-full text-left px-2 py-1.5 rounded-lg text-xs transition-colors hover:bg-muted/65 ${
+                            className={`flex items-center gap-2 w-full text-left px-2 py-1.5 rounded-lg text-xs transition-colors hover:bg-surface-hover ${
                               active ? "text-foreground font-medium" : "text-muted-foreground line-through opacity-60"
                             }`}
                             title={cal.calendar_id}
@@ -626,7 +628,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                             />
                             <span className="truncate flex-1">{cal.summary}</span>
                             {isReadOnly && (
-                              <span className="text-[10px] text-muted-foreground opacity-60" title="Read-only">🔒</span>
+                              <Lock size={11} className="shrink-0 text-muted-foreground opacity-60" aria-label="Read-only" />
                             )}
                           </button>
                         );
@@ -643,7 +645,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
         <div className="pt-2 border-t border-border/60 text-[10px] text-muted-foreground flex flex-wrap gap-x-2 gap-y-1">
           <span>○ Meeting</span>
           <span>⧗ Focus Time</span>
-          <span>🌴 Out of Office</span>
+          <span>◇ Out of Office</span>
         </div>
 
         {/* Today Panel */}
@@ -669,7 +671,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                 onChange={(e) => void handleSearchChange(e.target.value)}
                 onFocus={() => setSearchFocused(true)}
                 onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
-                className="w-full pl-8 pr-8 py-1.5 text-xs bg-muted/65 hover:bg-muted text-foreground border border-border rounded-xl focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+                className="w-full pl-8 pr-8 py-1.5 text-xs bg-muted/65 hover:bg-surface-hover text-foreground border border-border rounded-xl focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
               />
               {searchQuery && (
                 <button
@@ -697,7 +699,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                         setSearchQuery("");
                         setSearchResults([]);
                       }}
-                      className="w-full text-left px-3 py-2 text-xs rounded hover:bg-muted transition-colors flex flex-col gap-0.5"
+                      className="w-full text-left px-3 py-2 text-xs rounded-md hover:bg-surface-hover transition-colors flex flex-col gap-0.5"
                     >
                       <span className="font-semibold text-foreground truncate">{ev.summary || "(No title)"}</span>
                       <span className="text-[10px] text-muted-foreground">
@@ -744,14 +746,14 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
             <button
               type="button"
               onClick={() => handleNavigate("PREV")}
-              className="p-1.5 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
+              className="mail-pressable flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <ChevronLeft size={16} />
             </button>
             <button
               type="button"
               onClick={() => handleNavigate("NEXT")}
-              className="p-1.5 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
+              className="mail-pressable flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <ChevronRight size={16} />
             </button>
@@ -794,7 +796,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                             }
                           }));
                           toast("success", `Moved ${selectedEventIds.length} events successfully!`);
-                          void fetchEvents();
+                          void reloadEvents();
                           setSelectedEventIds([]);
                         } catch (err) {
                           toast("error", err instanceof Error ? err.message : String(err));
@@ -837,7 +839,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                   type="text"
                   value={quickAddText}
                   onChange={(e) => setQuickAddText(e.target.value)}
-                  placeholder="⚡ Quick Add: 'Dinner tomorrow at 7pm'"
+                  placeholder="Quick add: 'Dinner tomorrow at 7pm'"
                   className="flex h-8 w-full rounded-lg border border-input bg-transparent px-3 py-1 text-xs shadow-sm transition-colors placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                 />
                 <Button type="submit" size="sm" className="h-8 px-3 text-xs shrink-0 bg-primary/15 hover:bg-primary/25 border border-primary/35 text-foreground hover:text-foreground">
@@ -879,7 +881,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                   className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
                     view === v || (v === "day" && view !== "agenda")
                       ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground hover:bg-card/25"
+                      : "text-muted-foreground hover:text-foreground hover:bg-surface-hover"
                   }`}
                 >
                   {v === "day" ? "Day" : "Agenda"}
@@ -896,7 +898,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                   className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
                     view === v
                       ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground hover:bg-card/25"
+                      : "text-muted-foreground hover:text-foreground hover:bg-surface-hover"
                   }`}
                 >
                   {t(`calendar.view.${v}`) || v.charAt(0).toUpperCase() + v.slice(1)}
@@ -980,17 +982,17 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                                 <TooltipTrigger asChild>
                                   <div className="w-full h-full truncate text-xs font-medium flex items-center justify-between gap-1">
                                     <span className="truncate flex items-center gap-1">
-                                      {isReadOnly && <span title="Read-only">🔒</span>}
+                                      {isReadOnly && <Lock size={11} className="shrink-0" aria-label="Read-only" />}
                                       {resource.event_type === "outOfOffice" && <span className="text-[9px] font-bold text-orange-700 bg-orange-100 px-0.5 rounded shrink-0">OOO</span>}
                                       {resource.event_type === "focusTime" && <span className="text-[9px] font-bold text-purple-700 bg-purple-100 px-0.5 rounded shrink-0">Focus</span>}
                                       {event.title}
                                     </span>
                                     <div className="flex items-center gap-1 shrink-0">
                                       {isRecurring && (
-                                        <span className="text-[10px] opacity-75" title="Recurring event">🔄</span>
+                                        <Repeat size={11} className="opacity-75" aria-label="Recurring event" />
                                       )}
                                       {resource.hangout_link && (
-                                        <span className="text-[10px] opacity-75" title="Has Meet Link">🎥</span>
+                                        <Video size={11} className="opacity-75" aria-label="Has Meet Link" />
                                       )}
                                       {attSummary && (
                                         <span className="text-[9px] bg-muted/60 px-1 rounded select-none font-semibold text-muted-foreground" title={`Accepted: ${attSummary.accepted}, Declined: ${attSummary.declined}, Pending: ${attSummary.pending}`}>
@@ -1008,7 +1010,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                                   </p>
                                   {resource.location && (
                                     <p className="text-xs flex items-center gap-1 text-muted-foreground">
-                                      📍 {resource.location}
+                                      <MapPin size={12} className="shrink-0" aria-hidden="true" /> {resource.location}
                                     </p>
                                   )}
                                   {resource.description && (
@@ -1033,20 +1035,20 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                                 <ContextMenuShortcut>E</ContextMenuShortcut>
                               </ContextMenuItem>
                               <ContextMenuItem onClick={() => void handleDuplicateEvent(resource.id)} disabled={isReadOnly}>
-                                ⚡ Duplicate
+                                <Copy size={14} className="mr-2" aria-hidden="true" />Duplicate
                                 <ContextMenuShortcut>C</ContextMenuShortcut>
                               </ContextMenuItem>
                               <ContextMenuItem onClick={() => void handleExportIcsFile(resource)}>
-                                📥 Export .ics
+                                <Download size={14} className="mr-2" aria-hidden="true" />Export .ics
                               </ContextMenuItem>
                               {resource.uid && (
                                 <ContextMenuItem onClick={() => void handleOpenInGoogleCalendar(resource.uid, resource.google_calendar_id || "")}>
-                                  🌐 Open in Google
+                                  <Globe size={14} className="mr-2" aria-hidden="true" />Open in Google
                                 </ContextMenuItem>
                               )}
                               <ContextMenuSeparator />
                               <ContextMenuItem onClick={() => void handleDeleteEvent(resource.id)} disabled={isReadOnly} className="text-destructive focus:bg-destructive/10 focus:text-destructive">
-                                🗑️ Delete
+                                <Trash2 size={14} className="mr-2" aria-hidden="true" />Delete
                                 <ContextMenuShortcut>D</ContextMenuShortcut>
                               </ContextMenuItem>
 
@@ -1069,7 +1071,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                                                 target_calendar_id: newCalId,
                                               });
                                               toast("success", "Event moved successfully!");
-                                              void fetchEvents();
+                                              void reloadEvents();
                                             } catch (err) {
                                               toast("error", err instanceof Error ? err.message : String(err));
                                             }
@@ -1090,10 +1092,10 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                           ) : (
                             <>
                               <ContextMenuItem onClick={() => void handleExportSelectedEvents()}>
-                                📥 Export {selectedEventIds.length} events
+                                <Download size={14} className="mr-2" aria-hidden="true" />Export {selectedEventIds.length} events
                               </ContextMenuItem>
                               <ContextMenuItem onClick={() => void handleDeleteSelectedEvents()} className="text-destructive focus:bg-destructive/10 focus:text-destructive">
-                                🗑️ Delete {selectedEventIds.length} events
+                                <Trash2 size={14} className="mr-2" aria-hidden="true" />Delete {selectedEventIds.length} events
                                 <ContextMenuShortcut>D</ContextMenuShortcut>
                               </ContextMenuItem>
 
@@ -1121,7 +1123,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                                                 }
                                               }));
                                               toast("success", `Moved ${selectedEventIds.length} events successfully!`);
-                                              void fetchEvents();
+                                              void reloadEvents();
                                               setSelectedEventIds([]);
                                             } catch (err) {
                                               toast("error", err instanceof Error ? err.message : String(err));

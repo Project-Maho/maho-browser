@@ -70,6 +70,22 @@ const DANGEROUS_EXTENSIONS: ReadonlySet<string> = new Set([
   // Disk images (often carry signed installers)
   ".iso",
   ".img",
+  // Office macro formats
+  ".docm",
+  ".dotm",
+  ".xlsm",
+  ".xltm",
+  ".xlam",
+  ".pptm",
+  ".potm",
+  ".ppam",
+  ".ppsm",
+  // Windows packages and diagnostics
+  ".msix",
+  ".msixbundle",
+  ".appx",
+  ".appxbundle",
+  ".diagcab",
 ]);
 
 const DANGEROUS_MIME_TYPES: ReadonlySet<string> = new Set([
@@ -96,9 +112,13 @@ export interface AttachmentSafetyInput {
  */
 function extractExtensions(filename: string): string[] {
   if (!filename) return [];
-  const lower = filename.toLowerCase();
-  const parts = lower.split(".").slice(1); // drop the base name
-  return parts.map((part) => `.${part}`);
+  const parts = filename.split(".").slice(1); // drop the base name
+  return parts
+    .map((part) => {
+      const cleaned = part.replace(/^[\s\x00-\x1f\x7f-\x9f]+|[\s\x00-\x1f\x7f-\x9f]+$/g, "").toLowerCase();
+      return cleaned ? `.${cleaned}` : "";
+    })
+    .filter(Boolean);
 }
 
 export function isDangerousAttachment(input: AttachmentSafetyInput): boolean {

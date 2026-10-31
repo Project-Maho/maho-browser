@@ -279,6 +279,93 @@ class RelaySessionStoreTest {
         assertEquals("http://192.168.0.39:8787", prefs.getString("server_url", null))
     }
 
+    @Test
+    fun `sync seed is stored encrypted and bound to its account`() {
+        assertTrue(store.saveSyncSeed("seed-secret", "account"))
+
+        assertEquals("enc:seed-secret", prefs.getString("sync_seed_encrypted", null))
+        assertFalse(prefs.all.values.contains("seed-secret"))
+        assertEquals("seed-secret", store.loadSyncSeed("account"))
+        assertNull(store.loadSyncSeed("other-account"))
+    }
+
+    @Test
+    fun `missing sync seed loads as null`() {
+        assertNull(store.loadSyncSeed("account"))
+    }
+
+    @Test
+    fun `legacy plaintext sync seed migrates to encrypted storage and is deleted`() {
+        prefs.edit()
+            .putString("account_id", "account")
+            .putString("sync_bootstrap_seed", "legacy-seed")
+            .commit()
+
+        assertEquals("legacy-seed", store.loadSyncSeed("account"))
+
+        assertFalse(prefs.contains("sync_bootstrap_seed"))
+        assertEquals("enc:legacy-seed", prefs.getString("sync_seed_encrypted", null))
+    }
+
+    @Test
+    fun `failed legacy seed migration keeps plaintext for retry`() {
+        crypto.failEncryption = true
+        prefs.edit()
+            .putString("account_id", "account")
+            .putString("sync_bootstrap_seed", "legacy-seed")
+            .commit()
+
+        assertNull(store.loadSyncSeed("account"))
+        assertEquals("legacy-seed", prefs.getString("sync_bootstrap_seed", null))
+        assertFalse(prefs.contains("sync_seed_encrypted"))
+    }
+
+    @Test
+    fun `corrupt sync seed is cleared`() {
+        prefs.edit()
+            .putString("sync_seed_encrypted", "corrupt")
+            .putString("sync_seed_account_id", "account")
+            .commit()
+
+        assertNull(store.loadSyncSeed("account"))
+        assertFalse(prefs.contains("sync_seed_encrypted"))
+    }
+
+    @Test
+    fun `sign out clearing removes the stored sync seed`() {
+        assertTrue(store.save(relaySession("access", "refresh")))
+        assertTrue(store.saveSyncSeed("seed", "account"))
+
+        assertTrue(store.clear())
+
+        assertNull(store.loadSyncSeed("account"))
+        assertTrue(prefs.all.isEmpty())
+    }
+
+    @Test
+    fun `clearSyncSeed removes only seed material`() {
+        assertTrue(store.save(relaySession("access", "refresh")))
+        assertTrue(store.saveSyncSeed("seed", "account"))
+
+        assertTrue(store.clearSyncSeed())
+
+        assertNull(store.loadSyncSeed("account"))
+        assertFalse(prefs.contains("sync_seed_encrypted"))
+        assertFalse(prefs.contains("sync_seed_account_id"))
+        assertEquals("access", store.load()?.accessToken)
+    }
+
+    @Test
+    fun `retired relay invalidates an encrypted sync seed`() {
+        prefs.edit()
+            .putString("server_url", "http://192.168.0.39:8787")
+            .putString("sync_seed_encrypted", "enc:seed")
+            .commit()
+
+        assertEquals(LegacyRelayMigrationOutcome.INVALIDATED_SESSION, store.migrateRetiredRelay())
+        assertEquals(mapOf("server_url" to "https://relay.mahobrowser.com"), prefs.all)
+    }
+
     private fun relaySession(accessToken: String, refreshToken: String) = RelaySession(
         email = "person@example.com",
         accessToken = accessToken,

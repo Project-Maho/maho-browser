@@ -8,6 +8,7 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/simple_test_tick_clock.h"
+#include "build/build_config.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/web_contents_tester.h"
@@ -144,6 +145,7 @@ TEST_F(MahoArtifactRegistryTest, RejectsUnsafeStoragePaths) {
                    .has_value());
 }
 
+#if !BUILDFLAG(IS_WIN)
 TEST_F(MahoArtifactRegistryTest, RejectsSymlinkEscape) {
   base::ScopedTempDir outside;
   ASSERT_TRUE(outside.CreateUniqueTempDir());
@@ -163,6 +165,7 @@ TEST_F(MahoArtifactRegistryTest, RejectsSymlinkEscape) {
   ASSERT_TRUE(escaping.has_value()) << escaping.error();
   EXPECT_FALSE(registry_->ResolvePath(*escaping).has_value());
 }
+#endif  // !BUILDFLAG(IS_WIN)
 
 TEST_F(MahoArtifactRegistryTest, FreshProfileArtifactRootIsPreparedOffThread) {
   base::DeletePathRecursively(registry_->artifact_root());

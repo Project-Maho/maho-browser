@@ -623,6 +623,25 @@ mod persistence_tests {
     }
 
     #[test]
+    fn add_bookmark_reports_the_stored_id() {
+        let temp_dir = temp_dir();
+        let mut core = create_persisted_core(&temp_dir);
+
+        let id = core
+            .add_bookmark_returning_id("https://example.com/docs", "Docs", None)
+            .expect("bookmark should be stored");
+        assert!(!id.is_empty(), "stored bookmark must report an id");
+
+        // Agent tools answer with the id they just received, so it has to be
+        // the id the store actually holds.
+        let found = core.search_bookmarks("Docs");
+        assert!(
+            found.iter().any(|row| row.0 == id),
+            "stored id {id} should be searchable, got {found:?}"
+        );
+    }
+
+    #[test]
     fn bookmark_folder_persistence_round_trip() {
         let temp_dir = temp_dir();
         let mut core = create_persisted_core(&temp_dir);
@@ -878,7 +897,8 @@ mod persistence_tests {
         let bindings: Vec<serde_json::Value> =
             serde_json::from_str(&shortcuts_json).expect("should parse shortcuts JSON");
 
-        let expected_actions = vec![
+        #[allow(unused_mut)]
+        let mut expected_actions = vec![
             "navigate_back",
             "navigate_forward",
             "reload_tab",
@@ -909,6 +929,7 @@ mod persistence_tests {
             "next_space",
             "prev_space",
             "new_space",
+            "toggle_spaces_overlay",
             "select_space_1",
             "select_space_2",
             "select_space_3",
@@ -927,26 +948,37 @@ mod persistence_tests {
             "maho_mini",
             "close_window",
             "add_split_view",
+            "add_split_view_arc",
+            "increase_split_view",
+            "decrease_split_view",
             "remove_split_view",
             "next_split_view",
             "prev_split_view",
             "swap_split_view",
             "toggle_split_view",
+            "toggle_split_orientation",
             "show_archive",
             "open_downloads",
             "settings",
             "open_history",
-            "open_bookmarks",
-            "new_note",
+            // `new_note` is intentionally absent: the 2026-08-20 registry audit
+            // removed it as a ghost binding (Ctrl+N with no browser surface,
+            // swallowing the key on macOS). See Rule 4 in
+            // `maho-chromium/docs/shortcut-registry-contract.md`; it returns
+            // only together with a dispatch handler when Notes ships.
             "zoom_in",
             "zoom_out",
             "reset_zoom",
+            "capture_screenshot",
             "toggle_dev_tools",
             "view_source",
             "js_console",
             "open_boost_editor",
             "open_atc_rules",
         ];
+        // Alt+D address-bar alias exists only off macOS.
+        #[cfg(not(target_os = "macos"))]
+        expected_actions.push("command_bar_alt");
 
         assert_eq!(
             bindings.len(),

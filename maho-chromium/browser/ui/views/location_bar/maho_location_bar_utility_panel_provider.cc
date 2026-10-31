@@ -12,12 +12,11 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/share/share_attempt.h"
-#include "chrome/browser/ssl/chrome_security_state_tab_helper.h"
+#include "chrome/browser/ssl/chrome_security_state_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
@@ -25,14 +24,16 @@
 #include "chrome/browser/ui/sharing_hub/sharing_hub_bubble_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
+#include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_action_view.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_decision_auto_blocker.h"
-#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
-#include "content/public/browser/browser_task_traits.h"
-#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_action_manager.h"
 #include "extensions/browser/extension_registry.h"
@@ -74,9 +75,9 @@ const gfx::VectorIcon& kSiteSettingsIcon = maho_lucide_icons::kSettingsIcon;
 content::WebContents* GetActiveWebContents(Browser* browser);
 const GURL& GetVisibleOrCommittedUrl(content::WebContents* contents);
 void OpenExtensionsSettingsPaneForBrowser(Browser* browser);
-void InvokeExtensionActionForBrowser(base::WeakPtr<Browser> browser_weak,
+void InvokeExtensionActionForBrowser(base::WeakPtr<BrowserWindowInterface> browser_weak,
                                      const std::string& extension_id);
-void ShowExtensionContextMenuForBrowser(base::WeakPtr<Browser> browser_weak,
+void ShowExtensionContextMenuForBrowser(base::WeakPtr<BrowserWindowInterface> browser_weak,
                                         const std::string& extension_id,
                                         views::View* anchor);
 
@@ -267,7 +268,7 @@ content::WebContents* GetActiveWebContents(Browser* browser) {
     return nullptr;
   }
 
-  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  TabStripModel* tab_strip_model = browser->GetTabStripModel();
   if (!tab_strip_model) {
     return nullptr;
   }
@@ -335,18 +336,18 @@ uint32_t GetBlockedCountForWebContents(
 }
 
 void ShowShieldBubbleForUtilityRow(
-    base::WeakPtr<Browser> browser_weak,
+    base::WeakPtr<BrowserWindowInterface> browser_weak,
     base::WeakPtr<content::WebContents> target_web_contents,
     const std::string& origin,
     uint32_t blocked_count,
     bool is_excepted,
     views::View* source_view) {
-  Browser* browser = browser_weak.get();
+  Browser* browser = static_cast<Browser*>(browser_weak.get());
   if (!browser || !target_web_contents || !source_view || origin.empty()) {
     return;
   }
 
-  BrowserWindow* window = browser->window();
+  ui::BaseWindow* window = browser->GetWindow();
   views::Widget* anchor_widget =
       window ? views::Widget::GetWidgetForNativeWindow(window->GetNativeWindow())
              : nullptr;
@@ -474,7 +475,7 @@ MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRowForOrigin(
   action.close_after_activate = true;
   if (browser) {
     action.anchor_callback = base::BindRepeating(
-        &ShowShieldBubbleForUtilityRow, browser->AsWeakPtr(),
+        &ShowShieldBubbleForUtilityRow, browser->GetWeakPtr(),
         target_web_contents, origin, blocked_count, is_excepted);
     action.show_disclosure_indicator = true;
   }
@@ -491,7 +492,7 @@ void OpenExtensionsSettingsPaneForBrowser(Browser* browser) {
   if (!browser) {
     return;
   }
-  maho::OpenMahoSettingsPane(browser, "extensions");
+  chrome::ShowExtensions(browser);
 }
 
 void TriggerCameraScreenshot(Browser* browser) {
@@ -560,66 +561,53 @@ MahoUtilityPanelZone BuildToolbarZone(Browser* browser) {
   return zone;
 }
 
-void InvokeExtensionActionForBrowser(base::WeakPtr<Browser> browser_weak,
+void InvokeExtensionActionForBrowser(base::WeakPtr<BrowserWindowInterface> browser_weak,
                                      const std::string& extension_id) {
-  Browser* browser = browser_weak.get();
+  Browser* browser = static_cast<Browser*>(browser_weak.get());
   if (!browser) {
     return;
   }
-  content::WebContents* web_contents = GetActiveWebContents(browser);
-  if (!web_contents) {
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+  if (!browser_view || !browser_view->toolbar()) {
     return;
   }
-  Profile* profile = browser->profile();
-  if (!profile) {
+  ExtensionsToolbarDesktop* extensions_container =
+      browser_view->toolbar()->extensions_container();
+  if (!extensions_container) {
     return;
   }
-  auto* registry = extensions::ExtensionRegistry::Get(profile);
-  if (!registry) {
+  ToolbarActionView* action_view =
+      extensions_container->GetViewForId(extension_id);
+  if (!action_view || !action_view->view_model()) {
     return;
   }
-  const extensions::Extension* extension =
-      registry->GetInstalledExtension(extension_id);
-  if (!extension) {
-    return;
-  }
-  if (!registry->enabled_extensions().Contains(extension_id)) {
-    return;
-  }
-  // C2: never run an extension in an incognito window unless the user allowed it
-  // there. RunAction below grants tab permissions on the (incognito) tab, so an
-  // unfiltered path would leak the incognito tab to disallowed extensions.
-  if (profile->IsOffTheRecord() &&
-      !extensions::util::IsIncognitoEnabled(extension_id, profile)) {
-    return;
-  }
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](base::WeakPtr<content::WebContents> wc,
-             scoped_refptr<const extensions::Extension> ext) {
-            if (!wc) {
-              return;
-            }
-            auto* runner =
-                extensions::ExtensionActionRunner::GetForWebContents(wc.get());
-            if (!runner) {
-              return;
-            }
-            runner->RunAction(ext.get(), /*grant_tab_permissions=*/true);
-          },
-          web_contents->GetWeakPtr(),
-          scoped_refptr<const extensions::Extension>(extension)));
+  action_view->view_model()->ExecuteUserAction(
+      ToolbarActionViewModel::InvocationSource::kMenuEntry);
 }
 
-void ShowExtensionContextMenuForBrowser(base::WeakPtr<Browser> browser_weak,
+void SetExtensionPinnedForBrowser(base::WeakPtr<BrowserWindowInterface> browser_weak,
+                                  const std::string& extension_id,
+                                  bool pinned) {
+  Browser* browser = static_cast<Browser*>(browser_weak.get());
+  if (!browser || browser->GetProfile()->IsOffTheRecord()) {
+    return;
+  }
+  auto* toolbar_model = ToolbarActionsModel::Get(browser->GetProfile());
+  if (!toolbar_model || toolbar_model->IsActionForcePinned(extension_id) ||
+      toolbar_model->IsActionPinned(extension_id) == pinned) {
+    return;
+  }
+  toolbar_model->SetActionVisibility(extension_id, pinned);
+}
+
+void ShowExtensionContextMenuForBrowser(base::WeakPtr<BrowserWindowInterface> browser_weak,
                                         const std::string& extension_id,
                                         views::View* anchor) {
-  Browser* browser = browser_weak.get();
+  Browser* browser = static_cast<Browser*>(browser_weak.get());
   if (!browser || !anchor) {
     return;
   }
-  Profile* profile = browser->profile();
+  Profile* profile = browser->GetProfile();
   if (!profile) {
     return;
   }
@@ -665,7 +653,7 @@ std::vector<MahoLocationBarUtilityPanelAction> BuildExtensionIconActions(
     return actions;
   }
 
-  Profile* profile = browser->profile();
+  Profile* profile = browser->GetProfile();
   if (!profile) {
     return actions;
   }
@@ -674,6 +662,7 @@ std::vector<MahoLocationBarUtilityPanelAction> BuildExtensionIconActions(
   if (!registry) {
     return actions;
   }
+  auto* toolbar_model = ToolbarActionsModel::Get(profile);
 
   auto append_set = [&](const extensions::ExtensionSet& set, bool enabled) {
     const bool is_otr = profile->IsOffTheRecord();
@@ -700,12 +689,22 @@ std::vector<MahoLocationBarUtilityPanelAction> BuildExtensionIconActions(
       if (enabled) {
         action.callback =
             base::BindRepeating(&InvokeExtensionActionForBrowser,
-                                browser->AsWeakPtr(), ext->id());
+                                browser->GetWeakPtr(), ext->id());
+        action.is_pinned =
+            toolbar_model && toolbar_model->IsActionPinned(ext->id());
+        action.pin_enabled =
+            toolbar_model && !is_otr &&
+            !toolbar_model->IsActionForcePinned(ext->id());
+        if (action.pin_enabled) {
+          action.pin_callback =
+              base::BindRepeating(&SetExtensionPinnedForBrowser,
+                                  browser->GetWeakPtr(), ext->id());
+        }
       }
 
       action.context_menu_callback =
           base::BindRepeating(&ShowExtensionContextMenuForBrowser,
-                              browser->AsWeakPtr(), ext->id());
+                              browser->GetWeakPtr(), ext->id());
       action.context_menu_enabled = true;
 
       actions.push_back(std::move(action));
@@ -795,7 +794,7 @@ MahoUtilityPanelZone BuildSettingsZone(Browser* browser) {
 
   zone.items.push_back(BuildBlockAdsAndTrackersRow(browser));
   zone.items.push_back(BuildAutoPipSettingsRow(
-      GetActiveWebContents(browser), browser ? browser->profile() : nullptr));
+      GetActiveWebContents(browser), browser ? browser->GetProfile() : nullptr));
   zone.items.push_back(BuildSiteSettingsRow(browser));
   return zone;
 }
@@ -813,11 +812,8 @@ MahoLocationBarUtilityPanelFooter BuildFooterFromWebContents(
     return footer;
   }
 
-  ChromeSecurityStateTabHelper::CreateForWebContents(web_contents);
-  SecurityStateTabHelper* helper =
-      SecurityStateTabHelper::FromWebContents(web_contents);
   const security_state::SecurityLevel level =
-      helper ? helper->GetSecurityLevel() : security_state::NONE;
+      chrome_security_state::GetSecurityLevel(web_contents);
 
   footer.data_state = MahoLocationBarUtilityPanelDataState::kLive;
   footer.security_level = static_cast<int>(level);
@@ -887,7 +883,10 @@ MahoUtilityPanelZone::~MahoUtilityPanelZone() = default;
 MahoLocationBarUtilityPanelModel BuildMahoLocationBarUtilityPanelModel(
     LocationBar* location_bar) {
   MahoLocationBarUtilityPanelModel model;
-  Browser* browser = location_bar ? location_bar->GetBrowser() : nullptr;
+  // Desktop browser windows are backed by Browser (CreateBrowserWindow's
+  // non-Android implementation returns Browser::Create()).
+  Browser* browser =
+      location_bar ? static_cast<Browser*>(location_bar->GetBrowser()) : nullptr;
   model.owning_browser = browser;
   internal::PopulateArcShapeModelData(model, browser);
   model.footer = internal::BuildFooter(location_bar);

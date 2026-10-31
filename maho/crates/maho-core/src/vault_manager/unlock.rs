@@ -6,16 +6,18 @@
 use chrono::{DateTime, Utc};
 
 use crate::vault_crypto::{
-    derive_recovery_wrapping_key, derive_user_wrapping_key, unwrap_vault_key, VaultCryptoError,
+    derive_account_wrapping_key, derive_recovery_wrapping_key, derive_user_wrapping_key,
+    unwrap_vault_key, VaultCryptoError,
 };
 
 use super::state::RuntimeState;
-use super::{VaultManager, VaultManagerError, MANAGER_WRAP_AAD};
+use super::{VaultManager, VaultManagerError, ACCOUNT_WRAP_AAD, MANAGER_WRAP_AAD};
 
 #[derive(Clone, Copy)]
 enum UnlockKind {
     User,
     Recovery,
+    Account,
 }
 
 impl VaultManager {
@@ -35,6 +37,14 @@ impl VaultManager {
         self.attempt_unlock(recovery_secret, now, UnlockKind::Recovery)
     }
 
+    pub fn unlock_with_account(
+        &mut self,
+        account_seed: &[u8],
+        now: DateTime<Utc>,
+    ) -> Result<(), VaultManagerError> {
+        self.attempt_unlock(account_seed, now, UnlockKind::Account)
+    }
+
     fn attempt_unlock(
         &mut self,
         secret: &[u8],
@@ -52,14 +62,20 @@ impl VaultManager {
         let envelope = match kind {
             UnlockKind::User => self.wrapped_user_key.clone(),
             UnlockKind::Recovery => self.wrapped_recovery_key.clone(),
+            UnlockKind::Account => self.wrapped_account_key.clone(),
         }
-        .ok_or(VaultManagerError::Uninitialized)?;
+        .ok_or(VaultManagerError::NoAccountWrap)?;
         let wrapping_key = match kind {
             UnlockKind::User => derive_user_wrapping_key(secret, &metadata)?,
             UnlockKind::Recovery => derive_recovery_wrapping_key(secret, &metadata)?,
+            UnlockKind::Account => derive_account_wrapping_key(secret, &metadata)?,
+        };
+        let aad: &[u8] = match kind {
+            UnlockKind::Account => ACCOUNT_WRAP_AAD,
+            UnlockKind::User | UnlockKind::Recovery => MANAGER_WRAP_AAD,
         };
         self.state = RuntimeState::Unlocking;
-        let key = match unwrap_vault_key(&envelope, &wrapping_key, MANAGER_WRAP_AAD) {
+        let key = match unwrap_vault_key(&envelope, &wrapping_key, aad) {
             Ok(key) => key,
             Err(VaultCryptoError::AuthenticationFailed) => {
                 self.state = RuntimeState::Locked;

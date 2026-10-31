@@ -86,7 +86,7 @@ describe("useComposeAttachments", () => {
     });
 
     expect(result.current.attachments).toHaveLength(0);
-    expect(toast).toHaveBeenCalledWith("error", expect.stringContaining("compose.attachmentTooBig"));
+    expect(toast).toHaveBeenCalledWith("error", expect.stringContaining("compose.exceedsFileSize"));
   });
 
   it("handleFileSelected rejects when total size exceeds limit", async () => {

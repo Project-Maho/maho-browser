@@ -90,6 +90,6 @@ class TabDeckIncognitoJourneyTest {
             }
         }
 
-        composeTestRule.onNodeWithText("No tabs yet").assertIsDisplayed()
+        composeTestRule.onNodeWithText("No private tabs").assertIsDisplayed()
     }
 }

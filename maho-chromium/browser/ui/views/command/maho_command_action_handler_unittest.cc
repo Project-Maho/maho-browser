@@ -15,6 +15,10 @@
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/split_tab_metrics.h"
+#include "components/split_tabs/split_tab_visual_data.h"
 #include "components/prefs/pref_service.h"
 #include "maho/browser/ui/maho_ai_ingress_coordinator.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
@@ -70,6 +74,8 @@ TEST_F(MahoCommandActionHandlerTest, RegularSplitAndSearchEnginePersist) {
 }
 
 TEST_F(MahoCommandActionHandlerTest, CopyUrlCommandCreatesLinkCopiedToast) {
+  // copy_url only acts on an active tab; the harness starts with none.
+  AddTab(browser(), GURL("https://example.com/"));
   EXPECT_EQ(nullptr, MahoNotificationOverlay::FromBrowser(browser()));
 
   ExecuteCommandAction(browser(), "copy_url");
@@ -77,6 +83,28 @@ TEST_F(MahoCommandActionHandlerTest, CopyUrlCommandCreatesLinkCopiedToast) {
   EXPECT_NE(nullptr, MahoNotificationOverlay::FromBrowser(browser()))
       << "Cmd+Shift+C must route its copy_url action through the link-copied "
          "toast surface";
+}
+
+TEST_F(MahoCommandActionHandlerTest, SplitActiveTracksActiveTabMembership) {
+  auto* model = browser()->GetTabStripModel();
+  MahoSplitViewController controller(browser());
+  ASSERT_EQ(TabStripModel::kNoTab, model->active_index());
+  EXPECT_FALSE(controller.IsSplitActive());
+  ExecuteCommandAction(browser(), "next_split_view");
+  EXPECT_EQ(TabStripModel::kNoTab, model->active_index());
+
+  AddTab(browser(), GURL("about:blank"));
+  EXPECT_FALSE(controller.IsSplitActive());
+  AddTab(browser(), GURL("about:blank"));
+  const int partner = model->active_index() == 0 ? 1 : 0;
+  const auto split_id = model->AddToNewSplit(
+      {partner},
+      split_tabs::SplitTabVisualData(split_tabs::SplitTabLayout::kSideBySide,
+                                     0.5),
+      split_tabs::SplitTabCreatedSource::kToolbarButton);
+  EXPECT_TRUE(controller.IsSplitActive());
+  model->RemoveSplit(split_id);
+  EXPECT_FALSE(controller.IsSplitActive());
 }
 
 TEST_F(MahoCommandActionHandlerTest, MailAvailabilityRequiresEveryGate) {
@@ -113,11 +141,11 @@ TEST_F(MahoCommandActionHandlerTest, MailCommandCatalogHasRequiredDeepLinks) {
 
 TEST_F(MahoCommandActionHandlerTest,
        UnavailableMailCommandDoesNotOpenATab) {
-  const int initial_tab_count = browser()->tab_strip_model()->count();
+  const int initial_tab_count = browser()->GetTabStripModel()->count();
 
   ExecuteCommandAction(browser(), "open_mail");
 
-  EXPECT_EQ(initial_tab_count, browser()->tab_strip_model()->count());
+  EXPECT_EQ(initial_tab_count, browser()->GetTabStripModel()->count());
 }
 
 // A single dispatch from a regular window carries the full command-palette
@@ -167,7 +195,7 @@ TEST_F(MahoCommandActionHandlerTest,
 TEST_F(MahoCommandActionHandlerTest,
        OnQuerySubmittedAttachContextPrefTrueStillNoneContext) {
   // Given: the attach-context pref is enabled on a regular profile.
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       maho::ai_prefs::kAttachBrowserContext, true);
   auto* coordinator =
       MahoAiIngressCoordinator::GetOrCreateForBrowser(browser());
@@ -200,7 +228,7 @@ TEST_F(MahoCommandActionHandlerTest,
 TEST_F(MahoCommandActionHandlerTest,
        OnQuerySubmittedAttachContextPrefFalseStillNoneContext) {
   // Given: the attach-context pref is disabled on a regular profile.
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       maho::ai_prefs::kAttachBrowserContext, false);
   auto* coordinator =
       MahoAiIngressCoordinator::GetOrCreateForBrowser(browser());

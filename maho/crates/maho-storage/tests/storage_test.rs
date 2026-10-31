@@ -12,6 +12,90 @@ fn sqlite_store() -> SqliteStorage {
 // === SQLite Tests ===
 
 #[test]
+fn pending_sync_updates_coalesce_without_acknowledging_newer_payloads() {
+    let db = sqlite_store();
+    let first = db.enqueue_sync_entity("tab", "same", 1, 1, r#"{"profileId":"a","value":1}"#, false).unwrap();
+    let newest = db.enqueue_sync_entity("tab", "same", 2, 2, r#"{"profileId":"a","value":2}"#, false).unwrap();
+    assert_eq!(first, newest);
+    let other = db.enqueue_sync_entity("tab", "same", 1, 1, r#"{"profileId":"b"}"#, false).unwrap();
+    assert_ne!(other, newest);
+    let lease = db.lease_sync_entities(&[newest]).unwrap().remove(0);
+    let pending = db.enqueue_sync_entity("tab", "same", 3, 3, r#"{"profileId":"a","value":3}"#, false).unwrap();
+    assert_ne!(pending, newest);
+    assert!(db.ack_sync_delivery(&lease.delivery_id, 1).unwrap());
+    let rows = db.load_pending_sync_entities().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|row| row.0 == pending && row.3 == 3));
+}
+
+#[test]
+fn old_unacknowledged_sync_rows_survive_pruning() {
+    let db = sqlite_store();
+    db.enqueue_sync_entity("tab", "offline", 1, 1, "{}", false).unwrap();
+    db.prune_acked_sync_entities().unwrap();
+    assert_eq!(db.pending_sync_outbox_count().unwrap(), 1);
+}
+
+#[test]
+fn repeated_content_blocker_snapshot_does_not_grow_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("blocker.db");
+    let db = SqliteStorage::open_with_key(path.to_str().unwrap(), "growth-test").unwrap();
+    let lists = vec![(cb_meta("list", "List", "https://example.com/list"), "||ads.example^\n".repeat(20000))];
+    let cache = vec![17; 1024 * 1024];
+    let snapshot = maho_storage::sqlite::ContentBlockerSnapshot {
+        mode: maho_types::content_blocking::ContentBlockingMode::Native,
+        generation: 1,
+        engine_cache: Some(&cache),
+        engine_version: Some("test"),
+        engine_hash: Some("unchanged"),
+        lists: &lists,
+        exceptions: &[],
+    };
+    db.replace_content_blocker_snapshot(&snapshot).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.pragma_update(None, "key", "growth-test").unwrap();
+    let before: i64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0)).unwrap();
+    let wal = dir.path().join("blocker.db-wal");
+    let before_wal = std::fs::metadata(&wal).unwrap().len();
+    for _ in 0..20 {
+        db.replace_content_blocker_snapshot(&snapshot).unwrap();
+    }
+    let after: i64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0)).unwrap();
+    assert_eq!(after, before);
+    assert_eq!(std::fs::metadata(&wal).unwrap().len(), before_wal);
+    assert_eq!(db.load_content_blocker_state().unwrap().unwrap().2.unwrap(), cache);
+    assert!(db.content_blocker_engine_matches("unchanged", "test").unwrap());
+    let metadata = maho_storage::sqlite::ContentBlockerSnapshot {
+        mode: maho_types::content_blocking::ContentBlockingMode::Disabled,
+        generation: 2,
+        engine_cache: None,
+        ..snapshot
+    };
+    db.replace_content_blocker_metadata_snapshot(&metadata).unwrap();
+    let state = db.load_content_blocker_state().unwrap().unwrap();
+    assert_eq!(state.0, maho_types::content_blocking::ContentBlockingMode::Disabled);
+    assert_eq!(state.1, 2);
+    assert_eq!(state.2.unwrap(), cache);
+}
+
+#[test]
+fn compaction_reclaims_legacy_free_pages_without_losing_pending_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.db");
+    let db = SqliteStorage::open_with_key(path.to_str().unwrap(), "compact-test").unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.pragma_update(None, "key", "compact-test").unwrap();
+    conn.execute_batch("CREATE TABLE bloat(data BLOB); INSERT INTO bloat VALUES (zeroblob(4194304)); DELETE FROM bloat;").unwrap();
+    db.enqueue_sync_entity("tab", "offline", 2, 1, "{}", false).unwrap();
+    let pages: i64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0)).unwrap();
+    db.compact().unwrap();
+    let compacted: i64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0)).unwrap();
+    assert!(compacted < pages);
+    assert_eq!(db.pending_sync_outbox_count().unwrap(), 1);
+}
+
+#[test]
 fn sqlite_open_in_memory() {
     sqlite_store();
 }
@@ -217,6 +301,17 @@ fn sqlite_save_and_load_boosts() {
     assert_eq!(boosts_with_state.len(), 1);
     assert_eq!(boosts_with_state[0].0.id.as_ref(), "b1");
     assert_eq!(boosts_with_state[0].1.as_deref(), Some("b1"));
+
+    // Every edit re-saves the boost; that must not clear the domain's active
+    // Boost (INSERT OR REPLACE fired ON DELETE SET NULL on domain_boost_state).
+    let mut edited = boost1.clone();
+    edited.color.smart_invert = true;
+    db.save_boost(&edited).unwrap();
+    assert_eq!(
+        db.get_active_boost("example.com").unwrap().as_deref(),
+        Some("b1")
+    );
+    assert!(db.load_boosts().unwrap()[0].color.smart_invert);
 }
 
 #[test]

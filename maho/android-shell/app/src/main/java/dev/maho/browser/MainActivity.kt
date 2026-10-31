@@ -49,11 +49,15 @@ class MainActivity : ComponentActivity() {
 
         BridgeSettings.getSettingsTyped()?.appearance?.theme?.let(BrowserThemeController::setTheme)
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
-            }
-        }
+        // The POST_NOTIFICATIONS request that used to live here was removed: this shell has
+        // no notification implementation at all (no NotificationManager, NotificationCompat,
+        // or channel anywhere in the module), so the permission had no caller. Requesting it
+        // from onCreate also pushed the activity out of RESUMED behind the system grant
+        // dialog, which is what broke launch instrumentation.
+        //
+        // Downloads go through the system DownloadManager, which posts its completion
+        // notification from its own process, not this app's -- so it needs no permission
+        // here either. Do not reintroduce a request without an actual notification caller.
 
         setContent {
             val darkTheme = BrowserThemeController.isDarkTheme()

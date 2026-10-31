@@ -45,7 +45,7 @@ void MahoAddressBarContextMenu::ExecuteCommand(int command_id,
       break;
     case IDC_MAHO_ADDR_COPY_URL: {
       content::WebContents* contents =
-          browser_->tab_strip_model()->GetActiveWebContents();
+          browser_->GetTabStripModel()->GetActiveWebContents();
       if (contents) {
         ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
         writer.WriteText(
@@ -55,7 +55,7 @@ void MahoAddressBarContextMenu::ExecuteCommand(int command_id,
     }
     case IDC_MAHO_ADDR_COPY_MARKDOWN: {
       content::WebContents* contents =
-          browser_->tab_strip_model()->GetActiveWebContents();
+          browser_->GetTabStripModel()->GetActiveWebContents();
       if (contents) {
         std::string url = contents->GetVisibleURL().spec();
         std::u16string title = contents->GetTitle();
@@ -77,7 +77,7 @@ bool MahoAddressBarContextMenu::IsCommandIdEnabled(int command_id) const {
       return !on_edit_address_.is_null();
     case IDC_MAHO_ADDR_COPY_URL:
     case IDC_MAHO_ADDR_COPY_MARKDOWN:
-      return browser_->tab_strip_model()->GetActiveWebContents() != nullptr;
+      return browser_->GetTabStripModel()->GetActiveWebContents() != nullptr;
     default:
       return false;
   }

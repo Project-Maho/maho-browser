@@ -20,6 +20,7 @@ let mockPartialFailureCount = 0;
 const mockTranslate = vi.fn();
 const mockTranslateHtml = vi.fn();
 const mockClearTranslation = vi.fn();
+let mockTargetLang = "ko";
 
 vi.mock("../../../hooks/useTranslation", () => ({
   useTranslation: () => ({
@@ -42,7 +43,15 @@ vi.mock("../../../hooks/useTranslation", () => ({
     ],
     partialFailureCount: mockPartialFailureCount,
   }),
+  SUPPORTED_LANGUAGES: [
+    { code: "en", name: "English" },
+    { code: "ko", name: "Korean" },
+  ],
   SUPPORTED_LANGUAGE_CODES: ["en", "ko"],
+  getTranslationTargetLang: () => mockTargetLang,
+  saveTranslationTargetLang: (lang: string) => {
+    mockTargetLang = lang;
+  },
 }));
 
 const mockConfirm = vi.fn();
@@ -95,6 +104,7 @@ describe("EmailContent", () => {
     mockTranslatedText = null;
     mockTranslatedHtml = null;
     mockPartialFailureCount = 0;
+    mockTargetLang = "ko";
     localStorage.clear();
   });
 
@@ -441,6 +451,30 @@ describe("EmailContent", () => {
     expect(screen.queryByLabelText(/Close translation/i)).toBeNull();
   });
 
+  it("manual Translate uses the saved target language, not a hardcoded default", async () => {
+    mockTargetLang = "fr";
+    const detail = createMockEmailDetail({
+      email: { id: "e1", subject: "Manual target", body_html: "<p>Hola</p>", date: new Date().toISOString() },
+    });
+
+    render(
+      <EmailContent
+        emailDetail={detail}
+        loading={false}
+        onReply={vi.fn()}
+        onForward={vi.fn()}
+        onDelete={vi.fn()}
+        onToggleStar={vi.fn()}
+      />,
+      { wrapper: TestProviders },
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /AI actions/i }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Translate/i }));
+
+    expect(mockTranslateHtml).toHaveBeenCalledWith("<p>Hola</p>", undefined, "fr");
+  });
+
   it("auto-triggers translateHtml for BYOK + HTML <= 8KB", async () => {
     localStorage.setItem(
       "maho-translation-config",
@@ -585,7 +619,7 @@ describe("EmailContent", () => {
 
     fireEvent.click(screen.getByRole("menuitem", { name: /Translate/i }));
 
-    expect(mockTranslateHtml).toHaveBeenCalledWith("<div>Hello HTML</div>");
+    expect(mockTranslateHtml).toHaveBeenCalledWith("<div>Hello HTML</div>", undefined, "ko");
     expect(mockTranslate).not.toHaveBeenCalled();
   });
 
@@ -622,7 +656,7 @@ describe("EmailContent", () => {
     });
     fireEvent.click(screen.getByRole("menuitem", { name: /Translate/i }));
 
-    expect(mockTranslate).toHaveBeenCalledWith("Hello World");
+    expect(mockTranslate).toHaveBeenCalledWith("Hello World", undefined, "ko");
     expect(mockTranslateHtml).not.toHaveBeenCalled();
     expect(localStorage.getItem("maho-qwen-html-translation-hint-shown")).toBe("true");
   });

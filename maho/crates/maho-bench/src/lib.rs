@@ -1,5 +1,7 @@
 use std::time::Instant;
 
+pub mod browser_cli;
+
 #[derive(Debug, Clone)]
 pub struct BenchResult {
     pub library: String,
@@ -291,6 +293,18 @@ pub mod diamond_bench {
     }
 
     pub fn cold_load(n: usize) -> BenchResult {
+        let (result, restored) = cold_load_document(n);
+        // Validate usable state outside the measured reconstruction interval.
+        if n > 0 {
+            assert_eq!(
+                restored.get_str(&["tabs", "tab-0"], "title"),
+                Some("Tab 0".into())
+            );
+        }
+        result
+    }
+
+    fn cold_load_document(n: usize) -> (BenchResult, Document) {
         let mut doc = Document::new();
         let agent = doc.create_agent(Uuid::new_v4());
         {
@@ -314,15 +328,38 @@ pub mod diamond_bench {
         let encoded = postcard::to_allocvec(&ops).unwrap_or_default();
 
         let start = Instant::now();
-        let _restored_ops: diamond_types_extended::SerializedOpsOwned =
+        let restored_ops: diamond_types_extended::SerializedOpsOwned =
             postcard::from_bytes(&encoded).unwrap();
+        let mut restored = Document::new();
+        restored
+            .merge_ops(restored_ops)
+            .expect("restore encoded operations");
         let duration = start.elapsed();
 
-        BenchResult {
-            library: "diamond-types-extended".into(),
-            operation: "cold_load".into(),
-            duration_us: duration.as_micros() as u64,
-            encoded_size_bytes: encoded.len(),
+        (
+            BenchResult {
+                library: "diamond-types-extended".into(),
+                operation: "cold_load".into(),
+                duration_us: duration.as_micros() as u64,
+                encoded_size_bytes: encoded.len(),
+            },
+            restored,
+        )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn cold_load_reconstructs_usable_document() {
+            let (_, restored) = super::cold_load_document(3);
+            assert_eq!(
+                restored.get_str(&["tabs", "tab-2"], "url"),
+                Some("https://example.com/2".into())
+            );
+            assert_eq!(
+                restored.get_str(&["tabs", "tab-0"], "title"),
+                Some("Tab 0".into())
+            );
         }
     }
 }

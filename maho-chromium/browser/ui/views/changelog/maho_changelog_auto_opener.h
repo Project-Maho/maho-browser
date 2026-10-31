@@ -11,14 +11,13 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/prefs/pref_service.h"
-#include "components/version_info/version_info.h"
+#include "maho/browser/updates/maho_product_version.h"
 #include "maho/browser/updates/maho_update_manager.h"
 #include "maho/browser/updates/maho_update_pref_names.h"
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
@@ -64,23 +63,28 @@ inline MahoChangelogAutoOpenDecision MahoChangelogEvaluateAutoOpen(
 
 // Applies the decision for one browser window. Returns true when the pref was
 // recorded, i.e. the flow reached a terminal state for this launch.
-inline bool MahoChangelogEvaluateAndOpenForBrowser(Browser* browser) {
+inline bool MahoChangelogEvaluateAndOpenForBrowser(
+    BrowserWindowInterface* browser) {
   PrefService* local_state =
       g_browser_process ? g_browser_process->local_state() : nullptr;
-  if (!local_state || !browser || !browser->is_type_normal()) {
+  if (!local_state || !browser ||
+      browser->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
     return false;
   }
-  Profile* profile = browser->profile();
+  Profile* profile = browser->GetProfile();
   if (!profile || !profile->IsRegularProfile()) {
     return false;
   }
   const std::string last_shown =
       local_state->GetString(prefs::kMahoChangelogLastShownVersion);
-  const std::string current_version =
-      std::string(version_info::GetVersionNumber());
+  // Keyed on the Maho product version (e.g. 2026.9.29), the version whose
+  // release notes this surface shows. Chromium's engine version changes on
+  // engine rolls that ship no Maho release notes, which re-opened the changelog
+  // for changes the user never received.
+  const std::string current_version = std::string(updates::kMahoProductVersion);
   const MahoChangelogAutoOpenDecision decision = MahoChangelogEvaluateAutoOpen(
       last_shown, current_version, profile->IsRegularProfile(),
-      browser->is_type_normal(),
+      browser->GetType() == BrowserWindowInterface::TYPE_NORMAL,
       profile->GetPrefs()->GetBoolean(maho::welcome::kLoginGateActive),
       MahoUpdateManager::GetInstance()->GetState() ==
           UpdateState::kReadyToInstall);
@@ -95,6 +99,34 @@ inline bool MahoChangelogEvaluateAndOpenForBrowser(Browser* browser) {
                            current_version);
   }
   return decision.write_pref;
+}
+
+// Opens Maho's own changelog surface in the profile's active window.
+//
+// This is the handler the macOS updater runs when the user asks Sparkle for
+// the full release notes / version history. Sparkle's default is to hand the
+// appcast's releaseNotesLink to the system browser, but that URL is a GitHub
+// release asset served with Content-Disposition: attachment, so the user got a
+// saved .html file instead of readable notes. Opening the bundled surface keeps
+// the notes in-app, offline-capable, and on-brand.
+//
+// The updater callback holds a WeakPtr<Profile> and calls this helper only
+// while the profile is alive.
+inline void MahoChangelogOpenForProfile(Profile* profile) {
+  if (!profile) {
+    return;
+  }
+  ProfileBrowserCollection* collection =
+      ProfileBrowserCollection::GetForProfile(profile);
+  BrowserWindowInterface* window =
+      collection ? collection->GetLastActiveBrowser() : nullptr;
+  if (!window || window->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
+    return;
+  }
+  NavigateParams params(window, GURL(kMahoChangelogURL),
+                        ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
+  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  Navigate(&params);
 }
 
 // Event-driven post-update auto-open: OnBrowserCreated is the single trigger.

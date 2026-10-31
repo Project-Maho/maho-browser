@@ -20,19 +20,18 @@ pub fn select_tool<'a>(chain: &[&'a str], available: &dyn Fn(&str) -> bool) -> O
 pub fn capture_args(tool: &str, path: &std::path::Path) -> Vec<String> {
     let path = path.to_string_lossy().into_owned();
     match tool {
-        "grim" => vec!["grim".into(), path],
-        "gnome-screenshot" => vec!["gnome-screenshot".into(), "-f".into(), path],
-        "spectacle" => vec![
-            "spectacle".into(),
-            "-b".into(),
-            "-n".into(),
-            "-o".into(),
-            path,
-        ],
-        "scrot" => vec!["scrot".into(), path],
-        "import" => vec!["import".into(), "-window".into(), "root".into(), path],
-        other => vec![other.to_string(), path],
+        "grim" => vec![path],
+        "gnome-screenshot" => vec!["-f".into(), path],
+        "spectacle" => vec!["-b".into(), "-n".into(), "-o".into(), path],
+        "scrot" => vec![path],
+        "import" => vec!["-window".into(), "root".into(), path],
+        _ => vec![path],
     }
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn atspi_args(pid: i32) -> Vec<String> {
+    vec!["-".into(), pid.to_string()]
 }
 
 /// One recognized word from tesseract TSV output.
@@ -118,14 +117,14 @@ pub fn filter_region(
     match region {
         None => blocks,
         Some(r) => {
-            let rx_end = r.x + r.w as i32;
-            let ry_end = r.y + r.h as i32;
+            let rx_end = i64::from(r.x) + i64::from(r.w);
+            let ry_end = i64::from(r.y) + i64::from(r.h);
             blocks
                 .into_iter()
                 .filter(|b| {
-                    let cx = b.x + b.w as i32 / 2;
-                    let cy = b.y + b.h as i32 / 2;
-                    cx >= r.x && cx < rx_end && cy >= r.y && cy < ry_end
+                    let cx = i64::from(b.x) + i64::from(b.w) / 2;
+                    let cy = i64::from(b.y) + i64::from(b.h) / 2;
+                    cx >= i64::from(r.x) && cx < rx_end && cy >= i64::from(r.y) && cy < ry_end
                 })
                 .collect()
         }
@@ -136,6 +135,25 @@ pub fn filter_region(
 mod tests {
     use super::*;
     use crate::grounding::TextBlock;
+
+    #[test]
+    fn atspi_python_executes_stdin_and_receives_pid() {
+        use crate::probe::{CommandRunner, SystemRunner};
+        let args = atspi_args(42);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let program = SystemRunner
+            .which("python3")
+            .expect("AT-SPI requires Python 3");
+        let out = SystemRunner
+            .run_with_stdin(
+                &program.to_string_lossy(),
+                &refs,
+                "import sys\nprint(int(sys.argv[1]))\n",
+            )
+            .unwrap();
+        assert_eq!(out.status, 0, "{}", out.stderr);
+        assert_eq!(out.stdout.trim(), "42");
+    }
 
     #[test]
     fn select_tool_skips_builtin_and_missing_entries() {
@@ -153,19 +171,19 @@ mod tests {
     #[test]
     fn capture_args_match_each_tool_contract() {
         let p = std::path::Path::new("/tmp/shot.png");
-        assert_eq!(capture_args("grim", p), vec!["grim", "/tmp/shot.png"]);
+        assert_eq!(capture_args("grim", p), vec!["/tmp/shot.png"]);
         assert_eq!(
             capture_args("gnome-screenshot", p),
-            vec!["gnome-screenshot", "-f", "/tmp/shot.png"]
+            vec!["-f", "/tmp/shot.png"]
         );
         assert_eq!(
             capture_args("spectacle", p),
-            vec!["spectacle", "-b", "-n", "-o", "/tmp/shot.png"]
+            vec!["-b", "-n", "-o", "/tmp/shot.png"]
         );
-        assert_eq!(capture_args("scrot", p), vec!["scrot", "/tmp/shot.png"]);
+        assert_eq!(capture_args("scrot", p), vec!["/tmp/shot.png"]);
         assert_eq!(
             capture_args("import", p),
-            vec!["import", "-window", "root", "/tmp/shot.png"]
+            vec!["-window", "root", "/tmp/shot.png"]
         );
     }
 
@@ -206,6 +224,47 @@ mod tests {
     fn atspi_parser_rejects_invalid_json_as_io_error() {
         let err = parse_atspi_json("not json").unwrap_err();
         assert_eq!(err.code(), "platform_io");
+    }
+
+    #[test]
+    fn region_filter_accepts_full_coordinate_and_size_ranges() {
+        use crate::grounding::Region;
+        let block = TextBlock {
+            text: "edge".into(),
+            x: i32::MAX,
+            y: i32::MAX,
+            w: 2,
+            h: 2,
+            confidence: 1.0,
+        };
+        let region = Region {
+            x: i32::MAX,
+            y: i32::MAX,
+            w: 3,
+            h: 3,
+        };
+        assert_eq!(
+            filter_region(vec![block.clone()], Some(region)),
+            vec![block]
+        );
+        let block = TextBlock {
+            text: "wide".into(),
+            x: 1,
+            y: 1,
+            w: u32::MAX,
+            h: u32::MAX,
+            confidence: 1.0,
+        };
+        let region = Region {
+            x: 0,
+            y: 0,
+            w: u32::MAX,
+            h: u32::MAX,
+        };
+        assert_eq!(
+            filter_region(vec![block.clone()], Some(region)),
+            vec![block]
+        );
     }
 
     #[test]

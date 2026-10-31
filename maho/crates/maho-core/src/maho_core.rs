@@ -14,6 +14,10 @@ const LMDB_DIRTY_SPLIT_VIEW: u8 = 0b1000000;
 const LMDB_DIRTY_ALL: u8 = 0b1111111;
 
 const PERSIST_THROTTLE_MS: u64 = 50;
+/// Distinct URLs rehydrated into the command-bar history at startup.
+const COMMAND_BAR_HISTORY_RESTORE_LIMIT: usize = 2000;
+/// Usage counters rehydrated at startup (the engine keeps at most 500).
+const COMMAND_BAR_USAGE_RESTORE_LIMIT: usize = 500;
 
 const CONTENT_BLOCKER_ENGINE_VERSION: &str = "adblock-0.12.2";
 
@@ -112,8 +116,9 @@ use crate::sync_models::{
 use crate::tab_lifecycle::{timestamp_millis_to_iso8601, TabLifecycleManager};
 use crate::tool_registry::ToolRegistry;
 use crate::vault_manager::{
-    preflight_vault_database, VaultHydrationSlots, VaultManagerError, VaultPreflightState,
-    SLOT_KDF_PARAMS, SLOT_WRAPPED_RECOVERY_KEY, SLOT_WRAPPED_USER_KEY,
+    preflight_vault_database, VaultHydrationOutcome, VaultHydrationSlots, VaultManagerError,
+    VaultPreflightState, SLOT_KDF_PARAMS, SLOT_WRAPPED_ACCOUNT_KEY, SLOT_WRAPPED_RECOVERY_KEY,
+    SLOT_WRAPPED_USER_KEY,
 };
 use crate::vault_runtime::VaultRuntime;
 
@@ -335,6 +340,47 @@ use crate::tab_preview_manager::TabPreviewManager;
 
 type UpdateListeners = Rc<RefCell<Vec<Box<dyn Fn(CoreUpdate)>>>>;
 
+/// Process-wide opt-in for the file-backed Vault device protector. Off by
+/// default so tests and tools never create device key files; the browser
+/// enables it once at startup. The OS keystore is never used.
+static PLATFORM_DEVICE_PROTECTOR_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_platform_device_protector_enabled(enabled: bool) {
+    PLATFORM_DEVICE_PROTECTOR_ENABLED.store(enabled, std::sync::atomic::Ordering::Release);
+}
+
+/// Typed outcome of [`crate::maho_core::MahoCore::ensure_vault_for_account`],
+/// the account-escrow ensure step driven at sign-in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VaultAccountEnsureOutcome {
+    /// A fresh account-escrowed vault was created (first sign-in, no escrow
+    /// record yet).
+    Provisioned,
+    /// The vault key slots were installed from the account escrow record and
+    /// auto-unwrapped (new device adopting the provisioning device's DEK).
+    Adopted,
+    /// An existing account-escrowed vault was auto-unwrapped (zero input).
+    Unwrapped,
+    /// The vault was already unlocked in this session.
+    AlreadyUnlocked,
+    /// The vault predates the account escrow and still needs the one-time
+    /// passphrase migration (workstream W6).
+    NeedsMigration,
+}
+
+impl VaultAccountEnsureOutcome {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Provisioned => "provisioned",
+            Self::Adopted => "adopted",
+            Self::Unwrapped => "unwrapped",
+            Self::AlreadyUnlocked => "already_unlocked",
+            Self::NeedsMigration => "needs_migration",
+        }
+    }
+}
+
 /// Errors that can occur during state persistence operations
 #[derive(Debug)]
 pub enum PersistenceError {
@@ -418,6 +464,127 @@ mod tests {
         assert_eq!(inherited[0].id, registrable.id);
     }
 
+    struct FakeDeviceProtector {
+        secret: Option<&'static [u8]>,
+    }
+
+    impl crate::oscrypt::VaultDeviceProtector for FakeDeviceProtector {
+        fn device_secret(
+            &self,
+        ) -> Result<zeroize::Zeroizing<Vec<u8>>, crate::oscrypt::VaultDeviceProtectorError> {
+            self.secret
+                .map(|secret| zeroize::Zeroizing::new(secret.to_vec()))
+                .ok_or(crate::oscrypt::VaultDeviceProtectorError::OperationFailed)
+        }
+    }
+
+    fn device_test_core(name: &str, secret: Option<&'static [u8]>) -> (tempfile::TempDir, MahoCore) {
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join(name);
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        core.test_device_protector = Some(Box::new(FakeDeviceProtector { secret }));
+        (dir, core)
+    }
+
+    #[test]
+    fn vault_passphrase_unlock_enrolls_device_and_device_unlock_reopens() {
+        let (_dir, mut core) = device_test_core("device-enroll.sqlite", Some(b"unit-test-device-secret-32-bytes"));
+        core.initialize_vault(b"master", b"recovery").expect("init");
+        core.lock_vault().expect("lock after init");
+
+        core.unlock_vault(b"master").expect("passphrase unlock");
+        core.lock_vault().expect("lock");
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Locked
+        );
+
+        core.unlock_vault_with_platform_device()
+            .expect("device unlock with enrolled key");
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Unlocked
+        );
+    }
+
+    #[test]
+    fn vault_device_unlock_without_enrollment_fails_and_stays_locked() {
+        let (_dir, mut core) = device_test_core("device-none.sqlite", Some(b"unit-test-device-secret-32-bytes"));
+        core.initialize_vault(b"master", b"recovery").expect("init");
+        core.lock_vault().expect("lock");
+
+        let result = core.unlock_vault_with_platform_device();
+
+        assert!(matches!(
+            result,
+            Err(crate::vault_manager::VaultManagerError::DeviceBindingMismatch)
+        ));
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Locked
+        );
+    }
+
+    #[test]
+    fn vault_device_enroll_failure_never_fails_passphrase_unlock() {
+        let (_dir, mut core) = device_test_core("device-fail.sqlite", None);
+        core.initialize_vault(b"master", b"recovery").expect("init");
+        core.lock_vault().expect("lock");
+
+        core.unlock_vault(b"master")
+            .expect("passphrase unlock must succeed even if enrollment fails");
+
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Unlocked
+        );
+        assert!(core.last_vault_lifecycle_error().is_some());
+    }
+
+    #[test]
+    fn vault_file_device_protector_creates_0600_secret_and_reuses_it() {
+        use crate::oscrypt::VaultDeviceProtector;
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join(crate::oscrypt::FileVaultDeviceProtector::FILE_NAME);
+        let protector = crate::oscrypt::FileVaultDeviceProtector::new(path.clone());
+
+        let first = protector.device_secret().expect("create secret");
+        let second = protector.device_secret().expect("reuse secret");
+
+        assert_eq!(first.len(), 32);
+        assert_eq!(first.as_slice(), second.as_slice());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn vault_device_protector_is_unavailable_until_browser_opts_in() {
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("device-optin.sqlite");
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        core.initialize_vault(b"master", b"recovery").expect("init");
+        core.lock_vault().expect("lock");
+
+        core.unlock_vault(b"master").expect("unlock");
+
+        assert!(matches!(
+            core.last_vault_lifecycle_error(),
+            Some(crate::vault_manager::VaultManagerError::DeviceProtector(
+                crate::oscrypt::VaultDeviceProtectorError::Unavailable
+            ))
+        ));
+        assert!(!dir
+            .path()
+            .join(crate::oscrypt::FileVaultDeviceProtector::FILE_NAME)
+            .exists());
+    }
+
     #[test]
     fn vault_state_slot_read_error_is_not_uninitialized() {
         let boom = MahoCore::classify_slot_read(Err(maho_storage::StorageError::Other(
@@ -440,7 +607,7 @@ mod tests {
 
     #[test]
     fn vault_state_lock_with_grant_store_error_is_observable() {
-        maho_storage::sqlite::set_sqlcipher_key("vault-state-unit-key").expect("key");
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join("revfault.sqlite");
         let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
@@ -478,7 +645,7 @@ mod tests {
             }
         }
 
-        maho_storage::sqlite::set_sqlcipher_key("vault-device-persist-failure-key").expect("key");
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join("vault-device-persist-failure.sqlite");
         let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
@@ -509,7 +676,7 @@ mod tests {
 
     #[test]
     fn vault_initialization_persist_failure_reverts_uninitialized_state() {
-        maho_storage::sqlite::set_sqlcipher_key("vault-init-persist-failure-key").expect("key");
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join("vault-init-persist-failure.sqlite");
         let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
@@ -539,6 +706,9 @@ mod tests {
         fn login(origin: &str, username: &str) -> VaultLoginInput {
             VaultLoginInput {
                 metadata: VaultItemPublicMetadata {
+                    favorite: false,
+                    trashed_at: None,
+                    has_notes: false,
                     title: "Site".to_string(),
                     origins: vec![CredentialOrigin::try_from(origin).expect("origin")],
                     username_hint: String::new(),
@@ -553,7 +723,7 @@ mod tests {
         }
 
         // Given multiple live rows and a fault injected after the first candidate write.
-        maho_storage::sqlite::set_sqlcipher_key("vault-range-delete-fault-key").expect("key");
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join("vault-range-delete-fault.sqlite");
         let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
@@ -592,8 +762,7 @@ mod tests {
 
     #[test]
     fn vault_state_sign_out_locks_before_grant_revocation_failure_is_observable() {
-        maho_storage::sqlite::set_sqlcipher_key("vault-sign-out-revocation-failure-key")
-            .expect("key");
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join("vault-sign-out-revocation-failure.sqlite");
         let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
@@ -1769,6 +1938,17 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_state_v2_existing_empty_space_returns_empty_tree() {
+        let core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let json_str = core
+            .get_sidebar_state_v2(&space_id)
+            .expect("an existing empty space must return Some, not None");
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["tree"].as_array().map(|tree| tree.len()), Some(0));
+    }
+
+    #[test]
     fn tidy_capability_create_folder_and_add_tab_directly() {
         let mut core = MahoCore::new();
         let space_id = core.get_active_space_id().clone();
@@ -1888,6 +2068,7 @@ mod tests {
 
     #[test]
     fn discard_first_temporary_boost_deletes_persisted_record() {
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join("discard-first-temp.sqlite");
         let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
@@ -1903,9 +2084,37 @@ mod tests {
             .all(|stored| stored.id != boost.id));
     }
 
+    /// Regression guard for the parallel-test re-keying race: a database opened
+    /// under the shared installer key must still decrypt after any number of
+    /// further installer calls, which is exactly what a concurrently scheduled
+    /// sibling test performs. A per-test key would make the reopen below fail
+    /// with `file is not a database`.
+    #[test]
+    fn shared_test_sqlcipher_key_is_stable_across_repeated_installs() {
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("shared-key-stability.sqlite");
+        let path_str = path.to_str().expect("utf8").to_string();
+        let storage = maho_storage::sqlite::SqliteStorage::open(&path_str).expect("first open");
+        storage
+            .set_setting("shared-key-probe", "value")
+            .expect("write probe row");
+        drop(storage);
+
+        crate::install_test_sqlcipher_key();
+        let reopened = maho_storage::sqlite::SqliteStorage::open(&path_str)
+            .expect("reopen must decrypt with the unchanged process-wide key");
+        assert_eq!(
+            reopened
+                .get_setting("shared-key-probe")
+                .expect("read probe"),
+            Some("value".to_string())
+        );
+    }
+
     #[test]
     fn update_profile_persisted_emits_target_only_after_successful_persistence() {
-        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let sqlite_path = dir.path().join("profile-update-notification.sqlite");
         let lmdb_path = dir.path().join("profile-update-notification-state");
@@ -2000,7 +2209,7 @@ mod tests {
 
     #[test]
     fn update_profile_persisted_emits_exactly_one_target_metadata_update() {
-        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let sqlite_path = dir.path().join("profile-update-event.sqlite");
         let lmdb_path = dir.path().join("profile-update-event-state");
@@ -2043,7 +2252,7 @@ mod tests {
 
     #[test]
     fn update_profile_persisted_emits_exactly_one_archive_timeout_update() {
-        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let sqlite_path = dir.path().join("profile-archive-event.sqlite");
         let lmdb_path = dir.path().join("profile-archive-event-state");
@@ -2123,7 +2332,7 @@ mod tests {
 
     #[test]
     fn profile_update_sqlite_failure_rolls_back_memory_lmdb_and_notifications() {
-        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let sqlite_path = dir.path().join("profile-update.sqlite");
         let lmdb_path = dir.path().join("profile-update-state");
@@ -2185,7 +2394,7 @@ mod tests {
 
     #[test]
     fn profile_delete_sqlite_failure_rolls_back_memory_lmdb_and_notifications() {
-        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let sqlite_path = dir.path().join("profile-delete.sqlite");
         let lmdb_path = dir.path().join("profile-delete-state");
@@ -2226,7 +2435,7 @@ mod tests {
 
     #[test]
     fn profile_lmdb_failure_does_not_reach_sqlite_or_mutate_memory() {
-        let _ = maho_storage::sqlite::set_sqlcipher_key("profile-test-key");
+        crate::install_test_sqlcipher_key();
         let dir = tempfile::tempdir().expect("dir");
         let sqlite_path = dir.path().join("profile-lmdb.sqlite");
         let lmdb_path = dir.path().join("profile-lmdb-state");
@@ -2419,11 +2628,14 @@ pub struct MahoCore {
     account_manager: AccountManager,
     split_view_configs: HashMap<WindowId, SplitViewConfig>,
     sync_manager: Option<crate::sync_manager::SyncManager>,
+    sync_baseline_needed: bool,
+    storage_maintenance: Option<std::thread::JoinHandle<()>>,
     llm_manager: LLMManager,
     tool_registry: ToolRegistry,
     skills_manager: SkillsManager,
     sharing_manager: SharingManager,
     memory_manager: MemoryManager,
+    memory_engine: crate::memory::MemoryEngine,
     persist_throttle: RefCell<PersistThrottle>,
     /// B3: Tracks last-persisted received_bytes per download to throttle SQLite writes.
     /// Progress is only flushed to storage every DOWNLOAD_PERSIST_INTERVAL_BYTES.
@@ -2434,12 +2646,26 @@ pub struct MahoCore {
     sync_last_upload_attempt: Cell<chrono::DateTime<chrono::Utc>>,
     emitted_during_dispatch: Rc<RefCell<Vec<CoreUpdate>>>,
     last_vault_lifecycle_error: Option<VaultManagerError>,
+    /// Code of the most recent account-escrow ensure outcome driven by the sync
+    /// bootstrap login hook; None when no login-hook ensure has run.
+    last_vault_account_outcome: Option<&'static str>,
+    /// In-memory account seed of the signed-in session; enables the one-time
+    /// legacy-vault-to-account-escrow migration after a passphrase unlock. Never
+    /// persisted.
+    last_account_seed: Option<zeroize::Zeroizing<[u8; 32]>>,
     #[cfg(test)]
     vault_revocation_fault: bool,
     #[cfg(test)]
     vault_item_persist_fault: bool,
     #[cfg(test)]
     vault_initialization_persist_fault: bool,
+    /// Test seam replacing the platform device protector (Keychain/DPAPI/
+    /// Secret Service) used by device auto-enroll and device unlock.
+    #[cfg(test)]
+    test_device_protector: Option<Box<dyn VaultDeviceProtector>>,
+    /// `maho_vault_device.key` next to the profile database; None for
+    /// in-memory cores.
+    vault_device_secret_path: Option<std::path::PathBuf>,
     #[cfg(test)]
     profile_sqlite_persist_fault: bool,
     #[cfg(test)]
@@ -2456,6 +2682,21 @@ impl Default for MahoCore {
 impl MahoCore {
     pub fn load_skills_from_dir(&mut self, dir_path: &std::path::Path) -> Result<(), String> {
         self.skills_manager.load_skills_from_dir(dir_path)
+    }
+
+    pub fn set_skills_available_capabilities(&mut self, caps: Vec<String>) {
+        self.skills_manager.set_available_capabilities(caps);
+    }
+
+    pub fn discover_skills(
+        &self,
+        available_capabilities: &[&str],
+    ) -> Vec<&crate::skills_manager::Skill> {
+        self.skills_manager.discover_skills(available_capabilities)
+    }
+
+    pub fn get_discoverable_skills(&self) -> Vec<&crate::skills_manager::Skill> {
+        self.skills_manager.get_discoverable_skills()
     }
 
     pub fn resolve_agent_slash_allowed_tools(&self, slash_command: &str) -> Option<Vec<String>> {
@@ -2648,11 +2889,6 @@ impl MahoCore {
             "Downloads".into(),
             "Settings".into(),
         );
-        command_bar.add_action(
-            "open_bookmarks".into(),
-            "Bookmarks".into(),
-            "Settings".into(),
-        );
         command_bar.add_action("open_history".into(), "History".into(), "Settings".into());
         command_bar.add_action(
             "view_archive".into(),
@@ -2763,11 +2999,14 @@ impl MahoCore {
             account_manager: AccountManager::new(),
             split_view_configs: HashMap::new(),
             sync_manager: None,
+            sync_baseline_needed: false,
+            storage_maintenance: None,
             llm_manager: LLMManager::new(),
             tool_registry: ToolRegistry::new(),
             skills_manager: SkillsManager::new(),
             sharing_manager: SharingManager::new(),
             memory_manager: MemoryManager::new(),
+            memory_engine: crate::memory::MemoryEngine::new(),
             persist_throttle: RefCell::new(PersistThrottle::new()),
             download_progress_last_persisted: HashMap::new(),
             sync_push_count: Cell::new(0),
@@ -2776,12 +3015,17 @@ impl MahoCore {
             sync_last_upload_attempt: Cell::new(chrono::Utc::now() - chrono::Duration::hours(1)), // Initialize to 1 hour ago so first upload is allowed
             emitted_during_dispatch,
             last_vault_lifecycle_error: None,
+            last_vault_account_outcome: None,
+            last_account_seed: None,
             #[cfg(test)]
             vault_revocation_fault: false,
             #[cfg(test)]
             vault_item_persist_fault: false,
             #[cfg(test)]
             vault_initialization_persist_fault: false,
+            #[cfg(test)]
+            test_device_protector: None,
+            vault_device_secret_path: None,
             #[cfg(test)]
             profile_sqlite_persist_fault: false,
             #[cfg(test)]
@@ -2886,11 +3130,26 @@ impl MahoCore {
             Ok(storage) => {
                 eprintln!("[MahoCore::with_storage] OK: opened SQLite storage at {path}");
                 self.storage = Some(storage);
+                self.vault_device_secret_path = std::path::Path::new(path)
+                    .parent()
+                    .map(|dir| dir.join(crate::oscrypt::FileVaultDeviceProtector::FILE_NAME));
                 if let Some(ref storage) = self.storage {
+                    self.sync_baseline_needed = storage.get_setting("sync_baseline_needed")
+                        .ok().flatten().as_deref() == Some("true");
                     if let Ok(Some(json)) = storage.get_setting("browser_settings") {
                         if let Ok(settings) = serde_json::from_str::<Settings>(&json) {
                             self.settings_manager = SettingsManager::with_settings(settings);
                         }
+                    }
+                    let auto_lock_minutes = self
+                        .settings_manager
+                        .get_settings()
+                        .autofill
+                        .vault_auto_lock_minutes;
+                    if let Err(error) =
+                        self.vault_runtime.set_auto_lock_minutes(auto_lock_minutes)
+                    {
+                        self.last_vault_lifecycle_error = Some(error);
                     }
                     let persisted_state = storage.load_content_blocker_state().ok().flatten();
                     let persisted_lists = storage.load_content_blocker_lists().unwrap_or_default();
@@ -2912,18 +3171,12 @@ impl MahoCore {
                         let cache_is_valid = version.as_deref()
                             == Some(CONTENT_BLOCKER_ENGINE_VERSION)
                             && hash.as_deref() == Some(expected_hash.as_str());
-                        let restored_from_cache = match (cache_is_valid, cache) {
-                            (true, Some(bytes)) => self
-                                .content_blocker
-                                .deserialize_engine_with_gen(&bytes, generation, hash.as_deref())
-                                .is_ok(),
-                            _ => false,
-                        };
-                        if !restored_from_cache {
-                            self.content_blocker.rebuild_engine_sync();
-                        }
+                        self.content_blocker.defer_engine_restore(
+                            if cache_is_valid { cache } else { None }, expected_hash,
+                        );
                     } else {
-                        self.content_blocker.rebuild_engine_sync();
+                        let hash = self.content_blocker.create_compile_snapshot().content_hash;
+                        self.content_blocker.defer_engine_restore(None, hash);
                     }
                     if !had_persisted_lists {
                         Self::write_content_blocker_snapshot(storage, &self.content_blocker);
@@ -3239,10 +3492,18 @@ impl MahoCore {
         self.set_readiness_status(CoreReadinessStatus::Initializing);
         let result = self.load_state_inner();
         match &result {
-            Ok(()) => self.set_readiness_status(CoreReadinessStatus::Ready),
-            Err(error) => {
-                self.set_readiness_status(CoreReadinessStatus::Failed(error.to_string()))
+            Ok(()) => {
+                self.set_readiness_status(CoreReadinessStatus::Ready);
+                if let Some(storage) = self.storage.as_ref() {
+                    if self.storage_maintenance.is_none() {
+                        match storage.compact_after_startup() {
+                            Ok(worker) => self.storage_maintenance = worker,
+                            Err(error) => eprintln!("[Maho] storage maintenance admission failed: {error}"),
+                        }
+                    }
+                }
             }
+            Err(error) => self.set_readiness_status(CoreReadinessStatus::Failed(error.to_string())),
         }
         result
     }
@@ -3378,6 +3639,15 @@ impl MahoCore {
                 if tab.role.is_pinned() && tab.pinned_url.is_none() {
                     tab.pinned_url = Some(tab.url.clone());
                 }
+                // Favorites sleep as their home page: after a restart they must
+                // reopen at the authored pinned URL, not at the page the tab was
+                // left on when the browser went away.
+                let favorite_role = tab.role.is_favorite(); // L3-EXEMPT: role query
+                if favorite_role {
+                    if let Some(ref pinned_url) = tab.pinned_url {
+                        tab.url = pinned_url.clone();
+                    }
+                }
                 self.tab_manager.restore_tab(tab);
             }
             let tab_ids: Vec<maho_types::identifiers::TabId> = self
@@ -3447,17 +3717,18 @@ impl MahoCore {
             >(&split_view_data)
             {
                 self.split_view_configs.clear();
-                let mut tabs_by_url_and_time: HashMap<(&str, u64), Vec<maho_types::identifiers::TabId>> =
-                    HashMap::new();
+                let mut tabs_by_url_and_time: HashMap<
+                    (&str, u64),
+                    Vec<maho_types::identifiers::TabId>,
+                > = HashMap::new();
                 let all_tabs = self.tab_manager.get_all_tabs();
                 for t in &all_tabs {
-                    let t_created_micros = if let Ok(dt) =
-                        chrono::DateTime::parse_from_rfc3339(&t.created_at.0)
-                    {
-                        dt.timestamp_micros() as u64
-                    } else {
-                        0
-                    };
+                    let t_created_micros =
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&t.created_at.0) {
+                            dt.timestamp_micros() as u64
+                        } else {
+                            0
+                        };
                     tabs_by_url_and_time
                         .entry((t.url.0.as_str(), t_created_micros))
                         .or_default()
@@ -3469,8 +3740,10 @@ impl MahoCore {
                     let mut resolved_panes = Vec::new();
                     let mut skip_window = false;
                     for stable_pane in &persist_config.panes {
-                        let matching_tabs = tabs_by_url_and_time
-                            .get(&(stable_pane.url.as_str(), stable_pane.tab_creation_time_micros));
+                        let matching_tabs = tabs_by_url_and_time.get(&(
+                            stable_pane.url.as_str(),
+                            stable_pane.tab_creation_time_micros,
+                        ));
                         let match_count = matching_tabs.map(|v| v.len()).unwrap_or(0);
 
                         if match_count == 1 {
@@ -3767,6 +4040,18 @@ impl MahoCore {
             }
         }
 
+        // Rehydrate command-bar history (oldest first) and usage counts so
+        // palette ranking survives a restart instead of starting empty.
+        if let Ok(history) = storage.load_recent_history(COMMAND_BAR_HISTORY_RESTORE_LIMIT) {
+            for (url, title, visited_at) in history.into_iter().rev() {
+                self.command_bar
+                    .restore_history_entry(url, title, visited_at);
+            }
+        }
+        if let Ok(usage) = storage.get_top_used("command_bar", COMMAND_BAR_USAGE_RESTORE_LIMIT) {
+            self.command_bar.load_usage_frequencies(usage);
+        }
+
         // Load reading list
         if let Ok(items) = storage.load_reading_list() {
             for (
@@ -3907,6 +4192,17 @@ impl MahoCore {
         self.vault_runtime.set_auto_lock_minutes(minutes)
     }
 
+    /// Mirrors persisted Vault trust settings onto the Vault runtime. Settings
+    /// are the durable source for the inactivity auto-lock timeout; the state
+    /// machine reads the mirrored value on every evaluation.
+    fn apply_vault_trust_settings(&mut self, settings: &Settings) {
+        if let Err(error) =
+            self.set_vault_auto_lock_minutes(settings.autofill.vault_auto_lock_minutes)
+        {
+            self.last_vault_lifecycle_error = Some(error);
+        }
+    }
+
     /// Initialize the Vault and persist its metadata slots transactionally. On
     /// any storage failure the in-memory Vault is reverted to uninitialized
     /// (fail-closed): it is never left initialized-but-unpersisted.
@@ -4040,7 +4336,43 @@ impl MahoCore {
             kdf_params: Self::read_vault_slot(storage, SLOT_KDF_PARAMS)?,
             wrapped_user_key: Self::read_vault_slot(storage, SLOT_WRAPPED_USER_KEY)?,
             wrapped_recovery_key: Self::read_vault_slot(storage, SLOT_WRAPPED_RECOVERY_KEY)?,
+            wrapped_account_key: Self::read_vault_slot(storage, SLOT_WRAPPED_ACCOUNT_KEY)?,
         })
+    }
+
+    pub fn last_vault_account_outcome_code(&self) -> Option<&'static str> {
+        self.last_vault_account_outcome
+    }
+
+    /// Base64 passthrough of [`Self::export_vault_account_escrow`] for the FFI
+    /// layer; the decode stays in the core so the bridge carries strings only.
+    pub fn export_vault_account_escrow_b64(
+        &self,
+    ) -> Result<Option<(String, String)>, VaultManagerError> {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        Ok(self
+            .export_vault_account_escrow()?
+            .map(|(kdf_params, wrapped_account_key)| {
+                (STANDARD.encode(kdf_params), STANDARD.encode(wrapped_account_key))
+            }))
+    }
+
+    /// Exports the durable account-escrow slots (KDF params + account-wrapped
+    /// key) for publication to the account bootstrap record. None while the
+    /// vault carries no account wrap.
+    pub fn export_vault_account_escrow(
+        &self,
+    ) -> Result<Option<(Vec<u8>, Vec<u8>)>, VaultManagerError> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage("vault storage is not configured".to_string())
+        })?;
+        let slots = Self::read_vault_slots(storage)?;
+        match (slots.kdf_params, slots.wrapped_account_key) {
+            (Some(kdf_params), Some(wrapped_account_key)) => {
+                Ok(Some((kdf_params, wrapped_account_key)))
+            }
+            _ => Ok(None),
+        }
     }
 
     pub fn last_vault_lifecycle_error(&self) -> Option<&VaultManagerError> {
@@ -4049,7 +4381,112 @@ impl MahoCore {
 
     pub fn unlock_vault(&mut self, master_passphrase: &[u8]) -> Result<(), VaultManagerError> {
         self.vault_runtime
-            .unlock(master_passphrase, chrono::Utc::now())
+            .unlock(master_passphrase, chrono::Utc::now())?;
+        self.migrate_legacy_vault_to_account_escrow();
+        self.enroll_platform_device_best_effort();
+        Ok(())
+    }
+
+    /// Binding for this profile on this device: active profile id + the
+    /// persistent sync device id (same pair the `maho` CLI recovery path uses).
+    fn platform_device_binding(&self) -> Result<VaultDeviceBinding, VaultManagerError> {
+        let profile_id = self
+            .get_active_profile_id()
+            .ok_or(VaultManagerError::DeviceBindingMismatch)?
+            .to_string();
+        let device_id = self.sync_device_id();
+        Ok(VaultDeviceBinding::new(
+            &profile_id,
+            &device_id,
+            crate::oscrypt::VaultDevicePlatform::Desktop,
+        ))
+    }
+
+    /// Runs `f` with the file-backed device protector stored next to the
+    /// profile database. Processes that have not opted in through
+    /// `set_platform_device_protector_enabled` (all cargo tests, the CLI) and
+    /// in-memory cores report `DeviceProtector(Unavailable)`.
+    fn with_platform_device_protector<R>(
+        &self,
+        binding: &VaultDeviceBinding,
+        f: impl FnOnce(&dyn VaultDeviceProtector) -> Result<R, VaultManagerError>,
+    ) -> Result<R, VaultManagerError> {
+        #[cfg(test)]
+        if let Some(protector) = self.test_device_protector.as_deref() {
+            return f(protector);
+        }
+        if !PLATFORM_DEVICE_PROTECTOR_ENABLED.load(std::sync::atomic::Ordering::Acquire) {
+            let _ = (binding, f);
+            return Err(VaultManagerError::DeviceProtector(
+                crate::oscrypt::VaultDeviceProtectorError::Unavailable,
+            ));
+        }
+        // File-backed only: the OS keystore (macOS Keychain, Secret Service,
+        // DPAPI) is never used for the device secret.
+        let _ = binding;
+        let path = self.vault_device_secret_path.clone().ok_or(
+            VaultManagerError::DeviceProtector(
+                crate::oscrypt::VaultDeviceProtectorError::Unavailable,
+            ),
+        )?;
+        let protector = crate::oscrypt::FileVaultDeviceProtector::new(path);
+        f(&protector)
+    }
+
+    /// Wraps the active Vault key for this device and persists it so the next
+    /// browser start can unlock silently. Best-effort: a failure is recorded in
+    /// `last_vault_lifecycle_error` and never fails the unlock that triggered it.
+    fn enroll_platform_device_best_effort(&mut self) {
+        if self.vault_runtime.status().lock_state != maho_types::vault::VaultLockState::Unlocked {
+            return;
+        }
+        let result = self.platform_device_binding().and_then(|binding| {
+            let bundle = self.with_platform_device_protector(&binding, |protector| {
+                self.vault_runtime.wrap_active_key_for_device(&binding, protector)
+            })?;
+            self.persist_vault_device_bundle(&bundle, &binding, chrono::Utc::now())
+        });
+        if let Err(error) = result {
+            eprintln!("[vault] device auto-enroll skipped; next start needs a manual unlock");
+            self.last_vault_lifecycle_error = Some(error);
+        }
+    }
+
+    /// Silent unlock with the device-wrapped key enrolled by a previous
+    /// successful unlock. No enrolled key -> `DeviceBindingMismatch`.
+    pub fn unlock_vault_with_platform_device(&mut self) -> Result<(), VaultManagerError> {
+        let binding = self.platform_device_binding()?;
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage("vault storage is not configured".to_string())
+        })?;
+        let row = storage
+            .get_vault_device_key(binding.device_id())
+            .map_err(|error| VaultManagerError::Storage(error.to_string()))?
+            .ok_or(VaultManagerError::DeviceBindingMismatch)?;
+        let bundle = VaultDeviceWrapBundle::from_opaque_bytes(&row.wrapped_key)?;
+        self.with_platform_device_protector(&binding, |protector| {
+            self.vault_runtime
+                .unlock_with_device(&bundle, &binding, protector, chrono::Utc::now())
+        })
+    }
+
+    /// One-time account-escrow migration for a legacy passphrase vault: the
+    /// first successful passphrase unlock while signed in adds the account wrap
+    /// (so later sign-ins need zero input) and persists it. Best-effort by
+    /// design - a migration failure must never fail the unlock itself.
+    fn migrate_legacy_vault_to_account_escrow(&mut self) {
+        let Some(seed) = self.last_account_seed.clone() else {
+            return;
+        };
+        if self.vault_runtime.has_account_wrap() {
+            return;
+        }
+        if let Err(error) = self.wrap_account_key_into_active_vault(&seed[..]) {
+            eprintln!(
+                "[vault] account-escrow migration after passphrase unlock failed; vault stays passphrase-only"
+            );
+            self.last_vault_lifecycle_error = Some(error);
+        }
     }
 
     pub fn unlock_vault_with_recovery(
@@ -4057,7 +4494,9 @@ impl MahoCore {
         recovery_secret: &[u8],
     ) -> Result<(), VaultManagerError> {
         self.vault_runtime
-            .unlock_with_recovery(recovery_secret, chrono::Utc::now())
+            .unlock_with_recovery(recovery_secret, chrono::Utc::now())?;
+        self.enroll_platform_device_best_effort();
+        Ok(())
     }
 
     pub fn unlock_vault_with_device(
@@ -4075,6 +4514,238 @@ impl MahoCore {
         let bundle = VaultDeviceWrapBundle::from_opaque_bytes(&row.wrapped_key)?;
         self.vault_runtime
             .unlock_with_device(&bundle, binding, protector, chrono::Utc::now())
+    }
+
+    /// Account-escrow ensure path driven at sign-in. Provision a fresh vault
+    /// for an account without one, auto-unwrap (zero user input) a vault that
+    /// carries the account wrap slot, and report legacy passphrase vaults that
+    /// still need the one-time migration. Fail-closed: wrong seeds and storage
+    /// failures never unlock anything.
+    pub fn ensure_vault_for_account(
+        &mut self,
+        account_seed: &[u8],
+    ) -> Result<VaultAccountEnsureOutcome, VaultManagerError> {
+        self.ensure_vault_for_account_with_escrow(account_seed, None, None)
+    }
+
+    /// Account-escrow ensure path carrying the bootstrap escrow record. When the
+    /// local vault is absent and the escrow record carries a provisioning
+    /// device's KDF params + account-wrapped key, the slots are installed (the
+    /// SAME DEK — provisioning a fresh key here would fork cross-device sync)
+    /// and the vault is auto-unwrapped. Escrow payloads are only adopted into a
+    /// vault-free database; anything else is ignored.
+    pub fn ensure_vault_for_account_with_escrow(
+        &mut self,
+        account_seed: &[u8],
+        escrow_kdf_params: Option<&[u8]>,
+        escrow_wrapped_account_key: Option<&[u8]>,
+    ) -> Result<VaultAccountEnsureOutcome, VaultManagerError> {
+        match self.ensure_vault_for_account_inner(
+            account_seed,
+            escrow_kdf_params,
+            escrow_wrapped_account_key,
+        ) {
+            Ok(outcome) => {
+                self.last_vault_account_outcome = Some(outcome.code());
+                self.enroll_platform_device_best_effort();
+                Ok(outcome)
+            }
+            Err(error) => {
+                self.last_vault_account_outcome = Some("failed");
+                Err(error)
+            }
+        }
+    }
+
+    fn ensure_vault_for_account_inner(
+        &mut self,
+        account_seed: &[u8],
+        escrow_kdf_params: Option<&[u8]>,
+        escrow_wrapped_account_key: Option<&[u8]>,
+    ) -> Result<VaultAccountEnsureOutcome, VaultManagerError> {
+        let slots = match &self.storage {
+            Some(storage) => Self::read_vault_slots(storage)?,
+            None => {
+                return Err(VaultManagerError::Storage(
+                    "vault storage is not configured".to_string(),
+                ))
+            }
+        };
+        let outcome = match (slots.kdf_params.is_some(), slots.wrapped_account_key.is_some()) {
+            (false, false) => {
+                match (slots.wrapped_user_key.is_some(), slots.wrapped_recovery_key.is_some()) {
+                    (false, false) => {
+                        match (escrow_kdf_params, escrow_wrapped_account_key) {
+                            (Some(kdf_params), Some(wrapped)) => {
+                                self.adopt_bootstrap_vault(account_seed, kdf_params, wrapped)?;
+                                VaultAccountEnsureOutcome::Adopted
+                            }
+                            _ => {
+                                self.provision_vault_for_account(account_seed)?;
+                                VaultAccountEnsureOutcome::Provisioned
+                            }
+                        }
+                    }
+                    _ => return Err(VaultManagerError::CorruptedVaultData),
+                }
+            }
+            (true, true) => {
+                if self.vault_runtime.status().lock_state
+                    == maho_types::vault::VaultLockState::Unlocked
+                {
+                    VaultAccountEnsureOutcome::AlreadyUnlocked
+                } else {
+                    self.vault_runtime
+                        .unlock_with_account(account_seed, chrono::Utc::now())?;
+                    VaultAccountEnsureOutcome::Unwrapped
+                }
+            }
+            (true, false) => VaultAccountEnsureOutcome::NeedsMigration,
+            (false, true) => return Err(VaultManagerError::CorruptedVaultData),
+        };
+        Ok(outcome)
+    }
+
+    /// Installs the escrow record's vault key slots (provisioning device's KDF
+    /// params + account-wrapped DEK) into a vault-free database and auto-unwraps
+    /// with the account seed. Fail-closed: a wrong seed or malformed payload
+    /// leaves the vault uninitialized.
+    fn adopt_bootstrap_vault(
+        &mut self,
+        account_seed: &[u8],
+        escrow_kdf_params: &[u8],
+        escrow_wrapped_account_key: &[u8],
+    ) -> Result<(), VaultManagerError> {
+        {
+            let storage = self.storage.as_ref().ok_or_else(|| {
+                VaultManagerError::Storage("vault storage is not configured".to_string())
+            })?;
+            let existing = Self::read_vault_slots(storage)?;
+            if existing.kdf_params.is_some()
+                || existing.wrapped_account_key.is_some()
+                || existing.wrapped_user_key.is_some()
+                || existing.wrapped_recovery_key.is_some()
+            {
+                return Err(VaultManagerError::AlreadyInitialized);
+            }
+        }
+        let now = chrono::Utc::now();
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage("vault storage is not configured".to_string())
+        })?;
+        let updated_at = now.to_rfc3339();
+        let schema_version = i64::from(u16::from(maho_types::vault::VaultSchemaVersion::CURRENT));
+        storage
+            .vault_transaction(|tx| {
+                tx.upsert_metadata(&maho_storage::sqlite::VaultMetadataRow {
+                    slot: SLOT_KDF_PARAMS.to_string(),
+                    schema_version,
+                    payload: escrow_kdf_params.to_vec(),
+                    updated_at: updated_at.clone(),
+                })?;
+                tx.upsert_metadata(&maho_storage::sqlite::VaultMetadataRow {
+                    slot: SLOT_WRAPPED_ACCOUNT_KEY.to_string(),
+                    schema_version,
+                    payload: escrow_wrapped_account_key.to_vec(),
+                    updated_at: updated_at.clone(),
+                })?;
+                Ok(())
+            })
+            .map_err(|error| VaultManagerError::Storage(error.to_string()))?;
+        self.refresh_vault_hydration()?;
+        self.vault_runtime
+            .unlock_with_account(account_seed, chrono::Utc::now())
+    }
+
+    /// Re-runs the metadata-only hydration from durable slots (used after
+    /// installing escrow slots so the runtime reflects the adopted vault).
+    fn refresh_vault_hydration(&mut self) -> Result<(), VaultManagerError> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage("vault storage is not configured".to_string())
+        })?;
+        let slots = Self::read_vault_slots(storage)?;
+        match self.vault_runtime.hydrate_locked(slots)? {
+            VaultHydrationOutcome::Locked => Ok(()),
+            VaultHydrationOutcome::Uninitialized => Err(VaultManagerError::CorruptedVaultData),
+        }
+    }
+
+    /// Provision a fresh account-escrowed vault and persist its slots
+    /// transactionally. On any storage failure the in-memory vault is reverted
+    /// to uninitialized (fail-closed).
+    fn provision_vault_for_account(&mut self, account_seed: &[u8]) -> Result<(), VaultManagerError> {
+        let now = chrono::Utc::now();
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage(
+                "vault storage is not configured; refusing non-durable initialization".to_string(),
+            )
+        })?;
+        if account_seed.is_empty() {
+            return Err(VaultManagerError::InvalidCredentials);
+        }
+        #[cfg(test)]
+        let inject_persist_fault = self.vault_initialization_persist_fault;
+        let vault_runtime = Arc::clone(&self.vault_runtime);
+        vault_runtime.initialize_account_and_persist(account_seed, now, |slots| {
+            let updated_at = now.to_rfc3339();
+            let schema_version =
+                i64::from(u16::from(maho_types::vault::VaultSchemaVersion::CURRENT));
+            storage
+                .vault_transaction(|tx| {
+                    #[cfg(test)]
+                    if inject_persist_fault {
+                        return Err(maho_storage::StorageError::Other(
+                            "injected Vault initialization persistence fault".to_string(),
+                        ));
+                    }
+                    tx.upsert_metadata(&maho_storage::sqlite::VaultMetadataRow {
+                        slot: SLOT_KDF_PARAMS.to_string(),
+                        schema_version,
+                        payload: slots.kdf_params.clone(),
+                        updated_at: updated_at.clone(),
+                    })?;
+                    tx.upsert_metadata(&maho_storage::sqlite::VaultMetadataRow {
+                        slot: SLOT_WRAPPED_ACCOUNT_KEY.to_string(),
+                        schema_version,
+                        payload: slots.wrapped_account_key.clone(),
+                        updated_at: updated_at.clone(),
+                    })?;
+                    Ok(())
+                })
+                .map_err(|error| VaultManagerError::Storage(error.to_string()))
+        })
+    }
+
+    /// One-time account-escrow migration for an already-initialized (passphrase
+    /// kit) vault: requires the vault to be UNLOCKED, adds the account wrap
+    /// slot, and persists it transactionally. On persistence failure the vault
+    /// is locked (fail-closed) and the durable slots stay untouched.
+    pub fn wrap_account_key_into_active_vault(
+        &mut self,
+        account_seed: &[u8],
+    ) -> Result<(), VaultManagerError> {
+        let now = chrono::Utc::now();
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage("vault storage is not configured".to_string())
+        })?;
+        let vault_runtime = Arc::clone(&self.vault_runtime);
+        vault_runtime.wrap_account_key_and_persist(account_seed, |envelope| {
+            let updated_at = now.to_rfc3339();
+            let schema_version =
+                i64::from(u16::from(maho_types::vault::VaultSchemaVersion::CURRENT));
+            let payload = crate::vault_manager::encode_account_wrap_slot(envelope)?;
+            storage
+                .vault_transaction(|tx| {
+                    tx.upsert_metadata(&maho_storage::sqlite::VaultMetadataRow {
+                        slot: SLOT_WRAPPED_ACCOUNT_KEY.to_string(),
+                        schema_version,
+                        payload: payload.wrapped_account_key.clone(),
+                        updated_at: updated_at.clone(),
+                    })?;
+                    Ok(())
+                })
+                .map_err(|error| VaultManagerError::Storage(error.to_string()))
+        })
     }
 
     pub fn rewrap_vault_device_with_recovery(
@@ -4464,8 +5135,21 @@ impl MahoCore {
     }
 
     pub fn add_bookmark(&mut self, url: &str, title: &str, folder_id: Option<&str>) {
+        let _ = self.add_bookmark_returning_id(url, title, folder_id);
+    }
+
+    /// Same as [`Self::add_bookmark`], reporting the stored id. Callers that
+    /// must address the new entry afterwards (agent tools answering with the
+    /// created bookmark) would otherwise have to search for it by URL.
+    /// Returns `None` when the active tab is private, where nothing is stored.
+    pub fn add_bookmark_returning_id(
+        &mut self,
+        url: &str,
+        title: &str,
+        folder_id: Option<&str>,
+    ) -> Option<String> {
         if self.active_tab_is_private() {
-            return;
+            return None;
         }
 
         let bm = self.bookmark_manager.add_bookmark(
@@ -4479,8 +5163,9 @@ impl MahoCore {
             let _ = storage.save_bookmark(&id_str, url, title, folder_id, &bm.created_at.0);
         }
         if let Ok(payload) = serde_json::to_string(&bm) {
-            self.push_sync_entity(SyncEntityType::Bookmark, id_str, payload, false);
+            self.push_sync_entity(SyncEntityType::Bookmark, id_str.clone(), payload, false);
         }
+        Some(id_str)
     }
 
     pub fn remove_bookmark(&mut self, bookmark_id: &str) {
@@ -6342,6 +7027,7 @@ impl MahoCore {
             }
             ShellEvent::ResetSettings => {
                 let settings = self.settings_manager.reset_to_defaults().clone();
+                self.apply_vault_trust_settings(&settings);
                 // Persist reset
                 if let Some(ref storage) = self.storage {
                     if let Ok(json) = serde_json::to_string(&settings) {
@@ -6551,6 +7237,10 @@ impl MahoCore {
                 if is_favorite {
                     // L3-EXEMPT: close protection check
                     if !already_suspended {
+                        // A closed favorite sleeps as its home page: reopening it
+                        // must land on the authored pinned URL, not on whatever
+                        // page it was left on.
+                        self.tab_manager.reset_favorite_url_to_pinned(tab_id);
                         self.tab_manager.suspend_tab(tab_id);
                         self.persist_lmdb_now_partial(LMDB_DIRTY_TABS);
                         self.push_tab_sync(tab_id);
@@ -7389,6 +8079,7 @@ impl MahoCore {
 
     pub fn update_settings(&mut self, update: SettingsUpdate) {
         let settings = self.settings_manager.update_settings(update).clone();
+        self.apply_vault_trust_settings(&settings);
         self.emit_settings_changed(settings.clone());
         // Persist to SQLite
         if let Some(ref storage) = self.storage {
@@ -7878,11 +8569,12 @@ impl MahoCore {
     ///
     /// Format: `{"tree": [...nodes...], "favicons": {"tab_id": "base64_png", ...}}`
     pub fn get_sidebar_state_v2(&self, space_id: &SpaceId) -> Option<String> {
+        // None means "no such space" only. An existing space with no tabs or
+        // folders is a real, renderable state: shells treat a null result as
+        // "state unavailable, keep what is on screen", so folding "empty" into
+        // None made an emptied space indistinguishable from a transient failure.
+        self.space_manager.get_space(space_id)?;
         let tree = self.get_sidebar_tree(space_id);
-        if tree.is_empty() {
-            // Space doesn't exist or has no tabs/folders
-            return None;
-        }
 
         // Collect favicons for all tabs in the tree as base64
         let mut favicons = serde_json::Map::new();
@@ -8335,8 +9027,9 @@ impl MahoCore {
                             deleted: false,
                             queue_row_id: None,
                             fields_hlc_json,
+                            profile_id: None,
                         };
-                        self.sync_push_entity_persisted(sync_entity);
+                        self.push_sync_entity(sync_entity.entity_type, sync_entity.entity_id, sync_entity.payload_json, false);
                     }
                     Err(e) => {
                         eprintln!(
@@ -8377,6 +9070,7 @@ impl MahoCore {
                             deleted: true,
                             queue_row_id: None,
                             fields_hlc_json,
+                            profile_id: None,
                         });
                     }
                     Err(e) => {
@@ -8781,8 +9475,13 @@ impl MahoCore {
                 })
                 .collect();
         let exceptions = content_blocker.get_site_exceptions();
-        let engine_cache = content_blocker.serialize_engine();
         let engine_hash = content_blocker.active_content_hash().map(str::to_string);
+        let unchanged = match engine_hash.as_deref() {
+            Some(hash) => storage.content_blocker_engine_matches(hash, CONTENT_BLOCKER_ENGINE_VERSION)
+                .map_err(|error| error.to_string())?,
+            None => false,
+        };
+        let engine_cache = if unchanged { Vec::new() } else { content_blocker.serialize_engine() };
         let snapshot = maho_storage::sqlite::ContentBlockerSnapshot {
             mode: content_blocker.mode(),
             generation: content_blocker.generation(),
@@ -8792,41 +9491,19 @@ impl MahoCore {
             lists: &lists,
             exceptions: &exceptions,
         };
-        storage
-            .replace_content_blocker_snapshot(&snapshot)
-            .map_err(|e| e.to_string())
+        if unchanged {
+            storage.replace_content_blocker_metadata_snapshot(&snapshot)
+        } else {
+            storage.replace_content_blocker_snapshot(&snapshot)
+        }.map_err(|e| e.to_string())
     }
 
     fn write_content_blocker_snapshot(
         storage: &maho_storage::sqlite::SqliteStorage,
         content_blocker: &ContentBlocker,
     ) {
-        let lists: Vec<(maho_types::content_blocking::FilterListMetadata, String)> =
-            content_blocker
-                .get_filter_lists()
-                .iter()
-                .map(|meta| {
-                    let raw = content_blocker
-                        .filter_list_content(&meta.id)
-                        .unwrap_or("")
-                        .to_string();
-                    (meta.clone(), raw)
-                })
-                .collect();
-        let exceptions = content_blocker.get_site_exceptions();
-        let engine_cache = content_blocker.serialize_engine();
-        let engine_hash = content_blocker.active_content_hash().map(str::to_string);
-        let snapshot = maho_storage::sqlite::ContentBlockerSnapshot {
-            mode: content_blocker.mode(),
-            generation: content_blocker.generation(),
-            engine_cache: Some(&engine_cache),
-            engine_version: Some(CONTENT_BLOCKER_ENGINE_VERSION),
-            engine_hash: engine_hash.as_deref(),
-            lists: &lists,
-            exceptions: &exceptions,
-        };
-        if let Err(err) = storage.replace_content_blocker_snapshot(&snapshot) {
-            eprintln!("[MahoCore] content-blocker snapshot persist failed: {err}");
+        if let Err(error) = Self::write_content_blocker_snapshot_result(storage, content_blocker) {
+            eprintln!("[MahoCore] content-blocker snapshot persist failed: {error}");
         }
     }
 
@@ -9170,6 +9847,7 @@ impl MahoCore {
             Ok(())
         }
     }
+
 
     pub fn load_content_engine_cache(&mut self, _path: &str) -> Result<(), String> {
         if let Some(ref storage) = self.storage {
@@ -9956,8 +10634,9 @@ impl MahoCore {
                         deleted: false,
                         queue_row_id: None,
                         fields_hlc_json,
+                        profile_id: None,
                     };
-                    self.sync_push_entity_persisted(sync_entity);
+                    self.push_sync_entity(sync_entity.entity_type, sync_entity.entity_id, sync_entity.payload_json, false);
                 }
                 Err(e) => {
                     eprintln!(
@@ -9986,8 +10665,9 @@ impl MahoCore {
                     deleted: true,
                     queue_row_id: None,
                     fields_hlc_json: None,
+                    profile_id: None,
                 };
-                self.sync_push_entity_persisted(sync_entity);
+                self.push_sync_entity(sync_entity.entity_type, sync_entity.entity_id, sync_entity.payload_json, true);
             }
             Err(e) => {
                 eprintln!(
@@ -10523,8 +11203,9 @@ impl MahoCore {
             if tab.is_private {
                 return;
             }
-            if let Ok(payload) = serde_json::to_string(tab) {
-                self.push_sync_entity(SyncEntityType::Tab, tab.id.to_string(), payload, false);
+            if let Ok(mut payload) = serde_json::to_value(tab) {
+                payload["favicon"] = serde_json::Value::Null;
+                self.push_sync_entity(SyncEntityType::Tab, tab.id.to_string(), payload.to_string(), false);
             }
         }
     }
@@ -10580,6 +11261,7 @@ impl MahoCore {
                 crate::sync_models::SyncEntityType::AutofillPayment,
                 crate::sync_models::SyncEntityType::Settings,
                 crate::sync_models::SyncEntityType::SharedCollection,
+                crate::sync_models::SyncEntityType::VaultItem,
             ] {
                 let entity_type_str = entity_type.as_str();
                 if let Ok(version) = s.get_sync_last_pulled_version(entity_type_str) {
@@ -10590,6 +11272,44 @@ impl MahoCore {
         self.sync_manager = Some(sm);
         if let Err(e) = self.load_sync_queue() {
             eprintln!("Failed to load sync queue: {}", e);
+        }
+        if self.sync_baseline_needed {
+        match self.build_raw_snapshot() {
+            Ok(snapshot) => {
+                for mut entity in snapshot.entities.into_values().flatten() {
+                    if entity.entity_type == SyncEntityType::Tab {
+                        if let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
+                            payload["favicon"] = serde_json::Value::Null;
+                            entity.payload_json = payload.to_string();
+                        }
+                    }
+                    self.sync_push_entity_persisted(entity);
+                }
+            }
+            Err(error) => eprintln!("[sync] Initial local baseline failed: {error}"),
+        }
+        let tombstones = self.storage.as_ref().map(|storage| storage.load_local_sync_tombstones());
+        if let Some(Ok(tombstones)) = tombstones {
+            for (kind, storage_id, version, device_id, payload_json) in tombstones {
+                let Some(entity_type) = parse_sync_entity_type(&kind) else { continue };
+                let profile_id = SyncEntity::profile_id_from_payload(&entity_type, &payload_json);
+                let entity_id = if entity_type.is_profile_scoped() {
+                    profile_id.as_ref().and_then(|profile| storage_id.strip_prefix(&format!("{profile}:")))
+                        .unwrap_or(&storage_id).to_string()
+                } else { storage_id };
+                self.sync_push_entity_persisted(SyncEntity {
+                    entity_type, entity_id, version, device_id, payload_json, profile_id,
+                    modified_at: chrono::Utc::now().timestamp(), schema_version: 1,
+                    deleted: true, queue_row_id: None, fields_hlc_json: None,
+                });
+            }
+        }
+        self.sync_baseline_needed = false;
+        if let Some(storage) = self.storage.as_ref() {
+            if let Err(error) = storage.set_setting("sync_baseline_needed", "false") {
+                eprintln!("[sync] baseline marker persistence failed: {error}");
+            }
+        }
         }
     }
 
@@ -10893,8 +11613,8 @@ impl MahoCore {
     }
 
     pub fn generate_sync_bootstrap(&self) -> String {
-        use base64::{engine::general_purpose::STANDARD, Engine};
         use crate::sync_crypto;
+        use base64::{engine::general_purpose::STANDARD, Engine};
 
         let seed = sync_crypto::generate_sync_seed();
         let room_id = sync_crypto::derive_room_id(&seed)
@@ -10977,8 +11697,26 @@ impl MahoCore {
         server_url: &str,
         bootstrap_seed: &str,
     ) -> Result<String, String> {
-        use base64::{engine::general_purpose::STANDARD, Engine};
+        self.configure_sync_encryption_from_bootstrap_with_escrow(
+            server_url,
+            bootstrap_seed,
+            None,
+            None,
+        )
+    }
+
+    /// Sign-in Sync setup that also consumes the account escrow record fetched
+    /// from the relay: a device joining an existing account adopts the
+    /// provisioning device's vault key slots instead of forking a new DEK.
+    pub fn configure_sync_encryption_from_bootstrap_with_escrow(
+        &mut self,
+        server_url: &str,
+        bootstrap_seed: &str,
+        escrow_kdf_params_b64: Option<&str>,
+        escrow_wrapped_key_b64: Option<&str>,
+    ) -> Result<String, String> {
         use crate::sync_crypto;
+        use base64::{engine::general_purpose::STANDARD, Engine};
 
         let decoded = STANDARD
             .decode(bootstrap_seed)
@@ -10990,9 +11728,37 @@ impl MahoCore {
             .map_err(|e| format!("Key derivation failed: {}", e))?;
         let room_id = sync_crypto::derive_room_id(&seed)
             .map_err(|e| format!("Room ID derivation failed: {}", e))?;
+        let escrow_kdf_params = match escrow_kdf_params_b64 {
+            Some(value) => Some(
+                STANDARD
+                    .decode(value)
+                    .map_err(|_| "Invalid vault escrow record".to_string())?,
+            ),
+            None => None,
+        };
+        let escrow_wrapped_key = match escrow_wrapped_key_b64 {
+            Some(value) => Some(
+                STANDARD
+                    .decode(value)
+                    .map_err(|_| "Invalid vault escrow record".to_string())?,
+            ),
+            None => None,
+        };
         self.start_sync(server_url, &room_id);
         if let Some(ref mut sm) = self.sync_manager {
             sm.set_encryption_key(encryption_key);
+        }
+        self.last_account_seed = Some(zeroize::Zeroizing::new(seed));
+        if let Err(error) = self.ensure_vault_for_account_with_escrow(
+            &seed,
+            escrow_kdf_params.as_deref(),
+            escrow_wrapped_key.as_deref(),
+        ) {
+            self.last_vault_account_outcome = Some("failed");
+            self.last_vault_lifecycle_error = Some(error);
+            eprintln!(
+                "[vault] account-escrow ensure after sign-in failed; keeping vault fail-closed"
+            );
         }
         Ok(room_id)
     }
@@ -11036,6 +11802,47 @@ impl MahoCore {
         }
     }
 
+    /// Bind a locally-minted snapshot entity to the active profile, mirroring
+    /// [`Self::sync_push_entity_persisted`].
+    ///
+    /// Profile-scoped entities are rejected on receipt unless the profile scope
+    /// can be resolved (`SyncManager::bind_remote_profile_scope`). A receiver
+    /// restoring from a snapshot is a fresh core: it has no space/entity scope
+    /// maps to fall back on, so scope must travel inside the payload. Without
+    /// this the entire snapshot is dropped and restore silently applies nothing.
+    fn stamp_snapshot_profile_scope(
+        &self,
+        entity_type: &SyncEntityType,
+        payload_json: String,
+    ) -> (String, Option<String>) {
+        if !entity_type.is_profile_scoped() {
+            return (payload_json, None);
+        }
+        if let Some(existing) =
+            crate::sync_models::SyncEntity::profile_id_from_payload(entity_type, &payload_json)
+        {
+            return (payload_json, Some(existing));
+        }
+        let Some(active_profile_id) = self.profile_manager.get_active_profile_id() else {
+            return (payload_json, None);
+        };
+        let profile_id = active_profile_id.to_string();
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&payload_json) else {
+            return (payload_json, None);
+        };
+        let Some(object) = value.as_object_mut() else {
+            return (payload_json, None);
+        };
+        object.insert(
+            "profileId".to_string(),
+            serde_json::Value::String(profile_id.clone()),
+        );
+        match serde_json::to_string(&value) {
+            Ok(scoped_payload) => (scoped_payload, Some(profile_id)),
+            Err(_) => (payload_json, None),
+        }
+    }
+
     fn create_sync_entity(
         &self,
         entity_type: SyncEntityType,
@@ -11044,11 +11851,19 @@ impl MahoCore {
         modified_at: i64,
     ) -> crate::sync_models::SyncEntity {
         let type_str = entity_type.as_str();
+        let (payload_json, profile_id) =
+            self.stamp_snapshot_profile_scope(&entity_type, payload_json);
 
         let (version, device_id, fields_hlc_json) = if let Some(ref s) = self.storage {
-            match s.get_entity_version(type_str, &entity_id) {
-                Ok(Some((hlc_ts, dev_id, fields_hlc, _payload))) => (hlc_ts, dev_id, fields_hlc),
-                _ => {
+            let row_opt = crate::sync_models::load_persisted_entity_version(
+                s, &entity_type, &entity_id, profile_id.as_deref(),
+            ).unwrap_or_else(|error| {
+                eprintln!("[sync] Failed to load snapshot version for {type_str}: {error}");
+                None
+            });
+            match row_opt {
+                Some((hlc_ts, dev_id, fields_hlc, _payload)) => (hlc_ts, dev_id, fields_hlc),
+                None => {
                     let dev_id = self.account_manager.device_id_hash();
                     let ver = (modified_at * 1000) as u64;
                     let f_hlc = crate::sync_models::build_fields_hlc(&payload_json, ver, dev_id);
@@ -11073,10 +11888,11 @@ impl MahoCore {
             deleted: false,
             queue_row_id: None,
             fields_hlc_json,
+            profile_id,
         }
     }
 
-    pub fn build_snapshot(&self) -> Result<Vec<u8>, String> {
+    pub fn build_raw_snapshot(&self) -> Result<crate::snapshot::Snapshot, String> {
         let mut snap = crate::snapshot::Snapshot {
             schema_version: 1,
             hlc_ts_ceiling: 0,
@@ -11106,9 +11922,11 @@ impl MahoCore {
         // Spaces
         let mut spaces = Vec::new();
         if !is_disabled(SyncEntityType::Space) {
-            for space in
-                sanitize_spaces_for_private_tabs(self.space_manager.get_all_spaces(), &private_ids)
-            {
+            let active_sp_id = self.space_manager.get_active_space_id();
+            let mut all_spaces =
+                sanitize_spaces_for_private_tabs(self.space_manager.get_all_spaces(), &private_ids);
+            all_spaces.sort_by_key(|s| if &s.id == active_sp_id { 0 } else { 1 });
+            for space in all_spaces {
                 let payload = serde_json::to_string(&space).map_err(|e| e.to_string())?;
                 let sync_ent = self.create_sync_entity(
                     SyncEntityType::Space,
@@ -11129,7 +11947,9 @@ impl MahoCore {
                 if tab.is_private {
                     continue;
                 }
-                let payload = serde_json::to_string(tab).map_err(|e| e.to_string())?;
+                let mut synced_tab = tab.clone();
+                synced_tab.favicon = None;
+                let payload = serde_json::to_string(&synced_tab).map_err(|e| e.to_string())?;
                 let sync_ent = self.create_sync_entity(
                     SyncEntityType::Tab,
                     tab.id.to_string(),
@@ -11497,6 +12317,31 @@ impl MahoCore {
         }
         entities.insert("AutofillPayment".to_string(), autofill_payments);
 
+        // VaultItem (ciphertext-only records; the vault key stays device-side)
+        let mut vault_items_sync = Vec::new();
+        if !is_disabled(SyncEntityType::VaultItem) {
+            if let Some(ref storage) = self.storage {
+                if let Ok(rows) = storage.list_vault_items() {
+                    for row in rows {
+                        let Some(dto) = vault_items::vault_item_sync_dto_from_row(&row) else {
+                            continue;
+                        };
+                        let payload = serde_json::to_string(&dto).map_err(|e| e.to_string())?;
+                        let modified_at = parse_dt(&dto.updated_at);
+                        let sync_ent = self.create_sync_entity(
+                            SyncEntityType::VaultItem,
+                            dto.id.to_string(),
+                            payload,
+                            modified_at,
+                        );
+                        hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                        vault_items_sync.push(sync_ent);
+                    }
+                }
+            }
+        }
+        entities.insert("VaultItem".to_string(), vault_items_sync);
+
         // Settings
         let mut settings_list = Vec::new();
         if !is_disabled(SyncEntityType::Settings) {
@@ -11536,7 +12381,11 @@ impl MahoCore {
 
         snap.hlc_ts_ceiling = hlc_ts_ceiling;
         snap.entities = entities;
+        Ok(snap)
+    }
 
+    pub fn build_snapshot(&self) -> Result<Vec<u8>, String> {
+        let snap = self.build_raw_snapshot()?;
         let snap_json = serde_json::to_vec(&snap).map_err(|e| e.to_string())?;
 
         let sync_key_opt = self
@@ -11551,6 +12400,115 @@ impl MahoCore {
             }
             None => Err("Encryption key is not set".to_string()),
         }
+    }
+
+    pub fn export_sync_snapshot(&self) -> Result<String, String> {
+        let snap = self.build_raw_snapshot()?;
+        let ceiling = snap.hlc_ts_ceiling;
+        let snap_json = serde_json::to_vec(&snap).map_err(|e| e.to_string())?;
+
+        let sync_key_opt = self
+            .sync_manager
+            .as_ref()
+            .and_then(|sm| sm.encryption_key.as_ref());
+        let blob_bytes = match sync_key_opt {
+            Some(key) => {
+                crate::sync_crypto::encrypt_update(&snap_json, key).map_err(|e| e.to_string())?
+            }
+            None => return Err("Encryption key is not set".to_string()),
+        };
+
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&blob_bytes);
+        let resp = serde_json::json!({
+            "hlc_ts_ceiling": ceiling,
+            "blob": b64,
+        });
+        serde_json::to_string(&resp).map_err(|e| e.to_string())
+    }
+
+    pub fn apply_sync_snapshot(&mut self, snapshot_json: &str) -> Result<usize, String> {
+        if self.sync_manager.is_none() {
+            let config = crate::sync_models::SyncConfig::default();
+            self.sync_manager = Some(crate::sync_manager::SyncManager::new(config));
+        }
+
+        let snap: crate::snapshot::Snapshot =
+            if let Ok(parsed) = serde_json::from_str::<crate::snapshot::Snapshot>(snapshot_json) {
+                parsed
+            } else if let Ok(val) = serde_json::from_str::<serde_json::Value>(snapshot_json) {
+                let blob_str = val
+                    .get("blob")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(snapshot_json);
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(blob_str)
+                    .map_err(|e| e.to_string())?;
+                let sync_key_opt = self
+                    .sync_manager
+                    .as_ref()
+                    .and_then(|sm| sm.encryption_key.as_ref());
+                let decrypted = match sync_key_opt {
+                    Some(key) => match crate::sync_crypto::decrypt_update(&bytes, key) {
+                        Ok(d) => d,
+                        Err(_) => bytes,
+                    },
+                    None => bytes,
+                };
+                serde_json::from_slice(&decrypted).map_err(|e| e.to_string())?
+            } else {
+                return Err("invalid snapshot JSON".to_string());
+            };
+
+        let mut ordered_entities = Vec::new();
+
+        let type_keys = vec![
+            "Space",
+            "Tab",
+            "BookmarkFolder",
+            "Bookmark",
+            "Note",
+            "Boost",
+            "ReadingListItem",
+            "SearchEngine",
+            "Shortcut",
+            "Extension",
+            "Memory",
+            "CssMod",
+            "Easel",
+            "Conversation",
+            "ConversationProject",
+            "ConversationTurn",
+            "AutofillAddress",
+            "AutofillPayment",
+            "Settings",
+            "SharedCollection",
+            "VaultItem",
+        ];
+
+        for key in type_keys {
+            if let Some(list) = snap.entities.get(key) {
+                ordered_entities.extend(list.clone());
+            }
+        }
+
+        let applied = self.apply_sync_remote_entities(ordered_entities);
+        if !applied.is_empty() {
+            if let Some(first_space) = snap.entities.get("Space").and_then(|list| list.first()) {
+                let space_id = maho_types::identifiers::SpaceId::new(&first_space.entity_id);
+                self.space_manager.activate_space(&space_id);
+            }
+
+            let space_id = self.space_manager.get_active_space_id();
+            let active_tab_id = self.tab_manager.get_active_tab_id().cloned();
+            self.tab_manager
+                .queue_update(CoreUpdate::ActiveSpaceChanged {
+                    space_id: space_id.clone(),
+                    active_tab_id,
+                });
+        }
+        Ok(applied.len())
     }
 
     pub fn apply_snapshot(&mut self, encrypted_blob: &[u8]) -> Result<(), String> {
@@ -11589,6 +12547,7 @@ impl MahoCore {
             "AutofillPayment",
             "Settings",
             "SharedCollection",
+            "VaultItem",
         ];
 
         for key in type_keys {
@@ -11623,6 +12582,7 @@ impl MahoCore {
                 SyncEntityType::AutofillPayment,
                 SyncEntityType::Settings,
                 SyncEntityType::SharedCollection,
+                SyncEntityType::VaultItem,
             ] {
                 let last_pulled = sm.last_pulled_versions.entry(t.clone()).or_insert(0);
                 *last_pulled = (*last_pulled).max(ceiling);
@@ -11648,6 +12608,16 @@ impl MahoCore {
         payload_json: String,
         deleted: bool,
     ) {
+        if self.sync_manager.is_none() {
+            if !self.sync_baseline_needed {
+                if let Some(storage) = self.storage.as_ref() {
+                    if let Err(error) = storage.set_setting("sync_baseline_needed", "true") {
+                        eprintln!("[sync] baseline marker persistence failed: {error}");
+                    }
+                }
+            }
+            self.sync_baseline_needed = true;
+        }
         if let Some(ref sm) = self.sync_manager {
             if sm.config().disabled_entity_types.contains(&entity_type) {
                 return; // Disabled entity type, skip sync push!
@@ -11673,8 +12643,9 @@ impl MahoCore {
                     deleted,
                     queue_row_id: None,
                     fields_hlc_json,
+                    profile_id: None,
                 };
-                self.sync_push_entity_persisted(sync_entity);
+                self.persist_sync_entity(sync_entity, self.sync_manager.is_some());
 
                 // Increment push count and run scheduled check
                 let count = self.sync_push_count.get() + 1;
@@ -12063,10 +13034,13 @@ impl MahoCore {
                     if entity.deleted {
                         let space_id = maho_types::identifiers::SpaceId::new(&entity.entity_id);
                         self.space_manager.delete_space(&space_id);
+                        updates.push(CoreUpdate::SpaceDeleted { space_id });
                     } else if let Ok(space) =
                         serde_json::from_str::<maho_types::space::Space>(&entity.payload_json)
                     {
+                        let vm = self.space_manager.to_view_model(&space);
                         self.space_manager.upsert_space(space);
+                        updates.push(CoreUpdate::SpaceCreated { space: vm });
                     }
                     let favorited_tab_ids: std::collections::HashSet<
                         maho_types::identifiers::TabId,
@@ -12083,12 +13057,23 @@ impl MahoCore {
                     if entity.deleted {
                         let tab_id = maho_types::identifiers::TabId::new(&entity.entity_id);
                         self.tab_manager.close_tab(&tab_id);
-                    } else if let Ok(tab) =
+                        updates.push(CoreUpdate::TabClosed {
+                            tab_id,
+                            animated: false,
+                        });
+                    } else if let Ok(mut tab) =
                         serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json)
                     {
+                        if tab.favicon.is_none() {
+                            tab.favicon = self.tab_manager.get_tab(&tab.id)
+                                .filter(|existing| existing.url == tab.url)
+                                .and_then(|existing| existing.favicon.clone());
+                        }
                         let is_favorite = tab.role.is_favorite(); // L3-EXEMPT: local query
                         let tab_id = tab.id.clone();
+                        let vm = self.tab_manager.to_view_model(&tab);
                         self.tab_manager.restore_tab(tab);
+                        updates.push(CoreUpdate::TabCreated { tab: vm });
                         if is_favorite {
                             // L3-EXEMPT: local parameter
                             let mut favorited_tab_ids = std::collections::HashSet::new();
@@ -12443,8 +13428,10 @@ impl MahoCore {
                             &entity.payload_json,
                         ) {
                             self.settings_manager.restore_settings(settings);
+                            let restored = self.settings_manager.get_settings().clone();
+                            self.apply_vault_trust_settings(&restored);
                             updates.push(CoreUpdate::SettingsChanged {
-                                settings: self.settings_manager.get_settings().clone(),
+                                settings: restored,
                             });
                         }
                     }
@@ -12463,7 +13450,26 @@ impl MahoCore {
                         }
                     }
                 }
-                SyncEntityType::VaultItem => {}
+                SyncEntityType::VaultItem => {
+                    let result = serde_json::from_str::<maho_types::vault::VaultItemSyncDto>(
+                        &entity.payload_json,
+                    )
+                    .ok()
+                    .and_then(|dto| vault_items::vault_item_storage_row_from_dto(&dto))
+                    .map_or(Ok(()), |row| {
+                        self.storage
+                            .as_ref()
+                            .map_or(Ok(()), |storage| storage.save_vault_item(&row))
+                    });
+                    if let Err(error) = result {
+                        eprintln!(
+                            "[sync] Failed to persist vault item {}: {}",
+                            entity.entity_id, error
+                        );
+                        failed_persistence
+                            .insert((entity.entity_type.clone(), entity.entity_id.clone()));
+                    }
+                }
             }
         }
 
@@ -12477,6 +13483,9 @@ impl MahoCore {
                     }
                 }
             }
+        }
+        for update in &updates {
+            self.tab_manager.queue_update(update.clone());
         }
         self.emit_updates(updates);
         applied
@@ -12604,10 +13613,57 @@ impl MahoCore {
     }
 
     /// Push an entity through sync, persisting to queue if storage available
-    pub fn sync_push_entity_persisted(&mut self, mut entity: SyncEntity) {
+    pub fn sync_push_entity_persisted(&mut self, entity: SyncEntity) {
+        self.persist_sync_entity(entity, true);
+    }
+
+    fn persist_sync_entity(&mut self, mut entity: SyncEntity, enqueue: bool) {
+        if entity.profile_id.is_none() {
+            if let Some(active_profile_id) = self.profile_manager.get_active_profile_id() {
+                entity.profile_id = Some(active_profile_id.to_string());
+            }
+        }
+        // If entity is profile-scoped and payload lacks profileId, inject it
+        if matches!(
+            entity.entity_type,
+            SyncEntityType::Tab
+                | SyncEntityType::Space
+                | SyncEntityType::Bookmark
+                | SyncEntityType::BookmarkFolder
+                | SyncEntityType::Note
+                | SyncEntityType::ReadingListItem
+        ) {
+            if let Some(ref pid) = entity.profile_id {
+                if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&entity.payload_json)
+                {
+                    if val.is_object() && val.get("profileId").is_none() {
+                        if let Some(map) = val.as_object_mut() {
+                            map.insert(
+                                "profileId".to_string(),
+                                serde_json::Value::String(pid.clone()),
+                            );
+                            if let Ok(updated_payload) = serde_json::to_string(&val) {
+                                entity.payload_json = updated_payload;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(sm) = &mut self.sync_manager {
+            if let Err(error) = sm.prepare_local_entity(&mut entity) {
+                eprintln!("[sync] Cannot persist unbound entity: {error}");
+                return;
+            }
+        }
+        let Some(storage_id) = entity.storage_entity_id() else {
+            eprintln!("[sync] Cannot persist an entity without its profile scope");
+            return;
+        };
         // Persist to SQLite queue first
         if let Some(ref storage) = self.storage {
             let entity_type_str = entity.entity_type.as_str();
+            if enqueue {
             if let Ok(row_id) = storage.enqueue_sync_entity(
                 entity_type_str,
                 &entity.entity_id,
@@ -12618,36 +13674,38 @@ impl MahoCore {
             ) {
                 entity.queue_row_id = Some(row_id);
             }
+            }
+            let persisted_payload = if entity.deleted {
+                serde_json::json!({"mahoSyncDeleted": true, "profileId": entity.profile_id}).to_string()
+            } else { entity.payload_json.clone() };
             // Also update entity_versions table for local change
             let _ = storage.save_entity_version(
                 entity_type_str,
-                &entity.entity_id,
+                &storage_id,
                 entity.version,
                 entity.device_id,
                 entity.fields_hlc_json.as_deref(),
-                Some(&entity.payload_json),
+                Some(&persisted_payload),
             );
         }
         // Then push to in-memory sync manager
         if let Some(ref mut sm) = self.sync_manager {
-            let cache_key = format!("{}:{}", entity.entity_type.as_str(), entity.entity_id);
-            sm.set_entity_version_in_cache(
-                &cache_key,
-                entity.version,
-                entity.device_id,
-                entity.fields_hlc_json.clone(),
-                Some(entity.payload_json.clone()),
-            );
+            // push_entity populates the canonical cache key after binding.
             sm.push_entity(entity);
         }
     }
 
     /// Load pending sync entities from persistent storage on startup
     pub fn load_sync_queue(&mut self) -> Result<(), PersistenceError> {
+        if let Some(worker) = self.storage_maintenance.take() {
+            worker.join().map_err(|_| PersistenceError::Storage("Storage maintenance worker panicked".to_string()))?;
+        }
         let storage = match self.storage.as_ref() {
             Some(s) => s,
             None => return Ok(()),
         };
+        storage.coalesce_legacy_sync_queue()
+            .map_err(|error| PersistenceError::Storage(error.to_string()))?;
         let entries = storage
             .load_pending_sync_entities()
             .map_err(|e| PersistenceError::Storage(e.to_string()))?;
@@ -12680,6 +13738,7 @@ impl MahoCore {
                 deleted,
                 queue_row_id: Some(id),
                 fields_hlc_json,
+                profile_id: None,
             };
             if let Some(ref mut sm) = self.sync_manager {
                 sm.push_entity(entity);
@@ -12722,6 +13781,12 @@ impl MahoCore {
                         .to_string();
                         facts_to_push.push((id, payload));
                     }
+                    self.memory_engine.record_session(crate::memory::consolidation::DreamSessionInput {
+                        session_id: session_id.clone(),
+                        is_private: false,
+                        facts: facts.iter().map(|fact| fact.fact.clone()).collect(),
+                        created_at: chrono::Utc::now(),
+                    });
                     updates.push(CoreUpdate::MemoryFactsExtracted {
                         session_id,
                         fact_count: facts.len(),
@@ -12830,6 +13895,31 @@ impl MahoCore {
             .get_memory_block(label)
             .ok()
             .flatten()
+    }
+
+    pub fn get_l1_briefing(&self) -> Option<String> {
+        self.get_memory_block(crate::memory::tier::L1_BRIEFING_LABEL)
+    }
+
+    pub fn search_memory_hybrid(
+        &self,
+        query: &str,
+        top_k: usize,
+    ) -> Vec<crate::memory::retrieval::HybridMemoryResult> {
+        let Some(ref storage) = self.storage else {
+            return Vec::new();
+        };
+        let mut engine = crate::memory::MemoryEngine::new();
+        let _ = engine.rebuild_index(storage);
+        engine.search_hybrid(query, storage, top_k)
+    }
+
+    pub fn step_memory_maintenance(&mut self) -> Result<usize, crate::error::CoreError> {
+        let Some(ref storage) = self.storage else {
+            return Ok(0);
+        };
+        self.memory_engine.rebuild_index(storage)?;
+        self.memory_engine.step_maintenance(storage)
     }
 
     pub fn delete_memory(&mut self, id: &str) -> bool {
@@ -13446,9 +14536,11 @@ impl MahoCore {
             .storage
             .as_ref()
             .ok_or(crate::vault_runtime::session::VaultBackendSessionError::StorageUnavailable)?;
+        let profile_id = self.get_active_profile_id().cloned().unwrap_or_default();
         Ok(crate::vault_runtime::session::VaultBackendSession::new(
             Arc::downgrade(&self.vault_runtime),
             storage.path(),
+            profile_id,
         ))
     }
 
@@ -13475,6 +14567,10 @@ impl MahoCore {
         range: &maho_types::vault::VaultItemCreatedRange,
     ) -> Result<maho_types::vault::VaultRangeDeleteResult, crate::vault_manager::VaultCrudError>
     {
+        // Lock denial must win before ANY repository/storage access: an
+        // uninitialized-but-locked runtime has to report Locked, not leak the
+        // storage-configuration state to the caller. Checking storage first
+        // inverts that order and turns a lock denial into a Storage error.
         self.vault_runtime
             .ensure_unlocked()
             .map_err(crate::vault_manager::VaultCrudError::from)?;
@@ -13483,17 +14579,23 @@ impl MahoCore {
                 "vault storage not configured".to_string(),
             )
         })?;
-        #[cfg(test)]
-        let inject_post_write_fault = self.vault_item_persist_fault;
-        #[cfg(not(test))]
-        let inject_post_write_fault = false;
-        self.vault_runtime.delete_created_range(
-            crate::vault_runtime::repository::VaultRepository::new(
+        let audit_context = crate::vault_runtime::audit::AuditContext::new(
+            self.get_active_profile_id().cloned().unwrap_or_default(),
+            maho_types::vault::VaultAuditOperation::ItemDeleted,
+        );
+        let result = {
+            #[cfg(test)]
+            let inject_post_write_fault = self.vault_item_persist_fault;
+            #[cfg(not(test))]
+            let inject_post_write_fault = false;
+            let repository = crate::vault_runtime::repository::VaultRepository::new(
                 storage,
                 inject_post_write_fault,
-            ),
-            range,
-        )
+            )
+            .with_audit(audit_context.clone());
+            self.vault_runtime.delete_created_range(repository, range)
+        };
+        crate::vault_runtime::audit::complete_operation_result(storage, &audit_context, result)
     }
 }
 
@@ -13598,6 +14700,10 @@ impl TabManagerInterface for TabLifecycleManager {
 
     fn suspend_tab(&mut self, tab_id: &TabId) {
         self.suspend_tab(tab_id)
+    }
+
+    fn reset_favorite_url_to_pinned(&mut self, tab_id: &TabId) -> bool {
+        self.reset_favorite_url_to_pinned(tab_id)
     }
 
     fn archive_tab(&mut self, tab_id: &TabId) {
@@ -13947,6 +15053,28 @@ impl CommandBarInterface for CommandBarEngine {
         ctx: &SearchContext,
     ) -> Vec<SuggestionViewModel> {
         self.search(query, mode, ctx)
+    }
+}
+
+#[cfg(test)]
+mod review_memory_maintenance_tests {
+    use super::*;
+
+    #[test]
+    fn completed_sessions_drive_core_maintenance() {
+        let _ = maho_storage::sqlite::set_sqlcipher_key("review-memory-key");
+        let mut core = MahoCore::new().with_storage(":memory:");
+        for i in 0..5 {
+            core.handle_memory_result(MemoryResult::FactsExtracted {
+                session_id: format!("session-{i}"),
+                facts: vec![crate::memory_manager::RawFact {
+                    fact: "The user commutes by bicycle".into(), category: "general".into(), importance: 0.8,
+                }],
+            }, &mut Vec::new());
+        }
+        assert_eq!(core.step_memory_maintenance().unwrap(), 2);
+        assert!(core.get_l1_briefing().unwrap().contains("The user commutes by bicycle"));
+        assert_eq!(core.step_memory_maintenance().unwrap(), 0);
     }
 }
 

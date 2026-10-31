@@ -12,6 +12,9 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ui/browser.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -94,10 +97,11 @@ void MahoBoostInteractiveUiTest::SetUpOnMainThread() {
   InProcessBrowserTest::SetUpOnMainThread();
 
   ASSERT_TRUE(browser());
-  ASSERT_TRUE(download_directory_.CreateUniqueTempDir("maho-boost-download-"));
-  browser()->profile()->GetPrefs()->SetFilePath(
+  ASSERT_TRUE(download_directory_.CreateUniqueTempDir(
+      FILE_PATH_LITERAL("maho-boost-download-")));
+  browser()->GetProfile()->GetPrefs()->SetFilePath(
       prefs::kDownloadDefaultDirectory, download_directory_.GetPath());
-  if (!browser()->tab_strip_model()->GetActiveWebContents()) {
+  if (!browser()->GetTabStripModel()->GetActiveWebContents()) {
     chrome::AddTabAt(browser(), GURL("about:blank"), /*index=*/-1,
                      /*foreground=*/true);
   }
@@ -111,7 +115,7 @@ void MahoBoostInteractiveUiTest::TearDownOnMainThread() {
         [this]() { return !GetController().HasWidget(); }));
   }
   if (browser()) {
-    browser()->tab_strip_model()->CloseAllTabs();
+    browser()->GetTabStripModel()->CloseAllTabs();
   }
   base::RunLoop().RunUntilIdle();
   {
@@ -127,12 +131,12 @@ void MahoBoostInteractiveUiTest::TearDownOnMainThread() {
 }
 
 maho::MahoBoostWindowController& MahoBoostInteractiveUiTest::GetController() {
-  return maho::MahoBoostWindowController::GetForBrowser(browser(),
-                                                         browser()->profile());
+  return maho::MahoBoostWindowController::GetForBrowser(static_cast<Browser*>(browser()),
+                                                         browser()->GetProfile());
 }
 
 content::WebContents* MahoBoostInteractiveUiTest::GetTargetWebContents() {
-  return browser()->tab_strip_model()->GetActiveWebContents();
+  return browser()->GetTabStripModel()->GetActiveWebContents();
 }
 
 content::WebContents* MahoBoostInteractiveUiTest::GetEditorWebContents() {
@@ -435,7 +439,7 @@ bool MahoBoostInteractiveUiTest::CaptureEditorScreenshot(
   }
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
-    if (base::WriteFile(output_path, *png) < 0) {
+    if (!base::WriteFile(output_path, *png)) {
       ADD_FAILURE() << "Could not write Boost screenshot: " << output_path;
       return false;
     }

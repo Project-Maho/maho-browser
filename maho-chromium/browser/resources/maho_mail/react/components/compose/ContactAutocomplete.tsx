@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import * as api from "../../api";
 import type { Contact, ContactGroup } from "../../types";
-import { X } from "lucide-react";
+import { Users, X } from "lucide-react";
+import { parseRecipientsFn } from "../../hooks/useComposeRecipients";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function isValidEmail(email: string): boolean {
@@ -15,6 +16,7 @@ interface ContactAutocompleteProps {
   accountId: string;
   value: string;
   onChange: (value: string) => void;
+  onPendingChange?: (value: string) => void;
   placeholder?: string;
   label?: string;
   inline?: boolean;
@@ -32,6 +34,7 @@ export function ContactAutocomplete({
   accountId,
   value,
   onChange,
+  onPendingChange,
   placeholder = "recipient@example.com",
   label,
   inline = false,
@@ -57,11 +60,10 @@ export function ContactAutocomplete({
     };
   }, []);
 
+  useEffect(() => { onPendingChange?.(inputValue); }, [inputValue, onPendingChange]);
+
   // Parse comma-separated value into unique array of chips
-  const chips = value
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const chips = parseRecipientsFn(value);
 
   const search = useCallback(
     async (query: string) => {
@@ -129,7 +131,9 @@ export function ContactAutocomplete({
         }
       });
     } else {
-      const display = item.data.name ? `${item.data.name} <${item.data.email}>` : item.data.email;
+      const name = item.data.name;
+      const encodedName = name && /[,;"\\]/.test(name) ? `"${name.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"` : name;
+      const display = encodedName ? `${encodedName} <${item.data.email}>` : item.data.email;
       if (!currentChips.includes(display)) {
         currentChips.push(display);
       }
@@ -145,7 +149,7 @@ export function ContactAutocomplete({
   const createChip = () => {
     const trimmed = inputValue.trim();
     if (trimmed) {
-      const newTokens = trimmed.split(/[;,]/).map((s) => s.trim()).filter(Boolean);
+      const newTokens = parseRecipientsFn(trimmed);
       const currentChips = [...chips];
 
       newTokens.forEach((token) => {
@@ -198,6 +202,7 @@ export function ContactAutocomplete({
       setActiveIndex((prev) => Math.max(prev - 1, 0));
     } else if (e.key === "Escape") {
       e.preventDefault();
+      e.stopPropagation();
       setShowSuggestions(false);
     }
   };
@@ -230,7 +235,7 @@ export function ContactAutocomplete({
           return (
             <div
               key={index}
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium border ${chipClass}`}
+              className={`inline-flex h-7 items-center gap-1 rounded-full pl-2.5 pr-1 text-xs font-medium border animate-scale-in ${chipClass}`}
             >
               <span>{chip}</span>
               <button
@@ -239,7 +244,8 @@ export function ContactAutocomplete({
                   e.stopPropagation();
                   removeChip(index);
                 }}
-                className="hover:bg-foreground/10 rounded-full p-0.5 transition-colors"
+                className="flex h-5 w-5 items-center justify-center rounded-full transition-colors hover:bg-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={`Remove ${chip}`}
               >
                 <X size={12} />
               </button>
@@ -287,7 +293,7 @@ export function ContactAutocomplete({
         <div
           id={listboxId}
           role="listbox"
-          className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-border bg-card py-1 shadow-xl max-h-60 overflow-y-auto"
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl animate-scale-in"
         >
           {suggestions.map((item, i) => (
             <button
@@ -298,15 +304,15 @@ export function ContactAutocomplete({
               aria-selected={i === activeIndex}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => selectSuggestion(item)}
-              className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
+              className={`flex min-h-10 w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
                 i === activeIndex
-                  ? "bg-primary/20 text-foreground"
-                  : "text-muted-foreground hover:bg-muted"
+                  ? "bg-primary/10 text-foreground"
+                  : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
               }`}
             >
               {item.type === 'group' ? (
                 <>
-                  <span className="shrink-0 text-base">👥</span>
+                  <Users size={16} className="shrink-0 text-muted-foreground" aria-hidden="true" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{item.data.name}</p>
                     <p className="truncate text-xs text-muted-foreground">

@@ -65,6 +65,8 @@ struct MahoControlActivityIndicatorModel {
   MahoControlPlane plane = MahoControlPlane::kEmbedded;
   // Human-readable controller name, e.g. "Maho CLI". Never an authority claim.
   std::u16string controller_name;
+  // Current active tool / step summary.
+  std::u16string current_step;
   // Title of the tab under control. May be empty when the target has no title.
   std::u16string target_title;
   // True when the controlled tab is not the active tab of this window.

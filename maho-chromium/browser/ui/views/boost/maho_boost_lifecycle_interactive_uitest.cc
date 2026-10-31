@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "base/run_loop.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -132,10 +133,10 @@ IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest, TabSwitchClosesEditor) {
   // Creating a tab produces browser-owned AX nodes. Add and settle it before
   // scoping the counter to the Boost widget so this test measures only editor
   // cleanup, rather than expecting the browser-wide tree to be unchanged.
-  const int new_tab_index = browser()->tab_strip_model()->count();
+  const int new_tab_index = browser()->GetTabStripModel()->count();
   chrome::AddTabAt(browser(), GURL("about:blank"), /*index=*/-1,
                    /*foreground=*/false);
-  ASSERT_EQ(new_tab_index + 1, browser()->tab_strip_model()->count());
+  ASSERT_EQ(new_tab_index + 1, browser()->GetTabStripModel()->count());
   base::RunLoop().RunUntilIdle();
   ui::AXPlatformNodeBase::ResetInstanceCountForTesting();
 
@@ -146,7 +147,7 @@ IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest, TabSwitchClosesEditor) {
         return ui::AXPlatformNodeBase::GetInstanceCount() > 0;
       }));
 
-  browser()->tab_strip_model()->ActivateTabAt(new_tab_index);
+  browser()->GetTabStripModel()->ActivateTabAt(new_tab_index);
 
   ASSERT_TRUE(WaitUntilHidden())
       << "Boost editor must close when the active tab changes";
@@ -171,10 +172,10 @@ IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
   const std::string temporary_boost_id = selected_id.ExtractString();
   ASSERT_FALSE(temporary_boost_id.empty());
 
-  const int new_tab_index = browser()->tab_strip_model()->count();
+  const int new_tab_index = browser()->GetTabStripModel()->count();
   chrome::AddTabAt(browser(), GURL("about:blank"), /*index=*/-1,
                    /*foreground=*/false);
-  browser()->tab_strip_model()->ActivateTabAt(new_tab_index);
+  browser()->GetTabStripModel()->ActivateTabAt(new_tab_index);
 
   ASSERT_TRUE(WaitForCondition("host cleanup and widget destruction",
                                [this]() { return !GetController().HasWidget(); }));
@@ -193,25 +194,25 @@ IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
   content::WebContents* original_tab = GetTargetWebContents();
   ASSERT_TRUE(original_tab);
 
-  const int background_index = browser()->tab_strip_model()->count();
+  const int background_index = browser()->GetTabStripModel()->count();
   chrome::AddTabAt(
       browser(), embedded_test_server()->GetURL("b.com", "/title2.html"),
       /*index=*/-1, /*foreground=*/false);
   content::WebContents* background_tab =
-      browser()->tab_strip_model()->GetWebContentsAt(background_index);
+      browser()->GetTabStripModel()->GetWebContentsAt(background_index);
   ASSERT_TRUE(background_tab);
   ASSERT_TRUE(content::NavigateToURL(
       background_tab,
       embedded_test_server()->GetURL("b.com", "/title2.html")));
   ASSERT_EQ(original_tab,
-            browser()->tab_strip_model()->GetActiveWebContents());
+            browser()->GetTabStripModel()->GetActiveWebContents());
 
   FocusObserver focus_observer(background_tab);
 
   GetController().ShowForActiveDomain(background_tab);
 
   EXPECT_EQ(background_tab,
-            browser()->tab_strip_model()->GetActiveWebContents());
+            browser()->GetTabStripModel()->GetActiveWebContents());
   EXPECT_EQ(background_tab,
             GetController().GetTargetWebContentsForTesting());
   EXPECT_TRUE(WaitForCondition("background Boost target receives focus",
@@ -260,13 +261,13 @@ IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
   content::WebContents* first_target = GetTargetWebContents();
   ASSERT_TRUE(first_target);
 
-  Browser* second_browser = CreateBrowser(browser()->profile());
+  Browser* second_browser = static_cast<Browser*>(CreateBrowser(browser()->GetProfile()));
   ASSERT_TRUE(second_browser);
   chrome::AddTabAt(second_browser,
                    embedded_test_server()->GetURL("b.com", "/title2.html"),
                    /*index=*/-1, /*foreground=*/true);
   content::WebContents* second_target =
-      second_browser->tab_strip_model()->GetActiveWebContents();
+      second_browser->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(second_target);
   ASSERT_TRUE(content::NavigateToURL(
       second_target,
@@ -274,7 +275,7 @@ IN_PROC_BROWSER_TEST_F(MahoBoostLifecycleTest,
 
   auto& first = GetController();
   auto& second = maho::MahoBoostWindowController::GetForBrowser(
-      second_browser, second_browser->profile());
+      second_browser, second_browser->GetProfile());
   first.ShowForActiveDomain(first_target);
   second.ShowForActiveDomain(second_target);
 

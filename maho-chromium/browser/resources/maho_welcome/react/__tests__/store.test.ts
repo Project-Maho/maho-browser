@@ -230,7 +230,9 @@ describe('MahoWelcomeStore', () => {
         configured: true,
       });
       await store.checkByokConfigured();
-      store.nextPage();
+      // Account escrow: the default flow skips the vault ceremony, so the page
+      // is entered through its dedicated navigation before the skip path.
+      store.navigateToPasswordSetup();
       expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
       await expect(store.skipPasswordSetup()).resolves.toBe(true);
       await expect(store.generateSyncKey()).resolves.toEqual(generated);
@@ -275,7 +277,7 @@ describe('MahoWelcomeStore', () => {
       WelcomePage.SearchEngine,
       WelcomePage.Essentials,
       WelcomePage.AIProvider,
-      WelcomePage.PasswordSetup,
+      WelcomePage.Completion,
     ];
 
     // Cannot advance without sign in
@@ -372,7 +374,7 @@ describe('MahoWelcomeStore', () => {
 
     expect(store.getSnapshot().aiSetup.status).toBe('success');
     store.nextPage();
-    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
   });
 
   it('reports BYOK setup failed when the dialog request rejects and keeps Next blocked', async () => {
@@ -397,7 +399,7 @@ describe('MahoWelcomeStore', () => {
 
     expect(store.getSnapshot().aiSetup.status).toBe('success');
     store.nextPage();
-    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
   });
 
   it('drops a stale BYOK credential result after the user switches provider', async () => {
@@ -437,7 +439,7 @@ describe('MahoWelcomeStore', () => {
     // newer confirmed state.
     expect(store.getSnapshot().aiSetup.status).toBe('success');
     store.nextPage();
-    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
   });
 
   it('ignores a stale BYOK check reply that lands while the settings dialog is open', async () => {
@@ -472,7 +474,7 @@ describe('MahoWelcomeStore', () => {
 
     store.continueWithFreePlan();
 
-    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
     expect(mockHandlerInstance.getSubscriptionCheckoutUrl).not.toHaveBeenCalled();
   });
 
@@ -783,7 +785,7 @@ describe('MahoWelcomeStore', () => {
     await Promise.resolve();
 
     expect(mockHandlerInstance.getRelayAccountStatusFromWelcome).toHaveBeenCalled();
-    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
   });
 
   it('prevPage returns managed users from PasswordSetup to PlanSelect', () => {

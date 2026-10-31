@@ -62,6 +62,8 @@ MAHO_BROWSER_CAPABILITY(mail_flag, "mail.flag", "mail_flag", Mail, Mutable, No, 
 MAHO_BROWSER_CAPABILITY(browser_acquire_lease, "lease.acquire", "browser_acquire_lease", Lease, Mutable, Yes, Browser, Tab, Sensitive, Always, ControlPlane, FailClosed, "Acquire an exclusive tab lease.")
 MAHO_BROWSER_CAPABILITY(browser_heartbeat_lease, "lease.heartbeat", "browser_heartbeat_lease", Lease, Mutable, No, Browser, Tab, Sensitive, Always, ControlPlane, FailClosed, "Extend an existing tab lease.")
 MAHO_BROWSER_CAPABILITY(browser_release_lease, "lease.release", "browser_release_lease", Lease, Mutable, Yes, Browser, Tab, Sensitive, Always, ControlPlane, FailClosed, "Release a tab lease.")
+MAHO_BROWSER_CAPABILITY(browser_tab_borrow, "lease.borrow", "browser_tab_borrow", Lease, Mutable, Yes, Browser, Tab, Sensitive, Always, ControlPlane, FailClosed, "Borrow a tab into an Agent Space.")
+MAHO_BROWSER_CAPABILITY(browser_tab_return, "lease.return", "browser_tab_return", Lease, Mutable, Yes, Browser, Tab, Sensitive, Always, ControlPlane, FailClosed, "Return a borrowed tab to its origin space.")
 MAHO_BROWSER_CAPABILITY(browser_grant_exact_origin, "control.origin.grant", "browser_grant_exact_origin", Policy, Mutable, Yes, Browser, Profile, Sensitive, Always, ControlPlane, FailClosed, "Grant one exact origin to this controller.")
 MAHO_BROWSER_CAPABILITY(browser_revoke_exact_origin, "control.origin.revoke", "browser_revoke_exact_origin", Policy, Mutable, Yes, Browser, Profile, Sensitive, Always, ControlPlane, FailClosed, "Revoke one exact origin from this controller.")
 MAHO_BROWSER_CAPABILITY(browser_list_exact_origins, "control.origin.list", "browser_list_exact_origins", Policy, ReadOnly, No, Browser, Profile, Sensitive, Always, ControlPlane, FailClosed, "List exact origins granted to this controller.")
@@ -86,6 +88,7 @@ MAHO_BROWSER_CAPABILITY(screenshot_proof, "capture.screenshot_proof", "screensho
 MAHO_BROWSER_CAPABILITY(input_locator_click, "input.locator_click", "browser_locator_click", Input, Mutable, Yes, Browser, Tab, Sensitive, Always, DesktopAgentAndBrowserMcp, FailClosed, "Click an element by locator (ref, css, or role/name).")
 MAHO_BROWSER_CAPABILITY(input_locator_type, "input.locator_type", "browser_locator_type", Input, Mutable, Yes, Browser, Tab, Sensitive, Always, DesktopAgentAndBrowserMcp, FailClosed, "Type text into an element by locator (ref, css, or role/name).")
 MAHO_BROWSER_CAPABILITY(browser_act_and_observe, "browser.act_and_observe", "browser_act_and_observe", Input, Mutable, Yes, Browser, Tab, Sensitive, Always, DesktopAgentAndBrowserMcp, FailClosed, "Execute a browser action and observe state changes in one transaction.")
+MAHO_BROWSER_CAPABILITY(browser_visual_click, "browser.visual_click", "browser_visual_click", Action, Mutable, Yes, Browser, Tab, Sensitive, NativeInput, BrowserMcp, FailClosed, "Click on a visual target using frame-derived screen coordinates.")
 
 // id, canonical_id, tool_name, category, broker, boundary, feature_gate,
 // surfaces, description. Mutability, authority, sensitivity and missing policy
@@ -97,6 +100,7 @@ MAHO_BROWSER_ACTION_CAPABILITY(page_get_attribute, "page.get_attribute", "page_g
 MAHO_BROWSER_ACTION_CAPABILITY(page_wait_for_selector, "page.wait_for_selector", "page_wait_for_selector", Page, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Wait for a selector to appear.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_wait_for_navigation, "navigation.wait", "browser_wait_for_navigation", Navigation, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Wait for navigation to complete or time out.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_navigate, "navigation.navigate", "browser_navigate", Navigation, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Navigate a tab to a URL.")
+MAHO_BROWSER_ACTION_CAPABILITY(browser_history_back, "navigation.back", "browser_history_back", Navigation, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Navigate back in the tab's navigation history.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_click, "input.click", "browser_click", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Click an element by accessibility ref.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_type, "input.type", "browser_type", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Type text into an element by accessibility ref.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_file_upload_select, "input.file_upload_select", "browser_file_upload_select", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Select a local file for a pending file chooser.")
@@ -104,3 +108,5 @@ MAHO_BROWSER_ACTION_CAPABILITY(browser_select, "input.select", "browser_select",
 MAHO_BROWSER_ACTION_CAPABILITY(browser_scroll, "input.scroll", "browser_scroll", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Scroll the viewport or an element.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_hover, "input.hover", "browser_hover", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Hover over an element by accessibility ref.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_key_press, "input.key_press", "browser_key_press", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Press a keyboard key in a tab.")
+MAHO_BROWSER_ACTION_CAPABILITY(browser_observe, "browser.observe", "browser_observe", Page, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Observe the active tab as a compact visual-object tree with @eN element refs, geometry, occlusion filtering, and cursor pagination.")
+MAHO_BROWSER_ACTION_CAPABILITY(browser_request_help, "browser.request_help", "browser_request_help", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Pause the agent run and ask the human to complete a step (CAPTCHA, 2FA, checkout); resumes on completion.")

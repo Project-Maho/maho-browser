@@ -314,6 +314,25 @@ export interface RpcResponse {
   error?: BridgeError;
 }
 
+export type BridgeRpcErrorCode =
+  | 'rpc_timeout'
+  | 'rpc_aborted'
+  | 'bridge_disposed'
+  | 'rpc_overloaded';
+
+export interface CallOptions {
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}
+
+export interface BridgeResourceClaimPayload {
+  readonly requestId: string;
+}
+
+export interface BridgeRequestAbandonPayload {
+  readonly requestId: string;
+}
+
 /**
  * Typed bridge surface. Every method returns a Promise — the RPC
  * dispatcher maps each call to the appropriate platform mechanism.

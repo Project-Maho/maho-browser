@@ -124,6 +124,7 @@ pub struct ActiveTurn {
     pub turn_id: String,
     pub session_id: String,
     pub cancelled: Arc<AtomicBool>,
+    pub cancel_notify: Arc<tokio::sync::Notify>,
     pub steer_guidance: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
@@ -133,6 +134,7 @@ impl ActiveTurn {
             session_id: session_id.into(),
             turn_id: turn_id.into(),
             cancelled: Arc::new(AtomicBool::new(false)),
+            cancel_notify: Arc::new(tokio::sync::Notify::new()),
             steer_guidance: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
@@ -145,6 +147,7 @@ impl ActiveTurn {
     /// Cancel this turn.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
+        self.cancel_notify.notify_one();
     }
 
     /// Cancellation flag handle.
@@ -204,6 +207,15 @@ impl SessionTurnController {
 
     /// Complete the currently active turn and pop the next queued follow-up if any.
     pub fn complete_current_turn(&mut self) -> Option<QueuedFollowUp> {
+        let turn_id = self.active_turn.as_ref()?.turn_id.clone();
+        self.complete_turn(&turn_id)
+    }
+
+    /// Complete only the identified turn; late completion cannot consume a newer turn.
+    pub fn complete_turn(&mut self, turn_id: &str) -> Option<QueuedFollowUp> {
+        if self.active_turn.as_ref().map(|turn| turn.turn_id.as_str()) != Some(turn_id) {
+            return None;
+        }
         self.active_turn = None;
         self.queue.pop_next()
     }
@@ -237,9 +249,10 @@ impl SessionTurnController {
             FollowUpBehavior::Steer => {
                 if let Some(ref active) = self.active_turn {
                     // Inject steer guidance into the active turn
-                    if let Ok(mut lock) = active.steer_guidance.try_lock() {
-                        *lock = Some(msg.clone());
-                    }
+                    let mut lock = active.steer_guidance.try_lock().map_err(|_| {
+                        TurnControlError::InvalidOperation("Steering guidance is busy".to_string())
+                    })?;
+                    *lock = Some(msg.clone());
                     Ok(FollowUpSubmissionResult::Steered { guidance: msg })
                 } else {
                     Err(TurnControlError::SessionNotActive)
@@ -269,6 +282,36 @@ impl SessionTurnController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_completion_preserves_new_turn_and_queue() {
+        let mut controller = SessionTurnController::new("session");
+        controller.start_turn("new").unwrap();
+        controller
+            .submit_follow_up("next", FollowUpBehavior::Queue, 0)
+            .unwrap();
+        assert!(controller.complete_turn("old").is_none());
+        assert_eq!(controller.active_turn.as_ref().unwrap().turn_id, "new");
+        assert_eq!(controller.queue.len(), 1);
+        assert_eq!(controller.complete_turn("new").unwrap().message, "next");
+    }
+
+    #[test]
+    fn steer_contention_returns_error_without_accepting_guidance() {
+        let mut controller = SessionTurnController::new("session");
+        controller.start_turn("turn").unwrap();
+        let guidance = controller
+            .active_turn
+            .as_ref()
+            .unwrap()
+            .steer_guidance
+            .clone();
+        let guard = guidance.try_lock().unwrap();
+        assert!(controller
+            .submit_follow_up("lost", FollowUpBehavior::Steer, 0)
+            .is_err());
+        assert!(guard.is_none());
+    }
 
     #[test]
     fn test_queue_follow_up_fifo_execution_and_once_only() {

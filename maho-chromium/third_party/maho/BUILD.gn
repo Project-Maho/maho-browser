@@ -179,7 +179,6 @@ config("maho_mail_ffi_prebuilt_config") {
   if (is_win) {
     libs = [
       "maho_mail_ffi.lib",
-      "libcrypto.lib",
       "ws2_32.lib",
       "userenv.lib",
       "ntdll.lib",
@@ -188,7 +187,6 @@ config("maho_mail_ffi_prebuilt_config") {
       "crypt32.lib",
       "secur32.lib",
     ]
-    lib_dirs += [ "C:/Program Files/OpenSSL-Win64/lib/VC/x64/MD" ]
   } else {
     libs = [ "maho_mail_ffi" ]
     if (is_mac) {

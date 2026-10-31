@@ -258,6 +258,17 @@ describe('InteractionApprovalCard — action confirmations', () => {
     expect(requireCard(container).getAttribute('data-state')).toBe('denied');
   });
 
+  it('retains the instruction and exposes retry feedback when dispatch fails', async () => {
+    act(() => emitRuntimeEvent(interactionEvent('session-1', 1, {kind: 0})));
+    setInstructionInAct(container, 'Use staging, not production');
+    mockHandler.respondToInteraction.mockRejectedValueOnce(new Error('Transport disconnected'));
+    await act(async () => { clickButton(container, 'Send reply'); });
+    expect.soft(container.querySelector<HTMLInputElement>('input')?.value).toBe('Use staging, not production');
+    expect.soft(requireCard(container).getAttribute('data-state')).toBe('pending');
+    expect.soft(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect.soft(container.querySelector<HTMLButtonElement>('[aria-label="Send reply"]')?.disabled).toBe(false);
+  });
+
   it('sends a typed instruction as a text answer', async () => {
     act(() => emitRuntimeEvent(interactionEvent('session-1', 1)));
 

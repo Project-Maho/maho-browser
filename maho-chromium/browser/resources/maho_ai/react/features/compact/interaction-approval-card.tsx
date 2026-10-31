@@ -87,12 +87,18 @@ function ArtifactRefSummary({artifactRef}: {readonly artifactRef: string}) {
 function InteractionCard(
     {store, record}: {store: MahoAiStore; record: InteractionRequestRecord}) {
   const [instruction, setInstruction] = useState('');
+  const [dispatchFailed, setDispatchFailed] = useState(false);
   const actionable = isInteractionActionable(record);
   const trimmed = instruction.trim();
 
-  const respond = (answer: InteractionAnswerPayload) => {
-    void store.respondToInteraction(record.requestId, answer);
-    setInstruction('');
+  const respond = async (answer: InteractionAnswerPayload) => {
+    setDispatchFailed(false);
+    const accepted = await store.respondToInteraction(record.requestId, answer);
+    if (accepted) {
+      setInstruction(current => current === instruction ? '' : current);
+    } else {
+      setDispatchFailed(true);
+    }
   };
 
   const confirm = () => {
@@ -191,6 +197,11 @@ function InteractionCard(
             type="button">
             Send reply
           </button>
+        ) : null}
+        {dispatchFailed ? (
+          <p role="alert" className="text-xs text-destructive">
+            Your reply could not be sent. Check your connection and try again.
+          </p>
         ) : null}
         {!actionable ? (
           <p className="text-[11px] text-muted-foreground" role="status">

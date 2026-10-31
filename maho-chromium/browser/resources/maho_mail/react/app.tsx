@@ -56,13 +56,14 @@ import { useAuthStatus } from "./hooks/useAuthStatus";
 import { useReauthRetryQueue } from "./hooks/useReauthRetryQueue";
 import * as api from "./api";
 import { Sidebar } from "./components/layout/Sidebar";
+import { MobileDrawer } from "./components/mobile/MobileDrawer";
 import { EmailList } from "./components/layout/EmailList";
 import { EmailContent } from "./components/layout/EmailContent";
 import { AuthExpiredBanner } from "./components/common/AuthExpiredBanner";
 import { ComposeModal } from "./components/compose/ComposeModal";
 
 import { AddAccountModal } from "./components/account/AddAccountModal";
-import type { ReplyContext, EmailSummary, ComposeEmailRequest, SmartCategory, CalendarEvent } from "./types";
+import type { ReplyContext, EmailSummary, ComposeEmailRequest, SmartCategory, CalendarEvent, ComposeAttachment, ComposeStateSnapshot, SendRequestedOptions } from "./types";
 import { useToast, Toaster } from "./components/ui/Toast";
 import { useConfirm, ConfirmProvider } from "./components/ui/ConfirmDialog";
 import { TooltipProvider } from "./components/ui/Tooltip";
@@ -161,20 +162,51 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   const [composeForwardUid, setComposeForwardUid] = useState<number | undefined>();
   const [composeForwardFolderId, setComposeForwardFolderId] = useState<string | undefined>();
   const [composeDraftBody, setComposeDraftBody] = useState<string | undefined>();
+  const [composeDraftBodyHtml, setComposeDraftBodyHtml] = useState<string | undefined>();
+  const [composeBodyIsComplete, setComposeBodyIsComplete] = useState(false);
+  const [composeAttachments, setComposeAttachments] = useState<ComposeAttachment[]>([]);
+  const [composeAccountId, setComposeAccountId] = useState<string | undefined>();
   const [composeInitialTo, setComposeInitialTo] = useState<string | undefined>();
   const [composeInitialDraftId, setComposeInitialDraftId] = useState<string | null>(null);
   const [composeInitialSubject, setComposeInitialSubject] = useState<string | undefined>();
   const [composeInitialCc, setComposeInitialCc] = useState<string | undefined>();
   const [composeInitialBcc, setComposeInitialBcc] = useState<string | undefined>();
+  const [composeReadReceipt, setComposeReadReceipt] = useState<boolean>(false);
+  const [composeSecurity, setComposeSecurity] = useState<Pick<ComposeStateSnapshot, 'pgpEncrypt' | 'smimeSign' | 'smimeEncrypt'>>({});
+  const [composeInReplyTo, setComposeInReplyTo] = useState<string | undefined>();
+  const [composeReferences, setComposeReferences] = useState<string | undefined>();
   const [showCheatsheet, setShowCheatsheet] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [searchRequest, setSearchRequest] = useState<{query: string} | null>(null);
   const [syntheticView, setSyntheticView] = useState<string | null>(null);
   const [syntheticEmails, setSyntheticEmails] = useState<EmailSummary[]>([]);
   const [showSnoozePicker, setShowSnoozePicker] = useState(false);
   const [snoozeTargetId, setSnoozeTargetId] = useState<string | null>(null);
-  const [pendingSend, setPendingSend] = useState<ComposeEmailRequest | null>(null);
+  const pendingSendsRef = useRef<Map<string, {
+    id: string;
+    request: ComposeEmailRequest;
+    draftId?: string | null;
+    composition?: ComposeStateSnapshot;
+  }>>(new Map());
+  const [pendingSends, setPendingSends] = useState<{
+    id: string;
+    request: ComposeEmailRequest;
+    draftId?: string | null;
+    composition?: ComposeStateSnapshot;
+  }[]>([]);
+  const [recoveredSends, setRecoveredSends] = useState<(typeof pendingSends)[number][]>([]);
+  useEffect(() => {
+    const guard = (event: BeforeUnloadEvent) => {
+      if (pendingSendsRef.current.size > 0) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', guard);
+    return () => window.removeEventListener('beforeunload', guard);
+  }, []);
   const [smartCategory, setSmartCategory] = useState<SmartCategory>("personal");
   const { isOnline, pendingMutationCount, connectionStatus } = useNetworkStatus();
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
@@ -314,8 +346,9 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     [selectedEmailIndex, mail.emails]
   );
   const archiveFolder = useMemo(
-    () => mail.folders.find((folder) => folder.folder_type === "Archive"),
-    [mail.folders]
+    () => mail.folders.find((folder) => folder.folder_type === "Archive" &&
+      folder.account_id === (selectedEmail?.account_id ?? mail.selectedAccountId)),
+    [mail.folders, selectedEmail, mail.selectedAccountId]
   );
   const composeOpen = showCompose;
   const modalsOpen = useMemo(
@@ -339,12 +372,20 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     setComposeForward(undefined);
     setComposeForwardUid(undefined);
     setComposeForwardFolderId(undefined);
+    setComposeAccountId(undefined);
     setComposeDraftBody(undefined);
+    setComposeDraftBodyHtml(undefined);
+    setComposeAttachments([]);
     setComposeInitialTo(undefined);
     setComposeInitialDraftId(null);
     setComposeInitialSubject(undefined);
     setComposeInitialCc(undefined);
     setComposeInitialBcc(undefined);
+    setComposeReadReceipt(false);
+    setComposeSecurity({});
+    setComposeBodyIsComplete(false);
+    setComposeInReplyTo(undefined);
+    setComposeReferences(undefined);
   };
 
   const openComposeScreen = () => {
@@ -367,7 +408,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       setShowAddAccount(true);
       return;
     }
-    void api.startOAuth2("gmail", accountId).catch(() => {
+    void api.reconnectAccount(accountId).catch(() => {
       setShowAddAccount(true);
     });
   };
@@ -375,12 +416,20 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   const openDraftForEditing = async (emailId: string) => {
     try {
       const detail = await api.getEmail(emailId);
-      const { email } = detail;
+      const { email, attachments } = detail;
+      let draftFiles: ComposeAttachment[] = [];
+      if (attachments && attachments.length > 0) {
+        draftFiles = await api.getForwardedAttachments(email.account_id, email.uid, email.folder_id);
+      }
       setComposeReplyTo(undefined);
       setComposeForward(undefined);
       setComposeForwardUid(undefined);
       setComposeForwardFolderId(undefined);
       setComposeDraftBody(email.body_text ?? undefined);
+      setComposeDraftBodyHtml(email.body_html ?? undefined);
+      setComposeBodyIsComplete(true);
+      setComposeAttachments(draftFiles);
+
       const toList = parseAddressList(email.to_addresses);
       const ccList = parseAddressList(email.cc_addresses);
       const bccList = parseAddressList(email.bcc_addresses);
@@ -389,6 +438,12 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       setComposeInitialBcc(bccList.join(", "));
       setComposeInitialSubject(email.subject);
       setComposeInitialDraftId(email.id);
+      setComposeAccountId(email.account_id);
+      setComposeReadReceipt(Boolean(email.mdn_requested));
+      setComposeInReplyTo(email.in_reply_to ?? undefined);
+      if (email.account_id) {
+        mail.changeAccount(email.account_id);
+      }
       openComposeScreen();
     } catch (err) {
       toast("error", err instanceof Error ? err.message : t("app.failedToLoadDraft"));
@@ -423,7 +478,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     try {
       await api.moveEmail(selectedEmail.id, archiveFolder.id);
       void emitMailUpdated(selectedEmail.id, "move");
-      mail.changeFolder(archiveFolder.id);
+      mail.removeEmails([selectedEmail.id]);
     } catch (err) {
       toast("error", err instanceof Error ? err.message : t("app.failedToArchive"));
     }
@@ -456,7 +511,6 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     if (!ok) return;
 
     await mail.deleteEmail(emailId);
-    void emitMailUpdated(emailId, "delete");
   };
 
   const handleDeleteAccount = async (accountId: string) => {
@@ -487,10 +541,15 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     setComposeForwardUid(undefined);
     setComposeForwardFolderId(undefined);
     setComposeDraftBody(undefined);
+    setComposeDraftBodyHtml(undefined);
+    setComposeAttachments([]);
     setComposeInitialDraftId(null);
     setComposeInitialSubject(undefined);
     setComposeInitialCc(undefined);
     setComposeInitialBcc(undefined);
+    setComposeReadReceipt(false);
+    setComposeInReplyTo(undefined);
+    setComposeReferences(undefined);
     openComposeScreen();
   };
 
@@ -609,42 +668,115 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     }
   };
 
-  const handleSendRequested = (request: ComposeEmailRequest) => {
-    setPendingSend(request);
-  };
-
-  const handleUndoSend = () => {
-    setPendingSend(null);
-    toast("success", t("app.sendCancelled"));
-  };
-
-  const handleUndoSendComplete = async () => {
-    if (!pendingSend) return;
-    const request = pendingSend;
-    setPendingSend(null);
-    try {
-      await api.sendEmail(request);
-      toast("success", t("app.emailSent"));
-    } catch (err) {
-      if (!isOnline && isMobile()) {
-        try {
-          await api.queueEmail({
-            account_id: request.account_id,
-            to: request.to,
-            cc: request.cc,
-            bcc: request.bcc,
-            subject: request.subject,
-            body_text: request.body_text,
-            body_html: request.body_html,
-            attachments: request.attachments,
-          });
-          toast("info", t("offline.emailQueued"));
-        } catch {
-          toast("error", err instanceof Error ? err.message : t("app.failedToSend"));
-        }
-      } else {
-        toast("error", err instanceof Error ? err.message : t("app.failedToSend"));
+  const restoreCompositionFromPending = (item: {
+    request: ComposeEmailRequest;
+    draftId?: string | null;
+    composition?: ComposeStateSnapshot;
+  }) => {
+    setComposeBodyIsComplete(true);
+    if (item.composition) {
+      setComposeReplyTo(item.composition.replyTo);
+      setComposeForward(item.composition.forwardFrom);
+      setComposeForwardUid(item.composition.forwardEmailUid);
+      setComposeForwardFolderId(item.composition.forwardFolderId);
+      setComposeDraftBody(item.composition.body);
+      setComposeDraftBodyHtml(item.composition.bodyHtml);
+      setComposeAttachments(item.composition.attachments ?? []);
+      setComposeInitialTo(item.composition.to);
+      setComposeInitialDraftId(item.composition.draftId ?? null);
+      setComposeInitialSubject(item.composition.subject);
+      setComposeInitialCc(item.composition.cc);
+      setComposeInitialBcc(item.composition.bcc);
+      setComposeReadReceipt(item.composition.readReceipt ?? false);
+      setComposeSecurity(item.composition);
+      setComposeInReplyTo(item.composition.inReplyTo);
+      setComposeReferences(item.composition.references);
+      setComposeAccountId(item.composition.accountId);
+      if (item.composition.accountId) {
+        mail.changeAccount(item.composition.accountId);
       }
+    } else {
+      setComposeInitialTo(item.request.to?.join(", "));
+      setComposeInitialCc(item.request.cc?.join(", "));
+      setComposeInitialBcc(item.request.bcc?.join(", "));
+      setComposeInitialSubject(item.request.subject);
+      setComposeDraftBody(item.request.body_text);
+      setComposeDraftBodyHtml(item.request.body_html);
+      setComposeAttachments(item.request.attachments ?? []);
+      setComposeInitialDraftId(item.draftId ?? null);
+      setComposeReadReceipt(item.request.read_receipt ?? false);
+      setComposeInReplyTo(item.request.in_reply_to);
+      setComposeReferences(item.request.references);
+      setComposeAccountId(item.request.account_id);
+      if (item.request.account_id) {
+        mail.changeAccount(item.request.account_id);
+      }
+    }
+    openComposeScreen();
+  };
+
+  useEffect(() => {
+    if (showCompose || recoveredSends.length === 0) return;
+    const [item, ...remaining] = recoveredSends;
+    restoreCompositionFromPending(item);
+    pendingSendsRef.current.delete(item.id);
+    setRecoveredSends(remaining);
+  }, [showCompose, recoveredSends]);
+
+  const handleSendRequested = async (request: ComposeEmailRequest, options?: SendRequestedOptions) => {
+    const composition = options?.composition;
+    const draftRequest = composition ? {
+      ...request,
+      body_text: composition.body,
+      body_html: composition.bodyHtml,
+      attachments: composition.attachments,
+    } : request;
+    let draftId = options?.draftId;
+    if (draftId) await api.updateDraft(draftId, draftRequest);
+    else draftId = await api.saveDraft(draftRequest);
+    const entry = {
+      id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      request,
+      draftId,
+      composition: composition ? { ...composition, draftId } : undefined,
+    };
+    pendingSendsRef.current.set(entry.id, entry);
+    setPendingSends((prev) => [...prev, entry]);
+  };
+
+  const handleUndoSend = (entryId: string) => {
+    const item = pendingSendsRef.current.get(entryId) ?? pendingSends.find((p) => p.id === entryId);
+    setPendingSends((prev) => prev.filter((p) => p.id !== entryId));
+    toast("success", t("app.sendCancelled"));
+    if (item) {
+      setRecoveredSends((prev) => [...prev, item]);
+    }
+  };
+
+  const handleUndoSendComplete = async (entryId: string) => {
+    const item = pendingSendsRef.current.get(entryId) ?? pendingSends.find((p) => p.id === entryId);
+    if (!item) return;
+    setPendingSends((prev) => prev.filter((p) => p.id !== entryId));
+    try {
+      const receipt = await api.sendEmail(item.request);
+      pendingSendsRef.current.delete(entryId);
+      switch (receipt.status) {
+        case "sent":
+          toast("success", t("app.emailSent"));
+          break;
+        case "queued":
+          toast("info", t("compose.queuedOffline"));
+          break;
+        case "uncertain":
+          toast("warning", "Delivery could not be confirmed. Verify with the recipient before sending again.");
+          break;
+      }
+      if (item.draftId) {
+        void api.deleteEmail(item.draftId).catch(() => {});
+      }
+    } catch (err) {
+      setRecoveredSends((prev) => [...prev, item]);
+      toast("error", err instanceof Error ? err.message : t("compose.failedToSend"));
     }
   };
 
@@ -661,7 +793,6 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
 
   const handleToggleStar = async (emailId: string) => {
     await mail.toggleStar(emailId);
-    void emitMailUpdated(emailId, "toggleStar");
   };
 
   const handleCreateFolder = async (accountId: string, folderName: string) => {
@@ -747,22 +878,23 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       entries.push({
         ...combo,
         handler,
-        disabled: modalsOpen || !mail.selectedEmail,
+        disabled: modalsOpen || !mail.selectedEmail || syntheticView === "calendar" || drawerOpen,
       });
     }
     return entries;
-  }, [toolbarConfig, modalsOpen, mail.selectedEmail]);
+  }, [toolbarConfig, modalsOpen, mail.selectedEmail, syntheticView, drawerOpen]);
 
+  const mailHotkeysDisabled = modalsOpen || syntheticView === "calendar" || drawerOpen;
   useHotkeys([
-    { key: "c", handler: openCompose, disabled: modalsOpen },
-    { key: "j", handler: () => moveSelection(1), disabled: modalsOpen },
-    { key: "k", handler: () => moveSelection(-1), disabled: modalsOpen },
-    { key: "Enter", handler: () => { if (selectedEmail) { void mail.selectEmail(selectedEmail.id); } }, disabled: modalsOpen || selectedEmail === null },
-    { key: "/", handler: openSearch, disabled: modalsOpen },
+    { key: "c", handler: openCompose, disabled: modalsOpen || syntheticView === "calendar" },
+    { key: "j", handler: () => moveSelection(1), disabled: modalsOpen || syntheticView === "calendar" },
+    { key: "k", handler: () => moveSelection(-1), disabled: modalsOpen || syntheticView === "calendar" },
+    { key: "Enter", handler: () => { if (selectedEmail) { void mail.selectEmail(selectedEmail.id); } }, disabled: mailHotkeysDisabled || selectedEmail === null },
+    { key: "/", handler: openSearch, disabled: mailHotkeysDisabled },
     { key: "Escape", handler: () => { setShowAddAccount(false); setShowCheatsheet(false); setShowCommandPalette(false); }, disabled: composeOpen },
-    { key: "R", shift: true, handler: () => { if (mail.selectedEmail) void handleReplyAll(mail.selectedEmail.email.id); }, disabled: modalsOpen || !mail.selectedEmail },
-    { key: "e", handler: () => { void handleArchiveShortcut(); }, disabled: modalsOpen || !selectedEmail },
-    { key: "u", handler: () => { void handleToggleReadShortcut(); }, disabled: modalsOpen || !selectedEmail },
+    { key: "R", shift: true, handler: () => { if (mail.selectedEmail) void handleReplyAll(mail.selectedEmail.email.id); }, disabled: mailHotkeysDisabled || !mail.selectedEmail },
+    { key: "e", handler: () => { void handleArchiveShortcut(); }, disabled: modalsOpen || !selectedEmail || syntheticView === "calendar" },
+    { key: "u", handler: () => { void handleToggleReadShortcut(); }, disabled: mailHotkeysDisabled || !selectedEmail },
     { key: ",", ctrl: true, handler: () => openSettingsPanel(), disabled: composeOpen || showAddAccount },
     { key: "?", handler: () => setShowCheatsheet(true) },
     { key: "k", ctrl: true, handler: () => setShowCommandPalette(true), disabled: modalsOpen },
@@ -841,17 +973,14 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   const handleForward = async (emailId: string) => {
     try {
       const ctx = await api.getReplyContext(emailId);
+      const source = mail.emails.find((email) => email.id === emailId)
+        ?? (await api.getEmail(emailId)).email;
       setComposeReplyTo(undefined);
       setComposeForward(ctx);
       setComposeDraftBody(undefined);
-      const selectedDetail = mail.selectedEmail;
-      if (selectedDetail && selectedDetail.email.id === emailId && selectedDetail.email.has_attachments) {
-        setComposeForwardUid(selectedDetail.email.uid);
-        setComposeForwardFolderId(selectedDetail.email.folder_id);
-      } else {
-      setComposeForwardUid(undefined);
-      setComposeForwardFolderId(undefined);
-      }
+      setComposeAccountId(source.account_id);
+      setComposeForwardUid(source.has_attachments ? source.uid : undefined);
+      setComposeForwardFolderId(source.has_attachments ? source.folder_id : undefined);
       openComposeScreen();
     } catch (err) {
       toast("error", err instanceof Error ? err.message : t("app.failedToOpenForward"));
@@ -1142,14 +1271,17 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       selectedFolderType={syntheticView ? null : mail.selectedFolderType}
       selectedSyntheticId={syntheticView}
       onSelectFolder={(folderId) => {
+        setDrawerOpen(false);
         setSyntheticView(null);
         mail.changeFolder(folderId);
       }}
       onSelectAggregate={(folderType) => {
+        setDrawerOpen(false);
         setSyntheticView(null);
         mail.selectAggregate(folderType);
       }}
       onSelectSynthetic={(id) => {
+        setDrawerOpen(false);
         void handleSelectSynthetic(id);
       }}
       onOpenSettings={() => {
@@ -1157,13 +1289,19 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       }}
       loading={mail.loading || syncing}
       onMoveEmail={(emailId, targetFolderId) => void handleMoveEmail(emailId, targetFolderId)}
-      collapsed={settings.sidebarCollapsed}
+      collapsed={drawerOpen ? false : settings.sidebarCollapsed}
       onToggleCollapsed={() => settings.setSidebarCollapsed(!settings.sidebarCollapsed)}
       onCreateFolder={(accountId, folderName) => void handleCreateFolder(accountId, folderName)}
       onRenameFolder={(accountId, folderId, newName) => void handleRenameFolder(accountId, folderId, newName)}
       onDeleteFolder={(accountId, folderId) => void handleDeleteFolder(accountId, folderId)}
       isOnline={isOnline}
       authErrors={authErrors}
+      onSearchSelect={(query) => {
+        setDrawerOpen(false);
+        setSyntheticView(null);
+        mail.clearSelectedEmail();
+        setSearchRequest({query});
+      }}
     />
   );
 
@@ -1204,8 +1342,8 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
           type="button"
           aria-label={t("a11y.resizeSidebar")}
           className={cn(
-            "mail-resize-handle hidden w-1 cursor-col-resize transition-colors md:block",
-            settings.isResizing ? "bg-primary/50" : "bg-transparent hover:bg-primary/30",
+            "mail-resize-handle hidden w-2 -mx-1 cursor-col-resize md:block",
+            settings.isResizing && "is-resizing",
           )}
           onMouseDown={settings.handleResizeMouseDown}
           onDoubleClick={() => {
@@ -1215,6 +1353,9 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <button type="button" className="mail-navigation-trigger items-center gap-2 p-3" aria-label="Open mailbox folders" onClick={() => setDrawerOpen(true)}>
+          <Menu size={18} /> Folders
+        </button>
         {authBanner}
 
         <div className="mail-workspace flex min-h-0 flex-1">
@@ -1222,7 +1363,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
             <section
               data-email-list-pane
               aria-label={t("a11y.emailList")}
-              className="mail-list-pane hidden w-full flex-shrink-0 md:flex"
+              className={cn("mail-list-pane w-full flex-shrink-0 md:flex", mail.selectedEmail || mail.emailLoading || mail.authRecoveryError ? "hidden" : "flex flex-1 md:flex-none")}
               style={{ width: `min(100%, ${settings.emailListWidth}px)` }}
             >
               <EmailList
@@ -1234,6 +1375,12 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
                 accountId={mail.selectedAccountId ?? undefined}
                 folderId={mail.selectedFolderId ?? undefined}
                 archiveFolderId={archiveFolder?.id}
+                archiveFolders={mail.folders.filter(folder => folder.folder_type === "Archive")}
+                searchRequest={searchRequest}
+                onEmailsRemoved={(ids) => {
+                  mail.removeEmails(ids);
+                  setSyntheticEmails(prev => prev.filter(email => !ids.includes(email.id)));
+                }}
                 onLoadMore={mail.loadMoreEmails}
                 hasMore={syntheticView ? false : mail.hasMore}
                 onPin={handlePinEmail}
@@ -1259,10 +1406,8 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
               type="button"
               aria-label={t("a11y.resizeEmailList")}
               className={cn(
-                "mail-resize-handle hidden w-1 cursor-col-resize transition-colors md:block",
-                settings.isEmailListResizing
-                  ? "bg-primary/50"
-                  : "bg-transparent hover:bg-primary/30",
+                "mail-resize-handle hidden w-2 -mx-1 cursor-col-resize md:block",
+                settings.isEmailListResizing && "is-resizing",
               )}
               onMouseDown={settings.handleEmailListResizeMouseDown}
               onDoubleClick={() => {
@@ -1271,7 +1416,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
             />
           )}
 
-          <main id="main-content" tabIndex={-1} className="mail-reader-pane flex min-w-0 flex-1">
+          <main id="main-content" tabIndex={-1} className={cn("mail-reader-pane min-w-0 flex-1 md:flex", syntheticView === "calendar" || mail.selectedEmail || mail.emailLoading || mail.authRecoveryError ? "flex" : "hidden")}>
             {syntheticView === "calendar" ? (
               <div className="flex w-full">
                 <CalendarGrid
@@ -1304,12 +1449,13 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
                 onForward={(id) => void handleForward(id)}
                 onDelete={handleDeleteEmail}
                 onToggleStar={handleToggleStar}
-                onBack={() => {}}
+                onBack={mail.clearSelectedEmail}
                 onDraftReply={(id, draft) => void handleDraftReply(id, draft)}
                 onPin={(id) => void handlePinEmail(id, true)}
                 onSnooze={handleOpenSnooze}
                 onReminder={(id) => void handleSetReminder(id)}
                 onSendRequested={handleSendRequested}
+                accountEmail={mail.accounts.find((account) => account.id === (mail.selectedEmail?.email.account_id ?? mail.selectedAccountId))?.email}
                 onOpenAiSettings={() => openSettingsPanel("translation")}
                 onComposeToRecipient={handleComposeToRecipient}
               />
@@ -1319,23 +1465,34 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       </div>
 
 
+      {drawerOpen && <div className="mail-navigation-drawer"><MobileDrawer isOpen onClose={() => setDrawerOpen(false)}>{sidebarContent}</MobileDrawer></div>}
+
       <ComposeModal
         isOpen={composeOpen}
         onClose={closeCompose}
-        accountId={mail.selectedAccountId ?? ""}
-        accountEmail={mail.accounts.find((a) => a.id === mail.selectedAccountId)?.email}
+        accountId={composeAccountId || mail.selectedAccountId || ""}
+        accountEmail={mail.accounts.find((a) => a.id === (composeAccountId || mail.selectedAccountId))?.email}
         accounts={mail.accounts}
-        sourceAccountId={mail.selectedEmail?.email.account_id}
+        sourceAccountId={composeAccountId || mail.selectedEmail?.email.account_id}
         replyTo={composeReplyTo}
         forwardFrom={composeForward}
         forwardEmailUid={composeForwardUid}
         forwardFolderId={composeForwardFolderId}
         initialBody={composeDraftBody}
+        initialBodyHtml={composeDraftBodyHtml}
+        initialBodyIsComplete={composeBodyIsComplete}
+        initialAttachments={composeAttachments}
         initialTo={composeInitialTo}
         initialDraftId={composeInitialDraftId ?? undefined}
         initialSubject={composeInitialSubject}
         initialCc={composeInitialCc}
         initialBcc={composeInitialBcc}
+        initialReadReceipt={composeReadReceipt}
+        initialPgpEncrypt={composeSecurity.pgpEncrypt}
+        initialSmimeSign={composeSecurity.smimeSign}
+        initialSmimeEncrypt={composeSecurity.smimeEncrypt}
+        initialInReplyTo={composeInReplyTo}
+        initialReferences={composeReferences}
         onSendRequested={handleSendRequested}
         fullscreen={false}
       />
@@ -1352,13 +1509,15 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
         onClose={() => { setShowSnoozePicker(false); setSnoozeTargetId(null); }}
         onSnooze={(until) => void handleSnooze(until)}
       />
-      {pendingSend && (
+      {pendingSends.map((item, index) => (
         <UndoSendToast
+          key={item.id}
+          offsetIndex={index}
           delaySeconds={settings.undoSendDelay}
-          onUndo={handleUndoSend}
-          onComplete={() => void handleUndoSendComplete()}
+          onUndo={() => handleUndoSend(item.id)}
+          onComplete={() => void handleUndoSendComplete(item.id)}
         />
-      )}
+      ))}
       <OnboardingTour />
       <CreateEventDialog
         isOpen={showCreateEvent}
@@ -1367,7 +1526,14 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
           setEditEvent(null);
           setInitialEventSummary("");
         }}
-        accountId={mail.selectedAccountId ?? ""}
+        // The unified all-accounts view has no selected account; fall back like
+        // useCalendarClient does so creates never send an empty account_id.
+        accountId={
+          editEvent?.account_id ||
+          mail.selectedAccountId ||
+          mail.accounts.find((a) => a.auth_type === "oauth2_gmail" || a.provider === "gmail")?.id ||
+          ""
+        }
         editEvent={editEvent}
         initialSummary={initialEventSummary}
         onEventSaved={() => {

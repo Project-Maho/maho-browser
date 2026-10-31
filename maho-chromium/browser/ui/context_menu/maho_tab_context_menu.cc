@@ -11,6 +11,8 @@
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
+#include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
@@ -70,10 +72,10 @@ std::string QueryTabRole(const std::string& tab_id) {
 namespace maho::context_menu {
 
 int ResolveTabIndex(Browser* browser, const std::string& tab_id) {
-  if (!browser || !browser->tab_strip_model() || tab_id.empty()) {
+  if (!browser || !browser->GetTabStripModel() || tab_id.empty()) {
     return -1;
   }
-  TabStripModel* model = browser->tab_strip_model();
+  TabStripModel* model = browser->GetTabStripModel();
   for (int i = 0; i < model->count(); ++i) {
     if (content::WebContents* wc = model->GetWebContentsAt(i)) {
       if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
@@ -88,17 +90,17 @@ int ResolveTabIndex(Browser* browser, const std::string& tab_id) {
 content::WebContents* GetWebContentsForTabId(Browser* browser,
                                              const std::string& tab_id) {
   const int index = ResolveTabIndex(browser, tab_id);
-  if (index < 0 || !browser || !browser->tab_strip_model()) {
+  if (index < 0 || !browser || !browser->GetTabStripModel()) {
     return nullptr;
   }
-  return browser->tab_strip_model()->GetWebContentsAt(index);
+  return browser->GetTabStripModel()->GetWebContentsAt(index);
 }
 
 void BoostTab(Browser* browser, content::WebContents* contents) {
   if (!browser || !contents) {
     return;
   }
-  MahoBoostWindowController::GetForBrowser(browser, browser->profile())
+  MahoBoostWindowController::GetForBrowser(browser, browser->GetProfile())
       .ShowForActiveDomain(contents);
 }
 
@@ -150,7 +152,7 @@ MahoTabContextMenu::MahoTabContextMenu(Browser* browser,
 MahoTabContextMenu::~MahoTabContextMenu() = default;
 
 int MahoTabContextMenu::CountEligibleSplitTabs() const {
-  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
+  TabStripModel* model = browser_ ? browser_->GetTabStripModel() : nullptr;
   if (!model) {
     return 0;
   }
@@ -169,7 +171,7 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   auto model = std::make_unique<ui::SimpleMenuModel>(this);
 
   // R-11-c: OTR (primary Incognito) context menu — local actions only.
-  if (browser_ && browser_->profile() && browser_->profile()->IsOffTheRecord()) {
+  if (browser_ && browser_->GetProfile() && browser_->GetProfile()->IsOffTheRecord()) {
     model->AddItem(IDC_MAHO_TAB_RELOAD,     u"Reload");
     model->AddItem(IDC_MAHO_TAB_DUPLICATE,  u"Duplicate Tab");
     model->AddItem(IDC_MAHO_TAB_COPY_URL,   u"Copy Link");
@@ -199,7 +201,7 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
     }
 
     bool any_unmuted = false;
-    TabStripModel* tab_strip_model = browser_ ? browser_->tab_strip_model() : nullptr;
+    TabStripModel* tab_strip_model = browser_ ? browser_->GetTabStripModel() : nullptr;
     if (tab_strip_model) {
       for (const auto& id : selected_tab_ids_) {
         int idx = maho::context_menu::ResolveTabIndex(browser_, id);
@@ -289,13 +291,14 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
                       move_to_space_submenu_.get());
 
     model->AddSeparator(ui::NORMAL_SEPARATOR);
+    model->AddItem(IDC_MAHO_TAB_FREEZE, u"Sleep Selected Tabs");
     model->AddItem(IDC_MAHO_TAB_ARCHIVE, u"Archive Tabs");
 
     return model;
   }
 
   const TabStripModel* tab_strip_model =
-      browser_ ? browser_->tab_strip_model() : nullptr;
+      browser_ ? browser_->GetTabStripModel() : nullptr;
   const bool has_valid_tab_index = tab_strip_model && tab_index_ >= 0 &&
                                    tab_index_ < tab_strip_model->count();
 
@@ -341,7 +344,7 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   //  9  Open in Split View / Remove from Split View
   {
     TabStripModel* split_tsm =
-        browser_ ? browser_->tab_strip_model() : nullptr;
+        browser_ ? browser_->GetTabStripModel() : nullptr;
     const bool in_split = split_tsm &&
                           split_tsm->ContainsIndex(tab_index_) &&
                           split_tsm->GetSplitForTab(tab_index_).has_value();
@@ -422,16 +425,19 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   // 13  [separator]
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
-  // 14  Archive Tab
+  // 14  Sleep Tab
+  model->AddItem(IDC_MAHO_TAB_FREEZE, u"Sleep Tab");
+
+  // 15  Archive Tab
   model->AddItem(IDC_MAHO_TAB_ARCHIVE, u"Archive Tab");
 
-  // 15  Archive Tabs Below
+  // 16  Archive Tabs Below
   model->AddItem(IDC_MAHO_TAB_ARCHIVE_BELOW, u"Archive Tabs Below");
 
-  // 16  [separator]
+  // 17  [separator]
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
-  // 17  Close Tab
+  // 18  Close Tab
   model->AddItem(IDC_MAHO_TAB_CLOSE, u"Close Tab");
 
   return model;
@@ -440,9 +446,9 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
 
 void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
   // R-11-c: OTR — only local command IDs are valid.
-  if (browser_ && browser_->profile() && browser_->profile()->IsOffTheRecord()) {
+  if (browser_ && browser_->GetProfile() && browser_->GetProfile()->IsOffTheRecord()) {
     TabStripModel* otr_tsm =
-        browser_ ? browser_->tab_strip_model() : nullptr;
+        browser_ ? browser_->GetTabStripModel() : nullptr;
     const bool otr_valid = otr_tsm && tab_index_ >= 0 &&
                            tab_index_ < otr_tsm->count();
     content::WebContents* otr_contents =
@@ -476,7 +482,31 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
 
   const bool is_multi = (selected_tab_ids_.size() > 1);
 
-  if (is_multi && delegate_) {
+  if (is_multi) {
+    if (command_id == IDC_MAHO_TAB_FREEZE) {
+      TabStripModel* multi_tsm =
+          browser_ ? browser_->GetTabStripModel() : nullptr;
+      if (multi_tsm) {
+        for (const auto& tab_id : selected_tab_ids_) {
+          int idx = maho::context_menu::ResolveTabIndex(browser_, tab_id);
+          if (idx >= 0 && idx != multi_tsm->active_index()) {
+            if (content::WebContents* wc = multi_tsm->GetWebContentsAt(idx)) {
+              if (auto* unit =
+                      resource_coordinator::TabLifecycleUnitExternal::
+                          FromWebContents(wc)) {
+                if (unit->GetTabState() !=
+                    mojom::LifecycleUnitState::DISCARDED) {
+                  unit->DiscardTab(
+                      mojom::LifecycleUnitDiscardReason::EXTERNAL);
+                }
+              }
+            }
+          }
+        }
+      }
+      return;
+    }
+    if (delegate_) {
     switch (command_id) {
       case IDC_MAHO_TAB_CLOSE:
         delegate_->CloseSelectedTabs();
@@ -511,12 +541,13 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
           }
         }
         break;
+      }
     }
     return;
   }
 
   TabStripModel* tab_strip_model =
-      browser_ ? browser_->tab_strip_model() : nullptr;
+      browser_ ? browser_->GetTabStripModel() : nullptr;
   const bool has_valid_tab_index = tab_strip_model && tab_index_ >= 0 &&
                                    tab_index_ < tab_strip_model->count();
 
@@ -530,7 +561,7 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       if (!has_valid_tab_index || !delegate_) {
         break;
       }
-      TabStripModel* tab_strip = browser_->tab_strip_model();
+      TabStripModel* tab_strip = browser_->GetTabStripModel();
       std::vector<std::string> ids_to_close;
       for (int i = tab_strip->count() - 1; i >= 0; --i) {
         if (i == tab_index_) {
@@ -557,7 +588,7 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       if (!has_valid_tab_index || !delegate_) {
         break;
       }
-      TabStripModel* tab_strip = browser_->tab_strip_model();
+      TabStripModel* tab_strip = browser_->GetTabStripModel();
       std::vector<std::string> ids_to_close;
       for (int i = tab_strip->count() - 1; i > tab_index_; --i) {
         if (content::WebContents* wc = tab_strip->GetWebContentsAt(i)) {
@@ -576,7 +607,7 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       if (!has_valid_tab_index || !delegate_) {
         break;
       }
-      TabStripModel* tab_strip = browser_->tab_strip_model();
+      TabStripModel* tab_strip = browser_->GetTabStripModel();
       std::vector<std::string> ids_to_close;
       for (int i = tab_index_ - 1; i >= 0; --i) {
         if (content::WebContents* wc = tab_strip->GetWebContentsAt(i)) {
@@ -668,8 +699,21 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
     }
 
     case IDC_MAHO_TAB_FREEZE:
-      if (!has_valid_tab_index) {
-        break;
+      if (has_valid_tab_index && tab_strip_model &&
+          tab_index_ != tab_strip_model->active_index()) {
+        content::WebContents* tab_contents =
+            tab_strip_model->GetWebContentsAt(tab_index_);
+        if (tab_contents) {
+          if (auto* unit =
+                  resource_coordinator::TabLifecycleUnitExternal::
+                      FromWebContents(tab_contents)) {
+            if (unit->GetTabState() !=
+                mojom::LifecycleUnitState::DISCARDED) {
+              unit->DiscardTab(
+                  mojom::LifecycleUnitDiscardReason::EXTERNAL);
+            }
+          }
+        }
       }
       break;
     case IDC_MAHO_TAB_OPEN_SPLIT:
@@ -726,7 +770,7 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
 
 bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
   // R-11-c: OTR — only the 5 allowlisted local commands are enabled.
-  if (browser_ && browser_->profile() && browser_->profile()->IsOffTheRecord()) {
+  if (browser_ && browser_->GetProfile() && browser_->GetProfile()->IsOffTheRecord()) {
     return command_id == IDC_MAHO_TAB_RELOAD ||
            command_id == IDC_MAHO_TAB_DUPLICATE ||
            command_id == IDC_MAHO_TAB_COPY_URL ||
@@ -746,6 +790,28 @@ bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
       case IDC_MAHO_TAB_ARCHIVE:
       case IDC_MAHO_TAB_NEW_FOLDER:
         return true;
+      case IDC_MAHO_TAB_FREEZE: {
+        TabStripModel* multi_tsm =
+            browser_ ? browser_->GetTabStripModel() : nullptr;
+        if (!multi_tsm) {
+          return false;
+        }
+        for (const auto& tab_id : selected_tab_ids_) {
+          int idx = maho::context_menu::ResolveTabIndex(browser_, tab_id);
+          if (idx >= 0 && idx != multi_tsm->active_index()) {
+            if (content::WebContents* wc = multi_tsm->GetWebContentsAt(idx)) {
+              auto* unit =
+                  resource_coordinator::TabLifecycleUnitExternal::
+                      FromWebContents(wc);
+              if (unit && unit->GetTabState() !=
+                              mojom::LifecycleUnitState::DISCARDED) {
+                return true;
+              }
+            }
+          }
+        }
+        return false;
+      }
       default:
         if (IsMoveToSpaceCommand(command_id)) {
           return true;
@@ -755,7 +821,7 @@ bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
   }
 
   const TabStripModel* tab_strip_model =
-      browser_ ? browser_->tab_strip_model() : nullptr;
+      browser_ ? browser_->GetTabStripModel() : nullptr;
   const bool has_valid_tab_index = tab_strip_model && tab_index_ >= 0 &&
                                    tab_index_ < tab_strip_model->count();
 
@@ -790,7 +856,24 @@ bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
     case IDC_MAHO_TAB_CLOSE_LEFT:
       return has_valid_tab_index && tab_index_ > 0;
 
-    case IDC_MAHO_TAB_FREEZE:
+    case IDC_MAHO_TAB_FREEZE: {
+      if (!has_valid_tab_index || !tab_strip_model) {
+        return false;
+      }
+      if (tab_index_ == tab_strip_model->active_index()) {
+        return false;
+      }
+      content::WebContents* tab_contents =
+          tab_strip_model->GetWebContentsAt(tab_index_);
+      if (!tab_contents) {
+        return false;
+      }
+      auto* unit =
+          resource_coordinator::TabLifecycleUnitExternal::FromWebContents(
+              tab_contents);
+      return unit != nullptr &&
+             unit->GetTabState() != mojom::LifecycleUnitState::DISCARDED;
+    }
     case IDC_MAHO_TAB_UNFREEZE:
       return false;
     case IDC_MAHO_TAB_MOVE_TO_SPACE:

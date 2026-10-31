@@ -3,6 +3,7 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -196,9 +197,11 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
   std::string screenshot_b64 = "fake_screenshot_png_base64_data";
   void CaptureFullPagePngBase64(
       int tab_id,
-      base::OnceCallback<void(std::string)> callback) override {
+      base::OnceCallback<void(std::string,
+                              std::optional<maho::MahoMcpCaptureMetrics>)>
+          callback) override {
     ++capture_full_page_count;
-    std::move(callback).Run(screenshot_b64);
+    std::move(callback).Run(screenshot_b64, std::nullopt);
   }
   void CaptureElementPngBase64(
       int tab_id,
@@ -268,6 +271,37 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
       const std::string& path,
       base::OnceCallback<void(bool)> callback) override {
     std::move(callback).Run(SelectFileForPendingChooser(tab_id, path));
+  }
+
+  int file_input_count = 0;
+  std::string last_file_input_css;
+  std::string last_file_input_path;
+  int last_file_input_tab_id = 0;
+  bool file_input_should_succeed = true;
+  bool SelectFileForInput(int tab_id,
+                          const std::string& css,
+                          const std::string& path) override {
+    ++file_input_count;
+    last_file_input_tab_id = tab_id;
+    last_file_input_css = css;
+    last_file_input_path = path;
+    return file_input_should_succeed;
+  }
+  void SelectFileForInputAsync(
+      int tab_id,
+      const std::string& css,
+      const std::string& path,
+      base::OnceCallback<void(bool)> callback) override {
+    std::move(callback).Run(SelectFileForInput(tab_id, css, path));
+  }
+
+  int go_back_count = 0;
+  int last_go_back_tab_id = 0;
+  bool go_back_should_succeed = true;
+  bool GoBack(int tab_id) override {
+    ++go_back_count;
+    last_go_back_tab_id = tab_id;
+    return go_back_should_succeed;
   }
 
   bool ActivateTab(int tab_id) override { return true; }
@@ -361,6 +395,23 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
 
 class MahoBrowserToolExecutorTest : public testing::Test {
  protected:
+  static bool IsLeaseRequiredActionTool(const std::string& tool_name) {
+    static constexpr auto kTools = std::to_array<std::string_view>({
+        "browser_click",        "browser_type",
+        "browser_navigate",     "browser_history_back",
+        "browser_scroll",       "browser_key_press",
+        "browser_select",       "browser_hover",
+        "browser_file_upload_select",
+        "browser_visual_click", "browser_act_and_observe",
+    });
+    for (std::string_view name : kTools) {
+      if (name == tool_name) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   MahoBrowserToolExecutor MakeExecutor(
       MahoBrowserToolExecutor::BrowserActionApprovalCallback approval_callback =
           MahoBrowserToolExecutor::BrowserActionApprovalCallback(),
@@ -379,6 +430,16 @@ class MahoBrowserToolExecutorTest : public testing::Test {
   base::DictValue Execute(MahoBrowserToolExecutor& executor,
                           const std::string& tool_name,
                           base::DictValue arguments = base::DictValue()) {
+    // Fixture default: lease-required browser actions carry the fixture's active
+    // tab (7), so each test exercises approval/lease/fallback semantics rather
+    // than tab resolution. Read-only and mail tools stay untouched. The
+    // tab-binding gate itself is covered by
+    // LeaseRequiredActionWithoutTabIdFailsClosed, which calls executor.Execute
+    // directly and omits the binding.
+    if (IsLeaseRequiredActionTool(tool_name) &&
+        !arguments.FindInt("tab_id").has_value()) {
+      arguments.Set("tab_id", delegate_.active_tab_id);
+    }
     bool fired = false;
     base::DictValue result;
     executor.Execute(
@@ -419,6 +480,41 @@ class MahoBrowserToolExecutorTest : public testing::Test {
   maho::MahoMcpLeaseRegistry lease_registry_;
   FakeBrowserActionDelegate delegate_;
 };
+
+// Tab-binding contract: a lease-required browser action without an explicit
+// tab_id fails closed instead of acting on whichever tab is focused. Reads keep
+// the active-tab fallback (PopulateRef above relies on it).
+TEST_F(MahoBrowserToolExecutorTest, LeaseRequiredActionWithoutTabIdFailsClosed) {
+  auto executor = MakeExecutor();
+  PopulateRef(executor, 1, 101);
+
+  base::DictValue arguments;
+  arguments.Set("ref", 1);
+  base::DictValue result;
+  bool fired = false;
+  executor.Execute(
+      "browser_click", arguments,
+      base::BindLambdaForTesting([&](base::DictValue tool_result) {
+        fired = true;
+        result = std::move(tool_result);
+      }));
+  ASSERT_TRUE(fired);
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  const std::string* error = result.FindString("error");
+  ASSERT_TRUE(error);
+  EXPECT_NE(error->find("Tab binding required"), std::string::npos);
+  EXPECT_EQ(delegate_.click_count, 0);
+  EXPECT_FALSE(lease_registry_.IsHeldBy(7, "agent-session"));
+
+  // The same call with an explicit binding still reaches the click path.
+  base::DictValue bound;
+  bound.Set("ref", 1);
+  bound.Set("tab_id", 7);
+  base::DictValue bound_result =
+      Execute(executor, "browser_click", std::move(bound));
+  EXPECT_TRUE(bound_result.FindBool("ok").value_or(false));
+  EXPECT_EQ(delegate_.click_count, 1);
+}
 
 // Driving the browser needs no approval authorization at all: a sensitive
 // in-browser action runs with no approval callback wired. Only an action that
@@ -838,6 +934,99 @@ TEST_F(MahoBrowserToolExecutorTest,
   EXPECT_EQ(delegate_.navigate_count, 2);
 }
 
+TEST_F(MahoBrowserToolExecutorTest, HistoryBackDispatchesToDelegate) {
+  auto executor = MakeExecutor();
+  PopulateRef(executor, 1, 101);
+
+  base::DictValue arguments;
+  arguments.Set("tab_id", 7);
+  base::DictValue result =
+      Execute(executor, "browser_history_back", std::move(arguments));
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_TRUE(result.FindBool("navigated").value_or(false));
+  EXPECT_TRUE(result.FindBool("went_back").value_or(false));
+  EXPECT_EQ(delegate_.go_back_count, 1);
+  EXPECT_EQ(delegate_.last_go_back_tab_id, 7);
+
+  // History navigation invalidates outstanding element references on the tab.
+  base::DictValue click_args;
+  click_args.Set("ref", 1);
+  click_args.Set("tab_id", 7);
+  base::DictValue click_result =
+      Execute(executor, "browser_click", std::move(click_args));
+  EXPECT_FALSE(click_result.FindBool("ok").value_or(true));
+  EXPECT_EQ(click_result.FindInt("error_code").value_or(0),
+            maho::kMahoMcpErrorStaleReference);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, HistoryBackFailsWhenNoHistory) {
+  auto executor = MakeExecutor();
+  delegate_.go_back_should_succeed = false;
+
+  base::DictValue arguments;
+  arguments.Set("tab_id", 7);
+  base::DictValue result =
+      Execute(executor, "browser_history_back", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_EQ(result.FindInt("error_code").value_or(0), -32000);
+  const std::string* error = result.FindString("error");
+  ASSERT_TRUE(error);
+  EXPECT_NE(error->find("no history back entry"), std::string::npos);
+  EXPECT_EQ(delegate_.go_back_count, 1);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, HistoryBackWithoutTabIdFailsClosed) {
+  auto executor = MakeExecutor();
+
+  base::DictValue arguments;
+  base::DictValue result;
+  bool fired = false;
+  executor.Execute(
+      "browser_history_back", arguments,
+      base::BindLambdaForTesting([&](base::DictValue tool_result) {
+        fired = true;
+        result = std::move(tool_result);
+      }));
+  ASSERT_TRUE(fired);
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  const std::string* error = result.FindString("error");
+  ASSERT_TRUE(error);
+  EXPECT_NE(error->find("Tab binding required"), std::string::npos);
+  EXPECT_EQ(delegate_.go_back_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, HistoryBackFailsClosedWithoutActiveOrigin) {
+  auto executor = MakeExecutor();
+  delegate_.active_url = "about:blank";
+
+  base::DictValue arguments;
+  arguments.Set("tab_id", 7);
+  base::DictValue result =
+      Execute(executor, "browser_history_back", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  const std::string* error = result.FindString("error");
+  ASSERT_TRUE(error);
+  EXPECT_NE(error->find("failed closed"), std::string::npos);
+  EXPECT_EQ(delegate_.go_back_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, HistoryBackNeedsNoApprovalPrompt) {
+  // Driving the browser needs no approval prompt; browser_history_back runs
+  // with no approval callback wired under the ActiveTabOrigin contract.
+  auto executor = MakeExecutor();
+
+  base::DictValue arguments;
+  arguments.Set("tab_id", 7);
+  base::DictValue result =
+      Execute(executor, "browser_history_back", std::move(arguments));
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_EQ(delegate_.go_back_count, 1);
+}
+
 // Leaving the browser still asks, and the ask carries typed metadata.
 TEST_F(MahoBrowserToolExecutorTest,
        AuthorizationReceivesTypedMetadataForBoundaryAction) {
@@ -884,6 +1073,104 @@ TEST_F(MahoBrowserToolExecutorTest, FileUploadFailsWhenDelegateRejects) {
   EXPECT_NE(result.FindString("error")->find("file upload could not be dispatched"),
             std::string::npos);
   EXPECT_EQ(delegate_.file_upload_count, 1);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithSelectorRoutesToInputAsync) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+
+  base::DictValue arguments;
+  arguments.Set("path", "/tmp/document.pdf");
+  arguments.Set("selector", "input[type='file']");
+  base::DictValue result =
+      Execute(executor, "browser_file_upload_select", std::move(arguments));
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_TRUE(result.FindBool("file_selected").value_or(false));
+  EXPECT_EQ(delegate_.file_input_count, 1);
+  EXPECT_EQ(delegate_.last_file_input_css, "input[type='file']");
+  EXPECT_EQ(delegate_.last_file_input_path, "/tmp/document.pdf");
+  EXPECT_EQ(delegate_.last_file_input_tab_id, 7);
+  EXPECT_EQ(delegate_.file_upload_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithCssAliasRoutesToInputAsync) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+
+  base::DictValue arguments;
+  arguments.Set("path", "/tmp/avatar.png");
+  arguments.Set("css", "#profile-photo-input");
+  base::DictValue result =
+      Execute(executor, "browser_file_upload_select", std::move(arguments));
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_TRUE(result.FindBool("file_selected").value_or(false));
+  EXPECT_EQ(delegate_.file_input_count, 1);
+  EXPECT_EQ(delegate_.last_file_input_css, "#profile-photo-input");
+  EXPECT_EQ(delegate_.last_file_input_path, "/tmp/avatar.png");
+  EXPECT_EQ(delegate_.last_file_input_tab_id, 7);
+  EXPECT_EQ(delegate_.file_upload_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithSelectorFailsWhenDelegateRejects) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  delegate_.file_input_should_succeed = false;
+
+  base::DictValue arguments;
+  arguments.Set("path", "/tmp/nonexistent.bin");
+  arguments.Set("selector", "input[type='file']");
+  base::DictValue result =
+      Execute(executor, "browser_file_upload_select", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_NE(result.FindString("error")->find("file upload could not be dispatched"),
+            std::string::npos);
+  EXPECT_EQ(delegate_.file_input_count, 1);
+  EXPECT_EQ(delegate_.file_upload_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectInvalidSelectorParams) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+
+  base::DictValue empty_selector;
+  empty_selector.Set("path", "/tmp/file.txt");
+  empty_selector.Set("selector", "");
+  base::DictValue empty_res =
+      Execute(executor, "browser_file_upload_select", std::move(empty_selector));
+  EXPECT_FALSE(empty_res.FindBool("ok").value_or(true));
+  EXPECT_EQ(empty_res.FindInt("error_code").value_or(0), -32602);
+  EXPECT_NE(empty_res.FindString("error")->find("selector cannot be empty"),
+            std::string::npos);
+
+  base::DictValue non_string_selector;
+  non_string_selector.Set("path", "/tmp/file.txt");
+  non_string_selector.Set("selector", 12345);
+  base::DictValue non_string_res =
+      Execute(executor, "browser_file_upload_select", std::move(non_string_selector));
+  EXPECT_FALSE(non_string_res.FindBool("ok").value_or(true));
+  EXPECT_EQ(non_string_res.FindInt("error_code").value_or(0), -32602);
+  EXPECT_NE(non_string_res.FindString("error")->find("selector must be a string"),
+            std::string::npos);
+
+  EXPECT_EQ(delegate_.file_input_count, 0);
+}
+
+TEST_F(MahoBrowserToolExecutorTest, FileUploadSelectWithSelectorRequiresApproval) {
+  // File upload crosses the browser boundary to the filesystem, so direct
+  // selector inputs still enforce required typed approval.
+  auto executor = MakeExecutor();
+
+  base::DictValue arguments;
+  arguments.Set("path", "/tmp/document.pdf");
+  arguments.Set("selector", "input[type='file']");
+  base::DictValue result =
+      Execute(executor, "browser_file_upload_select", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_EQ(result.FindInt("error_code").value_or(0), -32008);
+  const std::string* error = result.FindString("error");
+  ASSERT_TRUE(error);
+  EXPECT_NE(error->find("typed approval"), std::string::npos);
+  EXPECT_EQ(delegate_.file_input_count, 0);
 }
 
 TEST_F(MahoBrowserToolExecutorTest, VaultToolIsNotDispatchable) {

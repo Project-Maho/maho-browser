@@ -58,6 +58,7 @@ pub mod tab_lifecycle;
 pub mod tab_preview_manager;
 pub mod tool_registry;
 pub mod vault_crypto;
+pub mod vault_generator;
 pub mod vault_manager;
 pub mod vault_runtime;
 pub mod workspace_manager;

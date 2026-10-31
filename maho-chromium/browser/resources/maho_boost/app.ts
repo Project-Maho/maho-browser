@@ -1,27 +1,5 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
-interface TrustedTypesPolicyLike {
-  createScriptURL(input: string): string;
-}
-
-interface TrustedTypesPolicyRulesLike {
-  createHTML?: (input: string) => string;
-  createScriptURL?: (input: string) => string;
-}
-
-interface TrustedTypesLike {
-  createPolicy(
-    name: string,
-    rules: TrustedTypesPolicyRulesLike,
-  ): TrustedTypesPolicyLike;
-}
-
-declare global {
-  interface Window {
-    trustedTypes?: TrustedTypesLike;
-  }
-}
-
 const trustedTypes = window.trustedTypes;
 if (!trustedTypes || typeof trustedTypes.createPolicy !== 'function') {
   throw new Error('Trusted Types API is unavailable for maho-boost loader.');

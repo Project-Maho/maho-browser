@@ -26,8 +26,10 @@ export {
   ArrowUpRight,
   ArrowLeft,
   ArrowRight,
+  ArrowUp,
   Shield,
   ShieldAlert,
+  ShieldCheck,
   Sliders,
   Laptop,
   Moon,
@@ -62,4 +64,6 @@ export {
   Zap,
   Puzzle,
   ShieldOff,
+  FileText,
+  Repeat2,
 } from "lucide-react";

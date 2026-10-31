@@ -58,7 +58,7 @@ export function BottomTabBar({
               aria-current={isActive ? "page" : undefined}
               aria-label={badge?.accessibleName ?? tab.label}
               className={cn(
-                "flex min-h-14 w-full flex-col items-center justify-center gap-1 px-2 pt-2 text-[11px] leading-none transition-colors",
+                "mail-pressable flex min-h-14 w-full flex-col items-center justify-center gap-1 px-2 pt-2 text-[11px] leading-none",
                 isActive ? "text-primary" : "text-muted-foreground hover:text-foreground",
               )}
               onClick={() => onTabChange(tab.id)}

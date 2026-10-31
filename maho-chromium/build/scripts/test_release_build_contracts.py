@@ -37,6 +37,95 @@ _overrides = _load_module(
 )
 
 
+_gen_manifests = _load_module(
+    "generate_update_manifests.py",
+    "generate_update_manifests_under_test",
+)
+
+
+class TestLinuxUpdateManifest(unittest.TestCase):
+    # Fixed test seed; never the release key.
+    _SEED = bytes(range(32))
+
+    def _pubkey(self) -> bytes:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey,
+        )
+        return Ed25519PrivateKey.from_private_bytes(self._SEED).public_key().public_bytes_raw()
+
+    def _write_manifest(self, tmp_dir: str, version: str) -> str:
+        path = os.path.join(tmp_dir, "update-linux.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(_gen_manifests.build_linux_manifest(
+                version, self._SEED, "https://mahobrowser.com/download/"))
+        return path
+
+    def test_linux_release_emits_signed_update_manifest(self) -> None:
+        args = SimpleNamespace(skip_build=True, dry_run=True, out_dir="out/Release")
+        output_dir = _release_local.release_output_dir(args.out_dir)
+
+        with patch.object(_release_local, "run") as run:
+            artifacts = _release_local.build_and_bundle_linux("1.0.0", args)
+
+        self.assertEqual(artifacts[-1], os.path.join(output_dir, "update-linux.json"))
+        manifest_command = run.call_args_list[-1].args[0]
+        self.assertEqual(manifest_command[1], _release_local._GEN_MANIFESTS)
+        self.assertIn("--linux", manifest_command)
+        self.assertEqual(manifest_command[-2:], ["--output-dir", output_dir])
+
+    def test_verifier_accepts_valid_and_rejects_tampered_linux_manifest(self) -> None:
+        pub = self._pubkey()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = self._write_manifest(tmp_dir, "2026.9.27")
+            _release_local.verify_manifest_matches_artifacts(
+                [path], pubkey_bytes=pub, expected_version="2026.9.27")
+
+            with self.assertRaises(_release_local.ManifestVerificationError):
+                _release_local.verify_manifest_matches_artifacts(
+                    [path], pubkey_bytes=pub, expected_version="2026.9.28")
+
+            import json
+            with open(path, encoding="utf-8") as f:
+                envelope = json.load(f)
+            envelope["payload"] = envelope["payload"].replace("2026.9.27", "2099.1.1")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(envelope, f)
+            with self.assertRaises(_release_local.ManifestVerificationError):
+                _release_local.verify_manifest_matches_artifacts([path], pubkey_bytes=pub)
+
+    def test_relay_registration_carries_linux_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = self._write_manifest(tmp_dir, "2026.9.27")
+            with open(path, encoding="utf-8") as f:
+                expected = f.read()
+            captured = {}
+
+            class _Resp:
+                status = 200
+                def read(self):
+                    return b"release updated"
+                def __enter__(self):
+                    return self
+                def __exit__(self, *exc):
+                    return False
+
+            def urlopen(req, *a, **kw):
+                import json
+                captured.update(json.loads(req.data.decode("utf-8")))
+                return _Resp()
+
+            with patch.dict(os.environ, {"RELEASE_ADMIN_TOKEN": "test-token"}), \
+                 patch.object(_release_local.urllib.request, "urlopen", urlopen):
+                _release_local.register_release_to_relay(
+                    platform="linux", channel="stable", version="2026.9.27",
+                    version_code=2026009027, rollout_threshold=100,
+                    artifacts=[path], repo="Project-Maho/release")
+
+        self.assertEqual(captured["platform"], "linux")
+        self.assertEqual(captured["linux_envelope"], expected)
+        self.assertIsNone(captured["win_envelope"])
+
+
 class TestReleaseArtifactPaths(unittest.TestCase):
 
     def test_windows_release_uses_release_output_directory(self) -> None:
@@ -58,8 +147,32 @@ class TestReleaseArtifactPaths(unittest.TestCase):
             [
                 os.path.join(output_dir, "MahoSetup-1.0.0.exe"),
                 os.path.join(output_dir, "update-win.json"),
+                os.path.join(output_dir, "MahoBrowser_1.0.0.0_x64.msix"),
             ],
         )
+
+    def test_windows_release_packs_store_msix_from_release_output(self) -> None:
+        args = SimpleNamespace(
+            skip_build=True,
+            dry_run=True,
+            out_dir="out/Release",
+        )
+        output_dir = os.path.join(_release_local._CHROMIUM_SRC, "out", "Release")
+
+        with patch.object(_release_local, "run") as run:
+            _release_local.build_and_bundle_win("1.0.0", args)
+
+        msix_command = run.call_args_list[-1].args[0]
+        self.assertEqual(msix_command[1], _release_local._PACKAGE_MSIX)
+        self.assertEqual(
+            msix_command[2:],
+            [
+                "--input-dir", output_dir,
+                "--output", os.path.join(output_dir, "MahoBrowser_1.0.0.0_x64.msix"),
+                "--version", "1.0.0",
+            ],
+        )
+        self.assertIn("MahoBrowser_{version}.0_x64.msix", _release_local._FINAL_RELEASE_ASSETS)
 
     def test_manifests_are_written_to_selected_release_output(self) -> None:
         args = SimpleNamespace(

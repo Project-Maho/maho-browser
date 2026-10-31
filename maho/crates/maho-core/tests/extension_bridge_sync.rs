@@ -191,6 +191,7 @@ fn test_extension_sync_push_and_callback() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
     };
 
     let applied = core.apply_sync_remote_entities(vec![remote_entity]);

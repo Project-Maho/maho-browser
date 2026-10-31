@@ -11,6 +11,7 @@
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/no_destructor.h"
+#include "base/callback_list.h"
 #include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "base/values.h"
@@ -82,10 +83,15 @@ class MahoTabRegistry : public BrowserCollectionObserver {
 
   void AttachStripObserverFor(BrowserWindowInterface* browser);
   void DetachStripObserverFor(BrowserWindowInterface* browser);
+  // Called from StripObserver::OnTabStripModelDestroyed(). Unlike
+  // DetachStripObserverFor() it must not touch the browser's TabStripModel,
+  // which is already being torn down.
+  void DetachStripObserverForDestroyedModel(BrowserWindowInterface* browser);
 
   base::flat_map<BrowserWindowInterface*, std::unique_ptr<StripObserver>> strip_observers_;
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
       browser_collection_observation_{this};
+  base::CallbackListSubscription core_ready_subscription_;
 
   std::unordered_map<std::string, LastDispatchedTabState> dispatch_cache_;
   base::flat_set<std::string> archive_removal_suppressions_;

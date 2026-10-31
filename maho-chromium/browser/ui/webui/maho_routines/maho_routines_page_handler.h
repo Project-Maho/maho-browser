@@ -60,6 +60,17 @@ class MahoRoutinesPageHandler : public maho_routines::mojom::PageHandler {
   void GetLatestRun(const std::string& routine_id,
                     GetLatestRunCallback callback) override;
 
+  void StartTraceRecording(int64_t tab_id,
+                           StartTraceRecordingCallback callback) override;
+  void StopTraceRecording(StopTraceRecordingCallback callback) override;
+  void CreateRoutineFromTrace(const std::string& name,
+                              const std::string& description,
+                              const std::string& trace_json,
+                              const std::optional<std::string>& schedule,
+                              const std::optional<std::string>& trigger,
+                              CreateRoutineFromTraceCallback callback) override;
+  void IsTraceRecording(IsTraceRecordingCallback callback) override;
+
   void CompleteRoutine(RunRoutineCallback callback, std::string json);
   void FailRoutine(RunRoutineCallback callback, std::string error);
 
@@ -94,6 +105,7 @@ class MahoRoutinesPageHandler : public maho_routines::mojom::PageHandler {
   mojo::Receiver<maho_routines::mojom::PageHandler> receiver_;
   mojo::Remote<maho_routines::mojom::Page> page_;
   MahoPrivateContextToken context_token_;
+  raw_ptr<BrowserWindowInterface> browser_window_ = nullptr;
   base::WeakPtr<content::WebContents> host_web_contents_;
 
   SEQUENCE_CHECKER(sequence_checker_);

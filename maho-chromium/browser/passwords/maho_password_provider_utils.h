@@ -107,6 +107,10 @@ std::string GetActivePasswordProviderMode();
 std::string GetActivePasswordProviderModeForProfileKey(
     std::string_view profile_key);
 bool IsNativePasswordProviderActive();
+// Whether Vault/password operations must be device-reauthenticated (Touch ID
+// or the platform authenticator) before each use. Missing or unreadable core
+// settings fail closed to `true`.
+bool IsVaultDeviceReauthRequired();
 bool ShouldEnableChromiumPasswordManager();
 bool IsBitwardenExtensionAvailable();
 bool IsOnePasswordExtensionAvailable();

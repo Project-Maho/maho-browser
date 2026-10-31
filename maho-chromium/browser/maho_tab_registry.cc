@@ -302,7 +302,8 @@ class MahoTabRegistry::NavObserver : public content::WebContentsObserver {
 
   void DidUpdateFaviconURL(
       content::RenderFrameHost* render_frame_host,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) override {
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) override {
     MaybeDispatchTabFavicon();
   }
 
@@ -422,11 +423,32 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
   StripObserver& operator=(const StripObserver&) = delete;
 
   ~StripObserver() override {
-    if (model_) {
+    if (model_ && !model_destroyed_) {
       model_->RemoveObserver(this);
       CleanUpManyTabsEventState(model_);
     }
     nav_observers_.clear();
+  }
+
+  // TabStripModelObserver:
+  // Fired from ~TabStripModel, after TabStripModelObserver::ModelDestroyed has
+  // already detached this observer from the model.
+  //
+  // The registry keys strip observers by browser and dereferences the browser's
+  // TabStripModel on every ReannounceUnannouncedTabs(). A model can be destroyed
+  // while its browser is still recorded here, and the browser's own
+  // OnBrowserClosed notification is not guaranteed to arrive first (it is one of
+  // several observers of GlobalBrowserCollection). A later reannounce -- every
+  // MahoSpaceProfileBridge::SetActiveSpaceId() triggers one -- then walks the
+  // freed TabStripModel and crashes on model->count(). Drop the entry here, at
+  // the only point where the model's death is observable.
+  void OnTabStripModelDestroyed(TabStripModel* tab_strip_model) override {
+    model_destroyed_ = true;
+    CleanUpManyTabsEventState(model_);
+    // Erasing the registry entry destroys `this`; touch no members afterwards.
+    if (registry_) {
+      registry_->DetachStripObserverForDestroyedModel(browser_);
+    }
   }
 
   void OnTabStripModelChanged(
@@ -566,6 +588,11 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
   raw_ptr<MahoTabRegistry> registry_;
   raw_ptr<BrowserWindowInterface> browser_;
   raw_ptr<TabStripModel> model_;
+  // Set from OnTabStripModelDestroyed(), which runs while the model is being
+  // torn down. The destructor must then skip both RemoveObserver() and any
+  // CleanUpManyTabsEventState() work, because the base class already detached
+  // this observer and the model may not be touched again.
+  bool model_destroyed_ = false;
   base::flat_map<content::WebContents*, std::unique_ptr<NavObserver>> nav_observers_;
 };
 
@@ -603,6 +630,16 @@ void MahoTabRegistry::OnBrowserClosed(BrowserWindowInterface* browser) {
     return;
   }
   DetachStripObserverFor(browser);
+}
+
+void MahoTabRegistry::DetachStripObserverForDestroyedModel(
+    BrowserWindowInterface* browser) {
+  if (!browser) {
+    return;
+  }
+  // The browser's TabStripModel is already being destroyed, so this must not
+  // walk it the way DetachStripObserverFor() does.
+  strip_observers_.erase(browser);
 }
 
 void MahoTabRegistry::AttachStripObserverFor(BrowserWindowInterface* browser) {
@@ -696,8 +733,12 @@ void MahoTabRegistry::MigrateDispatchCache(const std::string& from_tab_id,
     dispatch_cache_.erase(it);
     return;
   }
-  dispatch_cache_[to_tab_id] = std::move(it->second);
-  dispatch_cache_.erase(it);
+  // `dispatch_cache_` is an unordered_map: inserting the (absent) destination
+  // key can rehash and invalidate every iterator, including `it`. Extract the
+  // node first so the source entry is removed before the insert runs.
+  auto node = dispatch_cache_.extract(it);
+  node.key() = to_tab_id;
+  dispatch_cache_.insert(std::move(node));
 }
 
 // static
@@ -741,7 +782,7 @@ void MahoTabRegistry::ArchiveTabsAndRemoveFromStrip(
     }
   }
 
-  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  TabStripModel* tab_strip_model = browser->GetTabStripModel();
   std::vector<std::pair<int, std::string>> index_id_pairs;
   for (int i = 0; i < tab_strip_model->count(); ++i) {
     content::WebContents* contents = tab_strip_model->GetWebContentsAt(i);
@@ -791,7 +832,21 @@ void SetTabRegistryShellEventObserverForTesting(ShellEventObserver* observer) {
 void DispatchTabRegistryShellEventForTesting(MahoCore* core,
                                              const std::string& kind,
                                              base::DictValue event) {
-  DispatchShellEventLocalWithCore(core, kind, std::move(event));
+  // Apply synchronously against the caller's core. DispatchCoreEvent routes
+  // through the global core holder, which unit tests driving a standalone
+  // maho_core_new() instance never populate, so the event would be dropped.
+  event.Set("kind", kind);
+  std::string json;
+  base::JSONWriter::Write(event, &json);
+  if (g_tab_registry_shell_event_observer_for_testing) {
+    g_tab_registry_shell_event_observer_for_testing->OnShellEventDispatched(
+        kind, json);
+  }
+  if (!core) {
+    return;
+  }
+  InvalidateSidebarCoreCacheForUpdatesJson(
+      maho::core::HandleEvent(core, json.c_str()));
 }
 
 }  // namespace maho

@@ -2,6 +2,8 @@
 
 #include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"
 
+#include <utility>
+
 #include <algorithm>
 #include <memory>
 #include <string>
@@ -18,8 +20,10 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/grit/generated_resources.h"
@@ -125,16 +129,20 @@ void ExecuteTabPromotion(Browser* popup_browser,
   if (!popup_browser || !target_profile) {
     return;
   }
-  TabStripModel* popup_tab_strip = popup_browser->tab_strip_model();
+  TabStripModel* popup_tab_strip = popup_browser->GetTabStripModel();
   if (!popup_tab_strip || popup_tab_strip->empty()) {
     return;
   }
 
-  Browser* target_browser = chrome::FindTabbedBrowser(
-      target_profile, /*match_original_profiles=*/false);
+  ProfileBrowserCollection* collection =
+      ProfileBrowserCollection::GetForProfile(target_profile);
+  BrowserWindowInterface* target_bwi =
+      collection ? collection->FindTabbedBrowser(/*match_original_profiles=*/false)
+                 : nullptr;
+  Browser* target_browser = static_cast<Browser*>(target_bwi);
   if (!target_browser || target_browser == popup_browser) {
     target_browser =
-        Browser::Create(Browser::CreateParams(target_profile, true));
+        static_cast<Browser*>(CreateBrowserWindow(BrowserWindowCreateParams(target_profile, true)));
   }
 
   int active_index = popup_tab_strip->active_index();
@@ -145,13 +153,13 @@ void ExecuteTabPromotion(Browser* popup_browser,
     if (bridge) {
       bridge->SetActiveSpaceId(target_browser, space_id);
     }
-    target_browser->tab_strip_model()->InsertWebContentsAt(
+    target_browser->GetTabStripModel()->InsertWebContentsAt(
         /*index=*/-1, std::move(contents),
         AddTabTypes::ADD_ACTIVE | AddTabTypes::ADD_INHERIT_OPENER);
-    target_browser->window()->Show();
-    target_browser->window()->Activate();
+    target_browser->GetWindow()->Show();
+    target_browser->GetWindow()->Activate();
   }
-  popup_browser->window()->Close();
+  popup_browser->GetWindow()->Close();
 }
 
 }  // namespace
@@ -191,7 +199,7 @@ class MahoMiniPromoteButton : public views::View,
             &MahoMiniPromoteButton::OnDropPressed, base::Unretained(this))));
     drop_button_->SetImageModel(
         views::Button::STATE_NORMAL,
-        ui::ImageModel::FromVectorIcon(vector_icons::kCaretDownIcon,
+        ui::ImageModel::FromVectorIcon(vector_icons::kCaretDownOldIcon,
                                        kMahoColorMiniSecondaryText, 8));
     drop_button_->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
     drop_button_->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
@@ -371,9 +379,9 @@ MahoMiniTopBarView::MahoMiniTopBarView(Browser* browser,
       gfx::Size(kAddressFieldMaxWidth, kAddressFieldHeight));
   address_field_->set_controller(this);
 
-  browser_->tab_strip_model()->AddObserver(this);
-  if (browser_->tab_strip_model()->GetActiveWebContents()) {
-    Observe(browser_->tab_strip_model()->GetActiveWebContents());
+  browser_->GetTabStripModel()->AddObserver(this);
+  if (browser_->GetTabStripModel()->GetActiveWebContents()) {
+    Observe(browser_->GetTabStripModel()->GetActiveWebContents());
   }
 
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
@@ -386,8 +394,8 @@ MahoMiniTopBarView::MahoMiniTopBarView(Browser* browser,
 }
 
 MahoMiniTopBarView::~MahoMiniTopBarView() {
-  if (browser_ && browser_->tab_strip_model()) {
-    browser_->tab_strip_model()->RemoveObserver(this);
+  if (browser_ && browser_->GetTabStripModel()) {
+    browser_->GetTabStripModel()->RemoveObserver(this);
   }
 }
 
@@ -534,10 +542,8 @@ void MahoMiniTopBarView::OnThemeChanged() {
   if (!address_field_ || !GetColorProvider()) {
     return;
   }
-  address_field_->SetTextColor(
-      GetColorProvider()->GetColor(kMahoColorMiniPrimaryText));
-  address_field_->set_placeholder_text_color(
-      GetColorProvider()->GetColor(kMahoColorMiniSecondaryText));
+  address_field_->SetTextColorId(kMahoColorMiniPrimaryText);
+  address_field_->SetPlaceholderTextColorId(kMahoColorMiniSecondaryText);
 }
 
 bool MahoMiniTopBarView::IsPositionInWindowCaption(
@@ -580,7 +586,7 @@ void MahoMiniTopBarView::OnWidgetBoundsChanged(views::Widget* widget,
     return;
   }
   last_widget_size_ = size;
-  PrefService* prefs = browser_->profile()->GetPrefs();
+  PrefService* prefs = browser_->GetProfile()->GetPrefs();
   if (prefs) {
     prefs->SetInteger(sidebar_prefs::kMahoMiniWindowWidth, size.width());
     prefs->SetInteger(sidebar_prefs::kMahoMiniWindowHeight, size.height());
@@ -651,14 +657,14 @@ void MahoMiniTopBarView::PromoteToSpace(const std::string& space_id) {
     g_browser_process->profile_manager()->LoadProfileByPath(
         absolute_path, false,
         base::BindOnce(
-            [](base::WeakPtr<Browser> weak_popup_browser, std::string space_id,
+            [](base::WeakPtr<BrowserWindowInterface> weak_popup_browser, std::string space_id,
                Profile* target_profile) {
               if (weak_popup_browser && target_profile) {
-                ExecuteTabPromotion(weak_popup_browser.get(), target_profile,
+                ExecuteTabPromotion(static_cast<Browser*>(weak_popup_browser.get()), target_profile,
                                     space_id);
               }
             },
-            browser_->AsWeakPtr(), space_id));
+            browser_->GetWeakPtr(), space_id));
     return;
   }
 
@@ -730,7 +736,7 @@ void MahoMiniTopBarView::AcceptAddressInput() {
        target.SchemeIs("chrome"));
   if (!is_direct_url) {
     TemplateURLService* template_url_service =
-        TemplateURLServiceFactory::GetForProfile(browser_->profile());
+        TemplateURLServiceFactory::GetForProfile(browser_->GetProfile());
     if (!template_url_service ||
         !template_url_service->GetDefaultSearchProvider()) {
       return;

@@ -101,14 +101,14 @@ export function SwipeableRow({
           style={{ width: Math.abs(offset) }}
         >
           <div
-            className="flex items-center gap-2 text-white transition-transform duration-150"
+            className="flex items-center gap-2 text-primary-foreground transition-transform duration-150"
             style={{
               opacity: 0.45 + leftProgress * 0.55,
               transform: `scale(${0.9 + leftProgress * 0.15})`,
             }}
           >
-            <LeftIcon size={18} className="text-white" />
-            <span className="text-xs font-medium text-white">{leftLabel}</span>
+            <LeftIcon size={18} aria-hidden="true" />
+            <span className="text-xs font-medium">{leftLabel}</span>
           </div>
         </div>
       )}
@@ -122,14 +122,14 @@ export function SwipeableRow({
           style={{ width: Math.abs(offset) }}
         >
           <div
-            className="flex items-center gap-2 text-white transition-transform duration-150"
+            className="flex items-center gap-2 text-primary-foreground transition-transform duration-150"
             style={{
               opacity: 0.45 + rightProgress * 0.55,
               transform: `scale(${0.9 + rightProgress * 0.15})`,
             }}
           >
-            <RightIcon size={18} className="text-white" />
-            <span className="text-xs font-medium text-white">{rightLabel}</span>
+            <RightIcon size={18} aria-hidden="true" />
+            <span className="text-xs font-medium">{rightLabel}</span>
           </div>
         </div>
       )}

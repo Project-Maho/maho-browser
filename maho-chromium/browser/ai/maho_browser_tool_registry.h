@@ -44,7 +44,14 @@ public:
   enum class Broker { kUnknown, kBrowser, kMail, kRoutines, kVault };
   enum class Boundary { kUnknown, kSession, kProfile, kTab };
   enum class Sensitivity { kUnknown, kLow, kSensitive, kCredential };
-  enum class FeatureGate { kUnknown, kAlways, kMailBeta, kRoutines, kVault };
+  enum class FeatureGate {
+    kUnknown,
+    kAlways,
+    kMailBeta,
+    kRoutines,
+    kVault,
+    kNativeInput,
+  };
   enum class MissingPolicy { kUnknown, kFailClosed };
   enum Surface : uint32_t {
     kDesktopAgent = 1u << 0,
@@ -140,7 +147,8 @@ public:
   static std::vector<const CapabilityDescriptor *>
   GetCapabilitiesForSurface(Surface surface, bool mail_enabled = true,
                             bool routines_enabled = true,
-                            bool vault_enabled = true);
+                            bool vault_enabled = true,
+                            bool native_input_enabled = false);
   static std::optional<base::DictValue>
   SerializePublicMcpCapability(const CapabilityDescriptor &descriptor);
   static std::optional<base::DictValue>
@@ -148,15 +156,18 @@ public:
   static base::ListValue
   SerializePublicMcpCapabilities(bool mail_enabled = true,
                                  bool routines_enabled = true,
-                                 bool vault_enabled = true);
+                                 bool vault_enabled = true,
+                                 bool native_input_enabled = false);
   static base::DictValue SerializeDiagnostics(
       Surface surface,
       bool mail_enabled = true,
       bool routines_enabled = true,
-      bool vault_enabled = true);
+      bool vault_enabled = true,
+      bool native_input_enabled = false);
   static base::ListValue SerializeAgentCapabilities(
       bool mail_enabled = true, bool routines_enabled = true,
-      bool vault_enabled = true);
+      bool vault_enabled = true,
+      bool native_input_enabled = false);
   static base::DictValue SerializeExecutionResult(
       const CapabilityDescriptor &descriptor, std::string output_json,
       const ExecutionReceiptContext &context);
@@ -181,6 +192,11 @@ public:
       std::optional<std::string_view> routine_id = std::nullopt,
       uint32_t limit = 50,
       MahoCore* core = nullptr);
+
+  // Human help request dispatch and validation bridge.
+  static base::DictValue ExecuteBrowserRequestHelp(
+      const base::DictValue& params,
+      std::string* error_out = nullptr);
 
   static constexpr bool HasSurface(const CapabilityDescriptor &descriptor,
                                    Surface surface) {

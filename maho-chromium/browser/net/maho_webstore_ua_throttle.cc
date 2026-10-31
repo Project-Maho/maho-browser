@@ -7,6 +7,8 @@
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "base/strings/string_util.h"
 #include "net/http/http_request_headers.h"
+#include "net/url_request/redirect_info.h"
+#include "services/network/public/cpp/http_request_headers_update_params.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "url/gurl.h"
 
@@ -75,14 +77,12 @@ void MahoWebStoreUAThrottle::WillRedirectRequest(
     net::RedirectInfo* redirect_info,
     const network::mojom::URLResponseHead& /* response_head */,
     bool* defer,
-    std::vector<std::string>* /* to_be_removed_request_headers */,
-    net::HttpRequestHeaders* modified_request_headers,
-    net::HttpRequestHeaders* /* modified_cors_exempt_request_headers */) {
+    network::HttpRequestHeadersUpdateParams* headers_update_params) {
   const GURL new_url(redirect_info->new_url);
   if (NeedsChromeLikeUA(new_url) && !cached_clean_ua_.empty() &&
-      modified_request_headers) {
-    modified_request_headers->SetHeader(net::HttpRequestHeaders::kUserAgent,
-                                       cached_clean_ua_);
+      headers_update_params) {
+    headers_update_params->modified_headers.SetHeader(
+        net::HttpRequestHeaders::kUserAgent, cached_clean_ua_);
     base::UmaHistogramBoolean("Maho.Extensions.UAThrottleApplied", true);
   }
 }

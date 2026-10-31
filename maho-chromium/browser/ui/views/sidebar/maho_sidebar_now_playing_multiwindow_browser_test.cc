@@ -14,7 +14,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
@@ -170,9 +169,9 @@ IN_PROC_BROWSER_TEST_F(MahoControlActivityBrowserTest,
       browser(),
       GURL("data:text/html,<body style='margin:0;background:%23123456'>")));
   content::WebContents* target =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(target);
-  const int target_index = browser()->tab_strip_model()->active_index();
+  const int target_index = browser()->GetTabStripModel()->active_index();
 
   MahoActionMarkerService::Request request;
   request.viewport_point = gfx::PointF(120.0f, 80.0f);
@@ -191,7 +190,7 @@ IN_PROC_BROWSER_TEST_F(MahoControlActivityBrowserTest,
       MahoActionMarkerService::ShowForRevalidatedTarget(target, request));
 
   WebContentsVisibilitySignal visible(target, content::Visibility::VISIBLE);
-  browser()->tab_strip_model()->ActivateTabAt(target_index);
+  browser()->GetTabStripModel()->ActivateTabAt(target_index);
   ASSERT_TRUE(visible.Wait());
   ASSERT_TRUE(
       MahoActionMarkerService::ShowForRevalidatedTarget(target, request));
@@ -217,10 +216,10 @@ IN_PROC_BROWSER_TEST_F(MahoControlActivityBrowserTest,
 class MahoRoutineHandoffBrowserTest : public InProcessBrowserTest {
  protected:
   void NavigateLegacyRoutinesAndWait() {
-    const int initial_tab_count = browser()->tab_strip_model()->count();
+    const int initial_tab_count = browser()->GetTabStripModel()->count();
     chrome::AddTabAt(browser(), GURL("about:blank"), -1, true);
     content::WebContents* legacy =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     WebContentsDestructionSignal destroyed(legacy);
     legacy->GetController().LoadURL(GURL(maho::kMahoRoutinesURL),
                                     content::Referrer(),
@@ -231,7 +230,7 @@ class MahoRoutineHandoffBrowserTest : public InProcessBrowserTest {
           << "legacy Routines navigation did not close its handoff tab";
       return;
     }
-    EXPECT_EQ(initial_tab_count, browser()->tab_strip_model()->count());
+    EXPECT_EQ(initial_tab_count, browser()->GetTabStripModel()->count());
   }
 };
 
@@ -247,14 +246,14 @@ IN_PROC_BROWSER_TEST_F(MahoRoutineHandoffBrowserTest,
   ASSERT_LT(browser_view->contents_container()->width(), cold_width);
   auto* side_panel_ui = browser()->GetFeatures().side_panel_ui();
   ASSERT_TRUE(side_panel_ui);
-  EXPECT_TRUE(side_panel_ui->IsSidePanelShowing(SidePanelType::kContent));
+  EXPECT_TRUE(side_panel_ui->IsSidePanelShowing());
   EXPECT_EQ(SidePanelEntryId::kMahoAiPanel,
-            side_panel_ui->GetCurrentEntryId(SidePanelType::kContent));
-  const int64_t cold_generation = browser()->profile()->GetPrefs()->GetInt64(
+            side_panel_ui->GetCurrentEntryId());
+  const int64_t cold_generation = browser()->GetProfile()->GetPrefs()->GetInt64(
       ai_prefs::kPendingSurfaceGeneration);
   ASSERT_GT(cold_generation, 0);
   ASSERT_TRUE(base::test::RunUntil([&]() {
-    return browser()->profile()->GetPrefs()->GetInteger(
+    return browser()->GetProfile()->GetPrefs()->GetInteger(
                ai_prefs::kPendingSurface) ==
            static_cast<int>(maho_ai::mojom::CompactSurface::kChat);
   }));
@@ -263,10 +262,10 @@ IN_PROC_BROWSER_TEST_F(MahoRoutineHandoffBrowserTest,
   NavigateLegacyRoutinesAndWait();
   EXPECT_EQ(open_width, browser_view->contents_container()->width());
   EXPECT_EQ(cold_generation + 1,
-            browser()->profile()->GetPrefs()->GetInt64(
+            browser()->GetProfile()->GetPrefs()->GetInt64(
                 ai_prefs::kPendingSurfaceGeneration));
   EXPECT_TRUE(base::test::RunUntil([&]() {
-    return browser()->profile()->GetPrefs()->GetInteger(
+    return browser()->GetProfile()->GetPrefs()->GetInteger(
                ai_prefs::kPendingSurface) ==
            static_cast<int>(maho_ai::mojom::CompactSurface::kChat);
   }));
@@ -285,7 +284,7 @@ class MahoNowPlayingMultiWindowBrowserTest : public InProcessBrowserTest {
 
  protected:
   content::WebContents* GetActiveWebContents(Browser* browser) {
-    return browser->tab_strip_model()->GetActiveWebContents();
+    return browser->GetTabStripModel()->GetActiveWebContents();
   }
 
   void StartPlayback(Browser* browser) {
@@ -301,19 +300,19 @@ class MahoNowPlayingMultiWindowBrowserTest : public InProcessBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(MahoNowPlayingMultiWindowBrowserTest, FiveWindowsCoexistAndIsolate) {
-  Browser* r1 = browser();
-  Browser* r2 = CreateBrowser(r1->profile());
-  Browser* r3 = CreateBrowser(r1->profile());
+  Browser* r1 = static_cast<Browser*>(browser());
+  Browser* r2 = static_cast<Browser*>(CreateBrowser(r1->GetProfile()));
+  Browser* r3 = static_cast<Browser*>(CreateBrowser(r1->GetProfile()));
 
-  Profile* otr_profile = r1->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
-  Browser* i1 = CreateBrowser(otr_profile);
-  Browser* i2 = CreateBrowser(otr_profile);
+  Profile* otr_profile = r1->GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+  Browser* i1 = static_cast<Browser*>(CreateBrowser(otr_profile));
+  Browser* i2 = static_cast<Browser*>(CreateBrowser(otr_profile));
   ASSERT_TRUE(r2);
   ASSERT_TRUE(i1);
 
   base::RunLoop().RunUntilIdle();
 
-  auto* reg_coordinator = MahoNowPlayingCoordinatorFactory::GetForProfile(r1->profile());
+  auto* reg_coordinator = MahoNowPlayingCoordinatorFactory::GetForProfile(r1->GetProfile());
   auto* otr_coordinator = MahoNowPlayingCoordinatorFactory::GetForProfile(otr_profile);
 
   ASSERT_TRUE(reg_coordinator);
@@ -331,12 +330,12 @@ IN_PROC_BROWSER_TEST_F(MahoNowPlayingMultiWindowBrowserTest, FiveWindowsCoexistA
 }
 
 IN_PROC_BROWSER_TEST_F(MahoNowPlayingMultiWindowBrowserTest, SourceWindowRoutingAndTabMove) {
-  Browser* r1 = browser();
-  Browser* r2 = CreateBrowser(r1->profile());
+  Browser* r1 = static_cast<Browser*>(browser());
+  Browser* r2 = static_cast<Browser*>(CreateBrowser(r1->GetProfile()));
 
   base::RunLoop().RunUntilIdle();
 
-  auto* reg_coordinator = MahoNowPlayingCoordinatorFactory::GetForProfile(r1->profile());
+  auto* reg_coordinator = MahoNowPlayingCoordinatorFactory::GetForProfile(r1->GetProfile());
   ASSERT_TRUE(reg_coordinator);
   ASSERT_EQ(2u, reg_coordinator->GetHostsForTesting().size());
 
@@ -351,7 +350,7 @@ IN_PROC_BROWSER_TEST_F(MahoNowPlayingMultiWindowBrowserTest, SourceWindowRouting
 
   // Start playback
   // Note: Tab strip active tab is index 1. Video tab is index 0.
-  content::WebContents* video_contents = r2->tab_strip_model()->GetWebContentsAt(0);
+  content::WebContents* video_contents = r2->GetTabStripModel()->GetWebContentsAt(0);
   video_contents->GetPrimaryMainFrame()->ExecuteJavaScriptForTests(
       u"play()", base::NullCallback(), content::ISOLATED_WORLD_ID_GLOBAL);
   

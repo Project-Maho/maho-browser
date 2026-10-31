@@ -40,12 +40,26 @@ interface MahoTranslateNamespace {
   const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "CODE", "PRE", "KBD", "SAMP"]);
   const originals = new WeakMap<Text, string>();
   let status: TranslateStatus = "idle";
+  let generation = 0;
   let observer: MutationObserver | null = null;
   let target = "";
   let source: string | undefined;
 
   const normalize = (code?: string): string | undefined =>
     code ? code.split("-")[0]?.toLowerCase() : undefined;
+
+  // Reports a state transition to the browser. The C++ injector observes these
+  // console messages (WebContentsObserver::OnDidAddMessageToConsole) because
+  // ExecuteJavaScriptInIsolatedWorld does not resolve promises, so this is the
+  // only channel the browser has to learn when on-device translation actually
+  // finished or failed (rather than optimistically assuming success). The
+  // message is emitted at the verbose level, which the DevTools console hides
+  // by default.
+  const report = (next: TranslateStatus, source_lang?: string): void => {
+    console.debug(
+        "__mahoTranslate:state:" + next +
+        (source_lang ? ":" + source_lang : ""));
+  };
 
   function translatable(node: Text): boolean {
     if (!node.nodeValue || !node.nodeValue.trim()) return false;
@@ -80,28 +94,22 @@ interface MahoTranslateNamespace {
     return undefined;
   }
 
-  async function translateNodes(nodes: Text[]): Promise<void> {
-    if (!w.Translator || !source || source === target) return;
+  async function translateNodes(nodes: Text[], request: number): Promise<void> {
+    if (request !== generation) return;
+    if (!w.Translator || !source) throw new Error('Translation is unavailable');
+    if (source === target) return;
     const pending = nodes.filter((n) => n.nodeValue && n.nodeValue.trim());
     if (!pending.length) return;
-    let translator: BrowserTranslatorInstance;
-    try {
-      translator = await w.Translator.create({ sourceLanguage: source, targetLanguage: target });
-    } catch {
-      status = "error";
-      return;
-    }
+    const translator = await w.Translator.create({ sourceLanguage: source, targetLanguage: target });
+    if (request !== generation) return;
     // Translate all nodes first, buffering results, then apply them in one
     // synchronous pass so the page swaps at once instead of revealing
     // top-to-bottom.
     const translations = new Map<Text, string>();
     for (const n of pending) {
       const value = n.nodeValue as string;
-      try {
-        translations.set(n, await translator.translate(value));
-      } catch {
-        continue;
-      }
+      translations.set(n, await translator.translate(value));
+      if (request !== generation) return;
     }
     for (const [n, translated] of translations) {
       if (!originals.has(n)) originals.set(n, n.nodeValue as string);
@@ -109,8 +117,8 @@ interface MahoTranslateNamespace {
     }
   }
 
-  function startObserver(): void {
-    if (observer) return;
+  function startObserver(request: number): void {
+    if (observer || request !== generation) return;
     observer = new MutationObserver((muts) => {
       if (status !== "translated") return;
       const fresh: Text[] = [];
@@ -120,16 +128,24 @@ interface MahoTranslateNamespace {
           else if (n.nodeType === Node.ELEMENT_NODE) fresh.push(...collect(n));
         });
       }
-      if (fresh.length) void translateNodes(fresh);
+      if (fresh.length) void translateNodes(fresh, request).catch(() => {
+        if (request !== generation) return;
+        status = "error";
+        observer?.disconnect();
+        observer = null;
+      });
     });
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
   w.__mahoTranslate = {
     translatePage(t: string): void {
-      if (status === "translating") return;
+      const request = ++generation;
+      observer?.disconnect();
+      observer = null;
       status = "translating";
       target = normalize(t) ?? "en";
+      report("translating");
       const nodes = collect(document.body);
       // Prefer the declared <html lang>: it is instant, so Translator.create()
       // runs inside the fresh transient-activation window. Falling back to the
@@ -141,21 +157,29 @@ interface MahoTranslateNamespace {
         : detect(nodes.map((n) => n.nodeValue).join(" ").slice(0, 2000));
       void resolveSource
         .then((s) => {
+          if (request !== generation) return;
           source = s;
-          return translateNodes(nodes);
+          return translateNodes(nodes, request);
         })
         .then(() => {
-          status = status === "error" ? "error" : "translated";
-          startObserver();
+          if (request !== generation) return;
+          status = "translated";
+          report("translated", source);
+          startObserver(request);
         })
         .catch(() => {
-          status = "error";
+          if (request === generation) {
+            status = "error";
+            report("error");
+          }
         });
     },
     restorePage(): void {
+      generation += 1;
       observer?.disconnect();
       observer = null;
       status = "idle";
+      report("idle");
       for (const n of collect(document.body)) {
         const orig = originals.get(n);
         if (orig !== undefined) n.nodeValue = orig;

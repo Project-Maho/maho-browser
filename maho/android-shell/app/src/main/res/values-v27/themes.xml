@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- API 27+ additions to Theme.Maho.Browser:
-         android:navigationBarDividerColor and android:windowLightNavigationBar
-         require API level 27. -->
-    <style name="Theme.Maho.Browser" parent="android:Theme.Material.Light.NoActionBar">
+    <!-- API 27+ delta over the base Theme.Maho.Browser in values/.
+         android:navigationBarDividerColor and android:windowLightNavigationBar were both
+         introduced in API 27, so they cannot live in the base configuration at minSdk 26. -->
+    <style name="Theme.Maho.Browser" parent="android:Theme.DeviceDefault.NoActionBar">
         <item name="android:windowBackground">@color/shell_window_background</item>
         <item name="android:colorBackground">@color/shell_window_background</item>
         <item name="android:statusBarColor">@android:color/transparent</item>

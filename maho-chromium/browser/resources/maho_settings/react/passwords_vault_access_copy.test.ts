@@ -10,7 +10,7 @@ describe('Vault access copy', () => {
     expect(getVaultAccessCopy(VaultLockState.kUninitialized)).toEqual({
       actionLabel: 'Initialize Vault',
       description:
-          'Create a local Vault before storing native passwords. The recovery secret is used only to recover this Vault.',
+          'Signing in sets up your Maho Vault automatically - its key follows your account. You can also set one up here with a passphrase.',
       mode: 'initialize',
       title: 'Set up Maho Vault',
     });
@@ -24,5 +24,6 @@ describe('Vault access copy', () => {
     expect(copy.mode).toBe('unlock');
     expect(copy.title).toBe('Unlock Maho Vault');
     expect(copy.actionLabel).toBe('Unlock Vault');
+    expect(copy.description).toContain('unlocks when you sign in');
   });
 });

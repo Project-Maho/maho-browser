@@ -63,6 +63,7 @@ class MahoSidebarInteractiveTestBase : public InteractiveBrowserTest {
   ~MahoSidebarInteractiveTestBase() override;
 
   void SetUpCommandLine(base::CommandLine* command_line) override;
+  void PreRunTestOnMainThread() override;
   void SetUpOnMainThread() override;
   void TearDownOnMainThread() override;
 

@@ -4,6 +4,25 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 fn catalog_discovery() -> serde_json::Value {
+    catalog_discovery_with_session_tools(&[])
+}
+
+/// Discovery as sent to a trusted Maho CLI session: catalog capabilities plus
+/// session-scoped tools that carry no `capabilityId`.
+fn catalog_discovery_with_session_tools(session_tools: &[&str]) -> serde_json::Value {
+    let mut discovery = catalog_discovery_base();
+    let tools = discovery["tools"].as_array_mut().expect("tools array");
+    for name in session_tools {
+        tools.push(serde_json::json!({
+            "name": name,
+            "description": "Session-scoped tool without a catalog capability.",
+            "inputSchema": {"type": "object", "properties": {}}
+        }));
+    }
+    discovery
+}
+
+fn catalog_discovery_base() -> serde_json::Value {
     serde_json::json!({
         "catalogDiagnostics": {
             "catalogVersion": 1,
@@ -60,6 +79,10 @@ struct MockBrowser {
 
 impl MockBrowser {
     fn spawn() -> Self {
+        Self::spawn_with_discovery(catalog_discovery())
+    }
+
+    fn spawn_with_discovery(discovery: serde_json::Value) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket_path = dir.path().join("mock-browser.sock");
         let listener = UnixListener::bind(&socket_path).expect("bind mock UDS");
@@ -75,6 +98,7 @@ impl MockBrowser {
                     Err(_) => break,
                 };
                 let calls = Arc::clone(&tool_calls_thread);
+                let discovery = discovery.clone();
                 // Handle each connection inline (one-shot CLI uses a single one).
                 let mut writer = stream.try_clone().expect("clone stream");
                 let mut reader = BufReader::new(stream);
@@ -105,7 +129,7 @@ impl MockBrowser {
                         "tools/list" => serde_json::json!({
                             "jsonrpc": "2.0",
                             "id": id,
-                            "result": catalog_discovery()
+                            "result": discovery
                         }),
                         "tools/call" => {
                             if let Some(name) = req
@@ -237,6 +261,32 @@ fn stateless_oneshot_forwarded_when_browser_reachable() {
     );
 }
 
+/// A trusted CLI session's `tools/list` also carries session-scoped tools
+/// without a `capabilityId` (e.g. `maho_agent_delegate`). They are not catalog
+/// capabilities, so they must not trip the diagnostics count check.
+#[test]
+fn stateless_oneshot_forwarded_when_trusted_session_adds_session_tools() {
+    let mock = MockBrowser::spawn_with_discovery(catalog_discovery_with_session_tools(&[
+        "maho_agent_delegate",
+    ]));
+
+    let output = run_cli_with_socket(
+        &["tool", "run", "page.content", "--args", "{}"],
+        mock.socket(),
+    );
+
+    assert!(
+        output.status.success(),
+        "session-scoped tools must not fail discovery validation; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        mock.recorded_calls(),
+        vec!["browser_page_content".to_string()],
+        "stateless tool should be forwarded to the browser exactly once"
+    );
+}
+
 /// The stateful set must be EXACTLY these 6 session-binding tool names, and the
 /// bogus `browser_refresh_lease` (never a real tool) must be absent.
 #[test]
@@ -253,15 +303,15 @@ fn tool_list_json_uses_packaged_catalog_without_browser() {
     assert_eq!(value["catalogDiagnostics"]["catalogVersion"], 1);
     assert_eq!(value["catalogDiagnostics"]["schemaVersion"], 1);
     assert_eq!(value["catalogDiagnostics"]["resultVersion"], 1);
-    assert_eq!(value["catalogDiagnostics"]["canonicalCount"], 87);
+    assert_eq!(value["catalogDiagnostics"]["canonicalCount"], 92);
     let tools = value["tools"].as_array().unwrap();
     let tool_ids = tools
         .iter()
         .map(|tool| tool["capabilityId"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(tool_ids.len(), 55);
-    assert_eq!(tool_ids[0], "bookmarks.create");
-    assert_eq!(tool_ids[54], "tab.switch");
+    assert_eq!(tool_ids.len(), 58);
+    assert_eq!(tool_ids[0], "tab.list");
+    assert_eq!(tool_ids[57], "browser.request_help");
 
     let diagnostic_ids = value["catalogDiagnostics"]["surfaces"]["publicMcp"]["ids"]
         .as_array()

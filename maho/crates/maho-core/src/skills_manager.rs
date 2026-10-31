@@ -45,7 +45,9 @@ impl Skill {
     /// 2. It requires no capability (`required_capability_id: None`) and declares `user_handoff: true`.
     pub fn is_discoverable(&self, available_capabilities: &[&str]) -> bool {
         if let Some(ref req) = self.required_capability_id {
-            available_capabilities.iter().any(|cap| *cap == req.as_str())
+            available_capabilities
+                .iter()
+                .any(|cap| *cap == req.as_str())
         } else {
             self.user_handoff
         }
@@ -743,7 +745,11 @@ impl SkillsManager {
     }
 
     pub fn get_discoverable_skills(&self) -> Vec<&Skill> {
-        let caps: Vec<&str> = self.available_capabilities.iter().map(|s| s.as_str()).collect();
+        let caps: Vec<&str> = self
+            .available_capabilities
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
         self.discover_skills(&caps)
     }
 
@@ -1577,7 +1583,9 @@ mod tests {
             "Maho product guidance.",
         );
         custom_skill.user_handoff = true;
-        manager.skills.insert("test-product-guide".to_string(), custom_skill);
+        manager
+            .skills
+            .insert("test-product-guide".to_string(), custom_skill);
 
         let context = manager.build_injected_context("https://mahobrowser.com/docs", 10_000);
         assert!(context.contains("Maho product guidance"));
@@ -1602,8 +1610,14 @@ mod tests {
             vec!["mahobrowser.com/*"],
             "Maho product guidance.",
         );
-        custom_skill.allowed_tools = vec!["browser_page_text".into(), "browser_click".into(), "fs_read".into()];
-        manager.skills.insert("test-product-guide".to_string(), custom_skill);
+        custom_skill.allowed_tools = vec![
+            "browser_page_text".into(),
+            "browser_click".into(),
+            "fs_read".into(),
+        ];
+        manager
+            .skills
+            .insert("test-product-guide".to_string(), custom_skill);
 
         let context = manager.build_injected_context("https://mahobrowser.com/docs", 10_000);
 
@@ -2410,10 +2424,7 @@ Use site guidance.
         assert_eq!(skills[0].id, "skill-1");
         assert!(skills[0].user_handoff);
         assert_eq!(skills[1].id, "skill-2");
-        assert_eq!(
-            skills[1].required_capability_id.as_deref(),
-            Some("cap_x")
-        );
+        assert_eq!(skills[1].required_capability_id.as_deref(), Some("cap_x"));
         assert_eq!(skills[2].id, "skill-3");
         assert_eq!(skills[2].slash_command, "/custom");
     }

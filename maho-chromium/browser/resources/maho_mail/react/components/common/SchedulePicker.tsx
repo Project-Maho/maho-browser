@@ -13,8 +13,8 @@ const QUICK_OPTIONS = [
   { labelKey: "compose.scheduleIn1Hour", hours: 1 },
   { labelKey: "compose.scheduleIn2Hours", hours: 2 },
   { labelKey: "compose.scheduleIn4Hours", hours: 4 },
-  { labelKey: "compose.scheduleTomorrowMorning", hours: 18 },
-  { labelKey: "compose.scheduleTomorrowAfternoon", hours: 24 },
+  { labelKey: "compose.scheduleTomorrowMorning", nextDayHour: 9 },
+  { labelKey: "compose.scheduleTomorrowAfternoon", nextDayHour: 14 },
   { labelKey: "compose.scheduleMondayMorning", days: "monday" as const },
 ] as const;
 
@@ -22,6 +22,9 @@ function computeScheduleDate(option: (typeof QUICK_OPTIONS)[number]): string {
   const now = new Date();
   if ("hours" in option && typeof option.hours === "number") {
     now.setHours(now.getHours() + option.hours);
+  } else if ("nextDayHour" in option) {
+    now.setDate(now.getDate() + 1);
+    now.setHours(option.nextDayHour, 0, 0, 0);
   } else if (option.days === "monday") {
     const dayOfWeek = now.getDay();
     const daysUntilMonday = (1 - dayOfWeek + 7) % 7 || 7;
@@ -60,7 +63,7 @@ export function SchedulePicker({ isOpen, onClose, onSchedule }: SchedulePickerPr
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full p-1 text-muted-foreground hover:bg-card hover:text-muted-foreground"
+            className="mail-pressable flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <X size={14} />
           </button>
@@ -72,7 +75,7 @@ export function SchedulePicker({ isOpen, onClose, onSchedule }: SchedulePickerPr
               key={option.labelKey}
               type="button"
               onClick={() => onSchedule(computeScheduleDate(option))}
-              className="w-full rounded-lg px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+              className="flex min-h-10 w-full items-center rounded-lg px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             >
               {t(option.labelKey)}
             </button>
@@ -99,7 +102,7 @@ export function SchedulePicker({ isOpen, onClose, onSchedule }: SchedulePickerPr
             type="button"
             onClick={handleCustomSchedule}
             disabled={!customDate}
-            className="mt-2 w-full rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
+            className="mail-pressable mt-2 flex h-9 w-full items-center justify-center rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
             {t("compose.scheduleSendButton")}
           </button>

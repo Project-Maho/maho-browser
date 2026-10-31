@@ -18,7 +18,7 @@ class Background;
   void SetMahoMargins();                            \
   void SetMahoBackground(std::unique_ptr<views::Background> background); \
   void ApplyMahoPasswordTypography()
-#include "src/chrome/browser/ui/views/autofill/popup/popup_row_view.h"  // IWYU pragma: export
+#include "../src/chrome/browser/ui/views/autofill/popup/popup_row_view.h"  // IWYU pragma: export
 #undef SetChildSuggestionsDisplayed
 
 #endif  // MAHO_CHROMIUM_SRC_CHROME_BROWSER_UI_VIEWS_AUTOFILL_POPUP_POPUP_ROW_VIEW_H_

@@ -9,7 +9,7 @@
 #include "base/functional/bind.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
-#include "chrome/browser/ui/web_modal/browser_window_modal_dialog_delegate.h"  // nogncheck
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/file_select_listener.h"
@@ -21,11 +21,12 @@
 #include "ui/base/page_transition_types.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/widget/widget.h"
 
 MahoPeekView::MahoPeekView(Browser* browser,
                            ControllerCallback open_as_tab_callback,
                            ControllerCallback close_callback)
-    : views::WebView(browser ? browser->profile() : nullptr),
+    : views::WebView(browser ? browser->GetProfile() : nullptr),
       browser_(browser),
       open_as_tab_callback_(std::move(open_as_tab_callback)),
       close_callback_(std::move(close_callback)) {
@@ -50,7 +51,7 @@ MahoPeekView::~MahoPeekView() {
 content::WebContents* MahoPeekView::CreateAndLoad(Profile* profile,
                                                   const GURL& url) {
   CHECK(profile);
-  CHECK_EQ(profile, browser_->profile());
+  CHECK_EQ(profile, browser_->GetProfile());
 
   content::WebContents::CreateParams create_params(profile);
   auto contents = content::WebContents::Create(create_params);
@@ -195,14 +196,49 @@ void MahoPeekView::Layout(PassKey pass_key) {
 }
 
 content::WebContentsDelegate* MahoPeekView::BrowserDelegate() const {
-  return static_cast<content::WebContentsDelegate*>(browser_.get());
+  return BrowserWebContentsDelegate::From(browser_.get());
+}
+
+web_modal::WebContentsModalDialogHost*
+MahoPeekView::GetWebContentsModalDialogHost(
+    content::WebContents* web_contents) {
+  // Host peek dialogs in this view. Returning nullptr here (the base default)
+  // makes constrained_window::CreateWebModalDialogViews() fail its
+  // CHECK(dialog_host), which crashes the browser whenever peeked content opens
+  // a web-modal dialog - notably the WebAuthn passkey dialog (including the
+  // caBLE cross-device QR) raised while Google sign-in runs inside peek.
+  return this;
+}
+
+gfx::NativeView MahoPeekView::GetHostView() const {
+  return GetWidget() ? GetWidget()->GetNativeView() : gfx::NativeView();
+}
+
+gfx::Point MahoPeekView::GetDialogPosition(const gfx::Size& size) {
+  const gfx::Size host_size = this->size();
+  return gfx::Point(host_size.width() / 2 - size.width() / 2,
+                    host_size.height() / 2 - size.height() / 2);
+}
+
+gfx::Size MahoPeekView::GetMaximumDialogSize() {
+  return size();
+}
+
+void MahoPeekView::AddObserver(
+    web_modal::ModalDialogHostObserver* observer) {
+  observers_.AddObserver(observer);
+}
+
+void MahoPeekView::RemoveObserver(
+    web_modal::ModalDialogHostObserver* observer) {
+  observers_.RemoveObserver(observer);
 }
 
 void MahoPeekView::AttachContents(
     std::unique_ptr<content::WebContents> contents) {
   CHECK(contents);
   CHECK(!owned_contents_);
-  CHECK_EQ(contents->GetBrowserContext(), browser_->profile());
+  CHECK_EQ(contents->GetBrowserContext(), browser_->GetProfile());
 
   owned_contents_ = std::move(contents);
   owned_contents_->SetDelegate(this);
@@ -210,7 +246,7 @@ void MahoPeekView::AttachContents(
       owned_contents_.get());
   web_modal::WebContentsModalDialogManager::FromWebContents(
       owned_contents_.get())
-      ->SetDelegate(BrowserWindowModalDialogDelegate::From(browser_));
+      ->SetDelegate(this);
   SetWebContents(owned_contents_.get());
 }
 

@@ -24,6 +24,50 @@ object MahoBridge {
 
     // === Core Lifecycle ===
 
+    /**
+     * U06a hydration: runs OFF Main. The loader owns the native pointer
+     * privately through key -> open -> load -> snapshot; the pointer is
+     * published (isInitialized) only after a complete initial snapshot, and
+     * a close requested during loading defers the reclaim to this loader.
+     * Returns true when the core is Ready for dependent setup (sync, restore).
+     */
+    fun beginHydration(storagePath: String): Boolean {
+        if (!CoreStartupState.beginLoading()) return false
+        val ptr = nativeCreateWithStorage(storagePath)
+        if (CoreStartupState.isClosingOrClosed()) {
+            if (ptr != 0L) nativeDestroy(ptr)
+            CoreStartupState.markClosed()
+            return false
+        }
+        if (ptr == 0L) {
+            CoreStartupState.markFailed()
+            return false
+        }
+        val loaded = nativeLoadState(ptr)
+        if (CoreStartupState.isClosingOrClosed()) {
+            nativeDestroy(ptr)
+            CoreStartupState.markClosed()
+            return false
+        }
+        if (!loaded) {
+            nativeDestroy(ptr)
+            CoreStartupState.markFailed()
+            return false
+        }
+        // Complete initial immutable snapshot BEFORE publication: views must
+        // never observe a hydrated-but-unpopulated core.
+        nativeGetTabViewModels(ptr)
+        nativeGetSpaceViewModels(ptr)
+        if (CoreStartupState.isClosingOrClosed()) {
+            nativeDestroy(ptr)
+            CoreStartupState.markClosed()
+            return false
+        }
+        corePtr = ptr
+        CoreStartupState.markReady()
+        return true
+    }
+
     fun initialize(storagePath: String) {
         if (corePtr != 0L) return
         corePtr = nativeCreateWithStorage(storagePath)
@@ -35,9 +79,13 @@ object MahoBridge {
     }
 
     fun destroy() {
+        // A Loading core is owned by its loader: defer the reclaim instead of
+        // freeing a pointer that is mid-native-load.
+        if (CoreStartupState.requestClose()) return
         val ptr = corePtr
         corePtr = 0
         if (ptr != 0L) nativeDestroy(ptr)
+        CoreStartupState.markClosed()
     }
 
     fun handleEvent(eventJson: String): String? {

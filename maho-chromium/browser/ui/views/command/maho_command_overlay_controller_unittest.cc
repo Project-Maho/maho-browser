@@ -22,7 +22,9 @@ namespace maho {
 // in MahoCommandOverlayController refers to the same class (maho:: scope).
 class MahoCommandOverlayControllerTest : public views::ViewsTestBase {
  protected:
-  MahoCommandOverlayControllerTest() = default;
+  MahoCommandOverlayControllerTest()
+      : views::ViewsTestBase(
+            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
   ~MahoCommandOverlayControllerTest() override = default;
 
   std::unique_ptr<MahoCommandOverlayController> MakeController() {
@@ -111,6 +113,28 @@ class MahoCommandOverlayControllerTest : public views::ViewsTestBase {
   void SetOpenStartTicks(MahoCommandOverlayController& controller,
                          base::TimeTicks ticks) {
     controller.open_start_ticks_ = ticks;
+  }
+
+  void TreatChromeWindowActive(MahoCommandOverlayController& controller) {
+    controller.treat_chrome_window_active_for_testing_ = true;
+  }
+
+  void CallOnDidChangeFocus(MahoCommandOverlayController& controller,
+                            views::View* focused_before,
+                            views::View* focused_now) {
+    controller.OnDidChangeFocus(focused_before, focused_now);
+  }
+
+  bool CallAcceleratorPressed(MahoCommandOverlayController& controller,
+                              const ui::Accelerator& accelerator) {
+    return controller.AcceleratorPressed(accelerator);
+  }
+
+  void CallOnTabStripModelChanged(
+      MahoCommandOverlayController& controller,
+      const TabStripSelectionChange& selection) {
+    TabStripModelChange change;
+    controller.OnTabStripModelChanged(nullptr, change, selection);
   }
 };
 
@@ -421,6 +445,10 @@ TEST_F(MahoCommandOverlayControllerTest,
 // is_hiding_ flag must remain true and no double-release occurs.
 TEST_F(MahoCommandOverlayControllerTest,
        HideWhileHidingInProgressIsNoOp) {
+  // Tests default to zero-duration animations, which would finish the fade
+  // synchronously and leave no in-progress hide to re-enter.
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   std::unique_ptr<views::Widget> parent = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   parent->Show();
 
@@ -552,31 +580,27 @@ TEST_F(MahoCommandOverlayControllerTest,
 
   auto controller = MakeController();
   InjectVisibleWidget(*controller, parent.get());
+  TreatChromeWindowActive(*controller);
+  // A click back into the browser window is what deactivates the palette.
+  parent->Activate();
+  ASSERT_FALSE(GetOverlayWidget(*controller)->IsActive());
 
-  // Set open_start_ticks_ to now.
   SetOpenStartTicks(*controller, base::TimeTicks::Now());
 
-  // Simulate deactivation immediately after show.
+  // Deactivation immediately after show.
   CallOnWidgetActivationChanged(*controller, GetOverlayWidget(*controller), false);
   ASSERT_TRUE(DeactivationTimerIsRunning(*controller));
 
-  // Fast-forward by 300ms (so timer fires, since delay is 200ms).
+  // The 200ms deactivation delay has fired, but the 500ms open grace keeps the
+  // palette up and re-arms the check instead of dropping it.
   task_environment()->FastForwardBy(base::Milliseconds(300));
-
-  // The overlay should still be visible because we are within the 500ms grace period.
   EXPECT_TRUE(controller->IsVisible());
+  EXPECT_TRUE(DeactivationTimerIsRunning(*controller));
 
-  // Fast-forward to 600ms after show.
+  // Once the grace window has elapsed the re-armed check dismisses the palette
+  // without needing a second deactivation, so a genuine early click still
+  // closes it.
   task_environment()->FastForwardBy(base::Milliseconds(300));
-
-  // Simulate deactivation again.
-  CallOnWidgetActivationChanged(*controller, GetOverlayWidget(*controller), false);
-  ASSERT_TRUE(DeactivationTimerIsRunning(*controller));
-
-  // Fast-forward by another 300ms (total time since show > 500ms).
-  task_environment()->FastForwardBy(base::Milliseconds(300));
-
-  // Now it should be hidden (or starting to hide).
   EXPECT_FALSE(controller->IsVisible());
 
   ReleaseInjectedWidget(*controller);
@@ -597,6 +621,78 @@ TEST_F(MahoCommandOverlayControllerTest, OtherOtrHasNoController) {
         << "only regular and exact primary Incognito windows own a command "
            "controller";
   }
+}
+
+TEST_F(MahoCommandOverlayControllerTest, FocusChangeOutsideDismissesOverlay) {
+  std::unique_ptr<views::Widget> parent =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  views::View* outside_view =
+      parent->SetContentsView(std::make_unique<views::View>());
+  parent->Show();
+
+  auto controller = MakeController();
+  InjectVisibleWidget(*controller, parent.get());
+  EXPECT_TRUE(controller->IsVisible());
+
+  CallOnDidChangeFocus(*controller, nullptr, outside_view);
+  EXPECT_FALSE(controller->IsVisible());
+
+  ReleaseInjectedWidget(*controller);
+}
+
+TEST_F(MahoCommandOverlayControllerTest, FocusChangeInsideOverlayDoesNotDismiss) {
+  std::unique_ptr<views::Widget> parent =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  parent->Show();
+
+  auto controller = MakeController();
+  InjectVisibleWidget(*controller, parent.get());
+  views::View* inside_view =
+      GetOverlayWidget(*controller)->SetContentsView(std::make_unique<views::View>());
+  EXPECT_TRUE(controller->IsVisible());
+
+  CallOnDidChangeFocus(*controller, nullptr, inside_view);
+  EXPECT_TRUE(controller->IsVisible());
+  EXPECT_FALSE(GetIsHiding(*controller));
+
+  ReleaseInjectedWidget(*controller);
+}
+
+TEST_F(MahoCommandOverlayControllerTest, HighPriorityEscAcceleratorDismissesOverlay) {
+  std::unique_ptr<views::Widget> parent =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  parent->Show();
+
+  auto controller = MakeController();
+  InjectVisibleWidget(*controller, parent.get());
+  EXPECT_TRUE(controller->IsVisible());
+
+  ui::Accelerator escape(ui::VKEY_ESCAPE, ui::EF_NONE);
+  EXPECT_TRUE(CallAcceleratorPressed(*controller, escape));
+  EXPECT_FALSE(controller->IsVisible());
+
+  ReleaseInjectedWidget(*controller);
+}
+
+TEST_F(MahoCommandOverlayControllerTest, ActiveTabChangeDismissesOverlay) {
+  std::unique_ptr<views::Widget> parent =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  parent->Show();
+
+  auto controller = MakeController();
+  InjectVisibleWidget(*controller, parent.get());
+  EXPECT_TRUE(controller->IsVisible());
+
+  TabStripSelectionChange selection;
+  // Non-null old_contents with null new_contents so active_tab_changed() returns true
+  // and WebContentsObserver::Observe(nullptr) safely clears the observed contents without dereference.
+  selection.old_contents = reinterpret_cast<content::WebContents*>(0x1);
+  selection.new_contents = nullptr;
+  CallOnTabStripModelChanged(*controller, selection);
+
+  EXPECT_FALSE(controller->IsVisible());
+
+  ReleaseInjectedWidget(*controller);
 }
 
 }  // namespace

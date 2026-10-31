@@ -135,9 +135,19 @@ constexpr base::TimeDelta kRemovalDuration = base::Milliseconds(180);
 constexpr float kInsertionStartScale = 0.7f;
 constexpr float kRemovalEndScale = 0.7f;
 
-ui::ImageModel CreateThemedGlobeIcon(int size) {
+// Private windows carry no resolved palette (transparent roles); they keep
+// the platform ColorId so the glyph stays visible there.
+ui::ColorVariant FavoritesGlyphColor(const MahoSidebarPalette& palette) {
+  if (palette.neutral_glyph != SK_ColorTRANSPARENT) {
+    return palette.neutral_glyph;
+  }
+  return ui::kColorSysOnSurfaceSubtle;
+}
+
+ui::ImageModel CreateThemedGlobeIcon(const MahoSidebarPalette& palette,
+                                     int size) {
   return ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon,
-                                        ui::kColorSysOnSurfaceSubtle, size);
+                                        FavoritesGlyphColor(palette), size);
 }
 
 class EmptyFavoritesPlaceholderView : public views::View {
@@ -168,12 +178,10 @@ class EmptyFavoritesPlaceholderView : public views::View {
         gfx::Size(kFavoriteEmptyBadgeIconSizeDp,
                   kFavoriteEmptyBadgeIconSizeDp));
 
-    close_button_ = AddChildView(views::CreateVectorImageButtonWithNativeTheme(
+    // Glyph images for every state are bound in UpdateAppearance().
+    close_button_ = AddChildView(views::CreateVectorImageButton(
         base::BindRepeating(&EmptyFavoritesPlaceholderView::OnClosePressed,
-                            base::Unretained(this)),
-        maho_lucide_icons::kXIcon, kFavoriteEmptyCloseSizeDp,
-        ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
-        ui::kColorSysOnSurface));
+                            base::Unretained(this))));
     close_button_->SetPreferredSize(
         gfx::Size(kFavoriteEmptyCloseHitTargetDp,
                   kFavoriteEmptyCloseHitTargetDp));
@@ -188,7 +196,6 @@ class EmptyFavoritesPlaceholderView : public views::View {
     title_label_ = AddChildView(std::make_unique<views::Label>(
         std::u16string(u"Drag to add Favorites")));
     title_label_->SetAutoColorReadabilityEnabled(false);
-    title_label_->SetEnabledColor(ui::kColorSysOnSurface);
     title_label_->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
     title_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     // Required for kGlassFrame: BrowserFrameView is non-opaque, so
@@ -198,7 +205,6 @@ class EmptyFavoritesPlaceholderView : public views::View {
     description_label_ = AddChildView(std::make_unique<views::Label>(
         std::u16string(u"Favorites keep your most used sites\nand apps close")));
     description_label_->SetAutoColorReadabilityEnabled(false);
-    description_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
     description_label_->SetTextStyle(views::style::STYLE_BODY_5_MEDIUM);
     description_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     description_label_->SetMultiLine(true);
@@ -281,8 +287,14 @@ class EmptyFavoritesPlaceholderView : public views::View {
           maho_lucide_icons::kWandSparklesIcon,
           highlighted_ ? ui::kColorSysPrimary : ui::kColorSysOnSurfaceSubtle,
           kFavoriteEmptyBadgeIconSizeDp));
+      // Private windows have no resolved palette.
+      title_label_->SetEnabledColor(ui::kColorSysOnSurface);
+      description_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+      SetCloseButtonImages(ui::kColorSysOnSurfaceSubtle,
+                           ui::kColorSysOnSurface);
       return;
     }
+    SetCloseButtonImages(palette_.neutral_glyph, palette_.disabled_text);
     const SkColor border = highlighted_ ? palette_.focus_ring : palette_.outline;
     card_background_->SetBackground(views::CreateRoundedRectBackground(
         palette_.row_selected, kFavoriteEmptyCardCornerRadiusDp));
@@ -298,6 +310,18 @@ class EmptyFavoritesPlaceholderView : public views::View {
         kFavoriteEmptyBadgeIconSizeDp));
     title_label_->SetEnabledColor(palette_.primary_text);
     description_label_->SetEnabledColor(palette_.secondary_text);
+  }
+
+  void SetCloseButtonImages(ui::ColorVariant glyph, ui::ColorVariant disabled) {
+    const ui::ImageModel normal = ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kXIcon, glyph, kFavoriteEmptyCloseSizeDp);
+    close_button_->SetImageModel(views::Button::STATE_NORMAL, normal);
+    close_button_->SetImageModel(views::Button::STATE_HOVERED, normal);
+    close_button_->SetImageModel(views::Button::STATE_PRESSED, normal);
+    close_button_->SetImageModel(
+        views::Button::STATE_DISABLED,
+        ui::ImageModel::FromVectorIcon(maho_lucide_icons::kXIcon, disabled,
+                                       kFavoriteEmptyCloseSizeDp));
   }
 
   base::RepeatingClosure on_dismiss_;
@@ -561,11 +585,18 @@ BuildTileSpecs(const MahoSidebarFavoritesModel& model) {
   return specs;
 }
 
-views::Label* AddPlaceholderLabel(views::View* parent, std::u16string text) {
+views::Label* AddPlaceholderLabel(views::View* parent,
+                                  std::u16string text,
+                                  const MahoSidebarPalette& palette) {
   auto label = std::make_unique<views::Label>(std::move(text));
   label->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   label->SetAutoColorReadabilityEnabled(false);
-  label->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+  if (palette.primary_text != SK_ColorTRANSPARENT) {
+    label->SetEnabledColor(palette.secondary_text);
+  } else {
+    // Private windows have no resolved palette.
+    label->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+  }
   label->SetMultiLine(false);
   label->SetElideBehavior(gfx::ELIDE_TAIL);
   label->SetTextStyle(views::style::STYLE_BODY_3);
@@ -620,7 +651,7 @@ MahoSidebarFavoritesGridView::LayoutSpec::~LayoutSpec() = default;
 
 MahoSidebarFavoritesGridView::MahoSidebarFavoritesGridView(Browser* browser)
     : browser_(browser),
-      prefs_(browser && browser->profile() ? browser->profile()->GetPrefs()
+      prefs_(browser && browser->GetProfile() ? browser->GetProfile()->GetPrefs()
                                            : nullptr) {
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical, gfx::Insets(),
@@ -726,7 +757,7 @@ MahoSidebarFavoritesGridView::MahoSidebarFavoritesGridView(Browser* browser)
     tile_glyph_containers_[index] = glyph_container.get();
     tile->AddChildView(std::move(glyph_container));
 
-    tile_labels_[index] = AddPlaceholderLabel(tile.get(), std::u16string());
+    tile_labels_[index] = AddPlaceholderLabel(tile.get(), std::u16string(), palette_);
     tile_labels_[index]->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(
         0, 4, 0, 4)));
 
@@ -802,7 +833,22 @@ void MahoSidebarFavoritesGridView::ResetDragFeedback(
 
 void MahoSidebarFavoritesGridView::OnSidebarPaletteChanged(
     const MahoSidebarPalette& palette) {
+  // Placeholder globes bake the palette glyph color; repaint the ones that
+  // were drawn with the previous palette.
+  const ui::ImageModel old_globe =
+      CreateThemedGlobeIcon(palette_, sidebar_layout::kFavoriteGlyphSizeDp);
   palette_ = palette;
+  const ui::ImageModel new_globe =
+      CreateThemedGlobeIcon(palette_, sidebar_layout::kFavoriteGlyphSizeDp);
+  for (auto& icon : tile_icons_) {
+    if (icon && icon->GetImageModel() == old_globe) {
+      icon->SetImage(new_globe);
+    }
+  }
+  if (drag_preview_icon_ &&
+      drag_preview_icon_->GetImageModel() == old_globe) {
+    drag_preview_icon_->SetImage(new_globe);
+  }
   if (empty_state_card_) {
     static_cast<EmptyFavoritesPlaceholderView*>(empty_state_card_.get())
         ->SetSidebarPalette(palette_);
@@ -812,11 +858,17 @@ void MahoSidebarFavoritesGridView::OnSidebarPaletteChanged(
       static_cast<FavoriteTileButton*>(tile_views_[index].get())
           ->SetSidebarPalette(palette_);
     }
+    // Private windows have no resolved palette (transparent roles).
+    const bool has_palette = palette_.primary_text != SK_ColorTRANSPARENT;
     if (tile_labels_[index]) {
-      tile_labels_[index]->SetEnabledColor(palette_.secondary_text);
+      tile_labels_[index]->SetEnabledColor(
+          has_palette ? ui::ColorVariant(palette_.secondary_text)
+                      : ui::ColorVariant(ui::kColorSysOnSurfaceSubtle));
     }
     if (tile_icon_labels_[index]) {
-      tile_icon_labels_[index]->SetEnabledColor(palette_.primary_text);
+      tile_icon_labels_[index]->SetEnabledColor(
+          has_palette ? ui::ColorVariant(palette_.primary_text)
+                      : ui::ColorVariant(ui::kColorSysOnSurface));
     }
   }
   if (drag_preview_tile_) {
@@ -943,7 +995,7 @@ void MahoSidebarFavoritesGridView::Update(
         if (browser_) {
           favicon::FaviconService* favicon_service =
               FaviconServiceFactory::GetForProfile(
-                  browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+                  browser_->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
           if (favicon_service) {
             const uint64_t generation = tile_favicon_generations_[index];
             favicon_service->GetFaviconImageForPageURL(
@@ -955,7 +1007,7 @@ void MahoSidebarFavoritesGridView::Update(
                 &cancelable_task_tracker_);
           }
         }
-        fav = CreateThemedGlobeIcon(sidebar_layout::kFavoriteGlyphSizeDp);
+        fav = CreateThemedGlobeIcon(palette_, sidebar_layout::kFavoriteGlyphSizeDp);
         cache_by_tab_id = false;
       }
 
@@ -1039,7 +1091,7 @@ void MahoSidebarFavoritesGridView::OnFaviconLoaded(
   } else {
     const auto cached_it = cached_favicons_by_tab_id_.find(tab_id);
     fav = cached_it == cached_favicons_by_tab_id_.end()
-              ? CreateThemedGlobeIcon(sidebar_layout::kFavoriteGlyphSizeDp)
+              ? CreateThemedGlobeIcon(palette_, sidebar_layout::kFavoriteGlyphSizeDp)
               : cached_it->second;
   }
   ApplyTileFavicon(current_index, tab_id, fav, cache_by_tab_id);
@@ -1538,7 +1590,7 @@ void MahoSidebarFavoritesGridView::OnExternalDragStarted(
     const std::string& tab_id) {
   pending_external_drag_tab_id_ = tab_id;
   if (!browser_ || tab_id.empty()) return;
-  TabStripModel* strip = browser_->tab_strip_model();
+  TabStripModel* strip = browser_->GetTabStripModel();
   if (!strip) return;
   GURL url;
   for (int i = 0; i < strip->count(); ++i) {
@@ -1553,7 +1605,7 @@ void MahoSidebarFavoritesGridView::OnExternalDragStarted(
   if (!url.is_valid()) return;
   favicon::FaviconService* favicon_service =
       FaviconServiceFactory::GetForProfile(
-          browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+          browser_->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
   if (favicon_service) {
     favicon_service->GetFaviconImageForPageURL(
         url, base::DoNothing(), &drag_preview_task_tracker_);
@@ -1807,7 +1859,6 @@ void MahoSidebarFavoritesGridView::ShowTileContextMenu(
   active_context_menu_url_ = tile_urls_[index];
   active_context_menu_title_ = tile_titles_[index];
   active_context_menu_pinned_url_ = tile_pinned_urls_[index];
-  active_context_menu_custom_icon_ = tile_custom_icons_[index];
   active_context_menu_custom_title_ = tile_custom_titles_[index];
   active_context_menu_ = std::make_unique<MahoFavoritesContextMenu>(
       browser_, active_context_menu_url_, active_context_menu_title_,
@@ -1856,60 +1907,35 @@ void MahoSidebarFavoritesGridView::OnFavoriteShareRequested() {
   maho::ShowLinkCopiedToast(browser_);
 }
 
-void MahoSidebarFavoritesGridView::OnFavoriteRenameRequested() {
-  OpenEditDialog(MahoFavoriteEditDialog::Focus::kName);
-}
-
-void MahoSidebarFavoritesGridView::OnFavoriteIconChangeRequested() {
-  OpenEditDialog(MahoFavoriteEditDialog::Focus::kIcon);
-}
-
 void MahoSidebarFavoritesGridView::OnFavoritePinnedUrlEditRequested() {
-  OpenEditDialog(MahoFavoriteEditDialog::Focus::kUrl);
+  OpenEditDialog();
 }
 
-void MahoSidebarFavoritesGridView::OpenEditDialog(
-    MahoFavoriteEditDialog::Focus focus) {
+void MahoSidebarFavoritesGridView::OpenEditDialog() {
   if (active_context_menu_tab_id_.empty()) {
     return;
   }
+  // Prefill with the pinned URL when one is set, else the live tab URL, and
+  // remember it as the change-detection baseline so saving an untouched field
+  // cannot author a pinned URL.
   const std::string initial_url = active_context_menu_pinned_url_.empty()
                                       ? active_context_menu_url_.spec()
                                       : active_context_menu_pinned_url_;
-  // Prefill with what the tile currently shows (authored title if any, else
-  // the derived one) and remember both values as the change-detection
-  // baseline, so saving a dialog without touching a field cannot author it.
-  const std::u16string initial_name =
-      active_context_menu_custom_title_.empty()
-          ? active_context_menu_title_
-          : active_context_menu_custom_title_;
   views::Widget* widget = GetWidget();
   MahoFavoriteEditDialog::Show(
-      widget ? widget->GetNativeWindow() : gfx::NativeWindow(), focus,
-      initial_name, base::UTF16ToUTF8(active_context_menu_custom_icon_),
-      initial_url,
+      widget ? widget->GetNativeWindow() : gfx::NativeWindow(), initial_url,
       base::BindOnce(&MahoSidebarFavoritesGridView::OnEditDialogAccepted,
                      weak_factory_.GetWeakPtr(), active_context_menu_tab_id_,
-                     initial_name, initial_url));
+                     initial_url));
 }
 
 void MahoSidebarFavoritesGridView::OnEditDialogAccepted(
     const std::string& tab_id,
-    std::u16string original_name,
     std::string original_url,
-    std::u16string name,
-    std::string icon,
     std::string url) {
   if (tab_id.empty()) {
     return;
   }
-  if (name != original_name) {
-    DispatchShellEvent("set_tab_custom_title",
-                       {{"tab_id", tab_id},
-                        {"custom_title", base::UTF16ToUTF8(name)}});
-  }
-  DispatchShellEvent("set_tab_custom_icon",
-                     {{"tab_id", tab_id}, {"custom_icon", icon}});
   if (!url.empty() && url != original_url && GURL(url).is_valid()) {
     DispatchShellEvent("set_tab_pinned_url",
                        {{"tab_id", tab_id}, {"url", url}});
@@ -2274,8 +2300,8 @@ void MahoSidebarFavoritesGridView::ShowInsertionPreview(
 
   ui::ImageModel fav;
   GURL resolved_url;
-  if (browser_ && browser_->tab_strip_model()) {
-    TabStripModel* strip = browser_->tab_strip_model();
+  if (browser_ && browser_->GetTabStripModel()) {
+    TabStripModel* strip = browser_->GetTabStripModel();
     const int strip_count = strip->count();
     for (int i = 0; i < strip_count; ++i) {
       content::WebContents* contents = strip->GetWebContentsAt(i);
@@ -2301,7 +2327,7 @@ void MahoSidebarFavoritesGridView::ShowInsertionPreview(
     drag_preview_task_tracker_.TryCancelAll();
     favicon::FaviconService* favicon_service =
         FaviconServiceFactory::GetForProfile(
-            browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+            browser_->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
     if (favicon_service) {
       favicon_service->GetFaviconImageForPageURL(
           resolved_url,
@@ -2310,9 +2336,9 @@ void MahoSidebarFavoritesGridView::ShowInsertionPreview(
               weak_factory_.GetWeakPtr(), tab_id, resolved_url),
           &drag_preview_task_tracker_);
     }
-    fav = CreateThemedGlobeIcon(sidebar_layout::kFavoriteGlyphSizeDp);
+    fav = CreateThemedGlobeIcon(palette_, sidebar_layout::kFavoriteGlyphSizeDp);
   } else if (fav.IsEmpty()) {
-    fav = CreateThemedGlobeIcon(sidebar_layout::kFavoriteGlyphSizeDp);
+    fav = CreateThemedGlobeIcon(palette_, sidebar_layout::kFavoriteGlyphSizeDp);
   }
 
   drag_preview_icon_->SetImage(fav);
@@ -2350,10 +2376,10 @@ void MahoSidebarFavoritesGridView::OnInsertionPreviewFaviconLoaded(
 
 ui::ImageModel MahoSidebarFavoritesGridView::ResolveFaviconForTabId(
     const std::string& tab_id) {
-  if (tab_id.empty() || !browser_ || !browser_->tab_strip_model()) {
+  if (tab_id.empty() || !browser_ || !browser_->GetTabStripModel()) {
     return ui::ImageModel();
   }
-  TabStripModel* strip = browser_->tab_strip_model();
+  TabStripModel* strip = browser_->GetTabStripModel();
   const int strip_count = strip->count();
   for (int i = 0; i < strip_count; ++i) {
     content::WebContents* contents = strip->GetWebContentsAt(i);

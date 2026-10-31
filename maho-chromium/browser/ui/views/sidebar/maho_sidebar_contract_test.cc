@@ -13,11 +13,14 @@
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/run_until.h"
+#include "base/test/scoped_run_loop_timeout.h"
+#include "base/test/test_timeouts.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/unload_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "ui/base/hit_test.h"
 #include "content/public/browser/favicon_status.h"
@@ -29,13 +32,15 @@
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/maho_settings_navigation.h"
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_scroll_bar.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_space_dot_view.h"
 #include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -406,7 +411,7 @@ void MahoSidebarContractTest::MeasureWindowedRealization(int tab_count,
                                                          int* out_window_rows) {
   RunAllPendingTasks();
   StopSidebarObservations();
-  tab_list_->Update(MakeScrollPerfModel(tab_count), browser());
+  tab_list_->Update(MakeScrollPerfModel(tab_count), static_cast<Browser*>(browser()));
 
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
@@ -461,7 +466,7 @@ void MahoSidebarContractTest::RunScrollPerformanceBenchmark(int tab_count) {
                            CountModelTabs(model.normal_tree));
   ASSERT_TRUE(AllModelTabsAreSynthetic(model.pinned_tree));
   ASSERT_TRUE(AllModelTabsAreSynthetic(model.normal_tree));
-  tab_list_->Update(model, browser());
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
 
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
@@ -1057,13 +1062,13 @@ int CountTabsInTree(const std::vector<SidebarTreeNode>& nodes) {
 }  // namespace
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, LargeTabCountRenders) {
-  const int initial_strip_count = browser()->tab_strip_model()->count();
+  const int initial_strip_count = browser()->GetTabStripModel()->count();
   constexpr int kAddedTabs = 20;
   AddTestTabs(kAddedTabs);
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     ResolveViews();
-    TabStripModel* strip = browser()->tab_strip_model();
+    TabStripModel* strip = browser()->GetTabStripModel();
     return strip && strip->count() >= initial_strip_count + kAddedTabs;
   })) << "Browser tab strip should eventually include the added tabs";
 
@@ -1095,7 +1100,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   MahoSidebarTabListModel empty_pinned_tree = state.tab_list;
   empty_pinned_tree.pinned_tree.clear();
 
-  tab_list_->Update(empty_pinned_tree, browser());
+  tab_list_->Update(empty_pinned_tree, static_cast<Browser*>(browser()));
   ExpectEmptyPinnedSectionLayout(tab_list_->tab_rows_for_testing());
 }
 
@@ -1104,7 +1109,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   RunAllPendingTasks();
   StopSidebarObservations();
   MahoSidebarTabListModel empty_model;
-  tab_list_->Update(empty_model, browser());
+  tab_list_->Update(empty_model, static_cast<Browser*>(browser()));
 
   ExpectEmptyPinnedSectionLayout(tab_list_->tab_rows_for_testing());
 }
@@ -1150,12 +1155,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
                           CountTabsInTree(state_before.tab_list.pinned_tree);
   ASSERT_GT(tabs_before, 0) << "Seed 2 must have at least one tab";
 
-  const int initial_strip_count = browser()->tab_strip_model()->count();
+  const int initial_strip_count = browser()->GetTabStripModel()->count();
   AddTestTabs(5);
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     ResolveViews();
-    TabStripModel* strip = browser()->tab_strip_model();
+    TabStripModel* strip = browser()->GetTabStripModel();
     return strip && strip->count() >= initial_strip_count + 5;
   })) << "Tab strip should reflect the 5 added tabs";
 
@@ -1182,7 +1187,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 
   MahoSidebarTabListModel patched = state.tab_list;
   patched.active_space_id = space_id;
-  tab_list_->Update(patched, browser());
+  tab_list_->Update(patched, static_cast<Browser*>(browser()));
 
   auto* rows = tab_list_->tab_rows_for_testing();
   ASSERT_TRUE(rows);
@@ -1191,10 +1196,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
          "original active_space_id preserved";
 }
 
-// The five structural sections of MahoSidebarViewStateModel must all be
+// The structural sections of MahoSidebarViewStateModel must all be
 // non-trivially constructed after a seeded profile refresh:
-//   - top_bar (navigation fields set)
-//   - search (idle_text non-empty)
+//   - top_bar (no fields; navigation moved to MahoContentsHeaderView)
 //   - favorites (items non-empty for seed 2)
 //   - tab_list (active_space_id non-empty)
 //   - footer (space_count > 0)
@@ -1205,9 +1209,6 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   ResolveViews();
 
   auto state = GetViewState();
-
-  EXPECT_FALSE(state.search.idle_text.empty())
-      << "search.idle_text must be non-empty after seeded profile";
 
   EXPECT_FALSE(state.favorites.items.empty())
       << "favorites must be non-empty for seed 2";
@@ -1243,7 +1244,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
     return n;
   }());
 
-  tab_list_->Update(new_model, browser());
+  tab_list_->Update(new_model, static_cast<Browser*>(browser()));
 
   auto* rows = tab_list_->tab_rows_for_testing();
   ASSERT_TRUE(rows);
@@ -1354,8 +1355,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   ASSERT_FALSE(first_child_id.empty());
   ASSERT_FALSE(second_child_id.empty());
 
-  auto* second_row = tab_list_->FindTabRowByIdForTesting(second_child_id);
-  ASSERT_TRUE(second_row) << "second child row must be resolvable";
+  SidebarTabRowView* second_row = nullptr;
+  ASSERT_TRUE(BlockAndPollUntil([&]() {
+    ResolveViews();
+    second_row = tab_list_->FindTabRowByIdForTesting(second_child_id);
+    return second_row != nullptr;
+  })) << "second child row must be resolvable";
 
   // The insertion lane before first_child sits at child-index 0 inside the
   // folder.  Dragging second_child onto it dispatches reorder_tab_in_folder
@@ -1368,7 +1373,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
     return;
   }
 
-  DragViewToView(second_row, lane_before_first);
+  // Same synthetic drop path as TabReorderContract: a real OS drag loop
+  // never delivers the drop on headless test displays.
+  DragViewToPoint(second_row, GetViewPoint(lane_before_first, 0.5, 0.5));
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return observer_.HasEvent("reorder_tab_in_folder");
@@ -1554,39 +1561,6 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   EXPECT_EQ(active_theme.primary_color, column_it->color);
 }
 
-// --- Startup-state: has_active_tab fallback when GetActiveWebContents is null --
-
-// BuildSearchModel with a null browser must always report has_active_tab=false.
-// This preserves the "genuinely no tab" contract.
-IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
-                        BuildSearchModelNullBrowserHasNoActiveTab) {
-  MahoSidebarStateAdapter adapter;
-  MahoSidebarSearchModel model = adapter.BuildSearchModel(nullptr);
-  EXPECT_FALSE(model.has_active_tab)
-      << "has_active_tab must be false when browser is null";
-  EXPECT_EQ(model.display_mode, MahoSidebarAddressDisplayMode::kSearchPlaceholder)
-      << "display_mode must be kSearchPlaceholder when browser is null";
-}
-
-// After a seeded profile the tab strip has active entries, so
-// BuildSearchModel must report has_active_tab=true regardless of whether
-// GetActiveWebContents returns a value — covering both the normal path
-// (non-null WebContents) and the startup-fallback path (tab strip entry
-// present but WebContents temporarily null).
-IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
-                        BuildSearchModelWithTabStripEntryHasActiveTab) {
-  SeedProfile(2);
-  base::RunLoop().RunUntilIdle();
-  ResolveViews();
-
-  MahoSidebarStateAdapter adapter;
-  MahoSidebarSearchModel model = adapter.BuildSearchModel(browser());
-  EXPECT_TRUE(model.has_active_tab)
-      << "has_active_tab must be true when the tab strip has a seeded entry";
-  EXPECT_FALSE(model.idle_text.empty())
-      << "idle_text must be non-empty when a tab is active";
-}
-
 // --- Regression tests for helper-based sidebar tab identity/activation ---
 
 // Given a seeded profile with tabs,
@@ -1600,7 +1574,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   ResolveViews();
 
   auto state = GetViewState();
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
   ASSERT_TRUE(strip);
 
   auto check_nodes = [&](const std::vector<SidebarTreeNode>& nodes) {
@@ -1635,7 +1609,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   SeedProfile(2);
   base::RunLoop().RunUntilIdle();
 
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
   ASSERT_TRUE(strip);
   ASSERT_GT(strip->count(), 0);
 
@@ -1663,7 +1637,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   base::RunLoop().RunUntilIdle();
   ResolveViews();
 
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
   ASSERT_TRUE(strip);
   ASSERT_GT(strip->count(), 0);
 
@@ -1677,7 +1651,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   ASSERT_TRUE(tab_list);
 
   auto state = GetViewState();
-  tab_list->Update(state.tab_list, browser());
+  tab_list->Update(state.tab_list, static_cast<Browser*>(browser()));
 
   std::string tab_id = helper->stable_tab_id();
   views::View* rows = tab_list->tab_rows_for_testing();
@@ -1698,7 +1672,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   StopSidebarObservations();
   tab_list_->set_accessibility_tree_enabled_for_testing(false);
 
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
   ASSERT_TRUE(strip);
   ASSERT_GT(strip->count(), 0);
   content::WebContents* contents = strip->GetWebContentsAt(0);
@@ -1730,7 +1704,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 
   MahoSidebarTabListView* tab_list = GetTabListView();
   ASSERT_TRUE(tab_list);
-  tab_list->Update(model, browser());
+  tab_list->Update(model, static_cast<Browser*>(browser()));
   SidebarTabRowView* row = tab_list->FindTabRowByIdForTesting(tab_id);
   ASSERT_TRUE(row);
   EXPECT_EQ(ui::ImageModel::FromImage(red), row->favicon_for_testing());
@@ -1753,7 +1727,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   StopSidebarObservations();
   tab_list_->set_accessibility_tree_enabled_for_testing(false);
 
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
   ASSERT_TRUE(strip);
   ASSERT_GE(strip->count(), 2);
   content::WebContents* first_contents = strip->GetWebContentsAt(0);
@@ -1797,7 +1771,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 
   MahoSidebarTabListView* tab_list = GetTabListView();
   ASSERT_TRUE(tab_list);
-  tab_list->Update(model, browser());
+  tab_list->Update(model, static_cast<Browser*>(browser()));
   SidebarTabRowView* row = tab_list->FindTabRowByIdForTesting(first_tab_id);
   ASSERT_TRUE(row);
 
@@ -1815,11 +1789,11 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   base::RunLoop().RunUntilIdle();
   ResolveViews();
 
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
   ASSERT_TRUE(strip);
   const int count_before = strip->count();
 
-  NavigateToNewForegroundTab(browser(),
+  NavigateToNewForegroundTab(static_cast<Browser*>(browser()),
                               GURL("https://maho.test/identity-check"),
                               ui::PAGE_TRANSITION_GENERATED);
   base::RunLoop().RunUntilIdle();
@@ -1927,12 +1901,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
     }
   }
   if (!initial_space.empty()) {
-    bridge->SetActiveSpaceId(browser(), initial_space);
+    bridge->SetActiveSpaceId(static_cast<Browser*>(browser()), initial_space);
   }
 
   const std::string space_before = bridge->GetActiveSpaceId(browser());
 
-  ExecuteCommandAction(browser(), "select_space_1");
+  ExecuteCommandAction(static_cast<Browser*>(browser()), "select_space_1");
   base::RunLoop().RunUntilIdle();
 
   const std::string bridge_space_after = bridge->GetActiveSpaceId(browser());
@@ -2012,7 +1986,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
     GTEST_SKIP() << "Need at least 2 spaces for multi-window isolation test";
   }
 
-  Browser* second_browser = CreateBrowser(browser()->profile());
+  Browser* second_browser = static_cast<Browser*>(CreateBrowser(browser()->GetProfile()));
   ASSERT_TRUE(second_browser);
   base::RunLoop().RunUntilIdle();
 
@@ -2036,7 +2010,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   const std::string window2_space_before =
       bridge->GetActiveSpaceId(second_browser);
 
-  ExecuteCommandAction(browser(), "select_space_1");
+  ExecuteCommandAction(static_cast<Browser*>(browser()), "select_space_1");
   base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(window2_space_before, bridge->GetActiveSpaceId(second_browser))
@@ -2065,7 +2039,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   MahoSidebarTabListModel pinned_cleared = state.tab_list;
   pinned_cleared.pinned_tree.clear();
 
-  tab_list_->Update(pinned_cleared, browser());
+  tab_list_->Update(pinned_cleared, static_cast<Browser*>(browser()));
 
   ExpectEmptyPinnedSectionLayout(tab_list_->tab_rows_for_testing());
 }
@@ -2079,14 +2053,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   RunAllPendingTasks();
   StopSidebarObservations();
 
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
   ASSERT_TRUE(strip);
   ASSERT_GT(strip->count(), 0) << "Seed 2 must have at least one live tab";
 
   MahoSidebarTabListModel empty_trees;
   empty_trees.active_space_id = GetActiveSpaceId();
 
-  tab_list_->Update(empty_trees, browser());
+  tab_list_->Update(empty_trees, static_cast<Browser*>(browser()));
 
   views::View* rows = tab_list_->tab_rows_for_testing();
   ASSERT_TRUE(rows);
@@ -2113,6 +2087,17 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 // This verifies that the zero-tab path is still reachable and correct.
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
                         TrueZeroTabStateRendersBareNewTabOnly) {
+  ASSERT_EQ(browser()->GetType(), BrowserWindowInterface::Type::TYPE_NORMAL);
+  auto* unload = UnloadController::From(browser());
+  ASSERT_NE(unload, nullptr);
+  ASSERT_FALSE(unload->is_attempting_to_close_browser());
+  AddTestTab(GURL("about:blank"), u"Zero-tab transition");
+  ASSERT_GT(browser()->GetTabStripModel()->count(), 0);
+  browser()->GetTabStripModel()->CloseAllTabs();
+  EXPECT_TRUE(browser()->GetTabStripModel()->empty());
+  EXPECT_FALSE(unload->is_attempting_to_close_browser());
+  EXPECT_FALSE(browser()->IsDeleteScheduled());
+
   MahoSidebarTabListModel empty_model;
   tab_list_->Update(empty_model, /*browser=*/nullptr);
 
@@ -2138,7 +2123,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
     return n;
   }());
 
-  tab_list_->Update(model, browser());
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
   views::View* header = sidebar_->space_header_view_for_testing();
   ASSERT_NE(header, nullptr);
   UpdateSidebarSpaceHeaderRow(header, model.active_space_icon,
@@ -2146,9 +2131,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   header->SetVisible(!model.active_space_name.empty());
   EXPECT_TRUE(header->GetVisible());
 
+  // With the search pill removed, favorites open the top region and the
+  // space header follows them.
   views::View* top_region = sidebar_->tabs_surface_for_testing()->children()[0];
-  ASSERT_GE(top_region->children().size(), 3u);
-  EXPECT_EQ(top_region->children()[2], header);
+  ASSERT_GE(top_region->children().size(), 2u);
+  EXPECT_EQ(top_region->children()[0], sidebar_->favorites_view_for_testing());
+  EXPECT_EQ(top_region->children()[1], header);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
@@ -2170,7 +2158,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
     return n;
   }());
 
-  tab_list_->Update(visible_model, browser());
+  tab_list_->Update(visible_model, static_cast<Browser*>(browser()));
   views::View* header = sidebar_->space_header_view_for_testing();
   ASSERT_NE(header, nullptr);
   UpdateSidebarSpaceHeaderRow(header, visible_model.active_space_icon,
@@ -2191,7 +2179,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
     return n;
   }());
 
-  tab_list_->Update(hidden_model, browser());
+  tab_list_->Update(hidden_model, static_cast<Browser*>(browser()));
   UpdateSidebarSpaceHeaderRow(header, hidden_model.active_space_icon,
                               hidden_model.active_space_name);
   header->SetVisible(!hidden_model.active_space_name.empty());
@@ -2226,6 +2214,15 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   ASSERT_NE(scroll->vertical_scroll_bar(), nullptr);
   EXPECT_TRUE(scroll->vertical_scroll_bar()->OverlapsContent())
       << "vertical scrollbar must be a thin auto-hiding overlay, not classic";
+  EXPECT_EQ(std::string(scroll->vertical_scroll_bar()->GetClassName()),
+            "MahoSidebarScrollBar")
+      << "the sidebar paints its palette-tinted pill, not the Fluent skin";
+  ASSERT_NE(sidebar_->tab_scroll_bar_for_testing(), nullptr);
+  EXPECT_EQ(sidebar_->tab_scroll_bar_for_testing()->GetThickness(),
+            MahoSidebarScrollBar::kThickness);
+  EXPECT_NE(sidebar_->tab_scroll_bar_for_testing()->idle_color_for_testing(),
+            SK_ColorTRANSPARENT)
+      << "the pill must be tinted from the resolved sidebar palette";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
@@ -2233,7 +2230,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   RunAllPendingTasks();
   StopSidebarObservations();
 
-  tab_list_->Update(MakeScrollPerfModel(80), browser());
+  tab_list_->Update(MakeScrollPerfModel(80), static_cast<Browser*>(browser()));
 
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
@@ -2331,7 +2328,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
     }());
   }
 
-  tab_list_->Update(model, browser());
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
 
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
@@ -2501,7 +2498,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   }
   ASSERT_FALSE(target_tab_id.empty());
 
-  tab_list_->Update(model, browser());
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
   ASSERT_TRUE(tab_list_->GetWidget());
@@ -2724,7 +2721,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   RunAllPendingTasks();
   StopSidebarObservations();
 
-  tab_list_->Update(MakeScrollPerfModel(80), browser());
+  tab_list_->Update(MakeScrollPerfModel(80), static_cast<Browser*>(browser()));
 
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
@@ -2788,7 +2785,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   RunAllPendingTasks();
   StopSidebarObservations();
 
-  tab_list_->Update(MakeScrollPerfModel(80), browser());
+  tab_list_->Update(MakeScrollPerfModel(80), static_cast<Browser*>(browser()));
 
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
@@ -2927,7 +2924,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   StopSidebarObservations();
 
   MahoSidebarTabListModel model = MakeProjectionModel();
-  tab_list_->Update(model, browser());
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
   ASSERT_TRUE(tab_list_->GetWidget());
   tab_list_->GetWidget()->LayoutRootViewIfNecessary();
 
@@ -3176,7 +3173,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   ASSERT_GT(expected_tabs, 0);
 
   tab_list_->set_accessibility_tree_enabled_for_testing(true);
-  tab_list_->Update(model, browser());
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
   EXPECT_EQ(0, tab_list_->accessibility_rebuild_count_for_testing())
       << "RebuildRows should only post the a11y rebuild, not run it inline";
   EXPECT_EQ(0, CountAxTabNodes(tab_list_->GetViewAccessibility()))
@@ -3192,8 +3189,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   MahoSidebarTabListModel model_with_two_extra = model_with_extra;
   model_with_two_extra.normal_tree.push_back(
       MakeProjectionTab("proj-extra-b"));
-  tab_list_->Update(model_with_extra, browser());
-  tab_list_->Update(model_with_two_extra, browser());
+  tab_list_->Update(model_with_extra, static_cast<Browser*>(browser()));
+  tab_list_->Update(model_with_two_extra, static_cast<Browser*>(browser()));
   EXPECT_EQ(1, tab_list_->accessibility_rebuild_count_for_testing())
       << "Multiple rebuilds in the same burst should coalesce before idle";
 
@@ -3210,7 +3207,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   StopSidebarObservations();
 
   MahoSidebarTabListModel model = MakeProjectionModel();
-  tab_list_->Update(model, browser());
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
   base::RunLoop().RunUntilIdle();
 
   const std::vector<SidebarTreeNode>* children =
@@ -3241,7 +3238,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   StopSidebarObservations();
 
   tab_list_->set_accessibility_tree_enabled_for_testing(true);
-  tab_list_->Update(MakeProjectionModel(), browser());
+  tab_list_->Update(MakeProjectionModel(), static_cast<Browser*>(browser()));
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(1, tab_list_->accessibility_rebuild_count_for_testing());
 
@@ -3255,21 +3252,53 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
                        BackgroundAllTabChangeSkipsUnrealizedRows) {
+  SeedProfile(2);
   RunAllPendingTasks();
   StopSidebarObservations();
 
   tab_list_->set_accessibility_tree_enabled_for_testing(true);
-  tab_list_->Update(MakeScrollPerfModel(300), browser());
-  ASSERT_TRUE(tab_list_->GetWidget());
-  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  TabStripModel* strip = browser()->GetTabStripModel();
+  ASSERT_TRUE(strip);
+  ASSERT_GE(strip->count(), 2);
+  const int active_index = strip->active_index();
+  ASSERT_TRUE(strip->ContainsIndex(active_index));
+  const int non_realized_background_index = active_index == 0 ? 1 : 0;
+  ASSERT_TRUE(strip->ContainsIndex(non_realized_background_index));
+  ASSERT_NE(active_index, non_realized_background_index);
+  auto* helper = MahoTabIdHelper::FromWebContents(
+      strip->GetWebContentsAt(non_realized_background_index));
+  ASSERT_TRUE(helper);
+  ASSERT_FALSE(helper->stable_tab_id().empty());
 
-  const int apply_count_before = sidebar_->cosmetic_apply_count_for_testing();
-  const int non_realized_background_index =
-      browser()->tab_strip_model()->active_index() + 1000;
+  MahoSidebarTabListModel model = MakeScrollPerfModel(300);
+  SidebarTreeNode background_tab = MakeScrollPerfTab(300);
+  background_tab.tab_id = helper->stable_tab_id();
+  background_tab.tab_strip_index = non_realized_background_index;
+  model.normal_tree.push_back(std::move(background_tab));
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_TRUE(scroll);
+  ASSERT_TRUE(tab_list_->GetWidget());
+  // Put the real background tab after all synthetic rows and pin the viewport
+  // to the top. Its strip index does not determine its projected row position.
+  {
+    base::test::ScopedRunLoopTimeout timeout(FROM_HERE,
+                                           TestTimeouts::action_timeout());
+    base::RunLoop frame;
+    scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+    scroll->InvalidateLayout();
+    tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+    frame.Run();
+  }
+  scroll->ScrollToPosition(scroll->vertical_scroll_bar(), 0);
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  ASSERT_EQ(0, scroll->GetVisibleRect().y());
+  ASSERT_LT(scroll->GetVisibleRect().height(), tab_list_->height());
   ASSERT_FALSE(tab_list_->IsTabRowRealizedAt(non_realized_background_index));
 
+  const int apply_count_before = sidebar_->cosmetic_apply_count_for_testing();
   sidebar_->OnTabChangedAtForTesting(
-      nullptr, non_realized_background_index, TabChangeType::kAll);
+      strip->GetTabAtIndex(non_realized_background_index), TabChangeType::kAll);
   sidebar_->FireCosmeticDebounceForTesting();
 
   EXPECT_EQ(apply_count_before, sidebar_->cosmetic_apply_count_for_testing())
@@ -3285,11 +3314,11 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   StopSidebarObservations();
 
   auto state = GetViewState();
-  tab_list_->Update(state.tab_list, browser());
+  tab_list_->Update(state.tab_list, static_cast<Browser*>(browser()));
   ASSERT_TRUE(tab_list_->GetWidget());
   tab_list_->GetWidget()->LayoutRootViewIfNecessary();
 
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
   ASSERT_TRUE(strip);
   ASSERT_GE(strip->count(), 2);
   const int active_index = strip->active_index();
@@ -3301,8 +3330,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 
   const int apply_count_before = sidebar_->cosmetic_apply_count_for_testing();
 
-  sidebar_->OnTabChangedAtForTesting(nullptr, realized_background_index,
-                                     TabChangeType::kAll);
+  sidebar_->OnTabChangedAtForTesting(
+      strip->GetTabAtIndex(realized_background_index), TabChangeType::kAll);
   sidebar_->FireCosmeticDebounceForTesting();
 
   EXPECT_EQ(apply_count_before + 1,
@@ -3322,7 +3351,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, OffWindowRevealRealizesTarget) {
   ASSERT_GT(root_tabs.size(), 10u);
   const std::string deep = root_tabs.back();
 
-  tab_list_->Update(model, browser());
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
   ASSERT_TRUE(tab_list_->GetWidget());
@@ -3355,7 +3384,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, FocusSurvivesCullRestore) {
   ASSERT_GT(root_tabs.size(), 10u);
   const std::string deep = root_tabs.back();
 
-  tab_list_->Update(model, browser());
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
   ASSERT_TRUE(tab_list_->GetWidget());
@@ -3384,6 +3413,110 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, FocusSurvivesCullRestore) {
       << "Re-revealing must restore the row after a cull";
 }
 
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ActiveTabRevealScrollsAlreadyRealizedRowOutsideViewport) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  MahoSidebarTabListModel model = MakeScrollPerfModel(80);
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+
+  base::RunLoop initial_frame_loop;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(
+      initial_frame_loop.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  initial_frame_loop.Run();
+
+  ASSERT_EQ(0, scroll->GetVisibleRect().y());
+  const gfx::Rect initial_viewport = scroll->GetVisibleRect();
+
+  // 1. Find a tab that is already realized (due to the 30-row overscan buffer
+  // below the viewport), but located strictly outside the visible viewport.
+  std::string target_tab_id;
+  SidebarTabRowView* target_row = nullptr;
+  const std::vector<std::string> visual_ids =
+      tab_list_->tab_visual_order_ids_for_testing();
+  for (const std::string& id : visual_ids) {
+    if (auto* row = tab_list_->FindTabRowByIdForTesting(id)) {
+      const gfx::Rect row_bounds = views::View::ConvertRectToTarget(
+          row, tab_list_, row->GetLocalBounds());
+      if (row_bounds.y() >= initial_viewport.bottom()) {
+        target_tab_id = id;
+        target_row = row;
+        break;
+      }
+    }
+  }
+  ASSERT_FALSE(target_tab_id.empty())
+      << "Expected an already-realized row outside the initial viewport";
+  ASSERT_NE(target_row, nullptr);
+
+  const gfx::Rect row_bounds_before = views::View::ConvertRectToTarget(
+      target_row, tab_list_, target_row->GetLocalBounds());
+  ASSERT_FALSE(initial_viewport.Intersects(row_bounds_before));
+
+  // Activating the off-viewport tab must reveal it into view.
+  tab_list_->UpdateActiveTabHighlightOnly(target_tab_id);
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+
+  const gfx::Rect new_viewport = scroll->GetVisibleRect();
+  const gfx::Rect row_bounds_after = views::View::ConvertRectToTarget(
+      target_row, tab_list_, target_row->GetLocalBounds());
+  EXPECT_TRUE(new_viewport.Intersects(row_bounds_after))
+      << "Already-realized active tab outside viewport must be revealed into view; "
+      << "row_bounds=" << row_bounds_after.ToString()
+      << " viewport=" << new_viewport.ToString();
+  EXPECT_GT(new_viewport.y(), 0)
+      << "Viewport must have scrolled to bring the already-realized row into view";
+
+  // 2. In-viewport no-scroll: to prove visible selection does not steal scroll,
+  // find a DIFFERENT tab that is already fully visible inside the current
+  // viewport and activate it. Since the tab differs from the current active
+  // tab, this genuinely exercises UpdateActiveTabHighlightOnly and RevealTabById,
+  // asserting that the scroll offset remains completely stationary.
+  const int settled_scroll_y = new_viewport.y();
+  std::string different_visible_tab_id;
+  for (const std::string& id : visual_ids) {
+    if (id == target_tab_id) {
+      continue;
+    }
+    if (auto* row = tab_list_->FindTabRowByIdForTesting(id)) {
+      const gfx::Rect bounds = views::View::ConvertRectToTarget(
+          row, tab_list_, row->GetLocalBounds());
+      if (new_viewport.Contains(bounds)) {
+        different_visible_tab_id = id;
+        break;
+      }
+    }
+  }
+  ASSERT_FALSE(different_visible_tab_id.empty())
+      << "Expected a different tab fully visible in the new viewport";
+
+  tab_list_->UpdateActiveTabHighlightOnly(different_visible_tab_id);
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  EXPECT_EQ(settled_scroll_y, scroll->GetVisibleRect().y())
+      << "Activating a different in-viewport tab must not change scroll position";
+
+  // 3. Manual scroll after activation remains where the user leaves it (no
+  // persistent scroll lock or re-snapping).
+  const int manual_target_y = std::max(0, settled_scroll_y - 20);
+  scroll->ScrollToOffset(gfx::PointF(0, manual_target_y));
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  EXPECT_EQ(manual_target_y, scroll->GetVisibleRect().y())
+      << "Manual scroll after activation must remain where user leaves it";
+
+  // Ensure rows remain realized across the test.
+  EXPECT_NE(tab_list_->FindTabRowByIdForTesting(target_tab_id), nullptr)
+      << "Target row must remain realized across manual scroll";
+  EXPECT_NE(tab_list_->FindTabRowByIdForTesting(different_visible_tab_id),
+            nullptr)
+      << "Different visible row must remain realized across manual scroll";
+}
+
 // --- T6: projection-based range navigation across the window boundary ---
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
@@ -3391,7 +3524,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   RunAllPendingTasks();
   StopSidebarObservations();
 
-  tab_list_->Update(MakeScrollPerfModel(300), browser());
+  tab_list_->Update(MakeScrollPerfModel(300), static_cast<Browser*>(browser()));
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
   ASSERT_TRUE(tab_list_->GetWidget());
@@ -3432,7 +3565,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   RunAllPendingTasks();
   StopSidebarObservations();
 
-  tab_list_->Update(MakeScrollPerfModel(300), browser());
+  tab_list_->Update(MakeScrollPerfModel(300), static_cast<Browser*>(browser()));
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
   ASSERT_TRUE(tab_list_->GetWidget());
@@ -3481,7 +3614,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   const std::string source = root_tabs.front();
   ASSERT_NE(target, source);
 
-  tab_list_->Update(model, browser());
+  tab_list_->Update(model, static_cast<Browser*>(browser()));
   ASSERT_TRUE(tab_list_->GetWidget());
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
@@ -3529,7 +3662,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   RunAllPendingTasks();
   StopSidebarObservations();
 
-  tab_list_->Update(MakeScrollPerfModel(300), browser());
+  // The virtual AX tree is built only while an AT is active; force it on.
+  tab_list_->set_accessibility_tree_enabled_for_testing(true);
+  tab_list_->Update(MakeScrollPerfModel(300), static_cast<Browser*>(browser()));
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
   ASSERT_TRUE(tab_list_->GetWidget());
@@ -3572,7 +3707,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   RunAllPendingTasks();
   StopSidebarObservations();
 
-  tab_list_->Update(MakeScrollPerfModel(320), browser());
+  tab_list_->Update(MakeScrollPerfModel(320), static_cast<Browser*>(browser()));
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
   ASSERT_TRUE(tab_list_->GetWidget());
@@ -3636,7 +3771,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   RunAllPendingTasks();
   StopSidebarObservations();
 
-  tab_list_->Update(MakeScrollPerfModel(320), browser());
+  tab_list_->Update(MakeScrollPerfModel(320), static_cast<Browser*>(browser()));
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
   ASSERT_TRUE(tab_list_->GetWidget());
@@ -3697,7 +3832,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, ReconcileWindowIsReentrancySafe)
   RunAllPendingTasks();
   StopSidebarObservations();
 
-  tab_list_->Update(MakeScrollPerfModel(320), browser());
+  tab_list_->Update(MakeScrollPerfModel(320), static_cast<Browser*>(browser()));
   views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
   ASSERT_NE(scroll, nullptr);
   ASSERT_TRUE(tab_list_->GetWidget());
@@ -3734,6 +3869,130 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, ReconcileWindowIsReentrancySafe)
             0);
   EXPECT_GT(tab_list_->height(), 0);
   EXPECT_TRUE(tab_list_->ReentrantReconcileIsBlockedForTesting());
+}
+
+// A ScrollView layout pass can move the viewport WITHOUT firing the
+// contents-scrolled callback: ScrollView::Layout() clamps the offset through
+// ConstrainScrollToBounds(), which never calls OnScrolled(). After a rebuild
+// shrinks the content extent that clamp is exactly what happens, so the
+// realized row window stays parked where the OLD offset was and the viewport
+// shows nothing but skeleton spacers — the "sidebar tab list vanished"
+// regression. The post-layout hook must re-sync the window against the settled
+// viewport.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ScrollClampAfterShrinkKeepsViewportRowsRealized) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->Update(MakeScrollPerfModel(400), static_cast<Browser*>(browser()));
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+  base::RunLoop frame;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  frame.Run();
+
+  // Scroll deep into the list so the offset is far past what the smaller model
+  // below can support; the clamp on the next layout is then unavoidable.
+  const int max_scroll_y =
+      tab_list_->height() - scroll->GetVisibleRect().height();
+  ASSERT_GT(max_scroll_y, 0);
+  scroll->ScrollToOffset(gfx::PointF(0, max_scroll_y));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return scroll->CurrentOffset().y() == max_scroll_y; }));
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  ASSERT_GT(ExpectIntersectingTabRowsVisible(tab_list_, tab_list_,
+                                             scroll->GetVisibleRect()),
+            0)
+      << "precondition: the deep-scrolled viewport must start out populated";
+
+  // Shrink the model. RebuildRows() reconciles against the pre-clamp geometry,
+  // then the following layout clamps the offset toward the top.
+  // Still taller than the viewport, so the viewport can be filled after the
+  // clamp; far shorter than the 400-row model, so the clamp is unavoidable.
+  tab_list_->Update(MakeScrollPerfModel(120), static_cast<Browser*>(browser()));
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return scroll->CurrentOffset().y() <=
+           std::max(0, tab_list_->height() - scroll->GetVisibleRect().height());
+  }));
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  // The post-layout re-sync is posted; drain it, then place the new rows.
+  base::RunLoop().RunUntilIdle();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+
+  const gfx::Rect viewport = scroll->GetVisibleRect();
+  int intersecting_rows = 0;
+  std::function<void(views::View*)> count_rows = [&](views::View* parent) {
+    for (views::View* child : parent->children()) {
+      if (auto* row = views::AsViewClass<SidebarTabRowView>(child)) {
+        if (row->IsDrawn() &&
+            views::View::ConvertRectToTarget(row, tab_list_,
+                                             row->GetLocalBounds())
+                .Intersects(viewport)) {
+          ++intersecting_rows;
+        }
+      }
+      count_rows(child);
+    }
+  };
+  count_rows(tab_list_);
+  // Without the post-layout re-sync the realized window stays parked at the
+  // pre-clamp offset: only each section's last row reaches the viewport and
+  // the rest of it is skeleton spacer.
+  EXPECT_GE(intersecting_rows, std::max(2, viewport.height() / 36 / 2))
+      << "viewport=" << viewport.ToString()
+      << ": after the post-rebuild scroll clamp the viewport must be filled "
+         "with realized rows, not skeleton spacers";
+}
+
+// Regression (Tidy): a rebuild that shrinks the list while deep-scrolled lays
+// out tab_rows_ against the pre-clamp offset, so the virtual layout culls the
+// action row and the normal section. When both section windows already hold
+// every row, the clamp does not change them, and the scaffold stayed hidden
+// below the pinned section until an unrelated scroll or rebuild.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       ScrollClampAfterShrinkRestoresCulledScaffold) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+
+  tab_list_->Update(MakeScrollPerfModel(400), static_cast<Browser*>(browser()));
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  ASSERT_TRUE(tab_list_->GetWidget());
+  base::RunLoop frame;
+  scroll->RegisterNextSuccessfulFramePostLayoutCallback(frame.QuitClosure());
+  scroll->InvalidateLayout();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  frame.Run();
+
+  const int max_scroll_y =
+      tab_list_->height() - scroll->GetVisibleRect().height();
+  ASSERT_GT(max_scroll_y, 0);
+  scroll->ScrollToOffset(gfx::PointF(0, max_scroll_y));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return scroll->CurrentOffset().y() == max_scroll_y; }));
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  ASSERT_FALSE(tab_list_->action_row_for_testing()->GetVisible())
+      << "precondition: the action row is culled at the deep offset";
+
+  // Small enough that both section windows realize every row at any offset.
+  tab_list_->Update(MakeScrollPerfModel(16), static_cast<Browser*>(browser()));
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  base::RunLoop().RunUntilIdle();
+  tab_list_->GetWidget()->LayoutRootViewIfNecessary();
+  ASSERT_EQ(0, scroll->CurrentOffset().y());
+
+  views::View* rows = tab_list_->tab_rows_for_testing();
+  ASSERT_TRUE(rows);
+  for (views::View* child : rows->children()) {
+    EXPECT_TRUE(child->GetVisible())
+        << child->GetClassName()
+        << " must be visible once the offset settles at the top";
+  }
+  EXPECT_TRUE(tab_list_->action_row_for_testing()->IsDrawn());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
@@ -3802,9 +4061,11 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   }
   ASSERT_FALSE(normal_tab_id.empty())
       << "Seed 2 must expose at least one normal tab row";
-  SidebarTabRowView* tab_row =
-      list_view->FindTabRowByIdForTesting(normal_tab_id);
-  ASSERT_TRUE(tab_row);
+  SidebarTabRowView* tab_row = nullptr;
+  ASSERT_TRUE(BlockAndPollUntil([&]() {
+    tab_row = list_view->FindTabRowByIdForTesting(normal_tab_id);
+    return tab_row != nullptr;
+  }));
   EXPECT_EQ(tab_row->GetPreferredSize(views::SizeBounds()).height(), 36)
       << "A normal tab row keeps the 36dp rhythm, distinct from the 42dp "
          "action row";
@@ -3826,7 +4087,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   mail_tab.url = "chrome://maho-mail/";
   model.normal_tree.push_back(std::move(mail_tab));
 
-  list_view->RebuildRowsForTesting(model, browser());
+  list_view->RebuildRowsForTesting(model, static_cast<Browser*>(browser()));
   base::RunLoop().RunUntilIdle();
 
   EXPECT_NE(nullptr, list_view->FindTabRowByIdForTesting("regular-tab"));
@@ -3867,10 +4128,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   EXPECT_FALSE(views::IsViewClass<SidebarTabRowView>(action_row_before))
       << "Action row must not be a tab row";
 
-  const std::vector<std::string> visual_order =
-      list_view->tab_visual_order_ids_for_testing();
-  ASSERT_FALSE(visual_order.empty())
-      << "Seed 1 must populate the tab visual order for a meaningful check";
+  // The seeded model reaches the tab list on the sidebar's async refresh.
+  std::vector<std::string> visual_order;
+  ASSERT_TRUE(BlockAndPollUntil([&]() {
+    visual_order = list_view->tab_visual_order_ids_for_testing();
+    return !visual_order.empty();
+  })) << "Seed 1 must populate the tab visual order for a meaningful check";
   for (const std::string& id : visual_order) {
     EXPECT_NE(
         static_cast<views::View*>(list_view->FindTabRowByIdForTesting(id)),
@@ -3900,12 +4163,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 
   // Two browser-context rebuilds plus one zero-context (nullptr) rebuild must
   // all keep the same action row identity.
-  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), browser());
+  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), static_cast<Browser*>(browser()));
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(action_row_before, list_view->action_row_for_testing())
       << "Action row must survive the first browser-context rebuild";
 
-  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), browser());
+  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), static_cast<Browser*>(browser()));
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(action_row_before, list_view->action_row_for_testing())
       << "Action row must survive the second browser-context rebuild";
@@ -3923,7 +4186,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   ASSERT_TRUE(list_view);
 
   list_view->SetPrivateMode(true);
-  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), browser());
+  list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), static_cast<Browser*>(browser()));
   base::RunLoop().RunUntilIdle();
 
   views::View* action_row = list_view->action_row_for_testing();

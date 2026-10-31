@@ -659,10 +659,21 @@ bool MahoMailListBySmartCategory(const char *account_id,
                                  MahoMailReadCallback callback,
                                  void *user_data);
 
+/**
+ * Scans recent incoming Messages for a one-time code and reports it with the
+ * same JSON shape as `MahoMailExtractOtp`: a two-entry field mapping, or `[]`.
+ * `page_origin` null/empty means the requesting page is unknown.
+ */
+bool MahoMessagesExtractOtp(int64_t max_age_seconds,
+                            const char *page_origin,
+                            MahoMailReadCallback callback,
+                            void *user_data);
+
 bool MahoMailExtractOtp(const char *account_id,
                         const char *folder_id,
                         const char *query,
                         int64_t max_age_seconds,
+                        const char *page_origin,
                         MahoMailReadCallback callback,
                         void *user_data);
 
@@ -690,6 +701,20 @@ bool MahoMailMarkRead(const char *email_id, MahoMailReadCallback callback, void 
 
 bool MahoMailMarkUnread(const char *email_id, MahoMailReadCallback callback, void *user_data);
 
+/**
+ * Grouped/batched mark-read (design U10): one database lease applies local
+ * flags, recounts each touched folder once, and persists the outbox before
+ * any network attempt; the pool connection is released before IMAP waits;
+ * one authenticated session per account selects each folder once and issues
+ * UID STORE chunks of at most 500 UIDs; a short second lease acknowledges
+ * only this batch's outbox entries for groups whose remote STORE succeeded,
+ * leaving failed groups' retry records (and any newer opposite operations)
+ * untouched.
+ */
+bool MahoMailBatchMarkRead(const char *request_json,
+                           MahoMailReadCallback callback,
+                           void *user_data);
+
 bool MahoMailToggleStar(const char *email_id, MahoMailReadCallback callback, void *user_data);
 
 bool MahoMailDeleteEmail(const char *email_id, MahoMailReadCallback callback, void *user_data);
@@ -698,10 +723,6 @@ bool MahoMailMoveEmail(const char *email_id,
                        const char *target_folder_id,
                        MahoMailReadCallback callback,
                        void *user_data);
-
-bool MahoMailBatchMarkRead(const char *request_json,
-                           MahoMailReadCallback callback,
-                           void *user_data);
 
 bool MahoMailBatchMarkUnread(const char *request_json,
                              MahoMailReadCallback callback,

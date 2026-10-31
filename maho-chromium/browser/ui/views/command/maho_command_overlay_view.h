@@ -113,6 +113,17 @@ class MahoCommandOverlayView : public views::View,
     context_class_ = klass;
   }
   bool AiIngressAllowedForTesting() const { return AiIngressAllowed(); }
+  // Pure inline-autocomplete rule: returns |typed| extended to the first
+  // history/tab row whose scheme-less host (optionally without "www.") starts
+  // with it, or nullopt when nothing should be completed.
+  static std::optional<std::string> ComputeInlineCompletion(
+      const std::string& typed,
+      const std::vector<CommandSuggestion>& results);
+  // Text the field shows when |suggestion| is keyboard-selected: the query for
+  // search rows, the URL for URL-bearing rows, empty (keep typed text) else.
+  static std::string TextfieldTextForSuggestion(
+      const CommandSuggestion& suggestion);
+  void OnRowHoveredForTesting(int index) { OnRowHovered(index); }
   static int GetPanelCornerRadiusForTesting();
   static int GetSearchRowCornerRadiusForTesting();
   static int GetTopbarHorizontalInsetForTesting();
@@ -134,6 +145,11 @@ class MahoCommandOverlayView : public views::View,
   void OnThemeChanged() override;
   void AddedToWidget() override;
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
+  gfx::Size GetMinimumSize() const override;
+  bool OnMousePressed(const ui::MouseEvent& event) override;
+
+  static constexpr int kPopupWidthDp = 744;
+  static constexpr int kPopupMinHeightDp = 48;
 
   // True if |screen_point| is inside the search-engine picker; lets the
   // controller's outside-click monitor spare picker clicks.
@@ -149,6 +165,10 @@ class MahoCommandOverlayView : public views::View,
   void TriggerSearchForCurrentText();
   void UpdateResultViews(const std::vector<CommandSuggestion>& results);
   void UpdateSelection(int new_index);
+  void UpdateSelectionImpl(int new_index, bool sync_textfield);
+  void OnRowHovered(int index);
+  void RecordSuggestionUsage(const CommandSuggestion& suggestion);
+  void MaybeApplyInlineAutocomplete();
   void ActivateResultAtIndex(int index);
   void ActivateSelected();
   void ActivateFirstNavigation();
@@ -224,11 +244,15 @@ class MahoCommandOverlayView : public views::View,
 
   raw_ptr<views::Widget> picker_widget_ = nullptr;
   std::string initial_url_;
+  // |initial_url_| as displayed (percent-escaped UTF-8 decoded).
+  std::string initial_display_text_;
   bool suppress_search_ = false;
+  bool suppress_inline_autocomplete_ = false;
   base::ScopedObservation<views::Widget, views::WidgetObserver> picker_observation_{this};
 
   base::OneShotTimer debounce_timer_;
   bool first_search_since_open_ = true;
+  bool user_navigated_results_ = false;
   bool esc_accelerator_registered_ = false;
   uint64_t search_seq_ = 0;
   int last_resized_height_ = -1;

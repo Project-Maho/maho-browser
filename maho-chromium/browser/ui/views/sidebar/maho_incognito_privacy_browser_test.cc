@@ -25,11 +25,12 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/chrome_paths.h"
@@ -169,7 +170,7 @@ ProfileSettingsFailureSnapshot CaptureProfileSettingsFailureSnapshot(
       .profiles = TakeMahoJson(maho_core_list_profiles(core)),
       .active_maho_profile_id =
           TakeMahoString(maho_core_get_active_profile_id(core)),
-      .active_browser_profile_path = active_browser->profile()->GetPath(),
+      .active_browser_profile_path = active_browser->GetProfile()->GetPath(),
       .active_space_id =
           maho::MahoSpaceProfileBridge::GetInstance()->GetActiveSpaceId(
               active_browser),
@@ -346,7 +347,7 @@ IN_PROC_BROWSER_TEST_F(
     IncognitoOnlyProcessDoesNotInitializeMahoServicesOrOpenStorage) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   // Verify that the browser opened is incognito.
-  ASSERT_TRUE(browser()->profile()->IsOffTheRecord());
+  ASSERT_TRUE(browser()->GetProfile()->IsOffTheRecord());
 
   // Verify that Maho extra parts core is not initialized.
   auto* parts = MahoBrowserMainExtraParts::GetInstance();
@@ -364,7 +365,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        FirstRegularBrowserInitializesMahoServicesExactlyOnce) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   // Starts normally with a regular browser.
-  ASSERT_FALSE(browser()->profile()->IsOffTheRecord());
+  ASSERT_FALSE(browser()->GetProfile()->IsOffTheRecord());
 
   // Verify Maho extra parts core is initialized.
   auto* parts = MahoBrowserMainExtraParts::GetInstance();
@@ -389,7 +390,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   }
   ASSERT_TRUE(second_profile);
 
-  Browser* second_browser = CreateBrowser(second_profile);
+  Browser* second_browser = static_cast<Browser*>(CreateBrowser(second_profile));
   ASSERT_TRUE(second_browser);
 
   // Verify core is still the same pointer.
@@ -418,7 +419,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
       authorization_service));
 
   const std::string profile_key = maho::GetProfileIdentityKey(
-      browser()->profile()->GetPath(), browser()->profile()->GetPrefs());
+      browser()->GetProfile()->GetPath(), browser()->GetProfile()->GetPrefs());
   authorization_service->GrantForTesting(
       profile_key, "https://suspend-auth.example",
       maho::passwords::PasswordAuthorizationAction::kAgentCredentialUse,
@@ -482,7 +483,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   ASSERT_EQ(1u, parts->McpVaultCredentialLeaseCountForTesting());
 
   EXPECT_FALSE(parts->PromoteMcpVaultCredentialLeaseForTesting(
-      browser()->profile(), expiry));
+      browser()->GetProfile(), expiry));
   EXPECT_EQ(0u, parts->McpVaultCredentialLeaseCountForTesting());
 }
 
@@ -490,7 +491,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        CrossProfileMcpCredentialHandleCannotBePromoted) {
   auto* parts = MahoBrowserMainExtraParts::GetInstance();
   ASSERT_TRUE(parts);
-  Profile* owner_profile = browser()->profile();
+  Profile* owner_profile = browser()->GetProfile();
   ASSERT_TRUE(owner_profile);
 
   ProfileManager* profile_manager = g_browser_process->profile_manager();
@@ -513,14 +514,14 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        TabRegistryNormalPositiveControl) {
-  ASSERT_FALSE(browser()->profile()->IsOffTheRecord());
+  ASSERT_FALSE(browser()->GetProfile()->IsOffTheRecord());
 
   RecordingShellEventObserver observer;
   SetTabRegistryShellEventObserverForTesting(&observer);
 
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
   ASSERT_TRUE(bridge);
-  bridge->SetActiveSpaceId(browser(), "fake-space-id");
+  bridge->SetActiveSpaceId(static_cast<Browser*>(browser()), "fake-space-id");
 
   // Create a new tab.
   chrome::AddTabAt(browser(), GURL("about:blank"), -1, true);
@@ -542,17 +543,17 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        TabRegistryPrimaryOtrIsSilent) {
-  ASSERT_FALSE(browser()->profile()->IsOffTheRecord());
+  ASSERT_FALSE(browser()->GetProfile()->IsOffTheRecord());
 
   RecordingShellEventObserver observer;
   SetTabRegistryShellEventObserverForTesting(&observer);
 
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
   ASSERT_TRUE(bridge);
-  bridge->SetActiveSpaceId(browser(), "fake-space-id");
+  bridge->SetActiveSpaceId(static_cast<Browser*>(browser()), "fake-space-id");
 
   // Create primary OTR (Incognito) browser.
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  Browser* incognito_browser = static_cast<Browser*>(CreateIncognitoBrowser());
   ASSERT_TRUE(incognito_browser);
 
   // Add a tab in Incognito browser.
@@ -567,17 +568,17 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        GuestAndOtherOtrHaveNoMahoRegistration) {
-  ASSERT_FALSE(browser()->profile()->IsOffTheRecord());
+  ASSERT_FALSE(browser()->GetProfile()->IsOffTheRecord());
 
   RecordingShellEventObserver observer;
   SetTabRegistryShellEventObserverForTesting(&observer);
 
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
   ASSERT_TRUE(bridge);
-  bridge->SetActiveSpaceId(browser(), "fake-space-id");
+  bridge->SetActiveSpaceId(static_cast<Browser*>(browser()), "fake-space-id");
 
   // Create Guest browser.
-  Browser* guest_browser = CreateGuestBrowser();
+  Browser* guest_browser = static_cast<Browser*>(CreateGuestBrowser());
   ASSERT_TRUE(guest_browser);
 
   // Add a tab in Guest.
@@ -592,11 +593,11 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        RegistryDelayedCallbacksAfterCloseAreSilent) {
-  ASSERT_FALSE(browser()->profile()->IsOffTheRecord());
+  ASSERT_FALSE(browser()->GetProfile()->IsOffTheRecord());
 
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
   ASSERT_TRUE(bridge);
-  bridge->SetActiveSpaceId(browser(), "fake-space-id");
+  bridge->SetActiveSpaceId(static_cast<Browser*>(browser()), "fake-space-id");
 
   RecordingShellEventObserver observer;
   SetTabRegistryShellEventObserverForTesting(&observer);
@@ -607,8 +608,8 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   observer.Clear();
 
   // Close the tab
-  int index = browser()->tab_strip_model()->count() - 1;
-  browser()->tab_strip_model()->CloseWebContentsAt(index,
+  int index = browser()->GetTabStripModel()->count() - 1;
+  browser()->GetTabStripModel()->CloseWebContentsAt(index,
                                                    TabCloseTypes::CLOSE_NONE);
   base::RunLoop().RunUntilIdle();
 
@@ -629,10 +630,10 @@ class MahoWebUiPrivateBoundaryBrowserTest : public InProcessBrowserTest {
 IN_PROC_BROWSER_TEST_F(MahoWebUiPrivateBoundaryBrowserTest,
                        RegularControllersAndHandlersPositiveControl) {
   // Test regular profile (should succeed)
-  Browser* reg_browser = browser();
+  Browser* reg_browser = static_cast<Browser*>(browser());
   chrome::AddTabAt(reg_browser, GURL("about:blank"), -1, true);
   content::WebContents* reg_contents =
-      reg_browser->tab_strip_model()->GetActiveWebContents();
+      reg_browser->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(reg_contents);
 
   mojo::Remote<maho_boost::mojom::PageHandler> remote;
@@ -657,11 +658,11 @@ IN_PROC_BROWSER_TEST_F(MahoWebUiPrivateBoundaryBrowserTest,
 IN_PROC_BROWSER_TEST_F(MahoWebUiPrivateBoundaryBrowserTest,
                        DirectNavigationDeniedBeforeController) {
   // Test Guest
-  Browser* guest_browser = CreateGuestBrowser();
+  Browser* guest_browser = static_cast<Browser*>(CreateGuestBrowser());
   ASSERT_TRUE(guest_browser);
   chrome::AddTabAt(guest_browser, GURL("about:blank"), -1, true);
   content::WebContents* guest_contents =
-      guest_browser->tab_strip_model()->GetActiveWebContents();
+      guest_browser->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(guest_contents);
 
   mojo::Remote<maho_boost::mojom::PageHandler> remote;
@@ -683,11 +684,11 @@ IN_PROC_BROWSER_TEST_F(MahoWebUiPrivateBoundaryBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoWebUiPrivateBoundaryBrowserTest,
                        ForgedFactoriesAndHandlersDisconnectBeforeStateAccess) {
-  Browser* inc_browser = CreateIncognitoBrowser();
+  Browser* inc_browser = static_cast<Browser*>(CreateIncognitoBrowser());
   ASSERT_TRUE(inc_browser);
   chrome::AddTabAt(inc_browser, GURL("about:blank"), -1, true);
   content::WebContents* inc_contents =
-      inc_browser->tab_strip_model()->GetActiveWebContents();
+      inc_browser->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(inc_contents);
 
   // Test Boost under Incognito OTR
@@ -860,25 +861,26 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   Profile* profile = ProfileManager::GetLastUsedProfile();
   ASSERT_TRUE(profile);
 
-  Browser* active_browser = browser();
+  Browser* active_browser = static_cast<Browser*>(browser());
   if (!active_browser) {
     if (!GetAllBrowserWindowInterfaces().empty()) {
       active_browser =
-          GetAllBrowserWindowInterfaces()[0]->GetBrowserForMigrationOnly();
+          static_cast<Browser*>(GetAllBrowserWindowInterfaces()[0]);
     }
   }
   if (!active_browser) {
-    active_browser = Browser::Create(Browser::CreateParams(profile, true));
-    active_browser->window()->Show();
+    active_browser = static_cast<Browser*>(CreateBrowserWindow(
+        BrowserWindowCreateParams(profile, true)));
+    active_browser->GetWindow()->Show();
   }
   ASSERT_TRUE(active_browser);
 
   content::WebContents* reg_contents =
-      active_browser->tab_strip_model()->GetActiveWebContents();
+      active_browser->GetTabStripModel()->GetActiveWebContents();
   if (!reg_contents) {
     chrome::AddSelectedTabWithURL(active_browser, GURL("about:blank"),
                                   ui::PAGE_TRANSITION_LINK);
-    reg_contents = active_browser->tab_strip_model()->GetActiveWebContents();
+    reg_contents = active_browser->GetTabStripModel()->GetActiveWebContents();
   }
   ASSERT_TRUE(reg_contents);
 
@@ -891,7 +893,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                                       .AppendASCII("test_data")
                                       .AppendASCII("incognito_test_extension");
 
-  extensions::ChromeTestExtensionLoader loader(active_browser->profile());
+  extensions::ChromeTestExtensionLoader loader(active_browser->GetProfile());
   loader.set_allow_incognito_access(false);
   scoped_refptr<const extensions::Extension> extension =
       loader.LoadExtension(extension_path);
@@ -903,14 +905,14 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                                   "document.getElementById('maho-incognito-"
                                   "test-extension-marker') !== null"));
 
-  Browser* incognito_browser = CreateIncognitoBrowser(profile);
+  Browser* incognito_browser = static_cast<Browser*>(CreateIncognitoBrowser(profile));
   ASSERT_TRUE(incognito_browser);
   content::WebContents* inc_contents =
-      incognito_browser->tab_strip_model()->GetActiveWebContents();
+      incognito_browser->GetTabStripModel()->GetActiveWebContents();
   if (!inc_contents) {
     chrome::AddSelectedTabWithURL(incognito_browser, GURL("about:blank"),
                                   ui::PAGE_TRANSITION_LINK);
-    inc_contents = incognito_browser->tab_strip_model()->GetActiveWebContents();
+    inc_contents = incognito_browser->GetTabStripModel()->GetActiveWebContents();
   }
   ASSERT_TRUE(inc_contents);
 
@@ -925,13 +927,13 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   ASSERT_TRUE(content::NavigateToURL(inc_contents, GURL("about:blank")));
 
   bool is_inc_enabled = extensions::util::IsIncognitoEnabled(
-      extension_id, active_browser->profile());
+      extension_id, active_browser->GetProfile());
   if (!is_inc_enabled) {
     extensions::TestExtensionRegistryObserver observer(
-        extensions::ExtensionRegistry::Get(active_browser->profile()),
+        extensions::ExtensionRegistry::Get(active_browser->GetProfile()),
         extension_id);
     extensions::util::SetIsIncognitoEnabled(extension_id,
-                                            active_browser->profile(), true);
+                                            active_browser->GetProfile(), true);
     observer.WaitForExtensionLoaded();
   }
 
@@ -947,13 +949,13 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   ASSERT_TRUE(content::NavigateToURL(inc_contents, GURL("about:blank")));
 
   is_inc_enabled = extensions::util::IsIncognitoEnabled(
-      extension_id, active_browser->profile());
+      extension_id, active_browser->GetProfile());
   if (is_inc_enabled) {
     extensions::TestExtensionRegistryObserver observer(
-        extensions::ExtensionRegistry::Get(active_browser->profile()),
+        extensions::ExtensionRegistry::Get(active_browser->GetProfile()),
         extension_id);
     extensions::util::SetIsIncognitoEnabled(extension_id,
-                                            active_browser->profile(), false);
+                                            active_browser->GetProfile(), false);
     observer.WaitForExtensionLoaded();
   }
 
@@ -967,24 +969,24 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        Mv3ExtensionModeCoexistsWithoutNativeBlockerOwnership) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
-  Browser* active_browser = browser();
+  Browser* active_browser = static_cast<Browser*>(browser());
   if (!active_browser && !GetAllBrowserWindowInterfaces().empty()) {
     active_browser =
-        GetAllBrowserWindowInterfaces()[0]->GetBrowserForMigrationOnly();
+        static_cast<Browser*>(GetAllBrowserWindowInterfaces()[0]);
   }
-  Profile* profile = active_browser ? active_browser->profile()
+  Profile* profile = active_browser ? active_browser->GetProfile()
                                     : ProfileManager::GetLastUsedProfile();
   ASSERT_TRUE(profile);
   if (!active_browser) {
-    active_browser = CreateBrowser(profile);
+    active_browser = static_cast<Browser*>(CreateBrowser(profile));
   }
   ASSERT_TRUE(active_browser);
 
   content::WebContents* contents =
-      active_browser->tab_strip_model()->GetActiveWebContents();
+      active_browser->GetTabStripModel()->GetActiveWebContents();
   if (!contents) {
     chrome::AddTabAt(active_browser, GURL("about:blank"), -1, true);
-    contents = active_browser->tab_strip_model()->GetActiveWebContents();
+    contents = active_browser->GetTabStripModel()->GetActiveWebContents();
   }
   ASSERT_TRUE(contents);
 
@@ -1044,24 +1046,24 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        NativeModeBlocksRendererSubresources) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
-  Browser* active_browser = browser();
+  Browser* active_browser = static_cast<Browser*>(browser());
   if (!active_browser && !GetAllBrowserWindowInterfaces().empty()) {
     active_browser =
-        GetAllBrowserWindowInterfaces()[0]->GetBrowserForMigrationOnly();
+        static_cast<Browser*>(GetAllBrowserWindowInterfaces()[0]);
   }
-  Profile* profile = active_browser ? active_browser->profile()
+  Profile* profile = active_browser ? active_browser->GetProfile()
                                     : ProfileManager::GetLastUsedProfile();
   ASSERT_TRUE(profile);
   if (!active_browser) {
-    active_browser = CreateBrowser(profile);
+    active_browser = static_cast<Browser*>(CreateBrowser(profile));
   }
   ASSERT_TRUE(active_browser);
 
   content::WebContents* contents =
-      active_browser->tab_strip_model()->GetActiveWebContents();
+      active_browser->GetTabStripModel()->GetActiveWebContents();
   if (!contents) {
     chrome::AddTabAt(active_browser, GURL("about:blank"), -1, true);
-    contents = active_browser->tab_strip_model()->GetActiveWebContents();
+    contents = active_browser->GetTabStripModel()->GetActiveWebContents();
   }
   ASSERT_TRUE(contents);
 
@@ -1169,14 +1171,14 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        DownloadRegularHistoryControl) {
   maho::MahoDownloadBridgeService* reg_service =
       maho::MahoDownloadBridgeServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   EXPECT_NE(reg_service, nullptr);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        DownloadOtrFileWithoutHistory) {
   Profile* otr_profile =
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+      browser()->GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
   maho::MahoDownloadBridgeService* otr_service =
       maho::MahoDownloadBridgeServiceFactory::GetForProfile(otr_profile);
   EXPECT_EQ(otr_service, nullptr);
@@ -1185,7 +1187,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
 IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        RealDownloadsDoNotEnterMaho) {
   Profile* otr_profile =
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+      browser()->GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
   maho::MahoDownloadBridgeService* otr_service =
       maho::MahoDownloadBridgeServiceFactory::GetForProfile(otr_profile);
   EXPECT_EQ(otr_service, nullptr);
@@ -1257,14 +1259,14 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   Browser* popup = nullptr;
   for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
     if (bwi && bwi->GetType() == BrowserWindowInterface::TYPE_POPUP &&
-        bwi->GetBrowserForMigrationOnly() != browser()) {
-      popup = bwi->GetBrowserForMigrationOnly();
+        bwi != browser()) {
+      popup = static_cast<Browser*>(bwi);
       break;
     }
   }
 
   ASSERT_TRUE(popup);
-  EXPECT_EQ(Browser::TYPE_POPUP, popup->type());
+  EXPECT_EQ(Browser::TYPE_POPUP, popup->GetType());
 
   CloseBrowserSynchronously(popup);
 }
@@ -1289,7 +1291,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   Browser* popup = nullptr;
   for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
     if (bwi && bwi->GetType() == BrowserWindowInterface::TYPE_POPUP) {
-      popup = bwi->GetBrowserForMigrationOnly();
+      popup = static_cast<Browser*>(bwi);
       break;
     }
   }
@@ -1306,7 +1308,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
 
   // Verify it navigated the existing popup
   content::WebContents* contents =
-      popup->tab_strip_model()->GetActiveWebContents();
+      popup->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return contents->GetVisibleURL() == GURL("chrome://version/");
   }));
@@ -1327,7 +1329,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   ASSERT_TRUE(base::test::RunUntil([&]() {
     for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
       if (bwi && bwi->GetType() == BrowserWindowInterface::TYPE_POPUP) {
-        popup = bwi->GetBrowserForMigrationOnly();
+        popup = static_cast<Browser*>(bwi);
         return true;
       }
     }
@@ -1338,9 +1340,8 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   // Find and close any normal browsers (if they exist) so only popup remains
   std::vector<Browser*> normal_browsers;
   for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
-    Browser* b = bwi->GetBrowserForMigrationOnly();
-    if (b && b->is_type_normal()) {
-      normal_browsers.push_back(b);
+    if (bwi && bwi->GetType() == BrowserWindowInterface::TYPE_NORMAL) {
+      normal_browsers.push_back(static_cast<Browser*>(bwi));
     }
   }
   for (Browser* b : normal_browsers) {
@@ -1357,9 +1358,8 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   Browser* new_browser = nullptr;
   ASSERT_TRUE(base::test::RunUntil([&]() {
     for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
-      Browser* b = bwi->GetBrowserForMigrationOnly();
-      if (b && b->is_type_normal()) {
-        new_browser = b;
+      if (bwi && bwi->GetType() == BrowserWindowInterface::TYPE_NORMAL) {
+        new_browser = static_cast<Browser*>(bwi);
         return true;
       }
     }
@@ -1369,7 +1369,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   ASSERT_TRUE(new_browser);
   EXPECT_EQ(
       GURL("chrome://version/"),
-      new_browser->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+      new_browser->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
@@ -1385,7 +1385,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   ASSERT_TRUE(base::test::RunUntil([&]() {
     for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
       if (bwi && bwi->GetType() == BrowserWindowInterface::TYPE_POPUP) {
-        popup = bwi->GetBrowserForMigrationOnly();
+        popup = static_cast<Browser*>(bwi);
         return true;
       }
     }
@@ -1403,7 +1403,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
 
   auto popup_still_open = [&]() {
     for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
-      if (bwi->GetBrowserForMigrationOnly() == popup) {
+      if (bwi == popup) {
         return true;
       }
     }
@@ -1440,8 +1440,7 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
 
   // Assert no popup browser was created
   for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
-    Browser* b = bwi->GetBrowserForMigrationOnly();
-    EXPECT_FALSE(b && b->is_type_popup());
+    EXPECT_FALSE(bwi && bwi->GetType() == BrowserWindowInterface::TYPE_POPUP);
   }
 }
 
@@ -1468,9 +1467,8 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   for (int i = 0; i < 50; ++i) {
     base::RunLoop().RunUntilIdle();
     for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
-      Browser* b = bwi->GetBrowserForMigrationOnly();
-      if (b && b->is_type_popup()) {
-        popup = b;
+      if (bwi && bwi->GetType() == BrowserWindowInterface::TYPE_POPUP) {
+        popup = static_cast<Browser*>(bwi);
         break;
       }
     }
@@ -1510,20 +1508,21 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
 
   // Ensure we have a valid browser window since login gate might suppress
   // startup window
-  Browser* active_browser = browser();
+  Browser* active_browser = static_cast<Browser*>(browser());
   if (!active_browser) {
-    active_browser = Browser::Create(Browser::CreateParams(profile, true));
-    active_browser->window()->Show();
+    active_browser = static_cast<Browser*>(CreateBrowserWindow(
+        BrowserWindowCreateParams(profile, true)));
+    active_browser->GetWindow()->Show();
   }
   ASSERT_TRUE(active_browser);
 
   // Ensure we have a valid active WebContents
   content::WebContents* active_contents =
-      active_browser->tab_strip_model()->GetActiveWebContents();
+      active_browser->GetTabStripModel()->GetActiveWebContents();
   if (!active_contents) {
     chrome::AddSelectedTabWithURL(active_browser, GURL("about:blank"),
                                   ui::PAGE_TRANSITION_LINK);
-    active_contents = active_browser->tab_strip_model()->GetActiveWebContents();
+    active_contents = active_browser->GetTabStripModel()->GetActiveWebContents();
   }
   ASSERT_TRUE(active_contents);
 
@@ -1538,7 +1537,8 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
       /*is_renderer_initiated=*/false);
   params.started_from_context_menu = false;
 
-  content::WebContentsDelegate* delegate = active_browser;
+  content::WebContentsDelegate* delegate =
+      BrowserWebContentsDelegate::From(active_browser);
   content::WebContents* result =
       delegate->OpenURLFromTab(active_contents, params, base::NullCallback());
   // Intercept should return nullptr
@@ -1549,9 +1549,8 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   for (int i = 0; i < 50; ++i) {
     base::RunLoop().RunUntilIdle();
     for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
-      Browser* b = bwi->GetBrowserForMigrationOnly();
-      if (b && b->is_type_popup()) {
-        popup = b;
+      if (bwi && bwi->GetType() == BrowserWindowInterface::TYPE_POPUP) {
+        popup = static_cast<Browser*>(bwi);
         break;
       }
     }
@@ -1579,10 +1578,11 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
 
   // Ensure we have a valid browser window since login gate might suppress
   // startup window
-  Browser* active_browser = browser();
+  Browser* active_browser = static_cast<Browser*>(browser());
   if (!active_browser) {
-    active_browser = Browser::Create(Browser::CreateParams(profile, true));
-    active_browser->window()->Show();
+    active_browser = static_cast<Browser*>(CreateBrowserWindow(
+        BrowserWindowCreateParams(profile, true)));
+    active_browser->GetWindow()->Show();
   }
   ASSERT_TRUE(active_browser);
 
@@ -1619,11 +1619,11 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   maho::MahoAtcState::SetHasEnabledRules(true);
 
   content::WebContents* active_contents =
-      active_browser->tab_strip_model()->GetActiveWebContents();
+      active_browser->GetTabStripModel()->GetActiveWebContents();
   if (!active_contents) {
     chrome::AddSelectedTabWithURL(active_browser, GURL("about:blank"),
                                   ui::PAGE_TRANSITION_LINK);
-    active_contents = active_browser->tab_strip_model()->GetActiveWebContents();
+    active_contents = active_browser->GetTabStripModel()->GetActiveWebContents();
   }
   ASSERT_TRUE(active_contents);
 
@@ -1634,7 +1634,8 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
       /*is_renderer_initiated=*/false);
   params.user_gesture = true;
 
-  content::WebContentsDelegate* delegate = active_browser;
+  content::WebContentsDelegate* delegate =
+      BrowserWebContentsDelegate::From(active_browser);
   content::WebContents* result =
       delegate->OpenURLFromTab(active_contents, params, base::NullCallback());
   // The routing cancels the original navigation asynchronously
@@ -1669,10 +1670,11 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
 
   // Ensure we have a valid browser window since login gate might suppress
   // startup window
-  Browser* active_browser = browser();
+  Browser* active_browser = static_cast<Browser*>(browser());
   if (!active_browser) {
-    active_browser = Browser::Create(Browser::CreateParams(profile, true));
-    active_browser->window()->Show();
+    active_browser = static_cast<Browser*>(CreateBrowserWindow(
+        BrowserWindowCreateParams(profile, true)));
+    active_browser->GetWindow()->Show();
   }
   ASSERT_TRUE(active_browser);
 
@@ -1740,10 +1742,11 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
                        ATCRouting_NoRulesFastPath) {
   Profile* profile = ProfileManager::GetLastUsedProfile();
   ASSERT_TRUE(profile);
-  Browser* active_browser = browser();
+  Browser* active_browser = static_cast<Browser*>(browser());
   if (!active_browser) {
-    active_browser = Browser::Create(Browser::CreateParams(profile, true));
-    active_browser->window()->Show();
+    active_browser = static_cast<Browser*>(CreateBrowserWindow(
+        BrowserWindowCreateParams(profile, true)));
+    active_browser->GetWindow()->Show();
   }
   ASSERT_TRUE(active_browser);
 
@@ -1751,11 +1754,11 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   maho::MahoAtcState::SetHasEnabledRules(false);
 
   content::WebContents* active_contents =
-      active_browser->tab_strip_model()->GetActiveWebContents();
+      active_browser->GetTabStripModel()->GetActiveWebContents();
   if (!active_contents) {
     chrome::AddSelectedTabWithURL(active_browser, GURL("about:blank"),
                                   ui::PAGE_TRANSITION_LINK);
-    active_contents = active_browser->tab_strip_model()->GetActiveWebContents();
+    active_contents = active_browser->GetTabStripModel()->GetActiveWebContents();
   }
   ASSERT_TRUE(active_contents);
 
@@ -1766,7 +1769,8 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
       /*is_renderer_initiated=*/false);
   params.user_gesture = true;
 
-  content::WebContentsDelegate* delegate = active_browser;
+  content::WebContentsDelegate* delegate =
+      BrowserWebContentsDelegate::From(active_browser);
   content::WebContents* result =
       delegate->OpenURLFromTab(active_contents, params, base::NullCallback());
   // The fast path should NOT return nullptr (it should navigate synchronously
@@ -1798,20 +1802,21 @@ class MahoAtcRoutingBrowserTest : public InProcessBrowserTest {
   static constexpr char kGlobPattern[] = "*.atc-routed.test";
 
   Browser* EnsureBrowser(Profile* profile) {
-    Browser* b = browser();
+    Browser* b = static_cast<Browser*>(browser());
     if (!b) {
-      b = Browser::Create(Browser::CreateParams(profile, true));
-      b->window()->Show();
+      b = static_cast<Browser*>(CreateBrowserWindow(
+          BrowserWindowCreateParams(profile, true)));
+      b->GetWindow()->Show();
     }
     return b;
   }
 
   content::WebContents* EnsureActiveContents(Browser* b) {
-    content::WebContents* wc = b->tab_strip_model()->GetActiveWebContents();
+    content::WebContents* wc = b->GetTabStripModel()->GetActiveWebContents();
     if (!wc) {
       chrome::AddSelectedTabWithURL(b, GURL("about:blank"),
                                     ui::PAGE_TRANSITION_LINK);
-      wc = b->tab_strip_model()->GetActiveWebContents();
+      wc = b->GetTabStripModel()->GetActiveWebContents();
     }
     return wc;
   }
@@ -1857,11 +1862,10 @@ class MahoAtcRoutingBrowserTest : public InProcessBrowserTest {
   int CountTabsWithHost(const std::string& host) {
     int count = 0;
     for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
-      Browser* b = bwi->GetBrowserForMigrationOnly();
-      if (!b) {
+      if (!bwi) {
         continue;
       }
-      TabStripModel* tsm = b->tab_strip_model();
+      TabStripModel* tsm = bwi->GetTabStripModel();
       for (int i = 0; i < tsm->count(); ++i) {
         content::WebContents* wc = tsm->GetWebContentsAt(i);
         if (wc && wc->GetVisibleURL().host() == host) {
@@ -1923,7 +1927,7 @@ IN_PROC_BROWSER_TEST_F(MahoAtcRoutingBrowserTest,
   ASSERT_NE(target_space, bridge->GetActiveSpaceId(b));
   AddGlobRule("atc-click-rule", kGlobPattern, target_space);
 
-  content::WebContents* wc = b->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* wc = b->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(wc);
   const std::string script =
       "var a = document.createElement('a'); a.href = '" +
@@ -1961,7 +1965,7 @@ IN_PROC_BROWSER_TEST_F(MahoAtcRoutingBrowserTest, CmdClickRoutesExactlyOnce) {
                                 ui::PAGE_TRANSITION_LINK,
                                 /*is_renderer_initiated=*/false);
   params.user_gesture = true;
-  content::WebContentsDelegate* delegate = b;
+  content::WebContentsDelegate* delegate = BrowserWebContentsDelegate::From(b);
   content::WebContents* result =
       delegate->OpenURLFromTab(active_contents, params, base::NullCallback());
   EXPECT_FALSE(result);
@@ -2001,7 +2005,7 @@ IN_PROC_BROWSER_TEST_F(MahoAtcRoutingBrowserTest,
                                 ui::PAGE_TRANSITION_LINK,
                                 /*is_renderer_initiated=*/false);
   params.started_from_context_menu = false;
-  content::WebContentsDelegate* delegate = b;
+  content::WebContentsDelegate* delegate = BrowserWebContentsDelegate::From(b);
   content::WebContents* result =
       delegate->OpenURLFromTab(active_contents, params, base::NullCallback());
   EXPECT_FALSE(result);
@@ -2009,9 +2013,8 @@ IN_PROC_BROWSER_TEST_F(MahoAtcRoutingBrowserTest,
   Browser* popup = nullptr;
   ASSERT_TRUE(base::test::RunUntil([&]() {
     for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
-      Browser* candidate = bwi->GetBrowserForMigrationOnly();
-      if (candidate && candidate->is_type_popup()) {
-        popup = candidate;
+      if (bwi && bwi->GetType() == BrowserWindowInterface::TYPE_POPUP) {
+        popup = static_cast<Browser*>(bwi);
         return true;
       }
     }
@@ -2039,7 +2042,7 @@ IN_PROC_BROWSER_TEST_F(MahoAtcRoutingBrowserTest, NoRuleFastPath) {
   const std::string origin_space = bridge->GetActiveSpaceId(b);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(b, MatchUrl("/title1.html")));
-  content::WebContents* wc = b->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* wc = b->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(wc);
   EXPECT_EQ(kMatchHost, wc->GetLastCommittedURL().host());
   EXPECT_EQ(origin_space, bridge->GetActiveSpaceId(b));
@@ -2062,7 +2065,7 @@ IN_PROC_BROWSER_TEST_F(MahoAtcRoutingBrowserTest, NonMatchKeepsCurrentSpace) {
   ASSERT_NE(origin_space, target_space);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(b, NonMatchUrl("/title1.html")));
-  content::WebContents* wc = b->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* wc = b->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(wc);
   EXPECT_EQ(kNonMatchHost, wc->GetLastCommittedURL().host());
   EXPECT_EQ(origin_space, bridge->GetActiveSpaceId(b));
@@ -2110,12 +2113,12 @@ IN_PROC_BROWSER_TEST_F(
   base::ScopedAllowBlockingForTesting allow_blocking;
   Profile* settings_host_profile = ProfileManager::GetLastUsedProfile();
   ASSERT_TRUE(settings_host_profile);
-  Browser* active_browser = browser();
+  Browser* active_browser = static_cast<Browser*>(browser());
   if (!active_browser) {
-    active_browser = CreateBrowser(settings_host_profile);
+    active_browser = static_cast<Browser*>(CreateBrowser(settings_host_profile));
   }
   ASSERT_TRUE(active_browser);
-  ASSERT_EQ(active_browser->profile(), settings_host_profile);
+  ASSERT_EQ(active_browser->GetProfile(), settings_host_profile);
   base::ScopedTempDir storage_dir;
   ASSERT_TRUE(storage_dir.CreateUniqueTempDir());
   ASSERT_TRUE(maho_storage_set_sqlcipher_key(
@@ -2187,12 +2190,12 @@ IN_PROC_BROWSER_TEST_F(
   base::ScopedAllowBlockingForTesting allow_blocking;
   Profile* settings_host_profile = ProfileManager::GetLastUsedProfile();
   ASSERT_TRUE(settings_host_profile);
-  Browser* active_browser = browser();
+  Browser* active_browser = static_cast<Browser*>(browser());
   if (!active_browser) {
-    active_browser = CreateBrowser(settings_host_profile);
+    active_browser = static_cast<Browser*>(CreateBrowser(settings_host_profile));
   }
   ASSERT_TRUE(active_browser);
-  ASSERT_EQ(active_browser->profile(), settings_host_profile);
+  ASSERT_EQ(active_browser->GetProfile(), settings_host_profile);
   base::ScopedTempDir storage_dir;
   ASSERT_TRUE(storage_dir.CreateUniqueTempDir());
   ASSERT_TRUE(maho_storage_set_sqlcipher_key(
@@ -2263,12 +2266,12 @@ IN_PROC_BROWSER_TEST_F(
   base::ScopedAllowBlockingForTesting allow_blocking;
   Profile* settings_host_profile = ProfileManager::GetLastUsedProfile();
   ASSERT_TRUE(settings_host_profile);
-  Browser* active_browser = browser();
+  Browser* active_browser = static_cast<Browser*>(browser());
   if (!active_browser) {
-    active_browser = CreateBrowser(settings_host_profile);
+    active_browser = static_cast<Browser*>(CreateBrowser(settings_host_profile));
   }
   ASSERT_TRUE(active_browser);
-  ASSERT_EQ(active_browser->profile(), settings_host_profile);
+  ASSERT_EQ(active_browser->GetProfile(), settings_host_profile);
   base::ScopedTempDir storage_dir;
   ASSERT_TRUE(storage_dir.CreateUniqueTempDir());
   ASSERT_TRUE(maho_storage_set_sqlcipher_key(
@@ -3048,8 +3051,8 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   Profile& profile_b =
       profiles::testing::CreateProfileSync(profile_manager, path_b);
 
-  Browser* browser_a = CreateBrowser(&profile_a);
-  Browser* browser_b = CreateBrowser(&profile_b);
+  Browser* browser_a = static_cast<Browser*>(CreateBrowser(&profile_a));
+  Browser* browser_b = static_cast<Browser*>(CreateBrowser(&profile_b));
 
   ASSERT_TRUE(browser_a);
   ASSERT_TRUE(browser_b);

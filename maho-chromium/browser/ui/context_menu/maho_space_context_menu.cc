@@ -76,7 +76,6 @@ namespace {
 
 constexpr char kDefaultSpaceName[] = "Space";
 constexpr char kCreateFolderKind[] = "create_folder";
-constexpr char kSetSpaceIconKind[] = "set_space_icon";
 constexpr char kSpaceIconHome[] = "🏠";
 constexpr char kSpaceIconWork[] = "💼";
 constexpr char kSpaceIconArt[] = "🎨";
@@ -196,13 +195,24 @@ void ChangeSpaceIconOnPool(const std::string& space_id,
     return;
   }
 
+  // `update_space_config` is the core's icon seam (SpaceConfigUpdate.icon).
+  // There is no `set_space_icon` ShellEvent; that kind was silently dropped.
+  base::DictValue changes;
+  changes.Set("spaceId", space_id);
+  changes.Set("icon", icon);
   base::DictValue event;
-  event.Set("kind", kSetSpaceIconKind);
-  event.Set("space_id", space_id);
-  event.Set("icon", icon);
+  event.Set("kind", "update_space_config");
+  event.Set("changes", std::move(changes));
   std::string event_json;
   base::JSONWriter::Write(event, &event_json);
   maho::DispatchSpaceContextMenuCoreEventForTesting(core, event_json);
+
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE, base::BindOnce([]() {
+        if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance()) {
+          bridge->NotifyChanged(/*is_structural=*/true);
+        }
+      }));
 }
 
 void RecolorSpaceOnPool(const std::string& space_id,
@@ -354,7 +364,7 @@ void MahoSpaceContextMenu::ExportTheme() {
   select_file_dialog_->SelectFile(
       ui::SelectFileDialog::SELECT_SAVEAS_FILE, u"Export Theme", default_path,
       &file_type_info, 1, FILE_PATH_LITERAL("mahotheme"),
-      browser_->window()->GetNativeWindow());
+      browser_->GetWindow()->GetNativeWindow());
 }
 
 void MahoSpaceContextMenu::ImportTheme() {
@@ -370,7 +380,7 @@ void MahoSpaceContextMenu::ImportTheme() {
   select_file_dialog_->SelectFile(
       ui::SelectFileDialog::SELECT_OPEN_FILE, u"Import Theme",
       base::FilePath(), &file_type_info, 1, FILE_PATH_LITERAL("mahotheme"),
-      browser_->window()->GetNativeWindow());
+      browser_->GetWindow()->GetNativeWindow());
 }
 
 void MahoSpaceContextMenu::FileSelected(const ui::SelectedFileInfo& file,
@@ -434,12 +444,12 @@ void MahoSpaceContextMenu::ExecuteCommand(int command_id, int event_flags) {
   switch (command_id) {
     case IDC_MAHO_SPACE_RENAME:
       MahoSpaceConfigDialog::Open(
-          browser_->profile(), browser_->window()->GetNativeWindow(),
+          browser_->GetProfile(), browser_->GetWindow()->GetNativeWindow(),
           space_id_, maho_space_config::mojom::InitialFocus::kName);
       break;
     case IDC_MAHO_SPACE_CHANGE_ICON:
       MahoSpaceConfigDialog::Open(
-          browser_->profile(), browser_->window()->GetNativeWindow(),
+          browser_->GetProfile(), browser_->GetWindow()->GetNativeWindow(),
           space_id_, maho_space_config::mojom::InitialFocus::kIcon);
       break;
     case IDC_MAHO_SPACE_EDIT_THEME: {

@@ -17,13 +17,13 @@ use super::{
     start_oauth_with_options, CompleteOAuthOptions, OAuthCompletion, StartOAuthOptions,
 };
 
-fn migrated_conn() -> Connection {
+pub(super) fn migrated_conn() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     maho_core::db::migrations::run_migrations(&conn).unwrap();
     conn
 }
 
-fn insert_pending(state_token: &str, provider: &str) {
+pub(super) fn insert_pending(state_token: &str, provider: &str) {
     state::pending_pkce().insert(
         state_token.to_string(),
         PkceEntry {
@@ -55,17 +55,17 @@ fn insert_pending_reauthorization(state_token: &str, account_id: &str) {
     );
 }
 
-struct FakeTransport {
+pub(super) struct FakeTransport {
     subject: Option<String>,
     email: String,
     refresh_token: Option<String>,
     expires_at: Option<String>,
-    exchange_calls: Cell<u32>,
+    pub(super) exchange_calls: Cell<u32>,
     userinfo_calls: Cell<u32>,
 }
 
 impl FakeTransport {
-    fn new(email: &str, refresh_token: Option<&str>) -> Self {
+    pub(super) fn new(email: &str, refresh_token: Option<&str>) -> Self {
         Self {
             subject: Some("google-subject-1".to_string()),
             email: email.to_string(),

@@ -10,6 +10,9 @@
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -98,21 +101,21 @@ class MahoShieldBubbleInteractiveUiTest : public InProcessBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
     InProcessBrowserTest::SetUpOnMainThread();
 
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         maho::sidebar_prefs::kSidebarLayoutEnabled, false);
     auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
     ASSERT_TRUE(browser_view);
     browser_view->InvalidateLayout();
     browser_view->GetWidget()->LayoutRootViewIfNecessary();
-    if (!browser()->tab_strip_model()->GetActiveWebContents()) {
+    if (!browser()->GetTabStripModel()->GetActiveWebContents()) {
       chrome::AddTabAt(browser(), GURL("about:blank"), -1, true);
     }
   }
 
   void TearDownOnMainThread() override {
     if (browser()) {
-      maho::MahoShieldBubbleCoordinator::GetForBrowser(browser()).Hide();
-      browser()->tab_strip_model()->CloseAllTabs();
+      maho::MahoShieldBubbleCoordinator::GetForBrowser(static_cast<Browser*>(browser())).Hide();
+      browser()->GetTabStripModel()->CloseAllTabs();
       base::RunLoop().RunUntilIdle();
     }
     InProcessBrowserTest::TearDownOnMainThread();
@@ -129,7 +132,7 @@ class MahoShieldBubbleInteractiveUiTest : public InProcessBrowserTest {
   }
 
   content::WebContents* GetActiveWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   std::string GetActiveOrigin() {
@@ -138,7 +141,7 @@ class MahoShieldBubbleInteractiveUiTest : public InProcessBrowserTest {
   }
 
   maho::MahoShieldBubbleCoordinator& GetCoordinator() {
-    return maho::MahoShieldBubbleCoordinator::GetForBrowser(browser());
+    return maho::MahoShieldBubbleCoordinator::GetForBrowser(static_cast<Browser*>(browser()));
   }
 };
 
@@ -174,7 +177,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   maho::MahoShieldBubbleCoordinator& coordinator = GetCoordinator();
   EXPECT_FALSE(coordinator.IsShowing());
 
-  MahoPageInfoUI::ShowShieldBubble(GetAnchorView(), browser(),
+  MahoPageInfoUI::ShowShieldBubble(GetAnchorView(), static_cast<Browser*>(browser()),
                                    GetActiveOrigin());
 
   ASSERT_TRUE(base::test::RunUntil([&]() { return coordinator.IsShowing(); }));
@@ -197,7 +200,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   maho::MahoShieldBubbleCoordinator& coordinator = GetCoordinator();
   ASSERT_FALSE(coordinator.IsShowing());
 
-  MahoPageInfoUI::ShowShieldBubble(browser());
+  MahoPageInfoUI::ShowShieldBubble(static_cast<Browser*>(browser()));
 
   ASSERT_TRUE(base::test::RunUntil([&]() { return coordinator.IsShowing(); }));
   EXPECT_TRUE(coordinator.IsShowing());
@@ -219,7 +222,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   maho::MahoShieldBubbleCoordinator& coordinator = GetCoordinator();
   ASSERT_FALSE(coordinator.IsShowing());
 
-  MahoPageInfoUI::ShowShieldBubble(browser());
+  MahoPageInfoUI::ShowShieldBubble(static_cast<Browser*>(browser()));
 
   ASSERT_TRUE(base::test::RunUntil([&]() { return coordinator.IsShowing(); }));
   views::Widget* bubble_widget = coordinator.GetBubbleWidgetForTesting();
@@ -242,7 +245,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   base::RunLoop().RunUntilIdle();
 
   maho::MahoShieldBubbleCoordinator& coordinator = GetCoordinator();
-  MahoPageInfoUI::ShowShieldBubble(GetAnchorView(), browser(),
+  MahoPageInfoUI::ShowShieldBubble(GetAnchorView(), static_cast<Browser*>(browser()),
                                    GetActiveOrigin());
   ASSERT_TRUE(base::test::RunUntil([&]() { return coordinator.IsShowing(); }));
 
@@ -271,7 +274,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   base::RunLoop().RunUntilIdle();
 
   maho::MahoShieldBubbleCoordinator& coordinator = GetCoordinator();
-  MahoPageInfoUI::ShowShieldBubble(anchor, browser(), GetActiveOrigin());
+  MahoPageInfoUI::ShowShieldBubble(anchor, static_cast<Browser*>(browser()), GetActiveOrigin());
   ASSERT_TRUE(base::test::RunUntil([&]() { return coordinator.IsShowing(); }));
 
   views::FocusManager* fm = anchor->GetWidget()->GetFocusManager();
@@ -292,7 +295,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   ASSERT_TRUE(maho::MahoShieldBubbleView::SetContentBlockingModeForTesting(0));
 
   for (int mode : {1, 2}) {
-    maho::MahoShieldBubbleView native_view(browser(), GetActiveOrigin(), 0,
+    maho::MahoShieldBubbleView native_view(static_cast<Browser*>(browser()), GetActiveOrigin(), 0,
                                            false, GetActiveWebContents());
     ASSERT_TRUE(
         maho::MahoShieldBubbleView::SetContentBlockingModeForTesting(mode));
@@ -303,7 +306,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
 
     EXPECT_EQ(maho::MahoShieldBubbleView::GetSiteExceptionsForTesting(),
               exceptions_before);
-    maho::MahoShieldBubbleView non_native_view(browser(), GetActiveOrigin(), 0,
+    maho::MahoShieldBubbleView non_native_view(static_cast<Browser*>(browser()), GetActiveOrigin(), 0,
                                                false, GetActiveWebContents());
     EXPECT_EQ(non_native_view.GetToggleForTesting(), nullptr);
     ASSERT_TRUE(
@@ -318,7 +321,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   ScopedContentBlockingMode scoped_mode;
   ASSERT_TRUE(maho::MahoShieldBubbleView::SetContentBlockingModeForTesting(0));
 
-  maho::MahoShieldBubbleView native_view(browser(), GetActiveOrigin(), 0,
+  maho::MahoShieldBubbleView native_view(static_cast<Browser*>(browser()), GetActiveOrigin(), 0,
                                          false, GetActiveWebContents());
 
   EXPECT_FALSE(HasLabelWithText(&native_view, u"Maho Shield"));
@@ -359,7 +362,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   ScopedContentBlockingMode scoped_mode;
   ASSERT_TRUE(maho::MahoShieldBubbleView::SetContentBlockingModeForTesting(0));
 
-  maho::MahoShieldBubbleView native_view(browser(), GetActiveOrigin(), 1, true,
+  maho::MahoShieldBubbleView native_view(static_cast<Browser*>(browser()), GetActiveOrigin(), 1, true,
                                          GetActiveWebContents());
 
   ASSERT_TRUE(native_view.GetToggleForTesting());
@@ -398,7 +401,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
     ASSERT_TRUE(maho::MahoShieldBubbleView::SetContentBlockingModeForTesting(
         expectation.mode));
 
-    maho::MahoShieldBubbleView view(browser(), GetActiveOrigin(), 7, false,
+    maho::MahoShieldBubbleView view(static_cast<Browser*>(browser()), GetActiveOrigin(), 7, false,
                                     GetActiveWebContents());
 
     EXPECT_EQ(view.GetToggleForTesting(), nullptr);
@@ -448,7 +451,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   ScopedContentBlockingMode scoped_mode;
   ASSERT_TRUE(maho::MahoShieldBubbleView::SetContentBlockingModeForTesting(0));
 
-  maho::MahoShieldBubbleView native_view(browser(), GetActiveOrigin(), 0,
+  maho::MahoShieldBubbleView native_view(static_cast<Browser*>(browser()), GetActiveOrigin(), 0,
                                          false, GetActiveWebContents());
   ASSERT_TRUE(native_view.GetSettingsButtonForTesting());
   EXPECT_EQ(native_view.GetSettingsButtonForTesting()->GetText(),
@@ -457,7 +460,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   native_view.OpenSettingsForTesting();
 
   EXPECT_EQ(browser()
-                ->tab_strip_model()
+                ->GetTabStripModel()
                 ->GetActiveWebContents()
                 ->GetVisibleURL()
                 .spec(),
@@ -471,7 +474,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   ScopedContentBlockingMode scoped_mode;
   ASSERT_TRUE(maho::MahoShieldBubbleView::SetContentBlockingModeForTesting(1));
 
-  maho::MahoShieldBubbleView extension_view(browser(), GetActiveOrigin(), 0,
+  maho::MahoShieldBubbleView extension_view(static_cast<Browser*>(browser()), GetActiveOrigin(), 0,
                                             false, GetActiveWebContents());
   ASSERT_TRUE(extension_view.GetSettingsButtonForTesting());
   EXPECT_EQ(extension_view.GetSettingsButtonForTesting()->GetText(),
@@ -480,7 +483,7 @@ IN_PROC_BROWSER_TEST_F(MahoShieldBubbleInteractiveUiTest,
   extension_view.OpenSettingsForTesting();
 
   EXPECT_EQ(browser()
-                ->tab_strip_model()
+                ->GetTabStripModel()
                 ->GetActiveWebContents()
                 ->GetVisibleURL()
                 .spec(),

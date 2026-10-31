@@ -469,4 +469,62 @@ describe("useMailClient", () => {
       expect(api.markRead).not.toHaveBeenCalledWith("email-1");
     });
   });
+
+  describe("optimistic mutations", () => {
+    it("handles deleteEmail failure gracefully without unhandled rejection and rolls back", async () => {
+      vi.mocked(api.listAccounts).mockResolvedValue([]);
+      vi.mocked(api.deleteEmail).mockRejectedValue(new Error("Network delete error"));
+
+      const { result } = renderHook(() => useMailClient());
+      await waitFor(() => {
+        expect(result.current.isBootstrappingAccounts).toBe(false);
+      });
+
+      const unhandledRejections: unknown[] = [];
+      const onUnhandled = (reason: unknown) => { unhandledRejections.push(reason); };
+      process.on("unhandledRejection", onUnhandled);
+
+      try {
+        let deletePromise: Promise<void>;
+        await act(async () => {
+          deletePromise = result.current.deleteEmail("email-fail-1");
+          await deletePromise;
+        });
+
+        await expect(deletePromise!).resolves.toBeUndefined();
+        expect(unhandledRejections).toHaveLength(0);
+        expect(api.deleteEmail).toHaveBeenCalledWith("email-fail-1");
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+      }
+    });
+
+    it("handles toggleStar failure gracefully without unhandled rejection and rolls back", async () => {
+      vi.mocked(api.listAccounts).mockResolvedValue([]);
+      vi.mocked(api.toggleStar).mockRejectedValue(new Error("Network star error"));
+
+      const { result } = renderHook(() => useMailClient());
+      await waitFor(() => {
+        expect(result.current.isBootstrappingAccounts).toBe(false);
+      });
+
+      const unhandledRejections: unknown[] = [];
+      const onUnhandled = (reason: unknown) => { unhandledRejections.push(reason); };
+      process.on("unhandledRejection", onUnhandled);
+
+      try {
+        let starPromise: Promise<void>;
+        await act(async () => {
+          starPromise = result.current.toggleStar("email-fail-2");
+          await starPromise;
+        });
+
+        await expect(starPromise!).resolves.toBeUndefined();
+        expect(unhandledRejections).toHaveLength(0);
+        expect(api.toggleStar).toHaveBeenCalledWith("email-fail-2");
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+      }
+    });
+  });
 });

@@ -75,16 +75,17 @@ def stage_runtime_files(
     staging_dir: Path,
 ) -> list[Path]:
     copied: list[Path] = []
-    for source_pattern, destination, required in parse_release_entries(release_file):
+    for source_pattern, destination, _required in parse_release_entries(release_file):
         pattern = source_pattern.replace("\\", os.sep).replace("/", os.sep)
         matches = sorted(glob.glob(str(input_dir / pattern), recursive=True))
         if not matches:
-            # chrome_child.dll and optimization_guide_internal.dll are optional based on build config
-            if required and source_pattern not in ("chrome_child.dll", "optimization_guide_internal.dll"):
-                raise FileNotFoundError(
-                    f"Required MSIX payload entry {source_pattern!r} is absent from "
-                    f"{input_dir}"
-                )
+            # chrome.release lists entries that only some build configurations
+            # produce: chrome_child.dll (component builds only), chrome_renderer.dll
+            # (gated on enable_separate_renderer_binary), optimization_guide_internal.dll,
+            # the Widevine component, the beta/canary/dev logos, and so on. The
+            # upstream mini_installer (create_installer_archive.py) copies whatever
+            # its glob matches and skips the rest, so mirror that and rely on the
+            # essential-payload checks below to fail closed on a broken build tree.
             continue
         target_dir = staging_dir / _destination_directory(destination)
         for match in matches:

@@ -105,6 +105,7 @@ class MahoAiIngressCoordinator
                                    AcceptanceCallback)>;
   ConsumerRegistration RegisterConsumer(ConsumerType type,
                                         DeliveryCallback callback);
+  bool HasConsumer() const;
 
   void StoreSessionHandoff(SessionHandoff handoff);
   std::optional<SessionHandoff> TakeSessionHandoff();

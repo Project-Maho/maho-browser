@@ -1262,11 +1262,11 @@ function getProviderIcon(id: string) {
       return <Sparkles className="size-4 text-primary" />;
     case 'openai':
     case 'anthropic':
-      return <Zap className="size-4 text-amber-500" />;
+      return <Zap className="size-4 text-warning" />;
     case 'openai-compatible':
-      return <Globe className="size-4 text-blue-500" />;
+      return <Globe className="size-4 text-primary" />;
     case 'local-server':
-      return <Database className="size-4 text-emerald-500" />;
+      return <Database className="size-4 text-success" />;
     default:
       return <Sparkles className="size-4" />;
   }
@@ -1569,7 +1569,7 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
 
                       <div className="flex items-center gap-3">
                         {testRes && (
-                          <span className={cn("text-xs", testRes.ok ? "text-emerald-500 font-medium" : "text-destructive")}>
+                          <span className={cn("text-xs", testRes.ok ? "text-success font-medium" : "text-destructive")}>
                             {testRes.message}
                           </span>
                         )}
@@ -2075,7 +2075,7 @@ function ProviderDisconnectDialog({
           )}
 
           {isDefault && (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-500 space-y-2">
+            <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning space-y-2">
               <p className="font-semibold">This is your current Default provider.</p>
               <p>You must assign another connected provider as Default before disconnecting.</p>
 

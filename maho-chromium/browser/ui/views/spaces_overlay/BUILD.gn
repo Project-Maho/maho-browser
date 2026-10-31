@@ -39,7 +39,10 @@ source_set("unit_tests") {
     "//base",
     "//base/test:test_support",
     "//maho/browser/ui/views/sidebar:maho_spaces_board_data",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_themed_background",
+    "//skia",
     "//testing/gtest",
+    "//ui/gfx",
     "//ui/views",
     "//ui/views:test_support",
   ]

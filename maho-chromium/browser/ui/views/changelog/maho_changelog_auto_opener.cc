@@ -12,8 +12,7 @@ void MahoChangelogAutoOpener::OnBrowserCreated(
   if (handled_) {
     return;
   }
-  Browser* browser = window->GetBrowserForMigrationOnly();
-  if (MahoChangelogEvaluateAndOpenForBrowser(browser)) {
+  if (MahoChangelogEvaluateAndOpenForBrowser(window)) {
     handled_ = true;
     observation_.Reset();
   }

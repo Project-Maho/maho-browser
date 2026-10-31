@@ -99,6 +99,7 @@ class PlatformConfig:
     enabled: bool
     search_url_template: str
     canonical_host: str
+    posting_author: str
     link_pattern: str
     keywords: tuple[str, ...]
     composer_names: tuple[str, ...]
@@ -140,6 +141,7 @@ class AppConfig:
     product_facts: tuple[str, ...]
     poll_interval_seconds: int
     platforms: dict[str, PlatformConfig]
+    keep_inspection_tab: bool = True
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = ""
@@ -161,6 +163,7 @@ class AppConfig:
                 enabled=bool(value.get("enabled", True)),
                 search_url_template=str(value["search_url_template"]),
                 canonical_host=str(value["canonical_host"]),
+                posting_author=str(value["posting_author"]).strip().lstrip("@"),
                 link_pattern=str(value["link_pattern"]),
                 keywords=tuple(str(x) for x in value.get("keywords", ())),
                 composer_names=tuple(str(x) for x in value.get("composer_names", ("Reply",))),
@@ -195,6 +198,7 @@ class AppConfig:
             blocked_terms=tuple(str(x).lower() for x in safety.get("blocked_terms", ())),
             blocked_claim_patterns=tuple(str(x) for x in safety.get("blocked_claim_patterns", ())),
             excluded_authors=excluded_authors,
+            keep_inspection_tab=bool(safety.get("keep_inspection_tab", True)),
             generator_mode=str(generation.get("mode", "template")),
             generator_timeout_seconds=max(10, int(generation.get("timeout_seconds", 60))),
             allow_template_fallback=bool(generation.get("allow_template_fallback", True)),
@@ -231,6 +235,7 @@ CREATE TABLE IF NOT EXISTS candidates (
     drafted_at TEXT,
     approved_at TEXT,
     posted_at TEXT,
+    posted_url TEXT,
     last_error TEXT,
     UNIQUE(platform, external_id),
     UNIQUE(canonical_url)
@@ -261,6 +266,15 @@ class Ledger:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        columns = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(candidates)").fetchall()
+        }
+        if "posted_url" not in columns:
+            self.conn.execute("ALTER TABLE candidates ADD COLUMN posted_url TEXT")
+            self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -377,15 +391,24 @@ class Ledger:
         self.conn.commit()
         self.audit("candidate_rejected", candidate_id, reason=reason)
 
-    def mark_posted(self, candidate_id: int, via: str) -> None:
+    def mark_posted(self, candidate_id: int, via: str, posted_url: str) -> None:
         row = self.get(candidate_id)
+        if not posted_url:
+            raise SafetyBlocked("posted_url cannot be empty")
         now = iso_now()
         self.conn.execute(
-            "UPDATE candidates SET status='posted', posted_at=?, last_error=NULL WHERE id=?",
-            (now, candidate_id),
+            "UPDATE candidates SET status='posted', posted_at=?, posted_url=?, last_error=NULL WHERE id=?",
+            (now, posted_url, candidate_id),
         )
         self.conn.commit()
-        self.audit("reply_posted", candidate_id, str(row["platform"]), via=via, url=row["canonical_url"])
+        self.audit(
+            "reply_posted",
+            candidate_id,
+            str(row["platform"]),
+            via=via,
+            url=row["canonical_url"],
+            posted_url=posted_url,
+        )
 
     def mark_error(self, candidate_id: int, message: str) -> None:
         self.conn.execute(
@@ -584,12 +607,11 @@ def find_accessibility_ref(
 
 
 def canonicalize(platform: PlatformConfig, url: str) -> tuple[str, str, str]:
-    match = platform.regex.search(url)
-    if not match:
+    match = platform.regex.fullmatch(url.strip())
+    if not match or match.lastindex is None:
         raise PipelineError(f"URL does not match {platform.name}: {url}")
-    groups = match.groups()
-    author = groups[0].lstrip("@") if len(groups) > 1 else ""
-    external_id = groups[-1]
+    author = match.group(1).lstrip("@") if match.lastindex > 1 else ""
+    external_id = match.group(match.lastindex)
     if platform.name == "x":
         canonical = f"https://{platform.canonical_host}/{author}/status/{external_id}"
     else:
@@ -965,7 +987,22 @@ class Pipeline:
             raise SafetyBlocked("approved reply text is empty")
         self.generator.ensure_novel(approved_text)
 
-    def post_via_repl(self, candidate_id: int) -> None:
+    def validate_posted_url(self, row: sqlite3.Row, url: str) -> str:
+        platform = self.config.platforms.get(str(row["platform"]))
+        if platform is None:
+            raise PipelineError(f"unknown platform: {row['platform']}")
+        canonical_posted, external_id, author = canonicalize(platform, url.strip())
+        if canonical_posted == str(row["canonical_url"]) or external_id == str(row["external_id"]):
+            raise SafetyBlocked(
+                f"published reply URL must be distinct from target post: {canonical_posted}"
+            )
+        if author.casefold() != platform.posting_author.casefold():
+            raise SafetyBlocked(
+                f"published reply URL must belong to @{platform.posting_author}: {canonical_posted}"
+            )
+        return canonical_posted
+
+    def post_via_repl(self, candidate_id: int, *, keep_tab: bool = True) -> None:
         row = self.ledger.get(candidate_id)
         self.rate_gate(row)
         if self.config.dry_run:
@@ -1008,22 +1045,39 @@ class Pipeline:
             if code != 0:
                 raise PipelineError(f"maho browser repl exited with status {code}")
             answer = input(
-                "Did you actually publish exactly the approved reply above? Type POSTED to record it: "
+                "Enter the canonical published reply URL (or type ABORT / leave blank to cancel): "
             ).strip()
-            if answer == "POSTED":
-                self.ledger.mark_posted(candidate_id, "repl")
-            else:
+            if not answer or answer.upper() in ("ABORT", "CANCEL", "QUIT", "NO"):
                 self.ledger.audit(
                     "repl_send_aborted",
                     candidate_id,
                     str(row["platform"]),
                 )
                 print("Not recorded as posted; candidate remains approved.")
+                return
+            canonical_reply_url = self.validate_posted_url(row, answer)
+            confirmation = input(
+                "Type REPLY to confirm this URL is the published reply to the target post: "
+            ).strip()
+            if confirmation != "REPLY":
+                self.ledger.audit(
+                    "repl_reply_unconfirmed",
+                    candidate_id,
+                    str(row["platform"]),
+                    posted_url=canonical_reply_url,
+                )
+                print("Reply relationship not confirmed; candidate remains approved.")
+                return
+            self.ledger.mark_posted(candidate_id, "repl", posted_url=canonical_reply_url)
+            print(f"Recorded as posted: {canonical_reply_url}")
         except Exception as exc:
             self.ledger.mark_error(candidate_id, str(exc))
             raise
         finally:
-            self.maho.tab_close(tab_id)
+            if not keep_tab:
+                self.maho.tab_close(tab_id)
+            else:
+                print(f"Retaining tab {tab_id} for inspection.")
 
 
 def default_socket_path() -> pathlib.Path:
@@ -1083,6 +1137,8 @@ def print_rows(rows: Sequence[sqlite3.Row]) -> None:
             print(f"  draft: {row['draft']}")
         if row["approved_text"] and row["approved_text"] != row["draft"]:
             print(f"  approved: {row['approved_text']}")
+        if "posted_url" in row.keys() and row["posted_url"]:
+            print(f"  posted_url: {row['posted_url']}")
         if row["filter_reason"]:
             print(f"  filter: {row['filter_reason']}")
         if row["last_error"]:
@@ -1162,6 +1218,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Open persistent Maho Browser REPL for one already-approved reply",
     )
     send.add_argument("--id", type=int, required=True)
+    send.add_argument(
+        "--keep-tab",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Keep the target/result browser tab open for inspection (default: true)",
+    )
     return parser
 
 
@@ -1223,7 +1285,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print_rows(pipeline.ledger.list_status(statuses, args.limit))
             return 0
         if args.command == "send":
-            pipeline.post_via_repl(args.id)
+            keep_tab = config.keep_inspection_tab if args.keep_tab is None else args.keep_tab
+            pipeline.post_via_repl(args.id, keep_tab=keep_tab)
             return 0
         raise PipelineError(f"unsupported command: {args.command}")
     finally:

@@ -9,6 +9,7 @@
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/class_property.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -27,6 +28,9 @@
 namespace maho {
 
 namespace {
+
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(views::BubbleDialogDelegate,
+                                 kActionPopoverDelegateKey)
 
 constexpr int kCardCornerRadius = 16;
 constexpr int kCardPadding = 8;
@@ -176,13 +180,13 @@ MahoSidebarActionPopoverView::MahoSidebarActionPopoverView(
   SetFocusBehavior(FocusBehavior::ALWAYS);
 
   AddActionRow(MahoSidebarActionPopoverAction::kNewSpace,
-               vector_icons::kSelectWindowChromeRefreshIcon,
+               vector_icons::kSelectWindowChromeRefreshOldIcon,
                u"New Space", u"Create a fresh workspace");
   AddActionRow(MahoSidebarActionPopoverAction::kNewFolder,
-               vector_icons::kFolderChromeRefreshIcon,
+               vector_icons::kFolderChromeRefreshOldIcon,
                u"New Folder", u"Organize tabs in the current space");
   AddActionRow(MahoSidebarActionPopoverAction::kNewTab,
-               vector_icons::kAddIcon,
+               vector_icons::kAddOldIcon,
                u"New Tab", u"Open a page in the current space");
 
   UpdateHighlightState();
@@ -216,8 +220,10 @@ views::Widget* MahoSidebarActionPopoverView::Show(
   delegate->SetContentsView(std::move(contents));
 
   views::Widget* widget =
-      views::BubbleDialogDelegate::CreateBubble(std::move(delegate));
+      views::BubbleDialogDelegate::CreateBubbleDeprecated(
+          delegate.get(), views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   if (widget) {
+    widget->SetProperty(kActionPopoverDelegateKey, std::move(delegate));
     widget->Show();
   }
   return widget;

@@ -19,7 +19,9 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/common/url_constants.h"
 #include "maho/browser/ai/maho_artifact_html_sanitizer.h"
+#include "maho/browser/ai/maho_artifact_pdf_processor.h"
 #include "maho/browser/ai/maho_artifact_registry.h"
+#include "maho/browser/ai/maho_artifact_xlsx_processor.h"
 #include "maho/browser/ui/webui/maho_webui_private_boundary.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "net/base/url_util.h"
@@ -30,8 +32,9 @@ namespace {
 constexpr int64_t kMaxPreviewInputBytes = 8 * 1024 * 1024;
 constexpr char kPreviewPurpose[] = "preview";
 
-std::string ReadAndSanitizeArtifact(base::FilePath artifact_root,
-                                    std::string storage_rel_path) {
+std::string ProcessArtifactForPreview(base::FilePath artifact_root,
+                                      std::string storage_rel_path,
+                                      maho::ai::MahoArtifactKind kind) {
   // Canonicalize + containment-check on this MayBlock sequence (realpath
   // resolution blocks and must not run on the UI thread). An escaped or
   // invalid path yields empty (sanitized) output, never the target file.
@@ -42,7 +45,24 @@ std::string ReadAndSanitizeArtifact(base::FilePath artifact_root,
   if (path) {
     base::ReadFileToStringWithMaxSize(*path, &contents, kMaxPreviewInputBytes);
   }
-  return maho::SanitizeArtifactHtml(contents);
+
+  switch (kind) {
+    case maho::ai::MahoArtifactKind::kXlsx: {
+      auto json_res =
+          maho::ai::MahoArtifactXlsxProcessor::GeneratePreviewJson(contents);
+      return json_res.value_or(
+          "{\"sheets\":[],\"error\":\"Failed to parse spreadsheet preview\"}");
+    }
+    case maho::ai::MahoArtifactKind::kPdf: {
+      auto pdf_res =
+          maho::ai::MahoArtifactPdfProcessor::ValidateForPreview(contents);
+      return pdf_res.value_or("");
+    }
+    case maho::ai::MahoArtifactKind::kHtml:
+    case maho::ai::MahoArtifactKind::kGeneric:
+    default:
+      return maho::SanitizeArtifactHtml(contents);
+  }
 }
 
 void RunGotDataWithString(content::URLDataSource::GotDataCallback callback,
@@ -84,12 +104,38 @@ class ArtifactPreviewDataSource : public content::URLDataSource {
     }
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-        base::BindOnce(&ReadAndSanitizeArtifact, registry->artifact_root(),
-                       artifact->storage_rel_path),
+        base::BindOnce(&ProcessArtifactForPreview, registry->artifact_root(),
+                       artifact->storage_rel_path, artifact->kind),
         base::BindOnce(&RunGotDataWithString, std::move(callback)));
   }
 
-  std::string GetMimeType(const GURL& url) override { return "text/html"; }
+  std::string GetMimeType(const GURL& url) override {
+    std::string token;
+    net::GetValueForKeyInQuery(url, "cap", &token);
+    maho::ai::MahoArtifactRegistry* registry =
+        profile_ ? maho::ai::MahoArtifactRegistry::GetForProfile(profile_)
+                 : nullptr;
+    const std::optional<maho::ai::MahoArtifact> artifact =
+        (registry && !token.empty())
+            ? registry->GetCapabilityArtifactForResponseMetadata(
+                  token, kPreviewPurpose)
+            : std::nullopt;
+    if (!artifact) {
+      return "text/html";
+    }
+    switch (artifact->kind) {
+      case maho::ai::MahoArtifactKind::kPdf:
+        return "application/pdf";
+      case maho::ai::MahoArtifactKind::kXlsx:
+        return "application/json";
+      case maho::ai::MahoArtifactKind::kHtml:
+      case maho::ai::MahoArtifactKind::kGeneric:
+      default:
+        return "text/html";
+    }
+  }
+
+  bool ShouldServeMimeTypeAsContentTypeHeader() override { return true; }
 
   bool ShouldReplaceExistingSource() override { return true; }
   bool AllowCaching() override { return false; }

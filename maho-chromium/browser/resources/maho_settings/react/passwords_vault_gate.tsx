@@ -74,7 +74,7 @@ export function getVaultAccessCopy(lockState: VaultLockState): VaultAccessCopy {
     return {
       actionLabel: 'Initialize Vault',
       description:
-          'Create a local Vault before storing native passwords. The recovery secret is used only to recover this Vault.',
+          'Signing in sets up your Maho Vault automatically - its key follows your account. You can also set one up here with a passphrase.',
       mode: 'initialize',
       title: 'Set up Maho Vault',
     };
@@ -82,7 +82,7 @@ export function getVaultAccessCopy(lockState: VaultLockState): VaultAccessCopy {
   return {
     actionLabel: 'Unlock Vault',
     description:
-        'Unlock your local Vault before viewing or changing saved native passwords.',
+        'Your Maho Vault unlocks when you sign in. After auto-lock, confirm it is you or enter your passphrase.',
     mode: 'unlock',
     title: 'Unlock Maho Vault',
   };

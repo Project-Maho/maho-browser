@@ -4,6 +4,9 @@
 
 #include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -68,7 +71,7 @@ class MahoSpacesOverlayInteractiveUiTest : public InProcessBrowserTest {
   void SendKeyPress(ui::KeyboardCode key_code) {
     base::RunLoop loop;
     ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
-        browser()->window()->GetNativeWindow(), key_code,
+        browser()->GetWindow()->GetNativeWindow(), key_code,
         false, false, false, false,
         loop.QuitClosure()));
     loop.Run();
@@ -106,7 +109,7 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(parent_widget);
 
   auto controller =
-      std::make_unique<MahoSpacesOverlayController>(browser());
+      std::make_unique<MahoSpacesOverlayController>(static_cast<Browser*>(browser()));
   EXPECT_FALSE(controller->IsVisible());
 
   controller->Show(parent_widget);
@@ -128,7 +131,7 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
 IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
                        DismissBeforeShowIsNoOp) {
   auto controller =
-      std::make_unique<MahoSpacesOverlayController>(browser());
+      std::make_unique<MahoSpacesOverlayController>(static_cast<Browser*>(browser()));
   EXPECT_FALSE(controller->IsVisible());
 
   controller->Dismiss(MahoSpacesOverlayController::DismissReason::kExplicitCancel);
@@ -142,7 +145,7 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(parent_widget);
 
   auto controller =
-      std::make_unique<MahoSpacesOverlayController>(browser());
+      std::make_unique<MahoSpacesOverlayController>(static_cast<Browser*>(browser()));
   controller->Show(parent_widget);
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return controller->IsVisible(); }));
@@ -160,7 +163,7 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(parent_widget);
 
   auto controller =
-      std::make_unique<MahoSpacesOverlayController>(browser());
+      std::make_unique<MahoSpacesOverlayController>(static_cast<Browser*>(browser()));
   EXPECT_FALSE(controller->IsVisible());
 
   controller->Toggle(parent_widget);
@@ -180,7 +183,7 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(parent_widget);
 
   auto controller =
-      std::make_unique<MahoSpacesOverlayController>(browser());
+      std::make_unique<MahoSpacesOverlayController>(static_cast<Browser*>(browser()));
   controller->Show(parent_widget);
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return controller->IsVisible(); }));
@@ -266,7 +269,7 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(parent_widget);
 
   auto controller =
-      std::make_unique<MahoSpacesOverlayController>(browser());
+      std::make_unique<MahoSpacesOverlayController>(static_cast<Browser*>(browser()));
 
   controller->Show(parent_widget);
   ASSERT_TRUE(base::test::RunUntil(
@@ -288,7 +291,7 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(parent_widget);
 
   auto controller =
-      std::make_unique<MahoSpacesOverlayController>(browser());
+      std::make_unique<MahoSpacesOverlayController>(static_cast<Browser*>(browser()));
   controller->Show(parent_widget);
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return controller->IsVisible(); }));
@@ -313,7 +316,7 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(parent_widget);
 
   auto controller =
-      std::make_unique<MahoSpacesOverlayController>(browser());
+      std::make_unique<MahoSpacesOverlayController>(static_cast<Browser*>(browser()));
   controller->Show(parent_widget);
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return controller->IsVisible(); }));

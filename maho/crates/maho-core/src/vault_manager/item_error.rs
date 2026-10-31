@@ -50,6 +50,9 @@ impl From<VaultManagerError> for VaultCrudError {
             | VaultManagerError::DeviceProtector(_)
             | VaultManagerError::DeviceWrapper(_)
             | VaultManagerError::DeviceBindingMismatch => Self::Crypto,
+            VaultManagerError::NoAccountWrap => {
+                Self::Storage("unexpected vault lifecycle state during item operation".to_string())
+            }
             VaultManagerError::AlreadyInitialized
             | VaultManagerError::RateLimited
             | VaultManagerError::InvalidCredentials => {

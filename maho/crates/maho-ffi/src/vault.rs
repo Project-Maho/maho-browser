@@ -303,10 +303,23 @@ struct VaultInitializeRequest {
     recovery_secret: String,
 }
 
+impl Drop for VaultInitializeRequest {
+    fn drop(&mut self) {
+        self.master_passphrase.zeroize();
+        self.recovery_secret.zeroize();
+    }
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultUnlockRequest {
     master_passphrase: String,
+}
+
+impl Drop for VaultUnlockRequest {
+    fn drop(&mut self) {
+        self.master_passphrase.zeroize();
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -315,9 +328,17 @@ struct VaultRecoveryUnlockRequest {
     recovery_secret: String,
 }
 
+impl Drop for VaultRecoveryUnlockRequest {
+    fn drop(&mut self) {
+        self.recovery_secret.zeroize();
+    }
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultLoginRequest {
+    #[serde(default)]
+    notes: Option<String>,
     metadata: VaultItemPublicMetadata,
     username: String,
     password: String,
@@ -326,6 +347,15 @@ struct VaultLoginRequest {
     /// have no form context (settings, importers).
     #[serde(default)]
     form_details: Option<maho_core::vault_manager::VaultCredentialFormDetails>,
+}
+
+impl Drop for VaultLoginRequest {
+    fn drop(&mut self) {
+        self.password.zeroize();
+        if let Some(notes) = &mut self.notes {
+            notes.zeroize();
+        }
+    }
 }
 
 fn deserialize_vault_revision<'de, D>(deserializer: D) -> Result<VaultRevision, D::Error>
@@ -380,6 +410,8 @@ where
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VaultLoginUpdateRequest {
+    #[serde(default)]
+    notes: Option<String>,
     id: VaultItemId,
     #[serde(
         default,
@@ -394,6 +426,17 @@ struct VaultLoginUpdateRequest {
     /// Absent leaves the stored form detail untouched; present replaces it.
     #[serde(default)]
     form_details: Option<maho_core::vault_manager::VaultCredentialFormDetails>,
+}
+
+impl Drop for VaultLoginUpdateRequest {
+    fn drop(&mut self) {
+        if let Some(password) = &mut self.password {
+            password.zeroize();
+        }
+        if let Some(notes) = &mut self.notes {
+            notes.zeroize();
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -442,6 +485,322 @@ struct VaultMatchItemsRequest {
     policy: VaultMatchPolicyRequest,
 }
 
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultParityMutationRequest {
+    id: VaultItemId,
+    #[serde(alias = "expected_revision", deserialize_with = "deserialize_vault_revision")]
+    expected_revision: VaultRevision,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultFavoriteRequest {
+    id: VaultItemId,
+    #[serde(alias = "expected_revision", deserialize_with = "deserialize_vault_revision")]
+    expected_revision: VaultRevision,
+    favorite: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultNoteRequest {
+    title: String,
+    notes: String,
+}
+
+impl Drop for VaultNoteRequest {
+    fn drop(&mut self) {
+        self.notes.zeroize();
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultNoteUpdateRequest {
+    id: VaultItemId,
+    #[serde(alias = "expected_revision", deserialize_with = "deserialize_vault_revision")]
+    expected_revision: VaultRevision,
+    title: String,
+    notes: String,
+}
+
+impl Drop for VaultNoteUpdateRequest {
+    fn drop(&mut self) {
+        self.notes.zeroize();
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultTotpRequest {
+    id: VaultItemId,
+    #[serde(alias = "expected_revision", deserialize_with = "deserialize_vault_revision")]
+    expected_revision: VaultRevision,
+    secret: String,
+}
+
+impl Drop for VaultTotpRequest {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultItemRequest {
+    #[serde(alias = "itemId")]
+    id: VaultItemId,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultTotpCodeRequest {
+    #[serde(alias = "itemId")]
+    id: VaultItemId,
+    #[serde(default, alias = "timestamp_secs")]
+    timestamp_secs: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VaultStrengthRequest {
+    password: String,
+}
+
+impl Drop for VaultStrengthRequest {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultGetNotesResponse {
+    notes: String,
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_trash_item_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultParityMutationRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_trash_item(request.id, request.expected_revision) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_restore_item_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultParityMutationRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_restore_item(request.id, request.expected_revision) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_set_favorite_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultFavoriteRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_set_favorite(request.id, request.expected_revision, request.favorite) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_empty_trash_json(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        match core.vault_empty_trash() {
+            Ok(result) => vault_ok(result),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free. The caller must secure-clear returned secrets.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_get_notes_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultItemRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_get_notes(request.id) {
+            Ok(result) => vault_ok(VaultGetNotesResponse { notes: result.as_str().to_string() }),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_add_secure_note_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let mut request = match unsafe { vault_parse_json::<VaultNoteRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        let notes = Zeroizing::new(std::mem::take(&mut request.notes));
+        match core.vault_add_secure_note(request.title, notes) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_update_secure_note_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let mut request = match unsafe { vault_parse_json::<VaultNoteUpdateRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        let notes = Zeroizing::new(std::mem::take(&mut request.notes));
+        match core.vault_update_secure_note(request.id, request.expected_revision, request.title, notes) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_set_login_totp_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultTotpRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_set_login_totp(request.id, request.expected_revision, &request.secret) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_totp_code_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultTotpCodeRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        let timestamp = request.timestamp_secs.unwrap_or_else(|| {
+            u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(0)
+        });
+        match core.vault_totp_code(request.id, timestamp) {
+            Ok(result) => vault_ok(result),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_health_report_json(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        match core.vault_health_report() {
+            Ok(result) => vault_ok(result),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and readable NUL-terminated request.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_generate_password_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller guarantees the core and request remain valid for this call.
+        if unsafe { vault_core(core) }.is_none() { return ptr::null_mut(); }
+        // SAFETY: The request is caller-owned readable NUL-terminated UTF-8.
+        let request = match unsafe { vault_parse_json::<maho_types::vault_generator::PasswordGeneratorOptions>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match maho_core::vault_generator::generate_password(&request) {
+            Ok(result) => vault_ok(result),
+            Err(error) => vault_error(VaultErrorCode::StorageFailure, error.to_string()),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and readable NUL-terminated request.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_password_strength_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller guarantees the core and request remain valid for this call.
+        if unsafe { vault_core(core) }.is_none() { return ptr::null_mut(); }
+        // SAFETY: The request is caller-owned readable NUL-terminated UTF-8.
+        let request = match unsafe { vault_parse_json::<VaultStrengthRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        vault_ok(maho_core::vault_generator::estimate_strength(&Zeroizing::new(request.password)))
+    }, ptr::null_mut())
+}
+
 fn vault_ok<T: serde::Serialize>(data: T) -> *mut c_char {
     to_json_cstring(&VaultFfiResponse {
         ok: true,
@@ -469,6 +828,9 @@ fn vault_lifecycle_error(error: VaultManagerError) -> *mut c_char {
         VaultManagerError::RateLimited => VaultErrorCode::RateLimited,
         VaultManagerError::InvalidCredentials => VaultErrorCode::InvalidCredentials,
         VaultManagerError::CorruptedVaultData => VaultErrorCode::UnsupportedSchemaVersion,
+        // The vault file has no wrapped key slot for the requested unlock kind,
+        // so this file cannot be opened that way: same class as CorruptedVaultData.
+        VaultManagerError::NoAccountWrap => VaultErrorCode::UnsupportedSchemaVersion,
         VaultManagerError::Storage(_) => VaultErrorCode::StorageFailure,
         VaultManagerError::DeviceProtector(_) => VaultErrorCode::ProviderUnavailable,
         VaultManagerError::DeviceWrapper(_) => VaultErrorCode::StorageFailure,
@@ -788,11 +1150,21 @@ pub unsafe extern "C" fn maho_vault_add_login_json(
                 Ok(request) => request,
                 Err(response) => return response,
             };
+             let mut form_details = request.form_details;
+            if let Some(notes) = request.notes {
+                let details = form_details.get_or_insert_with(maho_core::vault_manager::VaultCredentialFormDetails::default);
+                details.notes.clear();
+                if !notes.is_empty() {
+                    let mut note = maho_core::vault_manager::VaultCredentialNote::default();
+                    note.value = notes;
+                    details.notes.push(note);
+                }
+            }
             let input = VaultLoginInput {
                 metadata: request.metadata,
                 username: request.username,
                 password: zeroize::Zeroizing::new(request.password),
-                form_details: request.form_details,
+                form_details,
             };
             match core.vault_add_login(input) {
                 Ok(item) => vault_ok(item),
@@ -907,6 +1279,7 @@ pub unsafe extern "C" fn maho_vault_update_login_json(
                 Err(response) => return response,
             };
             let update = VaultLoginUpdate {
+                notes: request.notes.map(Zeroizing::new),
                 metadata: request.metadata,
                 username: request.username,
                 password: request.password.map(zeroize::Zeroizing::new),
@@ -1081,7 +1454,7 @@ mod vault_ffi_tests {
 
     #[test]
     fn vault_mutation_results_expose_lossless_identity() {
-        let (core, path) = core_with_storage();
+        let (_key_lock, core, path) = core_with_storage();
         let init = initialize_request();
         assert_eq!(
             read_owned_json(unsafe { maho_vault_initialize_json(core, init.as_ptr()) })["ok"],
@@ -1156,7 +1529,15 @@ mod vault_ffi_tests {
         serde_json::from_str(&value).expect("Vault JSON ABI returns JSON")
     }
 
-    fn core_with_storage() -> (*mut MahoCore, std::path::PathBuf) {
+    fn core_with_storage() -> (
+        std::sync::MutexGuard<'static, ()>,
+        *mut MahoCore,
+        std::path::PathBuf,
+    ) {
+        // Hold the process-wide test-key lock for the caller's whole test:
+        // the key is injected here and re-read on every vault FFI storage
+        // open below, and parallel key-flipping tests corrupt that.
+        let key_lock = crate::common::sqlcipher_test_key_lock();
         maho_storage::sqlite::set_sqlcipher_key("vault-ffi-test-key")
             .expect("test SQLCipher key configures");
         let path = std::env::temp_dir().join(format!("maho-vault-ffi-{}", uuid::Uuid::new_v4()));
@@ -1164,6 +1545,7 @@ mod vault_ffi_tests {
         let db_path = path.join("vault.sqlite");
         let db = db_path.to_str().expect("temporary path is UTF-8");
         (
+            key_lock,
             Box::into_raw(Box::new(MahoCore::new().with_storage(db))),
             path,
         )
@@ -1206,7 +1588,7 @@ mod vault_ffi_tests {
     // round-trip.
     #[test]
     fn vault_ffi_add_login_round_trips_form_details_through_the_json_contract() {
-        let (core, path) = core_with_storage();
+        let (_key_lock, core, path) = core_with_storage();
         let init = initialize_request();
         // SAFETY: the core and request are valid for the duration of this call.
         assert_eq!(
@@ -1248,7 +1630,7 @@ mod vault_ffi_tests {
             .create_vault_backend_session()
             .expect("backend session");
         let credentials = session
-            .login_credentials(Some("https://detail.example"))
+            .login_credentials(Some("https://detail.example"), None)
             .expect("backend credential read");
         assert_eq!(1, credentials.len());
         let details = credentials[0]
@@ -1278,7 +1660,101 @@ mod vault_ffi_tests {
         free_core(core, &path);
     }
 
+    // Failing-first rationale: the backend guessed the lookup kind from the
+    // STORED records, so a `Basic realm=""` item (whose signon realm equals the
+    // plain origin) hijacked HTML lookups for the same site and hid the stored
+    // HTML credential. The request now carries the scheme, and the scheme
+    // decides HTML-origin versus HTTP-auth-realm resolution.
     #[test]
+    fn vault_ffi_login_query_honors_requested_scheme_when_realms_collide() {
+        let (_key_lock, core, path) = core_with_storage();
+        let init = initialize_request();
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_initialize_json(core, init.as_ptr()) })["ok"],
+            true
+        );
+
+        let collide_realm = "https://collide.example";
+        let add = |scheme: u8, username: &str| {
+            request(serde_json::json!({
+                "metadata": {
+                    "title": "Collision",
+                    "origins": [collide_realm],
+                    "usernameHint": "ignored-by-core",
+                    "itemKind": "login",
+                    "totp": null,
+                    "passkey": null,
+                },
+                "username": username,
+                "password": SECRET,
+                "formDetails": {
+                    "scheme": scheme,
+                    "signonRealm": collide_realm,
+                    "url": collide_realm,
+                    "action": collide_realm,
+                    "usernameElement": "user",
+                    "passwordElement": "pass",
+                    "blockedByUser": false,
+                },
+            }))
+        };
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_add_login_json(core, add(0, "html-user").as_ptr()) })["ok"],
+            true
+        );
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_add_login_json(core, add(1, "basic-user").as_ptr()) })["ok"],
+            true
+        );
+
+        // SAFETY: the core is uniquely owned by this test.
+        let core_ref = unsafe { &*core };
+        let session = core_ref
+            .create_vault_backend_session()
+            .expect("backend session");
+
+        // The HTML query must answer with the HTML credential even though a
+        // Basic item shares the identical signon realm.
+        let html_credentials = session
+            .login_credentials(Some(collide_realm), Some(0))
+            .expect("html credential read");
+        assert_eq!(1, html_credentials.len());
+        assert_eq!(
+            0,
+            html_credentials[0]
+                .form_details
+                .as_ref()
+                .expect("html form details")
+                .scheme
+        );
+
+        // The Basic query must resolve the HTTP-auth credential, not the HTML
+        // one sharing the realm.
+        let basic_credentials = session
+            .login_credentials(Some(collide_realm), Some(1))
+            .expect("basic credential read");
+        assert_eq!(1, basic_credentials.len());
+        assert_eq!(
+            1,
+            basic_credentials[0]
+                .form_details
+                .as_ref()
+                .expect("basic form details")
+                .scheme
+        );
+
+        // Legacy callers without a scheme keep the stored-realm inference.
+        let inferred = session
+            .login_credentials(Some(collide_realm), None)
+            .expect("inferred credential read");
+        assert_eq!(1, inferred.len());
+
+        drop(session);
+        free_core(core, &path);
+    }
     fn vault_secret_buffer_free_accepts_owned_secret_buffer() {
         let secret = CString::new("miri-secret-buffer").expect("test secret has no NUL");
         let raw = secret.into_raw();
@@ -1308,7 +1784,7 @@ mod vault_ffi_tests {
         // SAFETY: null core is an explicitly supported boundary input.
         assert!(unsafe { maho_vault_initialize_json(ptr::null_mut(), init.as_ptr()) }.is_null());
 
-        let (core, path) = core_with_storage();
+        let (_key_lock, core, path) = core_with_storage();
         // SAFETY: `core` is live and the invalid bytes are NUL-terminated.
         let response =
             read_owned_json(unsafe { maho_vault_initialize_json(core, invalid_utf8.as_ptr()) });
@@ -1339,7 +1815,7 @@ mod vault_ffi_tests {
 
     #[test]
     fn core_tick_at_drives_vault_auto_lock_deterministically() {
-        let (core, path) = core_with_storage();
+        let (_key_lock, core, path) = core_with_storage();
         let init = initialize_request();
         // SAFETY: the core and request are valid for the duration of this call.
         assert_eq!(
@@ -1370,7 +1846,7 @@ mod vault_ffi_tests {
 
     #[test]
     fn vault_ffi_uses_profile_owned_durable_lifecycle() {
-        let (core, path) = core_with_storage();
+        let (_key_lock, core, path) = core_with_storage();
         let init = initialize_request();
         // SAFETY: the core and request are valid for the duration of this call.
         assert_eq!(
@@ -1412,7 +1888,7 @@ mod vault_ffi_tests {
 
     #[test]
     fn vault_ffi_crud_returns_metadata_and_keeps_secret_out_of_queries() {
-        let (core, path) = core_with_storage();
+        let (_key_lock, core, path) = core_with_storage();
         let init = initialize_request();
         // SAFETY: the core and request are valid for the duration of this call.
         assert_eq!(

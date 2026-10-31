@@ -5,10 +5,14 @@
 mod add;
 mod audit;
 mod mutate;
+mod parity;
 mod policy;
 mod query;
 mod shared;
+mod sync;
 mod use_secret;
+
+pub(crate) use sync::{vault_item_storage_row_from_dto, vault_item_sync_dto_from_row};
 
 #[cfg(test)]
 mod tests;

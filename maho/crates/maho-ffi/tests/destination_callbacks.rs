@@ -330,3 +330,37 @@ fn destination_persists_foldered_tab_title_after_reopen() {
     assert_eq!(loaded_title, imported_title);
     unsafe { maho_ffi::maho_core_free(reopened) };
 }
+
+// Importers hand over whatever the source browser stored: Arc keeps icon
+// *names* ("bulb") next to real emoji. The destination must apply the icon and
+// maho-core must canonicalize names, or every shell renders the raw word.
+#[test]
+fn destination_create_space_applies_canonical_icon() {
+    let storage = tempfile::tempdir().unwrap();
+    let path = CString::new(storage.path().to_string_lossy().as_bytes()).unwrap();
+    let core = unsafe { maho_ffi::maho_core_new_with_storage(path.as_ptr()) };
+    assert!(!core.is_null());
+
+    let (emoji_space, named_space) = {
+        let destination = unsafe { MahoCoreDestination::new(core) };
+        (
+            destination
+                .create_space("Fictional Emoji Space", "#336699", "\u{1F680}")
+                .unwrap(),
+            destination
+                .create_space("Fictional Named Space", "#336699", "bulb")
+                .unwrap(),
+        )
+    };
+
+    let icons: std::collections::HashMap<String, Option<String>> = unsafe {
+        (&*core)
+            .get_space_view_models()
+            .into_iter()
+            .map(|space| (space.id.0, space.icon))
+            .collect()
+    };
+    assert_eq!(icons[&emoji_space].as_deref(), Some("\u{1F680}"));
+    assert_eq!(icons[&named_space].as_deref(), Some("\u{1F4A1}"));
+    unsafe { maho_ffi::maho_core_free(core) };
+}

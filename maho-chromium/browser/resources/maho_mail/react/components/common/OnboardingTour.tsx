@@ -97,7 +97,7 @@ export function OnboardingTour({ forceShow, onComplete }: OnboardingTourProps) {
           <button
             type="button"
             onClick={complete}
-            className="rounded-lg p-1 text-muted-foreground transition-colors hover:bg-card hover:text-muted-foreground"
+            className="mail-pressable flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Skip tour"
             title="Skip tour"
           >
@@ -113,7 +113,7 @@ export function OnboardingTour({ forceShow, onComplete }: OnboardingTourProps) {
             {TOUR_STEPS.map((_, i) => (
               <div
                 key={i}
-                className={`h-1.5 rounded-full transition-all ${
+                className={`h-1.5 rounded-full transition-[width,background-color] duration-200 ${
                   i === step ? "w-6 bg-primary" : "w-1.5 bg-muted"
                 }`}
               />
@@ -125,7 +125,7 @@ export function OnboardingTour({ forceShow, onComplete }: OnboardingTourProps) {
               <button
                 type="button"
                 onClick={prev}
-                className="flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+                className="mail-pressable flex h-9 items-center gap-1 rounded-lg px-3 text-sm text-muted-foreground hover:bg-surface-hover hover:text-foreground"
               >
                 <ChevronLeft size={14} /> Back
               </button>
@@ -133,7 +133,7 @@ export function OnboardingTour({ forceShow, onComplete }: OnboardingTourProps) {
             <button
               type="button"
               onClick={next}
-              className="flex items-center gap-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/80"
+              className="mail-pressable flex h-9 items-center gap-1 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90"
             >
               {isLast ? "Get Started" : "Next"} {!isLast && <ChevronRight size={14} />}
             </button>

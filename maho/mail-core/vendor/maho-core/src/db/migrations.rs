@@ -2,6 +2,14 @@ use rusqlite::Connection;
 
 use crate::error::AppError;
 
+#[path = "calendar_date_migration.rs"]
+mod calendar_date_migration;
+use calendar_date_migration::migrate_v55;
+
+#[cfg(test)]
+#[path = "queue_identity_review_tests.rs"]
+mod queue_identity_review_tests;
+
 pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
     let current_version = get_schema_version(conn);
     let mut ver = current_version;
@@ -11,15 +19,26 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
             if ver < $v {
                 conn.execute("BEGIN IMMEDIATE TRANSACTION;", [])
                     .map_err(AppError::Database)?;
-                match $mig(conn) {
-                    Ok(_) => {
-                        conn.execute("COMMIT TRANSACTION;", [])
-                            .map_err(AppError::Database)?;
-                        ver = $v;
-                    }
-                    Err(e) => {
-                        let _ = conn.execute("ROLLBACK TRANSACTION;", []);
-                        return Err(e);
+                // Re-read the applied version under the write lock. The first
+                // read happens before any lock is held, so another connection
+                // -- a second mail helper generation, or another member of the
+                // same pool -- can apply this step in between; replaying it
+                // then fails with "duplicate column name" and aborts startup.
+                ver = get_schema_version(conn);
+                if ver >= $v {
+                    conn.execute("COMMIT TRANSACTION;", [])
+                        .map_err(AppError::Database)?;
+                } else {
+                    match $mig(conn) {
+                        Ok(_) => {
+                            conn.execute("COMMIT TRANSACTION;", [])
+                                .map_err(AppError::Database)?;
+                            ver = $v;
+                        }
+                        Err(e) => {
+                            let _ = conn.execute("ROLLBACK TRANSACTION;", []);
+                            return Err(e);
+                        }
                     }
                 }
             }
@@ -77,8 +96,75 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
     run_mig!(50, migrate_v50);
     run_mig!(51, migrate_v51);
     run_mig!(52, migrate_v52);
+    run_mig!(53, migrate_v53);
+    run_mig!(54, migrate_v54);
+    run_mig!(55, migrate_v55);
+    run_mig!(56, migrate_v56);
+    run_mig!(57, migrate_v57);
 
     let _ = ver;
+    Ok(())
+}
+
+fn migrate_v57(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "ALTER TABLE folders ADD COLUMN reconciliation_version INTEGER NOT NULL DEFAULT 0;
+         INSERT INTO schema_version(version) VALUES(57);",
+    )?;
+    Ok(())
+}
+
+fn migrate_v56(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "ALTER TABLE folders ADD COLUMN reconciliation_uid INTEGER NOT NULL DEFAULT 0;
+         INSERT INTO schema_version(version) VALUES(56);",
+    )?;
+    Ok(())
+}
+
+fn migrate_v54(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE pending_mutations_v54 (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            email_uid INTEGER,
+            folder_path TEXT,
+            mutation_type TEXT NOT NULL CHECK(mutation_type IN (
+                'mark_read', 'mark_unread', 'star', 'unstar', 'move', 'delete',
+                'calendar_rsvp', 'calendar_rsvp_reply',
+                'calendar_create', 'calendar_update', 'calendar_delete'
+            )),
+            target_folder TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            calendar_event_id TEXT,
+            payload_json TEXT,
+            UNIQUE(account_id, folder_path, email_uid, mutation_type)
+        );
+        INSERT INTO pending_mutations_v54
+            (id, account_id, email_uid, folder_path, mutation_type, target_folder,
+             created_at, calendar_event_id, payload_json)
+            SELECT id, account_id, email_uid, folder_path, mutation_type,
+                   target_folder, created_at, calendar_event_id, payload_json
+            FROM pending_mutations;
+        DROP TABLE pending_mutations;
+        ALTER TABLE pending_mutations_v54 RENAME TO pending_mutations;
+        CREATE INDEX idx_pending_mutations_account ON pending_mutations(account_id);
+        CREATE INDEX idx_pending_mutations_cal_event ON pending_mutations(calendar_event_id)
+            WHERE calendar_event_id IS NOT NULL;
+        CREATE UNIQUE INDEX uniq_pending_mutations_cal
+            ON pending_mutations(account_id, calendar_event_id, mutation_type)
+            WHERE calendar_event_id IS NOT NULL;
+        INSERT INTO schema_version (version) VALUES (54);",
+    )?;
+    Ok(())
+}
+
+fn migrate_v53(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "ALTER TABLE emails ADD COLUMN email_references TEXT;
+         ALTER TABLE emails ADD COLUMN read_receipt INTEGER;
+         INSERT INTO schema_version (version) VALUES (53);",
+    )?;
     Ok(())
 }
 

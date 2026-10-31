@@ -12,6 +12,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -85,6 +86,9 @@ class MahoMcpPipeServer : public base::win::ObjectWatcher::Delegate {
   void OnObjectSignaled(HANDLE object) override;
 
  private:
+  friend class MahoMcpPipeServerWinTest;
+  friend class MahoMcpPipeMemoryThreadTest;
+
   struct PipeConnection {
     PipeConnection();
     ~PipeConnection();
@@ -97,12 +101,26 @@ class MahoMcpPipeServer : public base::win::ObjectWatcher::Delegate {
     uint64_t connection_id = 0;
 
     base::win::ScopedHandle pipe_handle;
-    std::unique_ptr<MahoMcpSession> session;
+    std::shared_ptr<MahoMcpSession> session;
 
     OVERLAPPED read_overlapped = {};
     base::win::ScopedHandle read_event;
     base::win::ObjectWatcher read_watcher;
     std::vector<char> read_buffer;
+    std::string ingress;
+    size_t ingress_scan_offset = 0;
+    bool read_in_progress = false;
+    bool request_in_progress = false;
+    bool admission_paused = false;
+    uint64_t next_request_id = 1;
+    struct Reservation {
+      size_t bytes;
+      bool large;
+      bool replied;
+    };
+    std::map<uint64_t, Reservation> reservations;
+    size_t ordinary_bytes = 0;
+    bool large_result_pending = false;
 
     // Ordered write queue. Only one write is in flight at a time;
     // `write_offset` tracks bytes of the front buffer already written
@@ -112,6 +130,7 @@ class MahoMcpPipeServer : public base::win::ObjectWatcher::Delegate {
     base::win::ScopedHandle write_event;
     base::win::ObjectWatcher write_watcher;
     base::circular_deque<std::string> write_queue;
+    base::circular_deque<uint64_t> write_request_ids;
     size_t write_offset = 0;
     bool write_in_progress = false;
     // When the session has transitioned to kClosed, close the connection once
@@ -130,9 +149,15 @@ class MahoMcpPipeServer : public base::win::ObjectWatcher::Delegate {
 
   void BeginRead(uint64_t connection_id);
   void OnReadComplete(uint64_t connection_id);
+  void PumpRequests(uint64_t connection_id);
   void OnResponsesReady(uint64_t connection_id,
+                        uint64_t request_id,
+                        bool expects_response,
                         std::vector<std::string> responses);
-  void OnDeferredResponse(uint64_t connection_id, std::string response);
+  void OnDeferredResponse(uint64_t connection_id,
+                          uint64_t request_id,
+                          std::string response);
+  void FinishWrite(PipeConnection& connection);
 
   void MaybeWriteNext(uint64_t connection_id);
   void OnWriteComplete(uint64_t connection_id);
@@ -148,7 +173,7 @@ class MahoMcpPipeServer : public base::win::ObjectWatcher::Delegate {
 
   // Session token for DPAPI authentication (not owned).
   raw_ptr<MahoMcpSessionToken> session_token_;
-  std::unique_ptr<MahoMcpLeaseRegistry> lease_registry_;
+  std::shared_ptr<MahoMcpLeaseRegistry> lease_registry_;
 
   // Listening pipe state.
   base::win::ScopedHandle listen_handle_;

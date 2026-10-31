@@ -10,6 +10,8 @@
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "maho/browser/maho_private_context_policy.h"  // nogncheck
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -18,8 +20,13 @@
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget_observer.h"
+
+namespace content {
+class NavigationHandle;
+}
 
 class Browser;
 
@@ -37,7 +44,10 @@ class MahoCommandOverlayView;
 class MahoCommandOverlayController : public views::WidgetObserver,
                                      public ui::EventObserver,
                                      public ui::AcceleratorTarget,
-                                     public gfx::AnimationDelegate {
+                                     public gfx::AnimationDelegate,
+                                     public content::WebContentsObserver,
+                                     public TabStripModelObserver,
+                                     public views::FocusChangeListener {
  public:
   explicit MahoCommandOverlayController(Browser* browser);
   MahoCommandOverlayController(const MahoCommandOverlayController&) = delete;
@@ -74,6 +84,24 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   // ui::AcceleratorTarget:
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
   bool CanHandleAccelerators() const override;
+
+  // content::WebContentsObserver:
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
+
+  // TabStripModelObserver:
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override;
+  void OnTabStripModelDestroyed(TabStripModel* tab_strip_model) override;
+
+  // views::FocusChangeListener:
+  void OnWillChangeFocus(views::View* focused_before,
+                         views::View* focused_now) override;
+  void OnDidChangeFocus(views::View* focused_before,
+                        views::View* focused_now) override;
+  void OnFocusManagerDestroying(views::FocusManager* focus_manager) override;
 
   // gfx::AnimationDelegate:
   void AnimationProgressed(const gfx::Animation* animation) override;
@@ -126,6 +154,9 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   // Guards OnWidgetActivationChanged against the synchronous activation↔focus
   // re-entrancy that otherwise recurses until the stack overflows.
   bool handling_activation_change_ = false;
+  // Unit tests have no active browser window; this stands in for
+  // GetActiveBrowser() so deactivation-dismiss logic can be exercised.
+  bool treat_chrome_window_active_for_testing_ = false;
 
   std::unique_ptr<views::EventMonitor> event_monitor_;
   raw_ptr<views::FocusManager> esc_target_focus_manager_ = nullptr;

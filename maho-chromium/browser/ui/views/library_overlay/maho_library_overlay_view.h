@@ -4,6 +4,7 @@
 #define MAHO_BROWSER_UI_VIEWS_LIBRARY_OVERLAY_MAHO_LIBRARY_OVERLAY_VIEW_H_
 
 #include <string>
+#include <utility>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -44,6 +45,14 @@ class MahoLibraryOverlayView : public views::View {
   Category category() const { return category_; }
   void SetCategory(Category category);
   void SetPalette(const MahoSidebarPalette& palette);
+  // Invoked from OnThemeChanged() to pull the docked rail's authoritative
+  // snapshot. This overlay lives in its own top-level widget, so Chromium
+  // delivers its theme change independently of the rail's; without the pull the
+  // widget can repaint from a snapshot the rail has already replaced.
+  void set_palette_refresh_callback(base::RepeatingClosure callback) {
+    palette_refresh_callback_ = std::move(callback);
+  }
+  bool palette_opaque_for_testing() const { return palette_.opaque; }
 
   void DismissOverlay();
 
@@ -73,6 +82,7 @@ class MahoLibraryOverlayView : public views::View {
   raw_ptr<MahoSidebarArchiveView> archive_view_ = nullptr;
   raw_ptr<MahoSidebarDownloadsView> downloads_view_ = nullptr;
   MahoSidebarPalette palette_;
+  base::RepeatingClosure palette_refresh_callback_;
 
   base::WeakPtrFactory<MahoLibraryOverlayView> weak_ptr_factory_{this};
 };

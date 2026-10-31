@@ -10,6 +10,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/base/class_property.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
@@ -29,6 +30,9 @@
 namespace maho {
 
 namespace {
+
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(views::BubbleDialogDelegate,
+                                 kPreviewDelegateKey)
 
 constexpr base::TimeDelta kTabPreviewShowDelay = base::Milliseconds(225);
 constexpr int kPreviewCornerRadius = 12;
@@ -94,7 +98,7 @@ MahoTabPreviewController::~MahoTabPreviewController() {
 
 void MahoTabPreviewController::ShowPreview(views::View* anchor_view,
                                            int tab_index) {
-  TabStripModel* tab_strip_model = browser_ ? browser_->tab_strip_model() : nullptr;
+  TabStripModel* tab_strip_model = browser_ ? browser_->GetTabStripModel() : nullptr;
   if (!tab_strip_model || !anchor_view || !tab_strip_model->ContainsIndex(tab_index) ||
       tab_index == tab_strip_model->active_index()) {
     HidePreview();
@@ -140,7 +144,7 @@ bool MahoTabPreviewController::IsShowingForTesting() const {
 
 void MahoTabPreviewController::ShowPreviewNow() {
   views::View* anchor_view = anchor_view_tracker_ ? anchor_view_tracker_->view() : nullptr;
-  TabStripModel* tab_strip_model = browser_ ? browser_->tab_strip_model() : nullptr;
+  TabStripModel* tab_strip_model = browser_ ? browser_->GetTabStripModel() : nullptr;
   if (!anchor_view || !tab_strip_model ||
       !tab_strip_model->ContainsIndex(pending_tab_index_) ||
       pending_tab_index_ == tab_strip_model->active_index()) {
@@ -168,13 +172,14 @@ void MahoTabPreviewController::ShowPreviewNow() {
   bubble->set_close_on_deactivate(false);
   bubble->SetContentsView(BuildBubbleContents(title, url_text));
 
-  views::Widget* widget = views::BubbleDialogDelegate::CreateBubble(
-      std::move(bubble));
+  views::Widget* widget = views::BubbleDialogDelegate::CreateBubbleDeprecated(
+      bubble.get(), views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   if (!widget) {
     HidePreview();
     return;
   }
 
+  widget->SetProperty(kPreviewDelegateKey, std::move(bubble));
   bubble_widget_ = widget;
   bubble_widget_observation_.Observe(widget);
   preview_title_for_testing_ = title;
@@ -189,7 +194,7 @@ void MahoTabPreviewController::ResetAnchorView() {
 }
 
 std::u16string MahoTabPreviewController::GetUrlTextForTab(int tab_index) const {
-  TabStripModel* tab_strip_model = browser_ ? browser_->tab_strip_model() : nullptr;
+  TabStripModel* tab_strip_model = browser_ ? browser_->GetTabStripModel() : nullptr;
   if (!tab_strip_model || !tab_strip_model->ContainsIndex(tab_index)) {
     return std::u16string();
   }

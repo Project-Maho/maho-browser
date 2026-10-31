@@ -8,6 +8,8 @@ pub struct SearchQuery {
     pub query: String,
     pub account_id: Option<String>,
     pub folder_id: Option<String>,
+    /// Mailbox name/path/type from `in:`, distinct from an explicit folder ID.
+    pub mailbox: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
     // Structured filters — applied as SQL WHERE, NOT passed to FTS

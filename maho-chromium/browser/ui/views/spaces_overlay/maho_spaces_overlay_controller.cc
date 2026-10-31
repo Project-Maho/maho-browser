@@ -9,6 +9,7 @@
 #include "maho_spaces_overlay_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/animation/tween.h"
@@ -98,6 +99,9 @@ void MahoSpacesOverlayController::Show(views::Widget* parent_widget) {
           },
           weak_factory_.GetWeakPtr()));
   overlay_view->SetPalette(palette_);
+  overlay_view->set_palette_refresh_callback(base::BindRepeating(
+      &MahoSpacesOverlayController::RefreshPaletteFromSidebar,
+      base::Unretained(this)));
 
   widget_ = std::make_unique<views::Widget>();
   views::Widget::InitParams params(
@@ -154,6 +158,21 @@ void MahoSpacesOverlayController::SetPalette(
   if (overlay_view_) {
     overlay_view_->SetPalette(palette_);
   }
+}
+
+void MahoSpacesOverlayController::RefreshPaletteFromSidebar() {
+  if (!sidebar_container_) {
+    return;
+  }
+  auto* sidebar = views::AsViewClass<MahoSidebarView>(
+      sidebar_container_->sidebar_view());
+  if (!sidebar) {
+    return;
+  }
+  // The rail is the palette authority; re-apply its live snapshot so this
+  // widget's own theme-change notification can never leave the overlay painted
+  // from a palette the rail has already replaced.
+  SetPalette(sidebar->sidebar_palette());
 }
 
 void MahoSpacesOverlayController::Dismiss(DismissReason reason) {

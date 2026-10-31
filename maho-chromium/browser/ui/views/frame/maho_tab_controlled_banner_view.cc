@@ -120,6 +120,9 @@ MahoTabControlledBannerView::MahoTabControlledBannerView(StopCallback stop_callb
       views::style::CONTEXT_LABEL,
       views::style::STYLE_PRIMARY);
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  // The banner widget is translucent and paints into its own layer, so the
+  // subpixel opacity assumption in Label does not hold for this surface.
+  label->SetSkipSubpixelRenderingOpacityCheck(true);
   label_ = AddChildView(std::move(label));
 
   auto stop_button = std::make_unique<views::MdTextButton>(

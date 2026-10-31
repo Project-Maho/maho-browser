@@ -53,9 +53,7 @@ MahoSpacesOverlayTabRowView::MahoSpacesOverlayTabRowView(
 
   favicon_view_ = AddChildView(std::make_unique<views::ImageView>());
   favicon_view_->SetPreferredSize(gfx::Size(kGlyphSizeDp, kGlyphSizeDp));
-  favicon_view_->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kGlobeIcon, ui::kColorSysOnSurfaceSubtle,
-      kGlyphSizeDp));
+  // The globe placeholder is painted from the palette in UpdateColors().
 
   if (profile && !tab_.url.empty()) {
     favicon::FaviconService* service =
@@ -131,6 +129,7 @@ MahoSpacesOverlayTabRowView::~MahoSpacesOverlayTabRowView() = default;
 void MahoSpacesOverlayTabRowView::OnFaviconLoaded(
     const favicon_base::FaviconImageResult& result) {
   if (!result.image.IsEmpty() && favicon_view_) {
+    favicon_loaded_ = true;
     favicon_view_->SetImage(ui::ImageModel::FromImageSkia(result.image.AsImageSkia()));
   }
 }
@@ -155,15 +154,20 @@ void MahoSpacesOverlayTabRowView::UpdateColors() {
   }
   SetBorder(nullptr);
 
+  if (!favicon_loaded_) {
+    favicon_view_->SetImage(ui::ImageModel::FromVectorIcon(
+        vector_icons::kGlobeIcon, palette_.neutral_glyph, kGlyphSizeDp));
+  }
   title_label_->SetEnabledColor(palette_.primary_text);
-  subtitle_label_->SetEnabledColor(palette_.tertiary_text);
+  // Subtitle and status chips are readable text: secondary role.
+  subtitle_label_->SetEnabledColor(palette_.secondary_text);
 
   for (views::View* chip : chip_row_->children()) {
     chip->SetBackground(nullptr);
     chip->SetBorder(nullptr);
   }
   for (views::Label* label : chip_labels_) {
-    label->SetEnabledColor(palette_.tertiary_text);
+    label->SetEnabledColor(palette_.secondary_text);
   }
 }
 

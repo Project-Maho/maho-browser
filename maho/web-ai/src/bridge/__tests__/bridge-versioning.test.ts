@@ -17,8 +17,8 @@ function respondTo(id: string, result: unknown) {
   );
 }
 
-// Skipped: Protocol v2 does not use version field or handshake queueing anymore.
-describe.skip('version field in outgoing requests', () => {
+// Protocol v2 sends JSON-RPC immediately, without a legacy version field or handshake.
+describe('version field in outgoing requests', () => {
   const rpcSpy = vi.fn<(json: string) => void>();
 
   beforeEach(() => {
@@ -36,7 +36,7 @@ describe.skip('version field in outgoing requests', () => {
     delete (window as unknown as { MahoBridgeAndroid?: unknown }).MahoBridgeAndroid;
   });
 
-  it('includes version: "1.0" in every outgoing JSON-RPC envelope', async () => {
+  it('uses JSON-RPC 2.0 without a legacy version field', async () => {
     const promise = call<string[]>('byokGetProviders');
 
     expect(rpcSpy).toHaveBeenCalledOnce();
@@ -47,7 +47,7 @@ describe.skip('version field in outgoing requests', () => {
       id: string;
     };
 
-    expect(sent.version).toBe('1.0');
+    expect(sent.version).toBeUndefined();
     expect(sent.jsonrpc).toBe('2.0');
 
     respondTo(sent.id, ['openai']);
@@ -55,7 +55,7 @@ describe.skip('version field in outgoing requests', () => {
   });
 });
 
-describe.skip('version mismatch response', () => {
+describe('version mismatch response', () => {
   const rpcSpy = vi.fn<(json: string) => void>();
 
   beforeEach(() => {
@@ -98,7 +98,7 @@ describe.skip('version mismatch response', () => {
   });
 });
 
-describe.skip('bridge ready handshake — queue drain', () => {
+describe('requests without a legacy ready handshake', () => {
   const rpcSpy = vi.fn<(json: string) => void>();
 
   beforeEach(() => {
@@ -115,11 +115,11 @@ describe.skip('bridge ready handshake — queue drain', () => {
     delete (window as unknown as { MahoBridgeAndroid?: unknown }).MahoBridgeAndroid;
   });
 
-  it('queues calls made before __mahoBridgeReady and drains them in FIFO order', async () => {
+  it('sends calls immediately in FIFO order and does not replay them on ready', async () => {
     const p1 = call<string[]>('byokGetProviders');
     const p2 = call<boolean>('byokValidateKey', { provider: 'openai', key: 'sk-test' });
 
-    expect(rpcSpy).not.toHaveBeenCalled();
+    expect(rpcSpy).toHaveBeenCalledTimes(2);
 
     window.dispatchEvent(new CustomEvent('__mahoBridgeReady'));
 
@@ -136,7 +136,7 @@ describe.skip('bridge ready handshake — queue drain', () => {
   });
 });
 
-describe.skip('bridge ready handshake — timeout', () => {
+describe('request deadline without a legacy ready handshake', () => {
   const rpcSpy = vi.fn<(json: string) => void>();
 
   beforeEach(() => {
@@ -156,15 +156,15 @@ describe.skip('bridge ready handshake — timeout', () => {
     _resetBridgeStateForTest();
   });
 
-  it('rejects all queued promises after 5s if __mahoBridgeReady never fires', async () => {
-    const p1 = call<string[]>('byokGetProviders');
-    const p2 = call<boolean>('byokDeleteKey', { provider: 'anthropic' });
+  it('rejects sent requests at their individual deadlines if native never responds', async () => {
+    const p1 = call<string[]>('byokGetProviders', undefined, { timeoutMs: 5000 });
+    const p2 = call<boolean>('byokDeleteKey', { provider: 'anthropic' }, { timeoutMs: 5000 });
+    const firstFailure = expect(p1).rejects.toThrow('rpc_timeout');
+    const secondFailure = expect(p2).rejects.toThrow('rpc_timeout');
 
-    expect(rpcSpy).not.toHaveBeenCalled();
+    expect(rpcSpy).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(5000);
 
-    vi.advanceTimersByTime(5001);
-
-    await expect(p1).rejects.toThrow('bridge ready timeout');
-    await expect(p2).rejects.toThrow('bridge ready timeout');
+    await Promise.all([firstFailure, secondFailure]);
   });
 });

@@ -134,6 +134,205 @@ function AISelectionCheck({active}: {readonly active: boolean}) {
   return <Check aria-hidden="true" className="size-3.5 text-primary" />;
 }
 
+// Mandatory scope copy for the quick switcher: it edits the global Default
+// route, so background consumers that inherit Default move with it. The plan
+// (models-settings-redesign §5.2) requires this copy on every Default-model
+// selection surface.
+const DEFAULT_MODEL_SCOPE_COPY =
+    'Changes the default model. Also used by Memory, Tab Tidy, and other background features unless they have their own model override.';
+
+function AISelectionScopeCopy() {
+  return (
+    <p className="px-2 pb-1 pt-0.5 text-[10px] leading-snug text-muted-foreground"
+        data-ai-selection-scope-copy>
+      {DEFAULT_MODEL_SCOPE_COPY}
+    </p>
+  );
+}
+
+interface ModelPickerEntry {
+  readonly model: AIModelOptionRecord;
+  readonly provider: AIProviderOptionRecord;
+}
+
+// Every whitespace-separated token must appear in the model label, id, or
+// provider label, so "opus 4" and "claude 6" both narrow the list.
+function modelMatchesQuery(entry: ModelPickerEntry, query: string): boolean {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return true;
+  }
+  const haystack =
+      `${getModelLabel(entry.model)} ${entry.model.id} ${entry.provider.label}`.toLowerCase();
+  return tokens.every(token => haystack.includes(token));
+}
+
+// Searchable model picker: a search field above a flat list of every model
+// across configured providers. Picking a model from another provider switches
+// the provider with it.
+function ModelSearchLevel({activeModel, activeProvider, onSelect, providers, value}: {
+  readonly activeModel: AIModelOptionRecord|null;
+  readonly activeProvider: AIProviderOptionRecord|null;
+  readonly onSelect: (entry: ModelPickerEntry) => void;
+  readonly providers: readonly AIProviderOptionRecord[];
+  readonly value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [highlighted, setHighlighted] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  const entries: ModelPickerEntry[] = providers.flatMap(
+      provider => provider.modelOptions.map(model => ({model, provider})));
+  const showProvider = providers.filter(p => p.modelOptions.length > 0).length > 1;
+  const filtered = entries.filter(entry => modelMatchesQuery(entry, query));
+  const highlightIndex = Math.min(highlighted, Math.max(filtered.length - 1, 0));
+  const isActive = (entry: ModelPickerEntry) =>
+      entry.provider.id === activeProvider?.id && entry.model.id === activeModel?.id;
+  const optionId = (index: number) => `ai-model-option-${index}`;
+
+  const onOpenChange = (next: boolean) => {
+    setOpen(next);
+    setQuery('');
+    if (next) {
+      const activeIndex = entries.findIndex(isActive);
+      setHighlighted(activeIndex >= 0 ? activeIndex : 0);
+    }
+  };
+
+  const select = (entry: ModelPickerEntry) => {
+    onOpenChange(false);
+    onSelect(entry);
+  };
+
+  const moveHighlight = (index: number) => {
+    setHighlighted(index);
+    listRef.current?.querySelector<HTMLElement>(`#${optionId(index)}`)
+        ?.scrollIntoView({block: 'nearest'});
+  };
+
+  const onSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (filtered.length === 0) {
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveHighlight((highlightIndex + 1) % filtered.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveHighlight((highlightIndex - 1 + filtered.length) % filtered.length);
+    } else if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      const entry = filtered[highlightIndex];
+      if (entry) {
+        select(entry);
+      }
+    }
+  };
+
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
+        <button
+          className={cn(
+              'inline-flex h-6 min-w-0 max-w-[9rem] shrink items-center gap-0.5 rounded-md panel-chip pl-[7px] pr-[5px]',
+              'text-[11px] font-medium tracking-[-0.004em] outline-none',
+              'focus-visible:ring-1 focus-visible:ring-ring',
+              open && 'bg-surface-selected text-foreground')}
+          aria-label="Default model"
+          title="Default model"
+          data-ai-selection-level="model"
+          type="button">
+          <span className="truncate">{value}</span>
+          <ChevronDown aria-hidden="true" className="size-2.5 shrink-0 opacity-55" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+          align="start"
+          aria-label="model options"
+          className="flex w-60 flex-col overflow-hidden rounded-xl panel-card-raised p-1"
+          onOpenAutoFocus={event => {
+            // Land focus in the search field instead of the first option.
+            event.preventDefault();
+            (event.currentTarget as HTMLElement | null)
+                ?.querySelector<HTMLInputElement>('input[data-ai-model-search]')?.focus();
+          }}
+          side="top">
+        <div className="flex h-8 shrink-0 items-center gap-2 px-2">
+          <Search aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            aria-activedescendant={filtered.length > 0 ? optionId(highlightIndex) : undefined}
+            aria-autocomplete="list"
+            aria-controls="ai-model-listbox"
+            aria-expanded="true"
+            aria-label="Search models"
+            autoComplete="off"
+            className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
+            data-ai-model-search
+            placeholder="Search models"
+            role="combobox"
+            spellCheck={false}
+            type="text"
+            value={query}
+            onChange={event => {
+              setQuery(event.target.value);
+              setHighlighted(0);
+            }}
+            onKeyDown={onSearchKeyDown}
+          />
+        </div>
+        <div
+          ref={listRef}
+          aria-label="Models"
+          className="grid max-h-72 gap-px overflow-y-auto pt-1"
+          id="ai-model-listbox"
+          role="listbox">
+          {entries.length === 0 ? (
+            <div className="px-2.5 py-2 text-xs text-muted-foreground">No models available</div>
+          ) : filtered.length === 0 ? (
+            <div className="px-2.5 py-2 text-xs text-muted-foreground">No matching models</div>
+          ) : (
+            filtered.map((entry, index) => {
+              const active = isActive(entry);
+              return (
+                <button
+                  key={`${entry.provider.id}/${entry.model.id}`}
+                  aria-selected={active}
+                  className={cn(
+                      'flex h-8 w-full shrink-0 items-center gap-2 rounded-lg px-2.5 text-left text-[13px] text-foreground outline-none',
+                      index === highlightIndex && 'bg-surface-selected')}
+                  data-ai-selection-model={entry.model.id}
+                  data-ai-selection-model-provider={entry.provider.id}
+                  id={optionId(index)}
+                  role="option"
+                  tabIndex={-1}
+                  title={getModelLabel(entry.model)}
+                  type="button"
+                  onClick={() => select(entry)}
+                  onMouseMove={() => {
+                    if (index !== highlightIndex) {
+                      setHighlighted(index);
+                    }
+                  }}>
+                  <span className="min-w-0 flex-1 truncate">{getModelLabel(entry.model)}</span>
+                  {showProvider ? (
+                    <span className="max-w-[40%] shrink-0 truncate text-[11px] text-muted-foreground">
+                      {entry.provider.label}
+                    </span>
+                  ) : null}
+                  <AISelectionCheck active={active} />
+                </button>
+              );
+            })
+          )}
+        </div>
+        <div className="mt-1 border-t border-border/60 pt-1">
+          <AISelectionScopeCopy />
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function AISelectionLevel({children, label, value}: {
   readonly children: ReactNode;
   readonly label: 'provider'|'model'|'thinking';
@@ -149,6 +348,8 @@ function AISelectionLevel({children, label, value}: {
               'text-[11px] font-medium tracking-[-0.004em] outline-none',
               'focus-visible:ring-1 focus-visible:ring-ring',
               open && 'bg-surface-selected text-foreground')}
+          aria-label={label === 'model' ? 'Default model' : label}
+          title={label === 'model' ? 'Default model' : undefined}
           data-ai-selection-level={label}
           type="button">
           <span className="truncate">{value}</span>
@@ -181,7 +382,7 @@ export function AISelectionLevels({handlers, state}: {
     selection: {
       providerId: provider?.id || '',
       modelId: model?.id || '',
-      reasoningEffort: reasoning?.effort || AI_REASONING_EFFORT.kMedium,
+      reasoningEffort: reasoning?.effort ?? AI_REASONING_EFFORT.kMedium,
       ...selection,
     },
   });
@@ -202,20 +403,13 @@ export function AISelectionLevels({handlers, state}: {
           <div className="p-2 text-xs text-muted-foreground">No providers configured</div>
         )}
       </AISelectionLevel>
-      <AISelectionLevel label="model" value={model ? getModelLabel(model) : (provider ? 'Model' : 'Not configured')}>
-        {provider && provider.modelOptions.length > 0 ? (
-          provider.modelOptions.map(option => (
-            <button key={option.id} className={itemClassName}
-              data-ai-selection-model={option.id} type="button"
-              onClick={() => commit({modelId: option.id})}>
-              <span className="truncate">{getModelLabel(option)}</span>
-              <AISelectionCheck active={option.id === model?.id} />
-            </button>
-          ))
-        ) : (
-          <div className="p-2 text-xs text-muted-foreground">No models available</div>
-        )}
-      </AISelectionLevel>
+      <ModelSearchLevel
+        activeModel={model}
+        activeProvider={provider}
+        providers={state.aiSettings.providerOptions}
+        value={model ? getModelLabel(model) : (provider ? 'Model' : 'Not configured')}
+        onSelect={entry => commit({providerId: entry.provider.id, modelId: entry.model.id})}
+      />
       <AISelectionLevel label="thinking" value={reasoning?.label || 'Thinking'}>
         {state.aiSettings.reasoningOptions.map(option => (
           <button key={option.effort} className={itemClassName}
@@ -317,7 +511,8 @@ export function AISelectionDropdownContent(
       <div className="h-px bg-muted" />
 
       <div className="grid gap-1">
-        <div className={aiSelectionLabelClassName}>Model</div>
+        <div className={aiSelectionLabelClassName}>Default model</div>
+        <AISelectionScopeCopy />
         {selectedProvider && selectedProvider.modelOptions.length > 0 ? (
           selectedProvider.modelOptions.map(model => {
             const active = activeProvider?.id === selectedProvider.id &&
@@ -735,6 +930,10 @@ export function Composer(
   });
 
   const handlePickerKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.matches('input, textarea, select') || target.isContentEditable) {
+      return;
+    }
     if (!pickerRef.current) {
       return;
     }

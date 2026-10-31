@@ -146,6 +146,17 @@ function renderMarkdownBody(body: string): string {
   return htmlParts.join('\n');
 }
 
+// Glyphs carry the change type so the surface keeps one neutral ink ramp
+// plus the single violet accent, matching the standalone release-notes sheet.
+const TYPE_GLYPHS: Record<string, string> = {
+  added: '+',
+  fixed: '\u2713',
+  changed: '~',
+  removed: '\u2212',
+};
+
+const TALLY_ORDER = ['added', 'fixed', 'changed', 'removed'] as const;
+
 function getBadgeClass(type: string): string {
   switch (type.toLowerCase()) {
     case 'added':
@@ -197,6 +208,45 @@ export function renderReleaseCard(release: ChangelogRelease): HTMLElement {
 
   let hasContent = false;
 
+  // Shape-of-release row: the size of a release reads before any prose does.
+  const tallies = TALLY_ORDER.map(type => ({
+    type,
+    count: (release.sections || [])
+        .filter(section => (section.type || '').toLowerCase() === type)
+        .reduce((sum, section) => sum + (section.items || []).length, 0),
+  })).filter(tally => tally.count > 0);
+
+  if (tallies.length > 0) {
+    hasContent = true;
+    const glance = document.createElement('ul');
+    glance.className = 'glance';
+    const total = tallies.reduce((sum, tally) => sum + tally.count, 0);
+    glance.setAttribute('aria-label', `${total} changes in this release`);
+    for (const tally of tallies) {
+      const cell = document.createElement('li');
+      cell.className = 'tally';
+
+      const glyph = document.createElement('span');
+      glyph.className = 'tally-glyph';
+      glyph.setAttribute('aria-hidden', 'true');
+      glyph.textContent = TYPE_GLYPHS[tally.type] || '\u2022';
+      cell.appendChild(glyph);
+
+      const count = document.createElement('span');
+      count.className = 'tally-count';
+      count.textContent = String(tally.count);
+      cell.appendChild(count);
+
+      const label = document.createElement('span');
+      label.className = 'tally-label';
+      label.textContent = tally.type;
+      cell.appendChild(label);
+
+      glance.appendChild(cell);
+    }
+    card.appendChild(glance);
+  }
+
   // Highlights
   const highlights = release.highlights || [];
   if (highlights.length > 0) {
@@ -206,10 +256,10 @@ export function renderReleaseCard(release: ChangelogRelease): HTMLElement {
 
     const hlTitle = document.createElement('div');
     hlTitle.className = 'highlights-title';
-    hlTitle.textContent = 'Key Highlights';
+    hlTitle.textContent = 'In this release';
     hlBox.appendChild(hlTitle);
 
-    const hlList = document.createElement('ul');
+    const hlList = document.createElement('ol');
     hlList.className = 'item-list';
     for (const item of highlights) {
       const li = document.createElement('li');
@@ -222,6 +272,8 @@ export function renderReleaseCard(release: ChangelogRelease): HTMLElement {
 
   // Sections
   const sections = release.sections || [];
+  const groups = document.createElement('div');
+  groups.className = 'changes-grid';
   for (const section of sections) {
     const items = section.items || [];
     if (items.length === 0) {
@@ -235,9 +287,17 @@ export function renderReleaseCard(release: ChangelogRelease): HTMLElement {
     const changeHeader = document.createElement('div');
     changeHeader.className = 'change-header';
 
+    const type = (section.type || 'general').toLowerCase();
     const badge = document.createElement('span');
-    badge.className = `badge ${getBadgeClass(section.type || 'general')}`;
-    badge.textContent = (section.type || 'NOTE').toUpperCase();
+    badge.className = `badge ${getBadgeClass(type)}`;
+
+    const badgeGlyph = document.createElement('span');
+    badgeGlyph.className = 'change-glyph';
+    badgeGlyph.setAttribute('aria-hidden', 'true');
+    badgeGlyph.textContent = TYPE_GLYPHS[type] || '\u2022';
+    badge.appendChild(badgeGlyph);
+    badge.appendChild(
+        document.createTextNode((section.type || 'NOTE').toUpperCase()));
     changeHeader.appendChild(badge);
 
     if (section.title) {
@@ -246,6 +306,13 @@ export function renderReleaseCard(release: ChangelogRelease): HTMLElement {
       title.textContent = section.title;
       changeHeader.appendChild(title);
     }
+
+    const count = document.createElement('span');
+    count.className = 'change-count';
+    count.textContent = String(items.length);
+    count.setAttribute('aria-label', `${items.length} changes`);
+    changeHeader.appendChild(count);
+
     group.appendChild(changeHeader);
 
     const list = document.createElement('ul');
@@ -256,7 +323,10 @@ export function renderReleaseCard(release: ChangelogRelease): HTMLElement {
       list.appendChild(li);
     }
     group.appendChild(list);
-    card.appendChild(group);
+    groups.appendChild(group);
+  }
+  if (groups.childElementCount > 0) {
+    card.appendChild(groups);
   }
 
   // Body

@@ -1132,13 +1132,13 @@ std::unordered_map<std::string, ChannelHealth> MahoAgentChannelGateway::GetAllHe
 void MahoAgentChannelGateway::SetPersistencePath(base::FilePath path) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   persistence_path_ = std::move(path);
-  persistence_path_str_ = persistence_path_.value();
+  persistence_path_str_ = persistence_path_.AsUTF8Unsafe();
 }
 
 void MahoAgentChannelGateway::SetPersistencePathString(std::string path) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   persistence_path_str_ = std::move(path);
-  persistence_path_ = base::FilePath(persistence_path_str_);
+  persistence_path_ = base::FilePath::FromUTF8Unsafe(persistence_path_str_);
 }
 
 bool MahoAgentChannelGateway::SavePersistence() const {

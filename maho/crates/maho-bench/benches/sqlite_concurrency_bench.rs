@@ -139,7 +139,13 @@ impl Drop for ReaderWorker {
         // Drop task_tx first so the worker's recv() returns Err and loop terminates
         drop(self.task_tx.take());
         if let Some(h) = self.handle.take() {
-            let _ = h.join();
+            if let Err(error) = h.join() {
+                if std::thread::panicking() {
+                    eprintln!("reader worker also panicked while reporting a benchmark failure");
+                } else {
+                    std::panic::resume_unwind(error);
+                }
+            }
         }
     }
 }
@@ -164,6 +170,7 @@ impl ReaderPool {
                     .expect("sync");
                 conn.busy_timeout(Duration::from_millis(2000))
                     .expect("timeout");
+                done_tx.send(()).expect("report reader readiness");
 
                 while task_rx.recv().is_ok() {
                     for i in 0..queries_per_reader {
@@ -184,15 +191,17 @@ impl ReaderPool {
                             .expect("query");
                         let mut count = 0;
                         for r in rows {
-                            if r.is_ok() {
-                                count += 1;
-                            }
+                            r.expect("read query row");
+                            count += 1;
                         }
                         std::hint::black_box(count);
                     }
-                    let _ = done_tx.send(());
+                    done_tx.send(()).expect("report reader completion");
                 }
             });
+            done_rx
+                .recv()
+                .expect("reader must initialize before measurement");
             workers.push(ReaderWorker {
                 task_tx: Some(task_tx),
                 done_rx,
@@ -213,18 +222,22 @@ impl ReaderPool {
                 let storage =
                     SqliteStorage::open_with_key(db_path.to_str().expect("db path"), &key_str)
                         .expect("reader storage");
+                done_tx.send(()).expect("report reader readiness");
 
                 while task_rx.recv().is_ok() {
                     for i in 0..queries_per_reader {
                         let query_pattern = format!("item-{}", (worker_idx * 17 + i * 13) % 200);
                         let results = storage
                             .search_history(&query_pattern, 20)
-                            .unwrap_or_default();
+                            .expect("reader history query");
                         std::hint::black_box(results);
                     }
-                    let _ = done_tx.send(());
+                    done_tx.send(()).expect("report reader completion");
                 }
             });
+            done_rx
+                .recv()
+                .expect("reader must initialize before measurement");
             workers.push(ReaderWorker {
                 task_tx: Some(task_tx),
                 done_rx,
@@ -237,11 +250,13 @@ impl ReaderPool {
     fn execute_round(&self) {
         for w in &self.workers {
             if let Some(ref tx) = w.task_tx {
-                let _ = tx.send(());
+                tx.send(()).expect("reader command channel disconnected");
             }
         }
         for w in &self.workers {
-            let _ = w.done_rx.recv();
+            w.done_rx
+                .recv()
+                .expect("reader completion channel disconnected");
         }
     }
 }

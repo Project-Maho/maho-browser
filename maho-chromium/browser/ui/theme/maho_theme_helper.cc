@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "build/build_config.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
@@ -119,9 +120,37 @@ void BuildContrastSurfaces(const std::vector<SkColor>& surface_stops,
   }
 }
 
-std::vector<SkColor> AllContrastSurfaces(const MahoSidebarPalette& palette) {
+// Surfaces the sidebar actually paints in opaque mode (Linux always, other
+// platforms while a library/Spaces overlay is open): the opaque stops with
+// every row state composited on top. Text roles must stay readable there too,
+// not only on the translucent stops composited over the backdrop.
+std::vector<SkColor> OpaqueModeContrastSurfaces(
+    const MahoSidebarPalette& palette) {
   std::vector<SkColor> surfaces;
-  surfaces.reserve(palette.normal_contrast_surfaces.size() * 4);
+  if (palette.opaque_contrast_stops.empty()) {
+    return surfaces;
+  }
+  surfaces.reserve(kGradientSampleCount * 4);
+  for (size_t i = 0; i < kGradientSampleCount; ++i) {
+    const float position =
+        static_cast<float>(i) / static_cast<float>(kGradientSampleCount - 1);
+    const SkColor normal =
+        SampleGradient(palette.opaque_contrast_stops, position);
+    surfaces.push_back(normal);
+    surfaces.push_back(
+        color_utils::GetResultingPaintColor(palette.row_hover, normal));
+    surfaces.push_back(
+        color_utils::GetResultingPaintColor(palette.row_active, normal));
+    surfaces.push_back(
+        color_utils::GetResultingPaintColor(palette.row_selected, normal));
+  }
+  return surfaces;
+}
+
+std::vector<SkColor> AllContrastSurfaces(const MahoSidebarPalette& palette) {
+  std::vector<SkColor> surfaces = OpaqueModeContrastSurfaces(palette);
+  surfaces.reserve(surfaces.size() +
+                   palette.normal_contrast_surfaces.size() * 4);
   surfaces.insert(surfaces.end(), palette.normal_contrast_surfaces.begin(),
                   palette.normal_contrast_surfaces.end());
   surfaces.insert(surfaces.end(), palette.hover_contrast_surfaces.begin(),
@@ -225,6 +254,34 @@ MahoSidebarPalette::MahoSidebarPalette(MahoSidebarPalette&&) noexcept =
 MahoSidebarPalette& MahoSidebarPalette::operator=(
     MahoSidebarPalette&&) noexcept = default;
 MahoSidebarPalette::~MahoSidebarPalette() = default;
+
+bool operator==(const MahoSidebarPalette& lhs,
+                const MahoSidebarPalette& rhs) {
+  return lhs.dark_family == rhs.dark_family &&
+         lhs.used_surface_fallback == rhs.used_surface_fallback &&
+         lhs.forced_colors == rhs.forced_colors && lhs.opaque == rhs.opaque &&
+         lhs.surface_stops == rhs.surface_stops &&
+         lhs.opaque_contrast_stops == rhs.opaque_contrast_stops &&
+         lhs.content_surface_stops == rhs.content_surface_stops &&
+         lhs.row_hover == rhs.row_hover && lhs.row_active == rhs.row_active &&
+         lhs.row_selected == rhs.row_selected &&
+         lhs.normal_contrast_surfaces == rhs.normal_contrast_surfaces &&
+         lhs.hover_contrast_surfaces == rhs.hover_contrast_surfaces &&
+         lhs.active_contrast_surfaces == rhs.active_contrast_surfaces &&
+         lhs.selected_contrast_surfaces == rhs.selected_contrast_surfaces &&
+         lhs.primary_text == rhs.primary_text &&
+         lhs.secondary_text == rhs.secondary_text &&
+         lhs.tertiary_text == rhs.tertiary_text &&
+         lhs.disabled_text == rhs.disabled_text &&
+         lhs.neutral_glyph == rhs.neutral_glyph &&
+         lhs.outline == rhs.outline && lhs.focus_ring == rhs.focus_ring &&
+         lhs.grain == rhs.grain;
+}
+
+bool operator!=(const MahoSidebarPalette& lhs,
+                const MahoSidebarPalette& rhs) {
+  return !(lhs == rhs);
+}
 
 MahoSidebarPalette ResolveMahoSidebarPalette(
     const MahoSidebarThemeEnvironment& environment) {
@@ -339,6 +396,15 @@ MahoSidebarThemeEnvironment BuildMahoSidebarThemeEnvironmentForBrowser(
     contrast_backdrops.push_back(
         color_provider->GetColor(ui::kColorSysSurface));
   }
+#if BUILDFLAG(IS_WIN)
+  // On Windows 11 the translucent sidebar composites over a DWM acrylic
+  // backdrop (ApplySidebarWindowVibrancy): a blur of whatever is behind the
+  // window, anywhere from near-white to near-black and unknown to us. Resolve
+  // text against both extremes so it stays readable over any desktop; when no
+  // color can, the palette falls back to its opaque surface.
+  contrast_backdrops.push_back(SK_ColorWHITE);
+  contrast_backdrops.push_back(SK_ColorBLACK);
+#endif
   MahoSidebarThemeEnvironment environment =
       BuildMahoSidebarThemeEnvironmentForBrowser(
           browser, os_dark, std::move(contrast_backdrops));
@@ -379,8 +445,20 @@ bool MahoSidebarPaletteHost::Update(
     return false;
   }
 
-  ++compute_count_;
   MahoSidebarPalette next_palette = ResolveMahoSidebarPalette(environment);
+  next_palette.opaque = opaque;
+
+  // A native-theme notification that resolves to the snapshot already on screen
+  // is a no-op: keep the counters and skip the fan-out so no dependent surface
+  // (docked rail, library overlay, Spaces overlay) is asked to repaint an
+  // identical palette. Structural and preview updates keep their unconditional
+  // recompute contract -- their inputs are not fully captured by `environment`.
+  if (reason == MahoSidebarPaletteUpdateReason::kNativeTheme &&
+      has_palette() && palette_ == next_palette) {
+    return false;
+  }
+
+  ++compute_count_;
   palette_ = std::move(next_palette);
   opaque_ = opaque;
   ++apply_count_;

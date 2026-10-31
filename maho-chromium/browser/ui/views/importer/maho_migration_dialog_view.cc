@@ -28,6 +28,38 @@
 #include "ui/gfx/canvas.h"
 #include "ui/shell_dialogs/select_file_policy.h"
 #include "ui/shell_dialogs/selected_file_info.h"
+
+// These string ids were referenced before a grit target ever defined them, so
+// the translation unit never compiled. Define them locally as a distinct enum:
+// GetMahoLocalizedString() switches on them for the ko locale and falls back to
+// l10n_util for everything else, so the values only need to be unique and
+// stable within this file.
+// Newer Chromium revisions define IDS_MAHO_MIGRATION_* grit macros; skip the
+// enum there and let the macros provide the identifiers.
+#ifndef IDS_MAHO_MIGRATION_TITLE
+enum MahoMigrationStringIds {
+  IDS_MAHO_MIGRATION_BROWSER_SELECTION,
+  IDS_MAHO_MIGRATION_CANCEL,
+  IDS_MAHO_MIGRATION_CHECKBOX_AUTOFILL,
+  IDS_MAHO_MIGRATION_CHECKBOX_BOOKMARKS,
+  IDS_MAHO_MIGRATION_CHECKBOX_COOKIES,
+  IDS_MAHO_MIGRATION_CHECKBOX_FAVICONS,
+  IDS_MAHO_MIGRATION_CHECKBOX_HISTORY,
+  IDS_MAHO_MIGRATION_CHECKBOX_PASSWORDS,
+  IDS_MAHO_MIGRATION_CHECKBOX_SIDEBAR,
+  IDS_MAHO_MIGRATION_CHECKBOX_WORKSPACES,
+  IDS_MAHO_MIGRATION_CLOSE,
+  IDS_MAHO_MIGRATION_CONTINUE,
+  IDS_MAHO_MIGRATION_IMPORT,
+  IDS_MAHO_MIGRATION_RETRY,
+  IDS_MAHO_MIGRATION_STATUS_CANCELLING,
+  IDS_MAHO_MIGRATION_STATUS_ERROR,
+  IDS_MAHO_MIGRATION_STATUS_IMPORTING,
+  IDS_MAHO_MIGRATION_STATUS_PARTIAL_FAIL,
+  IDS_MAHO_MIGRATION_STATUS_SUCCESS,
+  IDS_MAHO_MIGRATION_TITLE,
+};
+#endif
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/md_text_button.h"

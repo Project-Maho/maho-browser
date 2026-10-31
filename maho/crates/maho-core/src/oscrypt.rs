@@ -9,12 +9,6 @@ use std::path::Path;
 
 mod vault_device;
 
-#[cfg(target_os = "linux")]
-pub use vault_device::LinuxVaultDeviceProtector;
-#[cfg(target_os = "macos")]
-pub use vault_device::MacOsVaultDeviceProtector;
-#[cfg(target_os = "windows")]
-pub use vault_device::WindowsVaultDeviceProtector;
 pub use vault_device::{
     VaultDeviceBinding, VaultDevicePlatform, VaultDeviceProtector, VaultDeviceProtectorError,
     VaultDeviceWrapBundle, VaultDeviceWrapBundleError,
@@ -90,6 +84,46 @@ pub fn key_path_is_secure(path_str: &str, out_status: &mut u32) -> bool {
     {
         *out_status = 0;
         true
+    }
+}
+
+/// Vault device protector backed by a 0600 file inside the profile storage
+/// directory (next to `maho_storage.key`). It never touches the OS keystore
+/// (no macOS Keychain, Secret Service or DPAPI prompts): the device secret has
+/// the same protection as the storage key file that already guards the
+/// profile database.
+pub struct FileVaultDeviceProtector {
+    path: std::path::PathBuf,
+}
+
+impl FileVaultDeviceProtector {
+    pub const FILE_NAME: &'static str = "maho_vault_device.key";
+    const SECRET_LENGTH: usize = 32;
+
+    pub fn new(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+impl VaultDeviceProtector for FileVaultDeviceProtector {
+    fn device_secret(&self) -> Result<zeroize::Zeroizing<Vec<u8>>, VaultDeviceProtectorError> {
+        match std::fs::read(&self.path) {
+            Ok(bytes) => {
+                let secret = zeroize::Zeroizing::new(bytes);
+                if secret.len() != Self::SECRET_LENGTH {
+                    return Err(VaultDeviceProtectorError::OperationFailed);
+                }
+                Ok(secret)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let mut secret = zeroize::Zeroizing::new(vec![0u8; Self::SECRET_LENGTH]);
+                rand::thread_rng().fill_bytes(secret.as_mut_slice());
+                write_atomically(&self.path, secret.as_slice())
+                    .map_err(|_| VaultDeviceProtectorError::OperationFailed)?;
+                Ok(secret)
+            }
+            Err(_) => Err(VaultDeviceProtectorError::OperationFailed),
+        }
     }
 }
 

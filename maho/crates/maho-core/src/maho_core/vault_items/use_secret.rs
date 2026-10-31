@@ -9,7 +9,9 @@ impl MahoCore {
         &mut self,
         id: VaultItemId,
     ) -> Result<Zeroizing<String>, VaultCrudError> {
-        let repository = self.vault_repository().map_err(storage_error)?;
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::Fill)
+            .map_err(storage_error)?;
         let result = self.vault_runtime.use_login_password(&repository, id);
         self.record_vault_operation_result(VaultAuditOperation::Fill, result)
     }
@@ -19,7 +21,9 @@ impl MahoCore {
         id: VaultItemId,
         expected_revision: VaultRevision,
     ) -> Result<Zeroizing<String>, VaultCrudError> {
-        let repository = self.vault_repository().map_err(storage_error)?;
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::Fill)
+            .map_err(storage_error)?;
         let result =
             self.vault_runtime
                 .use_login_password_at_revision(&repository, id, expected_revision);
@@ -30,7 +34,9 @@ impl MahoCore {
         &mut self,
         id: VaultItemId,
     ) -> Result<Zeroizing<Vec<u8>>, VaultCrudError> {
-        let repository = self.vault_repository().map_err(storage_error)?;
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::TotpFill)
+            .map_err(storage_error)?;
         let result = self.vault_runtime.use_totp_seed(&repository, id);
         self.record_vault_operation_result(VaultAuditOperation::TotpFill, result)
     }
@@ -39,7 +45,9 @@ impl MahoCore {
         &mut self,
         id: VaultItemId,
     ) -> Result<Zeroizing<Vec<u8>>, VaultCrudError> {
-        let repository = self.vault_repository().map_err(storage_error)?;
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::PasskeyUsed)
+            .map_err(storage_error)?;
         let result = self.vault_runtime.use_passkey_key(&repository, id);
         self.record_vault_operation_result(VaultAuditOperation::PasskeyUsed, result)
     }
@@ -48,7 +56,9 @@ impl MahoCore {
         &mut self,
         id: VaultItemId,
     ) -> Result<Zeroizing<Vec<u8>>, VaultCrudError> {
-        let repository = self.vault_repository().map_err(storage_error)?;
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::Fill)
+            .map_err(storage_error)?;
         let result = self.vault_runtime.use_secure_bytes(&repository, id);
         self.record_vault_operation_result(VaultAuditOperation::Fill, result)
     }
@@ -58,7 +68,9 @@ impl MahoCore {
         id: VaultItemId,
         timestamp_secs: u64,
     ) -> Result<Zeroizing<String>, VaultCrudError> {
-        let repository = self.vault_repository().map_err(storage_error)?;
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::TotpFill)
+            .map_err(storage_error)?;
         let result = self
             .vault_runtime
             .generate_totp_code(&repository, id, timestamp_secs);

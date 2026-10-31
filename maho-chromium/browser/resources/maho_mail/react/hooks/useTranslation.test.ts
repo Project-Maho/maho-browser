@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useTranslation } from "./useTranslation";
+import {
+  useTranslation,
+  getTranslationTargetLang,
+  saveTranslationTargetLang,
+} from "./useTranslation";
 
 vi.mock("../api", () => ({
   translateText: vi.fn(),
@@ -31,7 +35,8 @@ describe("useTranslation", () => {
     expect(result.current.isTranslating).toBe(false);
     expect(result.current.error).toBeNull();
     expect(result.current.fromLang).toBe("en");
-    expect(result.current.toLang).toBe("ko");
+    // No saved config: follows the browser language (jsdom reports en-US).
+    expect(result.current.toLang).toBe("en");
     expect(result.current.isModelLoading).toBe(false);
   });
 
@@ -123,5 +128,30 @@ describe("useTranslation", () => {
     const { result } = renderHook(() => useTranslation());
     expect(result.current.SUPPORTED_LANGUAGES).toHaveLength(12);
     expect(result.current.SUPPORTED_LANGUAGES[0].code).toBe("en");
+  });
+
+  it("initial target comes from the saved config", () => {
+    localStorage.setItem(
+      "maho-translation-config",
+      JSON.stringify({ provider: "byok", defaultTargetLang: "ja", alwaysTranslateFrom: [] }),
+    );
+    const { result } = renderHook(() => useTranslation());
+    expect(result.current.toLang).toBe("ja");
+  });
+
+  it("without a saved config the target follows the browser language", () => {
+    const spy = vi.spyOn(navigator, "language", "get").mockReturnValue("fr-FR");
+    expect(getTranslationTargetLang()).toBe("fr");
+    spy.mockReturnValue("xx-YY");
+    expect(getTranslationTargetLang()).toBe("en");
+    spy.mockRestore();
+  });
+
+  it("saveTranslationTargetLang persists the choice and keeps the provider", () => {
+    setConfig("local");
+    saveTranslationTargetLang("de");
+    expect(getTranslationTargetLang()).toBe("de");
+    const saved = JSON.parse(localStorage.getItem("maho-translation-config") ?? "{}");
+    expect(saved).toMatchObject({ provider: "local", defaultTargetLang: "de" });
   });
 });

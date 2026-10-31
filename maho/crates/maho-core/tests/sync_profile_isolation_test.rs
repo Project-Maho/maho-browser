@@ -45,7 +45,9 @@ fn scoped_entity(
         device_id: 7,
         schema_version: 1,
         modified_at: 1_700_000_000,
-        fields_hlc_json: (!deleted).then(|| build_fields_hlc(&payload_json, version, 7)).flatten(),
+        fields_hlc_json: (!deleted)
+            .then(|| build_fields_hlc(&payload_json, version, 7))
+            .flatten(),
         payload_json,
         deleted,
         queue_row_id: None,
@@ -73,11 +75,9 @@ fn profile_scoped_lww_and_tombstones_do_not_cross_profiles() {
     let wire = serde_json::to_value(&live_b).expect("wire entity");
     assert_eq!(wire["profileId"].as_str(), Some("profile-b"));
 
-    let mut mismatched =
-        scoped_entity(SyncEntityType::Tab, "mismatch", "profile-a", 3, false);
+    let mut mismatched = scoped_entity(SyncEntityType::Tab, "mismatch", "profile-a", 3, false);
     mismatched.profile_id = Some("profile-b".to_string());
     assert!(!manager.apply_remote_entity(&mut mismatched, &storage));
-
 
     let storage_ref = storage.as_ref().expect("storage ref");
     let a_storage_id = deleted_a.storage_entity_id().expect("scoped A id");
@@ -151,7 +151,7 @@ fn switched_profile_is_bound_before_local_tab_is_durably_queued() {
         Some(work_id.as_str())
     );
 
-    let scoped_id = format!("profile:{}\u{1f}{}", work_id, "local-tab");
+    let scoped_id = format!("{}:{}", work_id, "local-tab");
     assert!(storage
         .get_entity_version("tab", &scoped_id)
         .expect("scoped entity version")

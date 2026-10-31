@@ -1,6 +1,24 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 import { callbackRouter } from './mojo_client.js';
+import type { ReplyContext, ComposeAttachment } from './types';
+
+export interface ComposeInitPayload {
+  to?: string;
+  cc?: string;
+  bcc?: string;
+  subject?: string;
+  body?: string;
+  bodyHtml?: string;
+  accountId?: string;
+  draftId?: string;
+  replyTo?: ReplyContext;
+  forwardFrom?: ReplyContext;
+  forwardEmailUid?: number;
+  forwardFolderId?: string;
+  initialAttachments?: ComposeAttachment[];
+  initialReadReceipt?: boolean;
+}
 
 export interface Event<T> {
   event: string;
@@ -8,6 +26,31 @@ export interface Event<T> {
 }
 
 export type EventCallback<T> = (event: Event<T>) => void;
+
+function safeParseJson(payload: string): unknown {
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return payload;
+  }
+}
+
+function safeParseJsonObject(payload: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(payload);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {}
+  return {};
+}
+
+function dispatchEvent<T>(handler: EventCallback<T>, event: string, payload: unknown): void {
+  handler({
+    event,
+    payload: payload as T,
+  });
+}
 
 /**
  * Tauri event listen mock for the WebUI migration.
@@ -18,10 +61,7 @@ export type EventCallback<T> = (event: Event<T>) => void;
 async function realListen<T>(eventName: string, handler: EventCallback<T>): Promise<() => void> {
   if (eventName === 'accounts-changed' || eventName === 'accounts-changed-event') {
     const listenerId = callbackRouter.onAccountsChanged.addListener(() => {
-      handler({
-        event: eventName,
-        payload: {} as T,
-      });
+      dispatchEvent(handler, eventName, {});
     });
     return () => {
       callbackRouter.removeListener(listenerId);
@@ -30,13 +70,10 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'auth-reauth-required') {
     const listenerId = callbackRouter.onAuthRequired.addListener((accountId: string, provider: string, reason: string) => {
-      handler({
-        event: eventName,
-        payload: {
-          account_id: accountId,
-          provider,
-          reason,
-        } as unknown as T,
+      dispatchEvent(handler, eventName, {
+        account_id: accountId,
+        provider,
+        reason,
       });
     });
     return () => {
@@ -46,11 +83,8 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'auth-refresh-succeeded') {
     const listenerId = callbackRouter.onAuthRefreshSucceeded.addListener((accountId: string) => {
-      handler({
-        event: eventName,
-        payload: {
-          account_id: accountId,
-        } as unknown as T,
+      dispatchEvent(handler, eventName, {
+        account_id: accountId,
       });
     });
     return () => {
@@ -61,12 +95,7 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
   if (eventName === 'sync-started' || eventName === 'sync-completed' || eventName === 'sync-error') {
     const listenerId = callbackRouter.onSyncEvent.addListener((eventType: string, payload: string) => {
       if (eventType === eventName) {
-        let p: any = payload;
-        try { p = JSON.parse(payload); } catch (_) {}
-        handler({
-          event: eventName,
-          payload: p as T,
-        });
+        dispatchEvent(handler, eventName, safeParseJson(payload));
       }
     });
     return () => {
@@ -77,12 +106,7 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
   if (eventName === 'backfill-started' || eventName === 'backfill-completed' || eventName === 'backfill-error') {
     const listenerId = callbackRouter.onBackfillEvent.addListener((eventType: string, payload: string) => {
       if (eventType === eventName) {
-        let p: any = payload;
-        try { p = JSON.parse(payload); } catch (_) {}
-        handler({
-          event: eventName,
-          payload: p as T,
-        });
+        dispatchEvent(handler, eventName, safeParseJson(payload));
       }
     });
     return () => {
@@ -92,10 +116,7 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'status-changed' || eventName === 'connection-status-changed') {
     const listenerId = callbackRouter.onStatusChanged.addListener((accountId: string, connected: boolean) => {
-      handler({
-        event: eventName,
-        payload: { account_id: accountId, connected } as unknown as T,
-      });
+      dispatchEvent(handler, eventName, { account_id: accountId, connected });
     });
     return () => {
       callbackRouter.removeListener(listenerId);
@@ -104,10 +125,7 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'new-mail' || eventName === 'new-emails') {
     const listenerId = callbackRouter.onNewMail.addListener((accountId: string) => {
-      handler({
-        event: eventName,
-        payload: { account_id: accountId, message_ids: [] } as unknown as T,
-      });
+      dispatchEvent(handler, eventName, { account_id: accountId, message_ids: [] });
     });
     return () => {
       callbackRouter.removeListener(listenerId);
@@ -116,10 +134,7 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'idle:new-mail') {
     const listenerId = callbackRouter.onNewMail.addListener((accountId: string) => {
-      handler({
-        event: eventName,
-        payload: { account_id: accountId, exists: 1 } as unknown as T,
-      });
+      dispatchEvent(handler, eventName, { account_id: accountId, exists: 1 });
     });
     return () => {
       callbackRouter.removeListener(listenerId);
@@ -128,12 +143,8 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'mutation') {
     const listenerId = callbackRouter.onMutation.addListener((accountId: string, payload: string) => {
-      let p: any = {};
-      try { p = JSON.parse(payload); } catch (_) {}
-      handler({
-        event: eventName,
-        payload: { account_id: accountId, ...p } as T,
-      });
+      const p = safeParseJsonObject(payload);
+      dispatchEvent(handler, eventName, { account_id: accountId, ...p });
     });
     return () => {
       callbackRouter.removeListener(listenerId);
@@ -142,13 +153,9 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'mutations-flushed' || eventName === 'mutation-queued') {
     const listenerId = callbackRouter.onMutation.addListener((_accountId: string, payload: string) => {
-      let p: any = {};
-      try { p = JSON.parse(payload); } catch (_) {}
+      const p = safeParseJsonObject(payload);
       if (p.event === eventName) {
-        handler({
-          event: eventName,
-          payload: p.data as T,
-        });
+        dispatchEvent(handler, eventName, p.data);
       }
     });
     return () => {
@@ -158,13 +165,9 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'outbox-queued' || eventName === 'outbox-flushed') {
     const listenerId = callbackRouter.onOutbox.addListener((accountId: string, payload: string) => {
-      let p: any = {};
-      try { p = JSON.parse(payload); } catch (_) {}
+      const p = safeParseJsonObject(payload);
       if (p.event === eventName) {
-        handler({
-          event: eventName,
-          payload: p.data as T,
-        });
+        dispatchEvent(handler, eventName, p.data);
       }
     });
     return () => {
@@ -179,13 +182,9 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
     eventName === 'send-later-failed'
   ) {
     const listenerId = callbackRouter.onScheduler.addListener((accountId: string, payload: string) => {
-      let p: any = {};
-      try { p = JSON.parse(payload); } catch (_) {}
+      const p = safeParseJsonObject(payload);
       if (p.event === eventName) {
-        handler({
-          event: eventName,
-          payload: p.data as T,
-        });
+        dispatchEvent(handler, eventName, p.data);
       }
     });
     return () => {
@@ -196,10 +195,7 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
   if (eventName === 'connection-error') {
     const listenerId = callbackRouter.onStatusChanged.addListener((accountId: string, connected: boolean) => {
       if (!connected) {
-        handler({
-          event: eventName,
-          payload: { account_id: accountId, error: 'Connection lost', error_type: 'network' } as unknown as T,
-        });
+        dispatchEvent(handler, eventName, { account_id: accountId, error: 'Connection lost', error_type: 'network' });
       }
     });
     return () => {
@@ -209,10 +205,7 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'agent-stream') {
     const listenerId = callbackRouter.onAgentStream.addListener((sessionId: string, chunk: string) => {
-      handler({
-        event: eventName,
-        payload: { session_id: sessionId, chunk } as unknown as T,
-      });
+      dispatchEvent(handler, eventName, { session_id: sessionId, chunk });
     });
     return () => {
       callbackRouter.removeListener(listenerId);
@@ -221,21 +214,14 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'agent-message-chunk') {
     const listenerId = callbackRouter.onAgentStream.addListener((sessionId: string, chunk: string) => {
-      let wire: any;
       try {
-        wire = JSON.parse(chunk);
+        const wire = JSON.parse(chunk);
         if (typeof wire === 'object' && wire !== null && 'kind' in wire) {
-          handler({
-            event: eventName,
-            payload: { session_id: sessionId, ...wire } as unknown as T,
-          });
+          dispatchEvent(handler, eventName, { session_id: sessionId, ...wire });
           return;
         }
       } catch (_) {}
-      handler({
-        event: eventName,
-        payload: { session_id: sessionId, chunk } as unknown as T,
-      });
+      dispatchEvent(handler, eventName, { session_id: sessionId, chunk });
     });
     return () => {
       callbackRouter.removeListener(listenerId);
@@ -247,10 +233,7 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
       try {
         const wire = JSON.parse(chunk);
         if (typeof wire === 'object' && wire !== null && wire.kind === 'complete') {
-          handler({
-            event: eventName,
-            payload: { session_id: sessionId } as unknown as T,
-          });
+          dispatchEvent(handler, eventName, { session_id: sessionId });
         }
       } catch (_) {}
     });
@@ -268,10 +251,7 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
             (wire.payload && typeof wire.payload.error === 'string')
               ? wire.payload.error
               : 'Agent stream error';
-          handler({
-            event: eventName,
-            payload: { session_id: sessionId, error: errorMsg } as unknown as T,
-          });
+          dispatchEvent(handler, eventName, { session_id: sessionId, error: errorMsg });
         }
       } catch (_) {}
     });
@@ -282,10 +262,7 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'calendar-events-changed') {
     const listenerId = callbackRouter.onCalendar.addListener((accountId: string, _payload: string) => {
-      handler({
-        event: eventName,
-        payload: accountId as unknown as T,
-      });
+      dispatchEvent(handler, eventName, accountId);
     });
     return () => {
       callbackRouter.removeListener(listenerId);
@@ -299,13 +276,9 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
     eventName === 'calendar-rsvp-reply-drained'
   ) {
     const listenerId = callbackRouter.onCalendar.addListener((_accountId: string, payload: string) => {
-      let p: any = {};
-      try { p = JSON.parse(payload); } catch (_) {}
+      const p = safeParseJsonObject(payload);
       if (p.event === eventName) {
-        handler({
-          event: eventName,
-          payload: p.data as T,
-        });
+        dispatchEvent(handler, eventName, p.data);
       }
     });
     return () => {
@@ -315,13 +288,9 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
   if (eventName === 'import-progress' || eventName === 'export-progress') {
     const listenerId = callbackRouter.onImport.addListener((payload: string) => {
-      let p: any = {};
-      try { p = JSON.parse(payload); } catch (_) {}
+      const p = safeParseJsonObject(payload);
       if (p.event === eventName) {
-        handler({
-          event: eventName,
-          payload: p.data as T,
-        });
+        dispatchEvent(handler, eventName, p.data);
       }
     });
     return () => {
@@ -334,23 +303,33 @@ async function realListen<T>(eventName: string, handler: EventCallback<T>): Prom
 
 const isTest = typeof globalThis !== 'undefined' && 'vi' in globalThis;
 
-async function emit(eventName: string, payload?: any): Promise<void> {}
-async function emitTo(target: string | { kind: string }, eventName: string, payload?: any): Promise<void> {}
+async function emit(_eventName: string, _payload?: unknown): Promise<void> {}
+async function emitTo(_target: string | { kind: string }, _eventName: string, _payload?: unknown): Promise<void> {}
+
+type MockFn<T> = {
+  mockResolvedValue: (val: T) => (...args: unknown[]) => Promise<T>;
+};
+
+interface ViGlobal {
+  vi: {
+    fn: <T>() => MockFn<T>;
+  };
+}
 
 const mockListen: typeof realListen = isTest
-  ? (globalThis as any).vi.fn().mockResolvedValue(() => {})
+  ? ((globalThis as unknown as ViGlobal).vi.fn<() => void>().mockResolvedValue(() => {}) as unknown as typeof realListen)
   : realListen;
 
-export { mockListen as listen };
+export { realListen, mockListen as listen };
 
 const mockEmit: typeof emit = isTest
-  ? (globalThis as any).vi.fn().mockResolvedValue(undefined)
+  ? ((globalThis as unknown as ViGlobal).vi.fn<void>().mockResolvedValue(undefined) as unknown as typeof emit)
   : emit;
 
 export { mockEmit as emit };
 
 const mockEmitTo: typeof emitTo = isTest
-  ? (globalThis as any).vi.fn().mockResolvedValue(undefined)
+  ? ((globalThis as unknown as ViGlobal).vi.fn<void>().mockResolvedValue(undefined) as unknown as typeof emitTo)
   : emitTo;
 
 export { mockEmitTo as emitTo };

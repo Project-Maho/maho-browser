@@ -12,7 +12,7 @@ use maho_types::chat::{ChatContent, ChatContentPart, ChatMessage};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{broadcast, oneshot, watch};
 
 use crate::omo::config::OmoLaunchConfig;
 use crate::omo::process::OmoProcess;
@@ -29,34 +29,76 @@ use crate::{
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const TURN_TIMEOUT: Duration = Duration::from_secs(300);
 const MCP_LIST_TIMEOUT: Duration = Duration::from_secs(5);
+/// Largest RPC frame accepted from omo. A longer line is discarded rather than buffered.
+const MAX_RPC_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 type EventCallback = Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static>;
 type SecureStorageCallback =
     Box<dyn Fn(&str) -> Result<SecureKeyBundle, AgentError> + Send + Sync + 'static>;
+
+/// Marks the connection closed when dropped while armed. A request future dropped in the
+/// middle of `write_all` leaves a partial frame on the socket; the next request must use a
+/// fresh connection instead of appending to it.
+struct ClosedUnlessDisarmed<'a> {
+    closed: &'a watch::Sender<bool>,
+    armed: bool,
+}
+
+impl Drop for ClosedUnlessDisarmed<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.closed.send_replace(true);
+        }
+    }
+}
 
 struct RpcConnection {
     writer: tokio::sync::Mutex<OwnedWriteHalf>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<RpcResponse>>>>,
     events: broadcast::Sender<RpcEvent>,
     next_id: AtomicU64,
+    /// Maho session id -> omo session handle. Handles are scoped to this connection's omo
+    /// process epoch, so the map lives and dies with the connection, and the reader drops an
+    /// entry the moment omo announces the handle ended (`session_closed` / `session_parked`,
+    /// e.g. its 30-minute idle eviction). A cached handle is therefore always one omo still
+    /// serves.
+    sessions: Arc<Mutex<HashMap<String, String>>>,
+    /// Handles omo has announced as ended on this connection. Handles are unique per omo
+    /// process epoch, so a handle seen here is dead forever; `rpc_session` consults it so an
+    /// `open_session` reply the reader already saw closed is never cached.
+    ended_handles: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Flips to `true` once the socket is gone (reader hit EOF/error or a write failed).
+    /// A closed connection is never reused: every omo session handle it carried is dead.
+    closed: watch::Sender<bool>,
 }
 
 impl RpcConnection {
     fn new(stream: UnixStream) -> Arc<Self> {
         let (reader, writer) = stream.into_split();
         let (events, _) = broadcast::channel(1024);
+        let (closed, _) = watch::channel(false);
         let connection = Arc::new(Self {
             writer: tokio::sync::Mutex::new(writer),
             pending: Arc::new(Mutex::new(HashMap::new())),
             events,
             next_id: AtomicU64::new(1),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            ended_handles: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            closed,
         });
         tokio::spawn(read_rpc_messages(
             reader,
             Arc::clone(&connection.pending),
             connection.events.clone(),
+            Arc::clone(&connection.sessions),
+            Arc::clone(&connection.ended_handles),
+            connection.closed.clone(),
         ));
         connection
+    }
+
+    fn is_closed(&self) -> bool {
+        *self.closed.borrow()
     }
 
     async fn request(&self, command: RpcCommand) -> Result<RpcResponse, AgentError> {
@@ -66,12 +108,26 @@ impl RpcConnection {
         let (sender, receiver) = oneshot::channel();
         lock_unpoison(&self.pending).insert(id.clone(), sender);
 
-        if let Err(error) = self.writer.lock().await.write_all(&bytes).await {
+        let mut writer = self.writer.lock().await;
+        if self.is_closed() {
+            lock_unpoison(&self.pending).remove(&id);
+            return Err(AgentError::ExecutionError(
+                "omo RPC connection is closed".to_string(),
+            ));
+        }
+        let mut write_guard = ClosedUnlessDisarmed {
+            closed: &self.closed,
+            armed: true,
+        };
+        if let Err(error) = writer.write_all(&bytes).await {
             lock_unpoison(&self.pending).remove(&id);
             return Err(AgentError::ExecutionError(format!(
                 "failed to write omo RPC request: {error}"
             )));
         }
+        write_guard.armed = false;
+        drop(write_guard);
+        drop(writer);
 
         match tokio::time::timeout(RESPONSE_TIMEOUT, receiver).await {
             Ok(Ok(response)) => Ok(response),
@@ -92,9 +148,20 @@ async fn read_rpc_messages(
     reader: OwnedReadHalf,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<RpcResponse>>>>,
     events: broadcast::Sender<RpcEvent>,
+    sessions: Arc<Mutex<HashMap<String, String>>>,
+    ended_handles: Arc<Mutex<std::collections::HashSet<String>>>,
+    closed: watch::Sender<bool>,
 ) {
-    let mut lines = BufReader::new(reader).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
+    let mut reader = BufReader::new(reader);
+    loop {
+        let line = match read_frame(&mut reader, MAX_RPC_FRAME_BYTES).await {
+            Ok(Some(Frame::Line(line))) => line,
+            Ok(Some(Frame::Skipped(reason))) => {
+                tracing::warn!(target: "maho_agent::omo", reason, "discarding unreadable omo RPC frame");
+                continue;
+            }
+            Ok(None) | Err(_) => break,
+        };
         let value = match serde_json::from_str::<serde_json::Value>(&line) {
             Ok(value) => value,
             Err(error) => {
@@ -114,6 +181,14 @@ async fn read_rpc_messages(
                 }
             }
             Ok(RpcInboundMessage::Event(event)) => {
+                if let RpcEvent::SessionClosed { session_id, .. }
+                | RpcEvent::SessionParked { session_id, .. } = &event
+                {
+                    // Evict before publishing, so anyone woken by this event already sees
+                    // the handle gone.
+                    lock_unpoison(&ended_handles).insert(session_id.clone());
+                    lock_unpoison(&sessions).retain(|_, handle| handle != session_id);
+                }
                 let _ = events.send(event);
             }
             Err(error) => {
@@ -121,7 +196,50 @@ async fn read_rpc_messages(
             }
         }
     }
+    closed.send_replace(true);
     lock_unpoison(&pending).clear();
+}
+
+enum Frame {
+    Line(String),
+    Skipped(&'static str),
+}
+
+/// Reads one newline-delimited frame without buffering more than `max` bytes of it.
+/// Oversize and non-UTF-8 frames are consumed and reported as skipped so one bad frame
+/// never tears down the connection. `Ok(None)` is end of stream.
+async fn read_frame<R>(reader: &mut R, max: usize) -> std::io::Result<Option<Frame>>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    let read = (&mut *reader).take(limit).read_until(b'\n', &mut buf).await?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if buf.last() != Some(&b'\n') && buf.len() > max {
+        // Drain the rest of the oversize line in bounded chunks.
+        loop {
+            let mut rest = Vec::new();
+            let n = (&mut *reader).take(limit).read_until(b'\n', &mut rest).await?;
+            if n == 0 || rest.last() == Some(&b'\n') {
+                break;
+            }
+        }
+        return Ok(Some(Frame::Skipped("frame exceeds size cap")));
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+    }
+    match String::from_utf8(buf) {
+        Ok(line) => Ok(Some(Frame::Line(line))),
+        Err(_) => Ok(Some(Frame::Skipped("frame is not valid UTF-8"))),
+    }
 }
 
 fn lock_unpoison<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -307,8 +425,8 @@ pub fn browser_mcp_config(binary: &Path, socket_path: Option<&Path>) -> serde_js
         serde_json::Value::String("true".to_string()),
     );
     env.insert(
-        "MAHO_MCP_AUTO_APPROVE".to_string(),
-        serde_json::Value::String("true".to_string()),
+        "MAHO_MCP_APPROVAL".to_string(),
+        serde_json::Value::String("browser".to_string()),
     );
     if let Some(sp) = socket_path {
         env.insert(
@@ -413,17 +531,18 @@ fn map_tool_call(tool_call: &serde_json::Value) -> Option<AgentStreamEvent> {
 }
 
 pub struct OmoBackend {
-    config: OmoLaunchConfig,
+    pub(crate) config: OmoLaunchConfig,
     browser_mcp_binary: PathBuf,
     cwd: PathBuf,
     process: tokio::sync::Mutex<Option<OmoProcess>>,
     connection: tokio::sync::Mutex<Option<Arc<RpcConnection>>>,
-    sessions: tokio::sync::Mutex<HashMap<String, String>>,
     turn_locks: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pub(crate) permission_callback: Mutex<Option<PermissionCallback>>,
-    pub(crate) secure_storage_callback: Mutex<Option<SecureStorageCallback>>,
+    approval_policy: Mutex<String>,
+    pub(crate) secure_storage_callback: Mutex<Option<Arc<SecureStorageCallback>>>,
     pub(crate) browser_tool_bridge: Mutex<Option<Arc<dyn crate::BrowserToolBridge>>>,
     run_journal: Arc<Mutex<RunJournal>>,
+    turn_timeout: Duration,
     preferred_provider: Mutex<Option<String>>,
     runtime_tier: Mutex<Option<String>>,
     active_space_id: Mutex<Option<String>>,
@@ -432,6 +551,9 @@ pub struct OmoBackend {
     artifact_root: Mutex<Option<PathBuf>>,
     storage: Mutex<Option<Arc<dyn AgentStorage>>>,
     composite_cfg: Mutex<crate::composite::CompositeExecutionConfig>,
+    /// This backend's pending user interactions. Per backend, so one session's answer can
+    /// never resolve another session's question.
+    interaction_broker: Arc<Mutex<crate::interaction::InteractionBroker>>,
 }
 
 impl OmoBackend {
@@ -446,12 +568,13 @@ impl OmoBackend {
             cwd: cwd.into(),
             process: tokio::sync::Mutex::new(None),
             connection: tokio::sync::Mutex::new(None),
-            sessions: tokio::sync::Mutex::new(HashMap::new()),
             turn_locks: tokio::sync::Mutex::new(HashMap::new()),
             permission_callback: Mutex::new(None),
+            approval_policy: Mutex::new("prompt".to_string()),
             secure_storage_callback: Mutex::new(None),
             browser_tool_bridge: Mutex::new(None),
             run_journal: Arc::new(Mutex::new(RunJournal::new())),
+            turn_timeout: TURN_TIMEOUT,
             preferred_provider: Mutex::new(None),
             runtime_tier: Mutex::new(None),
             active_space_id: Mutex::new(None),
@@ -460,6 +583,7 @@ impl OmoBackend {
             artifact_root: Mutex::new(None),
             storage: Mutex::new(None),
             composite_cfg: Mutex::new(crate::composite::CompositeExecutionConfig::default()),
+            interaction_broker: Arc::new(Mutex::new(crate::interaction::InteractionBroker::new())),
         }
     }
 
@@ -507,17 +631,26 @@ impl OmoBackend {
 
     async fn connection(&self) -> Result<Arc<RpcConnection>, AgentError> {
         let mut connection_guard = self.connection.lock().await;
-        if let Some(connection) = connection_guard.as_ref().cloned() {
-            return Ok(connection);
+        if let Some(connection) = connection_guard.as_ref() {
+            if !connection.is_closed() {
+                return Ok(Arc::clone(connection));
+            }
+            // The socket died (omo exited or dropped us); its session handles died with it.
+            *connection_guard = None;
         }
 
         let mut process_guard = self.process.lock().await;
+        if process_guard.as_mut().is_some_and(OmoProcess::has_exited) {
+            *process_guard = None;
+        }
         if process_guard.is_none() {
             self.write_mcp_config()?;
             self.write_models_config()?;
             self.write_settings_config()?;
-            let prompt_text = self.system_prompt.lock().unwrap().clone();
-            let _ = self.write_system_prompt(&prompt_text);
+            let prompt_text = lock_unpoison(&self.system_prompt).clone();
+            if let Err(error) = self.write_system_prompt(&prompt_text) {
+                tracing::warn!(target: "maho_agent::omo", %error, "omo will start without Maho's system prompt");
+            }
             let process = OmoProcess::spawn(
                 self.config.runtime_binary(),
                 self.config.rpc_entry(),
@@ -597,10 +730,12 @@ impl OmoBackend {
 
     fn write_models_config(&self) -> Result<(), AgentError> {
         let path = self.config.agent_dir().join("models.json");
+        let secure_storage_callback = lock_unpoison(&self.secure_storage_callback).clone();
         let provider_opt = if let Some(provider) = self.config.custom_provider() {
             Some(provider.clone())
-        } else if let Some(ref cb) = *self.secure_storage_callback.lock().unwrap() {
-            let preferred = self.preferred_provider.lock().unwrap().clone();
+        } else if let Some(cb) = secure_storage_callback {
+            // Invoked outside the mutex: the callback reaches the platform keychain.
+            let preferred = lock_unpoison(&self.preferred_provider).clone();
             let provider_name = preferred.as_deref().unwrap_or("openai-compatible");
             match cb(provider_name) {
                 Ok(bundle) => {
@@ -691,17 +826,33 @@ impl OmoBackend {
         maho_session_id: &str,
         connection: &RpcConnection,
     ) -> Result<String, AgentError> {
-        if let Some(session_id) = self.sessions.lock().await.get(maho_session_id).cloned() {
+        if let Some(session_id) = lock_unpoison(&connection.sessions).get(maho_session_id).cloned() {
             return Ok(session_id);
         }
 
+        // The id becomes a file name under the session directory.
+        if maho_session_id.is_empty()
+            || !maho_session_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(AgentError::ExecutionError(format!(
+                "invalid session id {maho_session_id:?}: only [A-Za-z0-9_-] is allowed"
+            )));
+        }
         let params = self.config.open_session_params();
-        let preferred = self.preferred_provider.lock().unwrap().clone();
+        let preferred = lock_unpoison(&self.preferred_provider).clone();
         let provider = preferred.or_else(|| params.provider);
         let session_file = self.config.session_dir().join(format!("{maho_session_id}.jsonl"));
         if !session_file.exists() {
+            let write_error = |error: std::io::Error| {
+                AgentError::ExecutionError(format!(
+                    "failed to write omo session file at {}: {error}",
+                    session_file.display()
+                ))
+            };
             if let Some(parent) = session_file.parent() {
-                let _ = std::fs::create_dir_all(parent);
+                std::fs::create_dir_all(parent).map_err(write_error)?;
             }
             let header = serde_json::json!({
                 "type": "session",
@@ -710,7 +861,7 @@ impl OmoBackend {
                 "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                 "cwd": self.cwd.to_string_lossy(),
             });
-            let _ = std::fs::write(&session_file, format!("{header}\n"));
+            std::fs::write(&session_file, format!("{header}\n")).map_err(write_error)?;
         }
         let session_path = Some(session_file.to_string_lossy().to_string());
 
@@ -723,58 +874,101 @@ impl OmoBackend {
             thinking_level: params.thinking_level.and_then(|s| s.parse().ok()),
             permission_preset: Some(params.permission_preset),
         };
-        let response = require_success(connection.request(command).await?)?;
-        let session_id = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("sessionId"))
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                AgentError::ExecutionError(
-                    "omo open_session response omitted data.sessionId".to_string(),
-                )
-            })?
-            .to_string();
-        self.sessions
-            .lock()
-            .await
-            .insert(maho_session_id.to_string(), session_id.clone());
-        Ok(session_id)
+        // omo can announce a freshly opened handle as closed before its open_session reply
+        // is read. Such a handle is dead on arrival, so open again rather than hand it out.
+        const MAX_OPEN_ATTEMPTS: usize = 3;
+        for _ in 0..MAX_OPEN_ATTEMPTS {
+            let response = require_success(connection.request(command.clone()).await?)?;
+            let session_id = response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("sessionId"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    AgentError::ExecutionError(
+                        "omo open_session response omitted data.sessionId".to_string(),
+                    )
+                })?
+                .to_string();
+            // Check and insert under the ended-handles lock: the reader marks a handle
+            // ended before evicting it, so either it sees our entry and removes it, or we
+            // see its mark here and reopen.
+            let ended = lock_unpoison(&connection.ended_handles);
+            if ended.contains(&session_id) {
+                continue;
+            }
+            lock_unpoison(&connection.sessions)
+                .insert(maho_session_id.to_string(), session_id.clone());
+            return Ok(session_id);
+        }
+        Err(AgentError::ExecutionError(format!(
+            "omo closed every session it opened for {maho_session_id} before replying \
+             ({MAX_OPEN_ATTEMPTS} attempts)"
+        )))
+    }
+
+    /// Sends a command addressed to `maho_session_id`'s omo handle. omo's idle sweep can
+    /// retire a cached handle after lookup but before dispatch. omo then refuses the command
+    /// in `getForCommand`, before `binding.handle` accepts it, with `unknown_session` (gone)
+    /// or `session_closing` (teardown in flight). The command never ran, so forget the
+    /// handle, reopen (omo's open waits out an in-flight teardown), and resend. Every other
+    /// failure is returned unchanged, and exhaustion is reported as a lifecycle error rather
+    /// than omo's raw refusal.
+    async fn session_request(
+        &self,
+        maho_session_id: &str,
+        connection: &RpcConnection,
+        build: impl Fn(String) -> RpcCommand,
+    ) -> Result<(String, RpcResponse), AgentError> {
+        const MAX_SEND_ATTEMPTS: usize = 3;
+        for _ in 0..MAX_SEND_ATTEMPTS {
+            let handle = self.rpc_session(maho_session_id, connection).await?;
+            let response = connection.request(build(handle.clone())).await?;
+            if !response.success && is_retired_handle_refusal(response.error.as_deref()) {
+                forget_handle(connection, &handle);
+                continue;
+            }
+            return Ok((handle, require_success(response)?));
+        }
+        Err(AgentError::ExecutionError(format!(
+            "omo kept retiring the session for {maho_session_id} before it could take the \
+             request ({MAX_SEND_ATTEMPTS} attempts); please retry"
+        )))
     }
 
     pub async fn get_auth_providers(&self) -> Result<Vec<RpcAuthProvider>, AgentError> {
         let connection = self.connection().await?;
-        let rpc_session_id = self.rpc_session("auth-session", &connection).await?;
-        let response = require_success(
-            connection
-                .request(RpcCommand::get_auth_providers(rpc_session_id))
-                .await?,
-        )?;
+        let (_, response) = self
+            .session_request("auth-session", &connection, RpcCommand::get_auth_providers)
+            .await?;
         let data = response.data.unwrap_or(serde_json::Value::Null);
         let providers = data.get("providers").cloned().unwrap_or(data);
         serde_json::from_value(providers)
             .map_err(|error| AgentError::ExecutionError(error.to_string()))
     }
 
+    /// Subscribe before starting a turn to observe runtime session lifecycle events.
+    pub async fn subscribe_rpc_events(&self) -> Result<broadcast::Receiver<RpcEvent>, AgentError> {
+        Ok(self.connection().await?.events.subscribe())
+    }
+
     pub async fn login_start(&self, provider: &str) -> Result<serde_json::Value, AgentError> {
         let connection = self.connection().await?;
-        let rpc_session_id = self.rpc_session("auth-session", &connection).await?;
-        let response = require_success(
-            connection
-                .request(RpcCommand::login_start(rpc_session_id, provider))
-                .await?,
-        )?;
+        let (_, response) = self
+            .session_request("auth-session", &connection, |handle| {
+                RpcCommand::login_start(handle, provider)
+            })
+            .await?;
         Ok(response.data.unwrap_or(serde_json::Value::Null))
     }
 
     pub async fn login_cancel(&self, provider: &str) -> Result<serde_json::Value, AgentError> {
         let connection = self.connection().await?;
-        let rpc_session_id = self.rpc_session("auth-session", &connection).await?;
-        let response = require_success(
-            connection
-                .request(RpcCommand::login_cancel(rpc_session_id, provider))
-                .await?,
-        )?;
+        let (_, response) = self
+            .session_request("auth-session", &connection, |handle| {
+                RpcCommand::login_cancel(handle, provider)
+            })
+            .await?;
         Ok(response.data.unwrap_or(serde_json::Value::Null))
     }
 
@@ -784,23 +978,37 @@ impl OmoBackend {
         key: &str,
     ) -> Result<serde_json::Value, AgentError> {
         let connection = self.connection().await?;
-        let rpc_session_id = self.rpc_session("auth-session", &connection).await?;
-        let response = require_success(
-            connection
-                .request(RpcCommand::login_api_key(rpc_session_id, provider, key))
-                .await?,
-        )?;
+        let (_, response) = self
+            .session_request("auth-session", &connection, |handle| {
+                RpcCommand::login_api_key(handle, provider, key)
+            })
+            .await?;
         Ok(response.data.unwrap_or(serde_json::Value::Null))
     }
 
     async fn turn_lock(&self, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-        self.turn_locks
-            .lock()
-            .await
+        let mut locks = self.turn_locks.lock().await;
+        // Drop locks no turn holds or waits on (only the map references them), so the map
+        // tracks in-flight sessions instead of every session ever seen.
+        locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+        locks
             .entry(session_id.to_string())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone()
     }
+}
+
+/// omo's pre-acceptance refusals for a command addressed to a handle it has retired
+/// (session-registry getForCommand): gone, or mid-teardown.
+fn is_retired_handle_refusal(error: Option<&str>) -> bool {
+    matches!(error, Some("unknown_session" | "session_closing"))
+}
+
+/// Drops a handle omo has stopped hosting, in the same order the reader uses (mark ended,
+/// then evict) so a concurrent `rpc_session` never re-caches it.
+fn forget_handle(connection: &RpcConnection, handle: &str) {
+    lock_unpoison(&connection.ended_handles).insert(handle.to_string());
+    lock_unpoison(&connection.sessions).retain(|_, cached| cached != handle);
 }
 
 fn require_success(response: RpcResponse) -> Result<RpcResponse, AgentError> {
@@ -844,22 +1052,75 @@ fn event_error(event: &RpcEvent) -> Option<String> {
         RpcEvent::Error { error, .. } => Some(error.clone()),
         RpcEvent::ContinuationError { error_message, .. } => Some(error_message.clone()),
         RpcEvent::MessageUpdate {
-            assistant_message_event: AssistantMessageEvent::Error { reason },
+            assistant_message_event: AssistantMessageEvent::Error { reason, error },
             ..
         } => Some(
-            reason
-                .clone()
-                .unwrap_or_else(|| "omo model turn failed".to_string()),
+            error
+                .as_ref()
+                .and_then(failed_message_error)
+                .unwrap_or_else(|| match reason.as_deref() {
+                    Some("aborted") => "omo model turn was aborted".to_string(),
+                    _ => "omo model turn failed".to_string(),
+                }),
         ),
+        // omo reports a failed provider call (HTTP 4xx/5xx, quota, invalid request) only on
+        // the finished assistant message: `stopReason: "error" | "aborted"` plus
+        // `errorMessage`. No `error` event accompanies it, so without this arm a failed turn
+        // ends as an empty success.
+        RpcEvent::MessageEnd {
+            message: Some(message),
+            ..
+        }
+        | RpcEvent::TurnEnd {
+            message: Some(message),
+            ..
+        } => failed_message_error(message),
         RpcEvent::SessionAbort { .. } => Some("omo session turn was aborted".to_string()),
         _ => None,
     }
 }
 
+fn failed_message_error(message: &serde_json::Value) -> Option<String> {
+    let stop_reason = message.get("stopReason").and_then(serde_json::Value::as_str)?;
+    if stop_reason != "error" && stop_reason != "aborted" {
+        return None;
+    }
+    let detail = message
+        .get("errorMessage")
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.trim().is_empty());
+    Some(match (stop_reason, detail) {
+        (_, Some(detail)) => detail.to_string(),
+        ("aborted", None) => "omo model turn was aborted".to_string(),
+        _ => "omo model turn failed".to_string(),
+    })
+}
+
+/// Next event from the broadcast stream. Falling behind (`Lagged`) only drops old events
+/// for this receiver, so it is logged and reading continues; only a closed channel ends.
+async fn recv_event(events: &mut broadcast::Receiver<RpcEvent>) -> Result<RpcEvent, AgentError> {
+    loop {
+        match events.recv().await {
+            Ok(event) => return Ok(event),
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                tracing::warn!(target: "maho_agent::omo", skipped, "omo event receiver lagged; continuing");
+            }
+            Err(broadcast::error::RecvError::Closed) => {
+                return Err(AgentError::ExecutionError(
+                    "omo RPC event stream ended".to_string(),
+                ));
+            }
+        }
+    }
+}
+
 fn event_is_terminal(event: &RpcEvent) -> bool {
+    // `agent_settled` is omo's end of a prompt (its own rpc-client waits for it).
+    // `agent_end` is not: it also fires before an automatic retry (`willRetry: true`), and
+    // the session stays busy until the retries finish.
     matches!(
         event,
-        RpcEvent::AgentEnd { .. } | RpcEvent::SessionAbort { .. }
+        RpcEvent::AgentSettled { .. } | RpcEvent::SessionAbort { .. }
     )
 }
 
@@ -875,35 +1136,54 @@ impl AgentRuntime for OmoBackend {
         let turn_lock = self.turn_lock(session_id).await;
         let _turn_guard = turn_lock.lock().await;
         let connection = self.connection().await?;
-        let rpc_session_id = self.rpc_session(session_id, &connection).await?;
+        // Subscribe before prompting so no event of this turn can be missed.
         let mut events = connection.events.subscribe();
+        let mut closed = connection.closed.subscribe();
         let (prompt, images) = prompt_parts(message.content);
-        let command = RpcCommand::Prompt {
-            id: None,
-            session_id: Some(rpc_session_id.clone()),
-            message: prompt,
-            images,
-            streaming_behavior: None,
-            thinking_level: None,
-            session_title_prompt: None,
-            expand_prompt_templates: None,
-        };
-        require_success(connection.request(command).await?)?;
-
         let run_id = AgentRunId::new(format!("{session_id}:{}", uuid::Uuid::new_v4()));
-        let _ = lock_unpoison(&self.run_journal).start_run(run_id.clone(), session_id);
+        if let Err(error) = lock_unpoison(&self.run_journal).start_run(run_id.clone(), session_id) {
+            tracing::warn!(target: "maho_agent::omo", %error, "failed to journal omo run start");
+        }
         let mut output = String::new();
         let mut turn_error = None;
+        let mut aborted = false;
+        let mut rpc_session_id = None;
         let wait = async {
+            let (handle, _) = self
+                .session_request(session_id, &connection, |handle| RpcCommand::Prompt {
+                    id: None,
+                    session_id: Some(handle),
+                    message: prompt.clone(),
+                    images: images.clone(),
+                    streaming_behavior: None,
+                    thinking_level: None,
+                    session_title_prompt: None,
+                    expand_prompt_templates: None,
+                })
+                .await?;
+            rpc_session_id = Some(handle.clone());
             loop {
-                let event = events.recv().await.map_err(|error| {
-                    AgentError::ExecutionError(format!("omo RPC event stream ended: {error}"))
-                })?;
-                if event.session_id() != Some(rpc_session_id.as_str()) {
+                let event = tokio::select! {
+                    biased;
+                    received = recv_event(&mut events) => received?,
+                    _ = closed.wait_for(|closed| *closed) => {
+                        return Err(AgentError::ExecutionError(
+                            "omo RPC connection closed during the turn".to_string(),
+                        ));
+                    }
+                };
+                if event.session_id() != Some(handle.as_str()) {
                     continue;
+                }
+                if matches!(event, RpcEvent::SessionClosed { .. } | RpcEvent::SessionParked { .. }) {
+                    return Err(AgentError::ExecutionError("omo session closed during the turn".to_string()));
                 }
                 if let Some(error) = event_error(&event) {
                     turn_error = Some(error);
+                }
+                if matches!(event, RpcEvent::TurnStart { .. }) {
+                    // A (re)started turn supersedes any failure an earlier attempt reported.
+                    turn_error = None;
                 }
                 if let Some(mapped) = map_rpc_event(&event) {
                     if let AgentStreamEvent::Token(ref token) = mapped {
@@ -917,47 +1197,72 @@ impl AgentRuntime for OmoBackend {
                     }
                 }
                 if event_is_terminal(&event) {
+                    aborted = matches!(event, RpcEvent::SessionAbort { .. });
                     return Ok::<(), AgentError>(());
                 }
             }
         };
-        match tokio::time::timeout(TURN_TIMEOUT, wait).await {
-            Ok(result) => result?,
-            Err(_) => {
-                let _ = connection.request(RpcCommand::abort(&rpc_session_id)).await;
-                let _ = tokio::time::timeout(Duration::from_secs(2), async {
-                    while let Ok(ev) = events.recv().await {
-                        if ev.session_id() == Some(rpc_session_id.as_str()) && event_is_terminal(&ev) {
-                            return true;
+        let turn_timeout = self.turn_timeout;
+        // Every exit funnels through this one outcome so the run is always journaled and an
+        // unsettled omo turn is always aborted and its handle retired.
+        let (outcome, settled) = match tokio::time::timeout(turn_timeout, wait).await {
+            Ok(Ok(())) => match turn_error {
+                Some(error) => (Err(AgentError::ExecutionError(error)), true),
+                None => (Ok(()), true),
+            },
+            Ok(Err(error)) => (Err(error), false),
+            Err(_) => (
+                Err(AgentError::ExecutionError(format!(
+                    "omo turn timed out after {turn_timeout:?}"
+                ))),
+                false,
+            ),
+        };
+
+        if outcome.is_err() {
+            let handle = rpc_session_id.or_else(|| {
+                lock_unpoison(&connection.sessions).get(session_id).cloned()
+            });
+            if let Some(rpc_session_id) = handle {
+                if let Err(error) = connection
+                    .request(RpcCommand::abort(&rpc_session_id))
+                    .await
+                    .and_then(require_success)
+                {
+                    tracing::warn!(target: "maho_agent::omo", %error, "failed to abort unsettled omo turn");
+                }
+                if !settled && !connection.is_closed() {
+                    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                        while let Ok(ev) = recv_event(&mut events).await {
+                            if ev.session_id() == Some(rpc_session_id.as_str()) && event_is_terminal(&ev) {
+                                return;
+                            }
                         }
-                    }
-                    false
-                })
-                .await;
-
-                // Always invalidate the session mapping on timeout so that subsequent turns
-                // start with a fresh, isolated RPC session.
-                self.sessions.lock().await.remove(session_id);
-
-                return Err(AgentError::ExecutionError(format!(
-                    "omo turn timed out after {TURN_TIMEOUT:?}"
-                )));
+                    })
+                    .await;
+                }
+                // The handle may still be mid-turn; later turns must open a fresh session.
+                forget_handle(&connection, &rpc_session_id);
             }
         }
 
-        if let Some(error) = turn_error {
-            let _ = lock_unpoison(&self.run_journal).record_terminal(
-                &run_id,
-                RunCheckpointKind::Failed,
-                Some(serde_json::json!({ "error": error })),
-            );
-            return Err(AgentError::ExecutionError(error));
+        let (kind, payload) = match &outcome {
+            Ok(()) => (RunCheckpointKind::Completed, None),
+            Err(error) => (
+                if aborted { RunCheckpointKind::Cancelled } else { RunCheckpointKind::Failed },
+                Some(serde_json::json!({ "error": error.to_string() })),
+            ),
+        };
+        if let Err(error) = lock_unpoison(&self.run_journal).record_terminal(&run_id, kind, payload) {
+            tracing::warn!(target: "maho_agent::omo", %error, "failed to journal omo run end");
         }
-        let _ = lock_unpoison(&self.run_journal).record_terminal(
-            &run_id,
-            RunCheckpointKind::Completed,
-            None,
-        );
+        drop(_turn_guard);
+        let mut locks = self.turn_locks.lock().await;
+        if Arc::strong_count(&turn_lock) == 2 {
+            locks.remove(session_id);
+        }
+        drop(locks);
+        outcome?;
         Ok(ChatMessage::assistant(ChatContent::text(output)))
     }
 
@@ -965,17 +1270,20 @@ impl AgentRuntime for OmoBackend {
         &self,
         bridge: Arc<dyn crate::BrowserToolBridge>,
     ) -> Result<(), AgentError> {
-        let mut guard = self.browser_tool_bridge.lock().unwrap();
-        *guard = Some(bridge);
+        *lock_unpoison(&self.browser_tool_bridge) = Some(bridge);
         Ok(())
     }
 
     async fn cancel(&self, session_id: &str) -> Result<(), AgentError> {
-        let connection = self.connection().await?;
-        let rpc_session_id = self
-            .sessions
+        // Cancelling never spawns omo: without a live connection there is no turn to stop.
+        let connection = self
+            .connection
             .lock()
             .await
+            .clone()
+            .filter(|connection| !connection.is_closed())
+            .ok_or_else(|| AgentError::SessionNotFound(session_id.to_string()))?;
+        let rpc_session_id = lock_unpoison(&connection.sessions)
             .get(session_id)
             .cloned()
             .ok_or_else(|| AgentError::SessionNotFound(session_id.to_string()))?;
@@ -1011,11 +1319,17 @@ impl AgentRuntime for OmoBackend {
         Ok(())
     }
 
+    fn set_approval_policy(&self, policy: String) {
+        // Omo RPC has no permission-request event. Chromium's browser gate is
+        // the enforcement point; this value retains the session policy.
+        *lock_unpoison(&self.approval_policy) = policy;
+    }
+
     fn set_secure_storage_callback(
         &self,
         callback: SecureStorageCallback,
     ) -> Result<(), AgentError> {
-        *lock_unpoison(&self.secure_storage_callback) = Some(callback);
+        *lock_unpoison(&self.secure_storage_callback) = Some(Arc::new(callback));
         Ok(())
     }
 
@@ -1023,23 +1337,43 @@ impl AgentRuntime for OmoBackend {
         Arc::clone(&self.run_journal)
     }
 
+    fn interaction_broker(&self) -> Arc<Mutex<crate::interaction::InteractionBroker>> {
+        Arc::clone(&self.interaction_broker)
+    }
+
+    fn resolve_interaction(
+        &self,
+        req_id: &str,
+        answer: crate::interaction::InteractionAnswer,
+    ) -> Result<(), crate::interaction::InteractionError> {
+        lock_unpoison(&self.interaction_broker)
+            .resolve(&crate::interaction::InteractionRequestId::new(req_id), answer)
+    }
+
+    fn timeout_interaction(&self, req_id: &str) -> Result<(), crate::interaction::InteractionError> {
+        lock_unpoison(&self.interaction_broker)
+            .timeout(&crate::interaction::InteractionRequestId::new(req_id))
+    }
+
+    fn cancel_interaction(&self, req_id: &str) -> Result<(), crate::interaction::InteractionError> {
+        lock_unpoison(&self.interaction_broker)
+            .cancel(&crate::interaction::InteractionRequestId::new(req_id))
+    }
+
     fn set_preferred_provider(&self, provider: Option<String>) {
-        let mut guard = self.preferred_provider.lock().unwrap();
-        *guard = provider;
+        *lock_unpoison(&self.preferred_provider) = provider;
     }
 
     fn set_runtime_tier(&self, tier: Option<String>) {
-        let mut guard = self.runtime_tier.lock().unwrap();
-        *guard = tier;
+        *lock_unpoison(&self.runtime_tier) = tier;
     }
 
     fn runtime_tier(&self) -> Option<String> {
-        self.runtime_tier.lock().unwrap().clone()
+        lock_unpoison(&self.runtime_tier).clone()
     }
 
     fn set_active_space_id(&self, space_id: Option<String>) {
-        let mut guard = self.active_space_id.lock().unwrap();
-        *guard = space_id;
+        *lock_unpoison(&self.active_space_id) = space_id;
     }
 
     fn set_fs_whitelist_roots(&self, roots: Vec<String>) {
@@ -1056,9 +1390,11 @@ impl AgentRuntime for OmoBackend {
         } else {
             prompt
         };
-        let mut guard = self.system_prompt.lock().unwrap();
-        *guard = effective_prompt.to_string();
-        let _ = self.write_system_prompt(effective_prompt);
+        *lock_unpoison(&self.system_prompt) = effective_prompt.to_string();
+        // omo reads the prompt file only at spawn; a failed write must not pass silently.
+        if let Err(error) = self.write_system_prompt(effective_prompt) {
+            tracing::warn!(target: "maho_agent::omo", %error, "failed to persist omo system prompt");
+        }
     }
 
     fn system_prompt(&self) -> Option<String> {
@@ -1114,6 +1450,656 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    /// Minimal stand-in for the omo RPC server. Like omo it hands out `rpc-N` session
+    /// handles, answers `unknown_session` for a handle it no longer hosts, broadcasts
+    /// `session_closed { reason: "idle_evicted" }` to every connection when it evicts a
+    /// session, and forgets a connection's sessions once that connection ends.
+    struct FakeOmo {
+        live: Mutex<std::collections::HashSet<String>>,
+        opened: AtomicU64,
+        stale_hits: AtomicU64,
+        drop_after_turn: std::sync::atomic::AtomicBool,
+        /// When set, the next prompt fails the way omo reports a provider failure:
+        /// `(stopReason, errorMessage)` on message_end/turn_end, no `error` event.
+        fail_next_turn: Mutex<Option<(String, String)>>,
+        fail_then_retry: std::sync::atomic::AtomicBool,
+        /// When set, the next opened session is evicted and announced BEFORE its
+        /// open_session reply is written: the reader sees the close first.
+        close_before_open_reply: std::sync::atomic::AtomicBool,
+        /// Number of upcoming session commands whose handle omo retires just before
+        /// dispatching them: the retirement lands after the backend's handle lookup.
+        retire_before_dispatch: std::sync::atomic::AtomicUsize,
+        /// Refusal omo gives a retired handle: "unknown_session" (gone) or
+        /// "session_closing" (teardown still in flight).
+        retire_refusal: Mutex<&'static str>,
+        /// When set, the next prompt is accepted but never settles (no events at all).
+        hang_next_turn: std::sync::atomic::AtomicBool,
+        evictions: broadcast::Sender<String>,
+    }
+
+    impl FakeOmo {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                live: Mutex::new(std::collections::HashSet::new()),
+                opened: AtomicU64::new(0),
+                stale_hits: AtomicU64::new(0),
+                drop_after_turn: std::sync::atomic::AtomicBool::new(false),
+                fail_next_turn: Mutex::new(None),
+                fail_then_retry: std::sync::atomic::AtomicBool::new(false),
+                close_before_open_reply: std::sync::atomic::AtomicBool::new(false),
+                retire_before_dispatch: std::sync::atomic::AtomicUsize::new(0),
+                retire_refusal: Mutex::new("unknown_session"),
+                hang_next_turn: std::sync::atomic::AtomicBool::new(false),
+                evictions: broadcast::channel(16).0,
+            })
+        }
+
+        /// omo's idle sweep: every live session is evicted and announced.
+        fn idle_evict_all(&self) {
+            let evicted: Vec<String> = lock_unpoison(&self.live).drain().collect();
+            for handle in evicted {
+                let _ = self.evictions.send(handle);
+            }
+        }
+    }
+
+    async fn write_json(writer: &mut OwnedWriteHalf, message: &serde_json::Value) {
+        let mut bytes = serde_json::to_vec(message).unwrap();
+        bytes.push(b'\n');
+        writer.write_all(&bytes).await.unwrap();
+    }
+
+    async fn serve_fake_omo(listener: tokio::net::UnixListener, fake: Arc<FakeOmo>) {
+        while let Ok((stream, _)) = listener.accept().await {
+            let fake = Arc::clone(&fake);
+            let mut evictions = fake.evictions.subscribe();
+            tokio::spawn(async move {
+                let (reader, mut writer) = stream.into_split();
+                let mut lines = BufReader::new(reader).lines();
+                let mut owned = Vec::new();
+                loop {
+                    let line = tokio::select! {
+                        line = lines.next_line() => match line {
+                            Ok(Some(line)) => line,
+                            _ => break,
+                        },
+                        Ok(handle) = evictions.recv() => {
+                            write_json(&mut writer, &serde_json::json!({
+                                "type": "session_closed", "sessionId": handle,
+                                "reason": "idle_evicted"
+                            })).await;
+                            continue;
+                        }
+                    };
+                    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                    let id = request["id"].clone();
+                    let command = request["type"].as_str().unwrap().to_string();
+                    let mut out = Vec::new();
+                    let mut drop_now = false;
+                    if command == "open_session" {
+                        let n = fake.opened.fetch_add(1, Ordering::SeqCst) + 1;
+                        let handle = format!("rpc-{n}");
+                        if fake.close_before_open_reply.swap(false, Ordering::SeqCst) {
+                            write_json(&mut writer, &serde_json::json!({
+                                "type": "session_closed", "sessionId": handle,
+                                "reason": "idle_evicted"
+                            })).await;
+                        } else {
+                            lock_unpoison(&fake.live).insert(handle.clone());
+                        }
+                        owned.push(handle.clone());
+                        out.push(serde_json::json!({
+                            "type": "response", "id": id, "command": command,
+                            "success": true, "data": { "sessionId": handle }
+                        }));
+                    } else {
+                        let handle = request["sessionId"].as_str().unwrap_or_default().to_string();
+                        let retire = fake
+                            .retire_before_dispatch
+                            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                            .is_ok();
+                        if retire {
+                            lock_unpoison(&fake.live).remove(&handle);
+                        }
+                        if !lock_unpoison(&fake.live).contains(&handle) {
+                            fake.stale_hits.fetch_add(1, Ordering::SeqCst);
+                            let refusal =
+                                if retire { *lock_unpoison(&fake.retire_refusal) } else { "unknown_session" };
+                            out.push(serde_json::json!({
+                                "type": "response", "id": id, "command": command,
+                                "success": false, "error": refusal
+                            }));
+                        } else {
+                            out.push(serde_json::json!({
+                                "type": "response", "id": id, "command": command, "success": true
+                            }));
+                            if command == "prompt" {
+                                if fake.hang_next_turn.swap(false, Ordering::SeqCst) {
+                                    for message in &out {
+                                        write_json(&mut writer, message).await;
+                                    }
+                                    continue;
+                                }
+                                let failure = lock_unpoison(&fake.fail_next_turn).take();
+                                let retry_first = fake.fail_then_retry.swap(false, Ordering::SeqCst);
+                                if retry_first {
+                                    // omo's auto-retry: a failed attempt, agent_end{willRetry},
+                                    // then a fresh turn that succeeds before agent_settled.
+                                    let failed = serde_json::json!({
+                                        "role": "assistant", "content": [],
+                                        "stopReason": "error", "errorMessage": "503: overloaded"
+                                    });
+                                    out.push(serde_json::json!({ "type": "turn_start", "sessionId": handle }));
+                                    out.push(serde_json::json!({
+                                        "type": "message_end", "sessionId": handle, "message": failed
+                                    }));
+                                    out.push(serde_json::json!({
+                                        "type": "agent_end", "sessionId": handle, "willRetry": true
+                                    }));
+                                    out.push(serde_json::json!({ "type": "turn_start", "sessionId": handle }));
+                                }
+                                if let Some((stop_reason, error_message)) = failure {
+                                    let failed = serde_json::json!({
+                                        "role": "assistant", "content": [],
+                                        "stopReason": stop_reason, "errorMessage": error_message
+                                    });
+                                    out.push(serde_json::json!({
+                                        "type": "message_end", "sessionId": handle, "message": failed
+                                    }));
+                                    out.push(serde_json::json!({
+                                        "type": "turn_end", "sessionId": handle,
+                                        "message": failed, "toolResults": []
+                                    }));
+                                    out.push(serde_json::json!({ "type": "agent_end", "sessionId": handle }));
+                                    out.push(serde_json::json!({ "type": "agent_settled", "sessionId": handle }));
+                                    for message in &out {
+                                        write_json(&mut writer, message).await;
+                                    }
+                                    continue;
+                                }
+                                out.push(serde_json::json!({
+                                    "type": "message_update", "sessionId": handle,
+                                    "assistantMessageEvent": {
+                                        "type": "text_delta", "contentIndex": 0,
+                                        "delta": format!("reply from {handle}")
+                                    }
+                                }));
+                                out.push(serde_json::json!({ "type": "agent_end", "sessionId": handle }));
+                                out.push(serde_json::json!({ "type": "agent_settled", "sessionId": handle }));
+                                drop_now = fake.drop_after_turn.swap(false, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                    for message in &out {
+                        write_json(&mut writer, message).await;
+                    }
+                    if drop_now {
+                        break;
+                    }
+                }
+                let mut live = lock_unpoison(&fake.live);
+                for handle in owned {
+                    live.remove(&handle);
+                }
+            });
+        }
+    }
+
+    /// Builds a backend whose "runtime" is a shell script that only prints omo's ready
+    /// marker, while the test itself serves the RPC socket.
+    fn fake_omo_backend(dir: &Path, fake: Arc<FakeOmo>) -> OmoBackend {
+        let socket_path = dir.join("rpc.sock");
+        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+        tokio::spawn(serve_fake_omo(listener, fake));
+        let script = dir.join("fake-omo.sh");
+        std::fs::write(&script, "echo 'rpc listening on fake' >&2\nexec sleep 300\n").unwrap();
+        let config = OmoLaunchConfig::builder(dir.join("agent"))
+            .runtime_binary("/bin/sh")
+            .rpc_entry(&script)
+            .socket_path(&socket_path)
+            .build()
+            .unwrap();
+        OmoBackend::new(config, dir.join("maho-browser-mcp"), dir)
+    }
+
+    async fn turn(backend: &OmoBackend, text: &str) -> Result<String, AgentError> {
+        let message = ChatMessage::user(ChatContent::text(text));
+        let reply = tokio::time::timeout(
+            Duration::from_secs(10),
+            backend.run_turn("panel-session", message, None, None),
+        )
+        .await
+        .expect("turn must settle instead of hanging")?;
+        match reply.content {
+            ChatContent::Text(text) => Ok(text),
+            other => panic!("unexpected reply content: {other:?}"),
+        }
+    }
+
+    async fn current_connection(backend: &OmoBackend) -> Arc<RpcConnection> {
+        backend.connection.lock().await.clone().unwrap()
+    }
+
+    fn cached_handle(connection: &RpcConnection) -> Option<String> {
+        lock_unpoison(&connection.sessions).get("panel-session").cloned()
+    }
+
+    #[test]
+    fn approval_policy_is_stored_by_omo_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = OmoLaunchConfig::builder(dir.path()).build().unwrap();
+        let backend = OmoBackend::new(config, dir.path().join("mcp"), dir.path());
+        backend.set_approval_policy("prompt".to_string());
+        assert_eq!(*lock_unpoison(&backend.approval_policy), "prompt");
+        backend.set_approval_policy("deny".to_string());
+        assert_eq!(*lock_unpoison(&backend.approval_policy), "deny");
+    }
+
+    #[tokio::test]
+    async fn idle_eviction_announcement_drops_the_cached_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeOmo::new();
+        let backend = fake_omo_backend(dir.path(), Arc::clone(&fake));
+
+        assert_eq!(turn(&backend, "first").await.unwrap(), "reply from rpc-1");
+        let connection = current_connection(&backend).await;
+        assert_eq!(cached_handle(&connection).as_deref(), Some("rpc-1"));
+
+        // Wait for the announcement itself, subscribed before omo's sweep fires.
+        let mut events = connection.events.subscribe();
+        fake.idle_evict_all();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(RpcEvent::SessionClosed { session_id, .. }) = events.recv().await {
+                    if session_id == "rpc-1" {
+                        return;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("session_closed must reach the client");
+        assert_eq!(cached_handle(&connection), None);
+
+        // The next turn opens a fresh handle up front: omo never sees the evicted one,
+        // so it never has a reason to answer unknown_session.
+        assert_eq!(turn(&backend, "second").await.unwrap(), "reply from rpc-2");
+        assert_eq!(fake.stale_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_handle_closed_before_its_open_reply_is_reopened_within_the_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeOmo::new();
+        let backend = fake_omo_backend(dir.path(), Arc::clone(&fake));
+
+        fake.close_before_open_reply.store(true, Ordering::SeqCst);
+        // The dead-on-arrival handle is reopened inside the same turn: no unknown_session.
+        assert_eq!(turn(&backend, "first").await.unwrap(), "reply from rpc-2");
+        let connection = current_connection(&backend).await;
+        assert_eq!(cached_handle(&connection).as_deref(), Some("rpc-2"));
+        assert_eq!(fake.stale_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_handle_evicted_after_lookup_is_reopened_and_the_prompt_resubmitted() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeOmo::new();
+        let backend = fake_omo_backend(dir.path(), Arc::clone(&fake));
+        assert_eq!(turn(&backend, "first").await.unwrap(), "reply from rpc-1");
+
+        // omo evicts rpc-1 between our cache lookup and its prompt dispatch.
+        fake.retire_before_dispatch.store(1, Ordering::SeqCst);
+        assert_eq!(turn(&backend, "second").await.unwrap(), "reply from rpc-2");
+        assert_eq!(fake.stale_hits.load(Ordering::SeqCst), 1);
+        let connection = current_connection(&backend).await;
+        assert_eq!(cached_handle(&connection).as_deref(), Some("rpc-2"));
+    }
+
+    #[tokio::test]
+    async fn auth_commands_recover_from_an_eviction_after_lookup() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeOmo::new();
+        let backend = fake_omo_backend(dir.path(), Arc::clone(&fake));
+        backend.login_start("anthropic").await.unwrap();
+
+        fake.retire_before_dispatch.store(1, Ordering::SeqCst);
+        backend.login_cancel("anthropic").await.unwrap();
+        assert_eq!(fake.stale_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.opened.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_prompt_racing_idle_teardown_is_resubmitted_to_a_fresh_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeOmo::new();
+        let backend = fake_omo_backend(dir.path(), Arc::clone(&fake));
+        assert_eq!(turn(&backend, "first").await.unwrap(), "reply from rpc-1");
+
+        // omo has begun tearing rpc-1 down when the prompt lands: session_closing.
+        *lock_unpoison(&fake.retire_refusal) = "session_closing";
+        fake.retire_before_dispatch.store(1, Ordering::SeqCst);
+        assert_eq!(turn(&backend, "second").await.unwrap(), "reply from rpc-2");
+    }
+
+    #[tokio::test]
+    async fn repeated_retirements_end_in_a_lifecycle_error_not_a_raw_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeOmo::new();
+        let backend = fake_omo_backend(dir.path(), Arc::clone(&fake));
+
+        fake.retire_before_dispatch.store(usize::MAX, Ordering::SeqCst);
+        let error = turn(&backend, "first").await.unwrap_err().to_string();
+        assert!(!error.contains("unknown_session"), "{error}");
+        assert!(error.contains("kept retiring the session"), "{error}");
+        // Every refused handle was forgotten, including the last one.
+        let connection = current_connection(&backend).await;
+        assert_eq!(cached_handle(&connection), None);
+
+        fake.retire_before_dispatch.store(0, Ordering::SeqCst);
+        assert!(turn(&backend, "second").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_turn_reconnects_after_the_rpc_connection_drops() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeOmo::new();
+        let backend = fake_omo_backend(dir.path(), Arc::clone(&fake));
+
+        fake.drop_after_turn.store(true, Ordering::SeqCst);
+        assert_eq!(turn(&backend, "first").await.unwrap(), "reply from rpc-1");
+        let first = current_connection(&backend).await;
+        tokio::time::timeout(Duration::from_secs(5), first.closed.subscribe().wait_for(|c| *c))
+            .await
+            .expect("client must observe the dropped connection")
+            .unwrap();
+
+        assert_eq!(turn(&backend, "second").await.unwrap(), "reply from rpc-2");
+        let second = current_connection(&backend).await;
+        assert!(!Arc::ptr_eq(&first, &second), "a closed connection must not be reused");
+        assert_eq!(fake.stale_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn provider_failure_on_the_finished_message_fails_the_turn_with_its_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeOmo::new();
+        let backend = fake_omo_backend(dir.path(), Arc::clone(&fake));
+        let quota = r#"429: {"code":429,"message":"Individual quota reached."}"#;
+
+        *lock_unpoison(&fake.fail_next_turn) = Some(("error".to_string(), quota.to_string()));
+        let error = turn(&backend, "first").await.unwrap_err().to_string();
+        assert!(error.contains(quota), "provider text must reach the caller: {error}");
+
+        *lock_unpoison(&fake.fail_next_turn) = Some(("aborted".to_string(), String::new()));
+        let error = turn(&backend, "second").await.unwrap_err().to_string();
+        assert!(error.contains("aborted"), "{error}");
+
+        assert_eq!(turn(&backend, "third").await.unwrap(), "reply from rpc-3");
+    }
+
+    #[tokio::test]
+    async fn a_turn_omo_retries_waits_for_settlement_and_reports_the_final_attempt() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeOmo::new();
+        let backend = fake_omo_backend(dir.path(), Arc::clone(&fake));
+
+        fake.fail_then_retry.store(true, Ordering::SeqCst);
+        assert_eq!(turn(&backend, "first").await.unwrap(), "reply from rpc-1");
+
+        fake.fail_then_retry.store(true, Ordering::SeqCst);
+        *lock_unpoison(&fake.fail_next_turn) =
+            Some(("error".to_string(), "429: quota after retries".to_string()));
+        let error = turn(&backend, "second").await.unwrap_err().to_string();
+        assert!(error.contains("429: quota after retries"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_turn_is_journaled_aborted_and_its_handle_retired() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeOmo::new();
+        let mut backend = fake_omo_backend(dir.path(), Arc::clone(&fake));
+        backend.turn_timeout = Duration::from_millis(300);
+
+        fake.hang_next_turn.store(true, Ordering::SeqCst);
+        let error = turn(&backend, "first").await.unwrap_err().to_string();
+        assert!(error.contains("timed out"), "{error}");
+
+        let journal = backend.run_journal();
+        let journal = lock_unpoison(&journal);
+        let runs = journal.list_runs();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].terminal_kind, Some(RunCheckpointKind::Failed));
+        drop(journal);
+
+        let connection = current_connection(&backend).await;
+        assert_eq!(cached_handle(&connection), None);
+        assert!(lock_unpoison(&connection.ended_handles).contains("rpc-1"));
+        assert_eq!(turn(&backend, "second").await.unwrap(), "reply from rpc-2");
+    }
+
+    #[tokio::test]
+    async fn a_lagged_event_receiver_keeps_reading() {
+        let (sender, mut receiver) = broadcast::channel(1);
+        sender.send(RpcEvent::Other).unwrap();
+        sender
+            .send(RpcEvent::AgentSettled { session_id: Some("rpc-1".to_string()) })
+            .unwrap();
+        let event = recv_event(&mut receiver).await.expect("lag is not fatal");
+        assert!(event_is_terminal(&event));
+        drop(sender);
+        assert!(recv_event(&mut receiver).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn bad_frames_are_skipped_without_ending_the_stream() {
+        let mut input: Vec<u8> = Vec::new();
+        input.extend_from_slice(&[b'x'; 40]);
+        input.push(b'\n');
+        input.extend_from_slice(&[0xff, 0xfe, b'\n']);
+        input.extend_from_slice(b"{\"ok\":1}\r\n");
+        let mut reader = BufReader::with_capacity(8, &input[..]);
+
+        assert!(matches!(read_frame(&mut reader, 16).await.unwrap(), Some(Frame::Skipped(_))));
+        assert!(matches!(read_frame(&mut reader, 16).await.unwrap(), Some(Frame::Skipped(_))));
+        match read_frame(&mut reader, 16).await.unwrap() {
+            Some(Frame::Line(line)) => assert_eq!(line, "{\"ok\":1}"),
+            _ => panic!("a valid frame after bad ones must still be read"),
+        }
+        assert!(read_frame(&mut reader, 16).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_write_retires_the_connection() {
+        let (ours, _peer) = UnixStream::pair().unwrap();
+        ours.writable().await.unwrap();
+        let bytes = [b'x'; 4096];
+        loop {
+            match ours.try_write(&bytes) {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("failed to fill socket: {error}"),
+            }
+        }
+        let connection = RpcConnection::new(ours);
+        {
+            let mut request = Box::pin(connection.request(RpcCommand::prompt("rpc-1", "hi")));
+            assert!(matches!(futures::poll!(&mut request), std::task::Poll::Pending));
+        }
+        assert!(
+            connection.is_closed(),
+            "a partial frame is on the socket; the connection must not be reused"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_ids_that_are_not_safe_file_names_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = fake_omo_backend(dir.path(), FakeOmo::new());
+        for bad in ["../escape", "a/b", "", "x.y"] {
+            let error = backend
+                .run_turn(bad, ChatMessage::user(ChatContent::text("hi")), None, None)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("invalid session id"), "{bad}: {error}");
+        }
+        assert!(!dir.path().join("agent").join("escape.jsonl").exists());
+    }
+
+    #[tokio::test]
+    async fn cancel_without_a_connection_does_not_spawn_omo() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = OmoLaunchConfig::builder(dir.path().join("agent"))
+            .runtime_binary(dir.path().join("no-such-runtime"))
+            .rpc_entry(dir.path().join("entry.js"))
+            .socket_path(dir.path().join("rpc.sock"))
+            .build()
+            .unwrap();
+        let backend = OmoBackend::new(config, dir.path().join("mcp"), dir.path());
+        assert!(matches!(
+            backend.cancel("panel-session").await,
+            Err(AgentError::SessionNotFound(_))
+        ));
+        assert!(backend.process.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn idle_turn_locks_are_pruned() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = fake_omo_backend(dir.path(), FakeOmo::new());
+        assert!(turn(&backend, "first").await.is_ok());
+        assert!(backend.turn_locks.lock().await.is_empty());
+        let held = backend.turn_lock("other-session").await;
+        let locks = backend.turn_locks.lock().await;
+        assert_eq!(locks.len(), 1, "the finished session's lock must be dropped");
+        assert!(locks.contains_key("other-session"));
+        drop(locks);
+        drop(held);
+    }
+
+    #[test]
+    fn secure_storage_callback_runs_without_holding_its_mutex() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = OmoLaunchConfig::builder(dir.path()).build().unwrap();
+        let backend = Arc::new(OmoBackend::new(config, dir.path().join("mcp"), dir.path()));
+        let weak = Arc::downgrade(&backend);
+        backend.set_secure_storage_callback(Box::new(move |_| {
+            let backend = weak.upgrade().unwrap();
+            assert!(backend.secure_storage_callback.try_lock().is_ok());
+            Err(AgentError::ExecutionError("fixture has no credentials".to_string()))
+        })).unwrap();
+        backend.write_models_config().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_failed_settled_turn_retires_its_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeOmo::new();
+        let backend = fake_omo_backend(dir.path(), Arc::clone(&fake));
+        *lock_unpoison(&fake.fail_next_turn) = Some(("error".to_string(), "fixture failure".to_string()));
+        assert!(turn(&backend, "first").await.is_err());
+        let connection = current_connection(&backend).await;
+        assert!(cached_handle(&connection).is_none());
+        assert!(lock_unpoison(&connection.ended_handles).contains("rpc-1"));
+        assert_eq!(lock_unpoison(&backend.run_journal).list_runs()[0].terminal_kind, Some(RunCheckpointKind::Failed));
+    }
+
+    #[tokio::test]
+    async fn session_file_write_failures_reach_the_caller() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = fake_omo_backend(dir.path(), FakeOmo::new());
+        std::fs::create_dir_all(backend.config.agent_dir()).unwrap();
+        std::fs::write(backend.config.session_dir(), b"not a directory").unwrap();
+        let error = turn(&backend, "first").await.unwrap_err().to_string();
+        assert!(error.contains("failed to write omo session file"), "{error}");
+    }
+
+    #[test]
+    fn a_poisoned_setting_mutex_does_not_panic_setters() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = OmoLaunchConfig::builder(dir.path()).build().unwrap();
+        let backend = Arc::new(OmoBackend::new(config, dir.path().join("mcp"), dir.path()));
+        let poisoner = Arc::clone(&backend);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.preferred_provider.lock().unwrap();
+            panic!("poison the mutex");
+        })
+        .join();
+        assert!(backend.preferred_provider.is_poisoned());
+        backend.set_preferred_provider(Some("anthropic".to_string()));
+        assert_eq!(
+            lock_unpoison(&backend.preferred_provider).as_deref(),
+            Some("anthropic")
+        );
+    }
+
+    #[test]
+    fn only_failed_stop_reasons_count_as_turn_errors() {
+        for (stop_reason, expected) in [
+            ("stop", None),
+            ("toolUse", None),
+            ("length", None),
+            ("error", Some("boom")),
+            ("aborted", Some("boom")),
+        ] {
+            let message = serde_json::json!({ "stopReason": stop_reason, "errorMessage": "boom" });
+            assert_eq!(failed_message_error(&message).as_deref(), expected, "{stop_reason}");
+        }
+        assert_eq!(
+            failed_message_error(&serde_json::json!({ "stopReason": "error" })).as_deref(),
+            Some("omo model turn failed")
+        );
+        assert_eq!(failed_message_error(&serde_json::json!({})), None);
+
+        let update: RpcEvent = serde_json::from_value(serde_json::json!({
+            "type": "message_update", "sessionId": "rpc-1",
+            "assistantMessageEvent": {
+                "type": "error", "reason": "error",
+                "error": { "stopReason": "error", "errorMessage": "400: bad schema" }
+            }
+        }))
+        .unwrap();
+        assert_eq!(event_error(&update).as_deref(), Some("400: bad schema"));
+    }
+
+    #[test]
+    fn interactions_resolve_through_the_backends_own_broker() {
+        use crate::interaction::{InteractionAnswer, InteractionError, InteractionOption};
+        let dir = tempfile::tempdir().unwrap();
+        let config = OmoLaunchConfig::builder(dir.path()).build().unwrap();
+        let backend = OmoBackend::new(config.clone(), dir.path().join("mcp"), dir.path());
+        let other = OmoBackend::new(config, dir.path().join("mcp"), dir.path());
+
+        let asked = lock_unpoison(&backend.interaction_broker())
+            .ask_user_question("Pick one", vec![InteractionOption::new("a", "A")])
+            .unwrap();
+
+        // Another session's backend cannot see, let alone answer, this question.
+        assert!(matches!(
+            other.resolve_interaction(
+                asked.as_str(),
+                InteractionAnswer::SelectedOption("a".to_string())
+            ),
+            Err(InteractionError::NotFound(_))
+        ));
+        backend
+            .resolve_interaction(
+                asked.as_str(),
+                InteractionAnswer::SelectedOption("a".to_string()),
+            )
+            .unwrap();
+        assert!(lock_unpoison(&backend.interaction_broker())
+            .get(&asked)
+            .unwrap()
+            .state
+            .is_resolved());
+        assert!(matches!(
+            backend.cancel_interaction("missing"),
+            Err(InteractionError::NotFound(_))
+        ));
+    }
 
     #[test]
     fn maps_rpc_text_and_thinking_deltas() {
@@ -1308,8 +2294,8 @@ mod tests {
             "true"
         );
         assert_eq!(
-            config["mcpServers"]["maho-browser"]["env"]["MAHO_MCP_AUTO_APPROVE"],
-            "true"
+            config["mcpServers"]["maho-browser"]["env"]["MAHO_MCP_APPROVAL"],
+            "browser"
         );
         assert!(config["mcpServers"]["maho-browser"]["env"]
             .get("MAHO_MCP_SOCKET_PATH")

@@ -8,6 +8,7 @@
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/net/maho_ad_block_tab_helper.h"
@@ -27,7 +28,7 @@ views::View* GetLocationBarAnchorView(Browser* browser) {
     return nullptr;
   }
 
-  BrowserWindow* window = browser->window();
+  BrowserView* window = BrowserView::GetBrowserViewForBrowser(browser);
   if (!window) {
     return nullptr;
   }
@@ -57,7 +58,7 @@ maho::MahoShieldSiteState* GetShieldSiteState(Browser* browser,
         Profile::FromBrowserContext(contents->GetBrowserContext()));
   }
   return maho::MahoShieldSiteStateFactory::GetForProfile(
-      browser ? browser->profile() : nullptr);
+      browser ? browser->GetProfile() : nullptr);
 }
 
 }  // namespace
@@ -73,7 +74,7 @@ void MahoPageInfoUI::ShowShieldBubble(views::View* anchor_view,
   }
 
   uint32_t blocked_count = 0;
-  TabStripModel* tab_strip = browser->tab_strip_model();
+  TabStripModel* tab_strip = browser->GetTabStripModel();
   content::WebContents* wc = tab_strip ? tab_strip->GetActiveWebContents()
                                        : nullptr;
   maho::MahoShieldSiteState* state = GetShieldSiteState(browser, wc);
@@ -139,7 +140,7 @@ void MahoPageInfoUI::ShowBoostEditor(Browser* browser) {
     return;
   }
 
-  TabStripModel* tab_strip = browser->tab_strip_model();
+  TabStripModel* tab_strip = browser->GetTabStripModel();
   if (!tab_strip) {
     return;
   }
@@ -154,7 +155,7 @@ void MahoPageInfoUI::ShowBoostEditor(Browser* browser) {
     return;
   }
 
-  maho::MahoBoostWindowController::GetForBrowser(browser, browser->profile())
+  maho::MahoBoostWindowController::GetForBrowser(browser, browser->GetProfile())
       .ShowForActiveDomain(active_tab);
 }
 
@@ -168,12 +169,12 @@ void MahoPageInfoUI::ShowShieldBubble(Browser* browser) {
 
   views::View* anchor_view = GetLocationBarAnchorView(browser);
   content::WebContents* web_contents =
-      browser->tab_strip_model()->GetActiveWebContents();
+      browser->GetTabStripModel()->GetActiveWebContents();
   if (!anchor_view || !web_contents) {
     return;
   }
 
-  if (BrowserWindow* window = browser->window()) {
+  if (ui::BaseWindow* window = browser->GetWindow()) {
     window->Activate();
   }
 

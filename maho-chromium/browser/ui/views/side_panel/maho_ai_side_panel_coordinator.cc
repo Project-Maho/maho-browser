@@ -53,7 +53,6 @@ void RegisterMahoAiSidePanel(BrowserWindowInterface* browser,
                           browser->GetProfile()),
       base::NullCallback());
   entry->set_should_show_header(false);
-  entry->set_should_show_outline(false);
   global_registry->Register(std::move(entry));
 }
 

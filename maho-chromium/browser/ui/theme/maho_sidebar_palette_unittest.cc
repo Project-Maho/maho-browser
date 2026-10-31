@@ -16,6 +16,7 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -24,7 +25,6 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_action_pane_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_processing_placeholder_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_update_notification_view.h"
@@ -405,12 +405,78 @@ TEST(MahoSidebarPaletteTest, ImpossibleMixedBackdropNormalizesSafely) {
   ExpectContrastAtLeast(palette, palette.neutral_glyph, 3.0f);
 }
 
+TEST(MahoSidebarCompositeContrastTest,
+     RolesStayReadableOverAnyAcrylicBackdropExtreme) {
+  // Windows composites the translucent sidebar over a DWM acrylic blur of an
+  // arbitrary desktop. With white and black backdrops in the contrast set,
+  // every role must hold its threshold at both extremes, which bounds every
+  // backdrop in between.
+  const ThemeData dark_theme = MakeTheme(
+      ThemeKind::kSolid, ColorScheme::kDark, {SkColorSetRGB(0x60, 0x50, 0x90)},
+      0.3f);
+  const ThemeData light_theme = MakeTheme(
+      ThemeKind::kSolid, ColorScheme::kLight, {SkColorSetRGB(0xC8, 0xB8, 0xD0)},
+      0.3f);
+  for (const ThemeData& theme : {dark_theme, light_theme}) {
+    const MahoSidebarPalette palette = ResolveMahoSidebarPalette(Environment(
+        theme, theme.color_scheme == ColorScheme::kDark,
+        {SkColorSetRGB(0x20, 0x20, 0x20), SK_ColorWHITE, SK_ColorBLACK}));
+    ExpectContrastAtLeast(palette, palette.primary_text, 4.5f);
+    ExpectContrastAtLeast(palette, palette.secondary_text, 4.5f);
+  }
+}
+
+TEST(MahoSidebarCompositeContrastTest,
+     RolesStayReadableOnOpaquePaintedSurfaces) {
+  // The sidebar paints `opaque_contrast_stops` on Linux and while an overlay
+  // is open, so every role must meet its threshold on those stops (and every
+  // row state over them), not only on the translucent composite.
+  const std::vector<std::pair<ThemeData, SkColor>> fixtures = {
+      {MakeTheme(ThemeKind::kSolid, ColorScheme::kAuto,
+                 {SkColorSetRGB(0xF1, 0xD1, 0x78)}, 0.3f),
+       SkColorSetRGB(0xEE, 0xEC, 0xE8)},
+      {MakeTheme(ThemeKind::kGradient, ColorScheme::kAuto,
+                 {SkColorSetRGB(0x42, 0x73, 0xA5),
+                  SkColorSetRGB(0xE5, 0xC4, 0x8A)},
+                 0.4f),
+       SkColorSetRGB(0xF5, 0xF5, 0xF7)},
+      {MakeTheme(ThemeKind::kGradient, ColorScheme::kDark,
+                 {SkColorSetRGB(0x30, 0x20, 0x50),
+                  SkColorSetRGB(0x10, 0x40, 0x50)},
+                 0.2f),
+       SkColorSetRGB(0x05, 0x05, 0x08)},
+      {MakeTheme(ThemeKind::kZen, ColorScheme::kLight,
+                 {SkColorSetRGB(0xE5, 0xC4, 0x8A),
+                  SkColorSetRGB(0x65, 0x8A, 0xA8),
+                  SkColorSetRGB(0x8D, 0x65, 0x9D)},
+                 0.5f),
+       SkColorSetRGB(0xFF, 0xFF, 0xFF)},
+  };
+
+  for (const auto& [theme, backdrop] : fixtures) {
+    const MahoSidebarPalette palette = ResolveMahoSidebarPalette(
+        Environment(theme, theme.color_scheme == ColorScheme::kDark,
+                    {backdrop}));
+    ASSERT_FALSE(palette.opaque_contrast_stops.empty());
+    for (SkColor stop : palette.opaque_contrast_stops) {
+      ASSERT_EQ(SkColorGetA(stop), SK_AlphaOPAQUE);
+      ExpectPaletteRolesAtSurface(palette, stop);
+      for (SkColor row_state :
+           {palette.row_hover, palette.row_active, palette.row_selected}) {
+        ExpectPaletteRolesAtSurface(
+            palette, color_utils::GetResultingPaintColor(row_state, stop));
+      }
+    }
+  }
+}
+
 class MahoSidebarPaletteHostTest : public BrowserWithTestWindowTest {
  protected:
   Browser* CreateAdditionalBrowser(Profile* profile) {
-    Browser::CreateParams params(profile, /*user_gesture=*/true);
+    BrowserWindowCreateParams params(profile, /*user_gesture=*/true);
+    params.window = new TestBrowserWindow();
     std::unique_ptr<Browser> browser =
-        CreateBrowserWithTestWindowForParams(params);
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
     Browser* browser_ptr = browser.get();
     additional_browsers_.push_back(std::move(browser));
     return browser_ptr;
@@ -441,6 +507,10 @@ class MahoSidebarPaletteHostTest : public BrowserWithTestWindowTest {
     bridge->SetActiveSpaceId("");
     browser_a_ = browser();
     browser_b_ = CreateAdditionalBrowser(profile());
+    // SetActiveSpaceId(browser, id) only binds spaces registered to the
+    // browser's profile, so register the fixture spaces first.
+    bridge->RegisterSpace("space-a", profile()->GetPath().BaseName());
+    bridge->RegisterSpace("space-b", profile()->GetPath().BaseName());
     bridge->SetActiveSpaceId(browser_a_, "space-a");
     bridge->SetActiveSpaceId(browser_b_, "space-b");
     ASSERT_EQ(MahoSpaceThemeState::UpdateFromSnapshotForTesting(
@@ -578,6 +648,100 @@ TEST_F(MahoSidebarPaletteHostTest,
   EXPECT_EQ(host.apply_count_for_testing(), 2);
   EXPECT_TRUE(host.opaque_for_testing());
   EXPECT_EQ(host.palette_for_testing().surface_stops, initial_stops);
+}
+
+// The snapshot is the single source of truth every sidebar-family surface
+// paints from (docked rail, Downloads/Archive library overlay, Spaces overlay).
+// Two surfaces of one Space theme used to disagree because each decided its own
+// paint mode and gradient span; the snapshot now carries the paint mode, so
+// equality has to cover it -- otherwise a notification that only flipped
+// opacity would be mistaken for a no-op.
+TEST_F(MahoSidebarPaletteHostTest, SnapshotEqualityCoversTheOpaquePaintMode) {
+  MahoSidebarPalette a;
+  MahoSidebarPalette b;
+  EXPECT_TRUE(a == b);
+  EXPECT_FALSE(a != b);
+
+  b.opaque = true;
+  EXPECT_FALSE(a == b) << "a paint-mode change must not compare equal";
+  EXPECT_TRUE(a != b);
+
+  a.opaque = true;
+  EXPECT_TRUE(a == b);
+
+  const MahoSidebarPalette resolved = ResolveMahoSidebarPalette(
+      Environment(MakeTheme(ThemeKind::kGradient, ColorScheme::kDark,
+                            {SkColorSetRGB(0x20, 0x10, 0x40),
+                             SkColorSetRGB(0x10, 0x30, 0x50)},
+                            0.8f),
+                  /*os_dark=*/true));
+  EXPECT_TRUE(resolved == resolved);
+  MahoSidebarPalette mutated = resolved;
+  mutated.primary_text = SK_ColorMAGENTA;
+  EXPECT_FALSE(mutated == resolved)
+      << "a resolved role color change must not compare equal";
+}
+
+TEST_F(MahoSidebarPaletteHostTest,
+       OpaquePaintModeTravelsWithThePublishedSnapshot) {
+  MahoSidebarPaletteHost host;
+  const MahoSidebarThemeEnvironment environment =
+      BuildMahoSidebarThemeEnvironmentForBrowser(browser_a_, false);
+
+  ASSERT_TRUE(host.Update(MahoSidebarPaletteUpdateReason::kConstruction,
+                          environment, /*opaque=*/false));
+  EXPECT_FALSE(host.palette_for_testing().opaque);
+  EXPECT_FALSE(host.opaque_for_testing());
+
+  // The overlay surfaces read the paint mode off the palette instead of
+  // hardcoding opaque, so the published snapshot must carry it.
+  ASSERT_TRUE(host.Update(MahoSidebarPaletteUpdateReason::kOpaqueMode,
+                          environment, /*opaque=*/true));
+  EXPECT_TRUE(host.palette_for_testing().opaque);
+  EXPECT_TRUE(host.opaque_for_testing());
+}
+
+TEST_F(MahoSidebarPaletteHostTest, NativeThemeNoOpDoesNotFanOutToConsumers) {
+  MahoSidebarPaletteHost host;
+  int callback_count = 0;
+  host.SetApplyCallback(base::BindRepeating(
+      [](int* count, const MahoSidebarPalette&) { ++*count; }, &callback_count));
+  const MahoSidebarThemeEnvironment environment =
+      BuildMahoSidebarThemeEnvironmentForBrowser(browser_a_, false);
+
+  ASSERT_TRUE(host.Update(MahoSidebarPaletteUpdateReason::kNativeTheme,
+                          environment, /*opaque=*/false));
+  EXPECT_EQ(callback_count, 1);
+  const int compute = host.compute_count_for_testing();
+  const int apply = host.apply_count_for_testing();
+
+  // Second identical native-theme notification: same inputs, same snapshot.
+  EXPECT_FALSE(host.Update(MahoSidebarPaletteUpdateReason::kNativeTheme,
+                           environment, /*opaque=*/false));
+  EXPECT_EQ(callback_count, 1)
+      << "an unchanged snapshot must not repaint every consumer surface";
+  EXPECT_EQ(host.compute_count_for_testing(), compute);
+  EXPECT_EQ(host.apply_count_for_testing(), apply);
+
+  // Flipping only the paint mode is a real change and must still publish.
+  EXPECT_TRUE(host.Update(MahoSidebarPaletteUpdateReason::kNativeTheme,
+                          environment, /*opaque=*/true));
+  EXPECT_EQ(callback_count, 2);
+  EXPECT_TRUE(host.palette_for_testing().opaque);
+
+  // A genuine theme change must still publish. This fixture's default theme
+  // resolves the same dark family for both OS modes, so drive the change with an
+  // explicit preview override (the real space-theme path) instead of os_dark.
+  ASSERT_TRUE(MahoSpaceThemeState::SetPreviewOverride(
+      browser_a_,
+      R"({"type":"solid","color":{"hue":120.0,"saturation":0.9,"brightness":0.7,"grain":0.4}})"));
+  EXPECT_TRUE(host.Update(
+      MahoSidebarPaletteUpdateReason::kNativeTheme,
+      BuildMahoSidebarThemeEnvironmentForBrowser(browser_a_, /*os_dark=*/false),
+      /*opaque=*/true));
+  EXPECT_EQ(callback_count, 3);
+  EXPECT_FLOAT_EQ(host.palette_for_testing().grain, 0.4f)
+      << "the new theme must actually reach the published snapshot";
 }
 
 TEST_F(MahoSidebarPaletteHostTest,
@@ -822,15 +986,12 @@ TEST_F(MahoSidebarPaletteHostTest,
   maho::MahoSidebarView* sidebar = CreateSidebar(browser_a_);
   ASSERT_TRUE(sidebar);
   ASSERT_TRUE(sidebar->top_bar_view_for_testing());
-  ASSERT_TRUE(sidebar->search_view_for_testing());
   ASSERT_TRUE(sidebar->favorites_view_for_testing());
   ASSERT_TRUE(sidebar->footer_view_for_testing());
 
   const MahoSidebarPalette& initial = sidebar->sidebar_palette_for_testing();
   ExpectSamePaletteSnapshot(
       initial, sidebar->top_bar_view_for_testing()->sidebar_palette_for_testing());
-  ExpectSamePaletteSnapshot(
-      initial, sidebar->search_view_for_testing()->sidebar_palette_for_testing());
   ExpectSamePaletteSnapshot(
       initial,
       sidebar->favorites_view_for_testing()->sidebar_palette_for_testing());
@@ -844,8 +1005,6 @@ TEST_F(MahoSidebarPaletteHostTest,
   const MahoSidebarPalette& preview = sidebar->sidebar_palette_for_testing();
   ExpectSamePaletteSnapshot(
       preview, sidebar->top_bar_view_for_testing()->sidebar_palette_for_testing());
-  ExpectSamePaletteSnapshot(
-      preview, sidebar->search_view_for_testing()->sidebar_palette_for_testing());
   ExpectSamePaletteSnapshot(
       preview,
       sidebar->favorites_view_for_testing()->sidebar_palette_for_testing());
@@ -953,6 +1112,12 @@ TEST_F(MahoSidebarPaletteHostTest,
        ThemePickerCancelAndCloseClearOnlyTheirOwnerPreviewOverrides) {
   bool a_cancelled = false;
   bool b_cancelled = false;
+  // The picker parents its dialog widget to the browser's native window; test
+  // windows have none by default, which leaves Aura without a root window.
+  for (Browser* b : {browser_a_.get(), browser_b_.get()}) {
+    static_cast<TestBrowserWindow*>(b->GetWindow())
+        ->SetNativeWindow(GetContext());
+  }
   views::Widget* picker_a = MahoSpaceThemePickerDialog::Open(
       browser_a_, "{}",
       base::BindOnce(

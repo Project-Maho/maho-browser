@@ -52,6 +52,11 @@ enum BackendOutcome {
 struct BackendCredentialDiscoveryRequest {
     #[serde(default)]
     origin: Option<String>,
+    /// Requested credential scheme (`PasswordForm::Scheme`): 0 = HTML,
+    /// 1 = Basic, 2 = Digest. When present it decides the lookup kind;
+    /// when absent the stored-realm inference is kept for legacy callers.
+    #[serde(default)]
+    scheme: Option<u8>,
 }
 
 #[derive(serde::Deserialize)]
@@ -338,7 +343,9 @@ pub unsafe extern "C" fn maho_vault_backend_session_execute_credentials(
                     };
                     match request {
                         BackendCredentialRequest::Discover(request) => {
-                            match backend_session.login_credentials(request.origin.as_deref()) {
+                            match backend_session
+                                .login_credentials(request.origin.as_deref(), request.scheme)
+                            {
                                 Ok(result) => match serde_json::to_vec(&result) {
                                     Ok(payload) => BackendOutcome::Success(Zeroizing::new(payload)),
                                     Err(_) => BackendOutcome::Failed,

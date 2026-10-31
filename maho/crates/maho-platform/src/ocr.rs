@@ -7,7 +7,7 @@ use crate::grounding::{Region, TextBlock};
 
 /// Convert normalized Vision bounding box (origin bottom-left: x, y, w, h in [0.0, 1.0])
 /// to top-left origin pixel coordinates (x, y, w, h).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn vision_bbox_to_pixels(
     bbox: (f32, f32, f32, f32),
     img_w: u32,
@@ -187,23 +187,10 @@ mod mac {
                 confidence,
             };
 
-            // Filter if region is provided: keep blocks whose centroid falls inside the region.
-            // Centroid-in-region ensures text blocks spanning region edges are uniquely attributed
-            // to a single region without duplication or adjacent noise.
-            if let Some(r) = region {
-                let cx = block.x + (block.w as i32) / 2;
-                let cy = block.y + (block.h as i32) / 2;
-                let rx_end = r.x + (r.w as i32);
-                let ry_end = r.y + (r.h as i32);
-                if cx < r.x || cx >= rx_end || cy < r.y || cy >= ry_end {
-                    continue;
-                }
-            }
-
             blocks.push(block);
         }
 
-        Ok(blocks)
+        Ok(crate::linux_probe::filter_region(blocks, region))
     }
 }
 

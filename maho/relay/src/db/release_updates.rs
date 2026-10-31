@@ -20,6 +20,8 @@ pub struct ReleaseUpdate {
     #[serde(default)]
     pub win_envelope: Option<String>,
     #[serde(default)]
+    pub linux_envelope: Option<String>,
+    #[serde(default)]
     pub notes_url: Option<String>,
     #[serde(default)]
     pub pub_date: Option<String>,
@@ -36,13 +38,18 @@ pub async fn find_latest_macos_release(
     channel: &str,
     bucket: i32,
 ) -> Result<Option<ReleaseUpdate>> {
+    // Only the newest macOS release is ever offered. A bucket outside its
+    // rollout gets no release (empty appcast) instead of an older fully rolled
+    // out row: Sparkle would otherwise present that stale build as "the newest
+    // version available" to clients already running something newer.
     let stmt = db.prepare(
         "SELECT platform, channel, version, version_code, rollout_threshold, \
-         appcast_xml, win_envelope, notes_url, pub_date, created_at \
-         FROM release_updates \
-         WHERE platform = 'macos' AND channel = ?1 AND ?2 < rollout_threshold \
-         ORDER BY version_code DESC \
-         LIMIT 1",
+         appcast_xml, win_envelope, linux_envelope, notes_url, pub_date, created_at \
+         FROM (SELECT * FROM release_updates \
+               WHERE platform = 'macos' AND channel = ?1 \
+               ORDER BY version_code DESC \
+               LIMIT 1) \
+         WHERE ?2 < rollout_threshold",
     );
     let stmt = stmt.bind(&[js(&channel)?, js(&bucket)?])?;
     let rows = stmt.all().await?;
@@ -56,9 +63,27 @@ pub async fn find_latest_windows_release(
 ) -> Result<Option<ReleaseUpdate>> {
     let stmt = db.prepare(
         "SELECT platform, channel, version, version_code, rollout_threshold, \
-         appcast_xml, win_envelope, notes_url, pub_date, created_at \
+         appcast_xml, win_envelope, linux_envelope, notes_url, pub_date, created_at \
          FROM release_updates \
          WHERE platform = 'windows' AND channel = ?1 \
+         ORDER BY version_code DESC \
+         LIMIT 1",
+    );
+    let stmt = stmt.bind(&[js(&channel)?])?;
+    let rows = stmt.all().await?;
+    let mut results: Vec<ReleaseUpdate> = rows.results()?;
+    Ok(results.pop())
+}
+
+pub async fn find_latest_linux_release(
+    db: &D1Database,
+    channel: &str,
+) -> Result<Option<ReleaseUpdate>> {
+    let stmt = db.prepare(
+        "SELECT platform, channel, version, version_code, rollout_threshold, \
+         appcast_xml, win_envelope, linux_envelope, notes_url, pub_date, created_at \
+         FROM release_updates \
+         WHERE platform = 'linux' AND channel = ?1 \
          ORDER BY version_code DESC \
          LIMIT 1",
     );
@@ -73,13 +98,14 @@ pub async fn upsert_release_update(db: &D1Database, update: &ReleaseUpdate) -> R
     let stmt = db.prepare(
         "INSERT INTO release_updates ( \
              platform, channel, version, version_code, rollout_threshold, \
-             appcast_xml, win_envelope, notes_url, pub_date, created_at \
-         ) VALUES (?1, ?2, ?3, ?4, COALESCE(?5, 100), ?6, ?7, ?8, ?9, COALESCE(?10, ?11)) \
+             appcast_xml, win_envelope, linux_envelope, notes_url, pub_date, created_at \
+         ) VALUES (?1, ?2, ?3, ?4, COALESCE(?5, 100), ?6, ?7, ?8, ?9, ?10, COALESCE(?11, ?12)) \
          ON CONFLICT(platform, channel, version) DO UPDATE SET \
              version_code = COALESCE(excluded.version_code, release_updates.version_code), \
              rollout_threshold = COALESCE(?5, release_updates.rollout_threshold), \
              appcast_xml = COALESCE(excluded.appcast_xml, release_updates.appcast_xml), \
              win_envelope = COALESCE(excluded.win_envelope, release_updates.win_envelope), \
+             linux_envelope = COALESCE(excluded.linux_envelope, release_updates.linux_envelope), \
              notes_url = COALESCE(excluded.notes_url, release_updates.notes_url), \
              pub_date = COALESCE(excluded.pub_date, release_updates.pub_date), \
              created_at = COALESCE(release_updates.created_at, excluded.created_at)",
@@ -92,6 +118,7 @@ pub async fn upsert_release_update(db: &D1Database, update: &ReleaseUpdate) -> R
         js(&update.rollout_threshold)?,
         js(&update.appcast_xml)?,
         js(&update.win_envelope)?,
+        js(&update.linux_envelope)?,
         js(&update.notes_url)?,
         js(&update.pub_date)?,
         js(&update.created_at)?,
@@ -112,6 +139,10 @@ mod tests {
             "../../migrations/0024_create_release_updates.sql"
         ))
         .unwrap();
+        db.execute_batch(include_str!(
+            "../../migrations/0026_release_updates_linux_envelope.sql"
+        ))
+        .unwrap();
         db
     }
 
@@ -120,13 +151,14 @@ mod tests {
         db.execute(
             "INSERT INTO release_updates (
                  platform, channel, version, version_code, rollout_threshold,
-                 appcast_xml, win_envelope, notes_url, pub_date, created_at
-             ) VALUES (?1, ?2, ?3, ?4, COALESCE(?5, 100), ?6, ?7, ?8, ?9, COALESCE(?10, ?11))
+                 appcast_xml, win_envelope, linux_envelope, notes_url, pub_date, created_at
+             ) VALUES (?1, ?2, ?3, ?4, COALESCE(?5, 100), ?6, ?7, ?8, ?9, ?10, COALESCE(?11, ?12))
              ON CONFLICT(platform, channel, version) DO UPDATE SET
                  version_code = COALESCE(excluded.version_code, release_updates.version_code),
                  rollout_threshold = COALESCE(?5, release_updates.rollout_threshold),
                  appcast_xml = COALESCE(excluded.appcast_xml, release_updates.appcast_xml),
                  win_envelope = COALESCE(excluded.win_envelope, release_updates.win_envelope),
+                 linux_envelope = COALESCE(excluded.linux_envelope, release_updates.linux_envelope),
                  notes_url = COALESCE(excluded.notes_url, release_updates.notes_url),
                  pub_date = COALESCE(excluded.pub_date, release_updates.pub_date),
                  created_at = COALESCE(release_updates.created_at, excluded.created_at)",
@@ -138,6 +170,7 @@ mod tests {
                 update.rollout_threshold,
                 update.appcast_xml,
                 update.win_envelope,
+                update.linux_envelope,
                 update.notes_url,
                 update.pub_date,
                 update.created_at,
@@ -154,11 +187,12 @@ mod tests {
     ) -> Option<ReleaseUpdate> {
         db.query_row(
             "SELECT platform, channel, version, version_code, rollout_threshold, \
-             appcast_xml, win_envelope, notes_url, pub_date, created_at \
-             FROM release_updates \
-             WHERE platform = 'macos' AND channel = ?1 AND ?2 < rollout_threshold \
-             ORDER BY version_code DESC \
-             LIMIT 1",
+             appcast_xml, win_envelope, linux_envelope, notes_url, pub_date, created_at \
+             FROM (SELECT * FROM release_updates \
+                   WHERE platform = 'macos' AND channel = ?1 \
+                   ORDER BY version_code DESC \
+                   LIMIT 1) \
+             WHERE ?2 < rollout_threshold",
             params![channel, bucket],
             |row| {
                 Ok(ReleaseUpdate {
@@ -169,9 +203,10 @@ mod tests {
                     rollout_threshold: row.get(4)?,
                     appcast_xml: row.get(5)?,
                     win_envelope: row.get(6)?,
-                    notes_url: row.get(7)?,
-                    pub_date: row.get(8)?,
-                    created_at: row.get(9)?,
+                    linux_envelope: row.get(7)?,
+                    notes_url: row.get(8)?,
+                    pub_date: row.get(9)?,
+                    created_at: row.get(10)?,
                 })
             },
         )
@@ -182,7 +217,7 @@ mod tests {
     fn sqlite_find_latest_windows(db: &Connection, channel: &str) -> Option<ReleaseUpdate> {
         db.query_row(
             "SELECT platform, channel, version, version_code, rollout_threshold, \
-             appcast_xml, win_envelope, notes_url, pub_date, created_at \
+             appcast_xml, win_envelope, linux_envelope, notes_url, pub_date, created_at \
              FROM release_updates \
              WHERE platform = 'windows' AND channel = ?1 \
              ORDER BY version_code DESC \
@@ -197,14 +232,103 @@ mod tests {
                     rollout_threshold: row.get(4)?,
                     appcast_xml: row.get(5)?,
                     win_envelope: row.get(6)?,
-                    notes_url: row.get(7)?,
-                    pub_date: row.get(8)?,
-                    created_at: row.get(9)?,
+                    linux_envelope: row.get(7)?,
+                    notes_url: row.get(8)?,
+                    pub_date: row.get(9)?,
+                    created_at: row.get(10)?,
                 })
             },
         )
         .optional()
         .unwrap()
+    }
+
+    fn sqlite_find_latest_linux(db: &Connection, channel: &str) -> Option<ReleaseUpdate> {
+        db.query_row(
+            "SELECT platform, channel, version, version_code, rollout_threshold, \
+             appcast_xml, win_envelope, linux_envelope, notes_url, pub_date, created_at \
+             FROM release_updates \
+             WHERE platform = 'linux' AND channel = ?1 \
+             ORDER BY version_code DESC \
+             LIMIT 1",
+            params![channel],
+            |row| {
+                Ok(ReleaseUpdate {
+                    platform: row.get(0)?,
+                    channel: row.get(1)?,
+                    version: row.get(2)?,
+                    version_code: row.get(3)?,
+                    rollout_threshold: row.get(4)?,
+                    appcast_xml: row.get(5)?,
+                    win_envelope: row.get(6)?,
+                    linux_envelope: row.get(7)?,
+                    notes_url: row.get(8)?,
+                    pub_date: row.get(9)?,
+                    created_at: row.get(10)?,
+                })
+            },
+        )
+        .optional()
+        .unwrap()
+    }
+
+    fn linux_release(version: &str, version_code: i64, envelope: Option<&str>) -> ReleaseUpdate {
+        ReleaseUpdate {
+            platform: "linux".to_string(),
+            channel: "stable".to_string(),
+            version: version.to_string(),
+            version_code: Some(version_code),
+            rollout_threshold: Some(100),
+            appcast_xml: None,
+            win_envelope: None,
+            linux_envelope: envelope.map(str::to_string),
+            notes_url: None,
+            pub_date: None,
+            created_at: Some(1000),
+        }
+    }
+
+    #[test]
+    fn test_linux_release_returns_latest_linux_envelope_only() {
+        let db = setup_test_db();
+        sqlite_upsert_release_update(
+            &db,
+            &linux_release("2026.9.24", 2_026_009_024, Some(r#"{"payload":"old"}"#)),
+        );
+        sqlite_upsert_release_update(
+            &db,
+            &linux_release("2026.9.27", 2_026_009_027, Some(r#"{"payload":"new"}"#)),
+        );
+        // A Windows row with a higher code must not leak into the Linux feed.
+        sqlite_upsert_release_update(
+            &db,
+            &ReleaseUpdate {
+                platform: "windows".to_string(),
+                version_code: Some(2_026_009_030),
+                win_envelope: Some(r#"{"payload":"win"}"#.to_string()),
+                linux_envelope: None,
+                ..linux_release("2026.9.30", 2_026_009_030, None)
+            },
+        );
+
+        let linux = sqlite_find_latest_linux(&db, "stable").unwrap();
+        assert_eq!(linux.version, "2026.9.27");
+        assert_eq!(linux.linux_envelope.as_deref(), Some(r#"{"payload":"new"}"#));
+        assert!(sqlite_find_latest_linux(&db, "beta").is_none());
+    }
+
+    #[test]
+    fn test_linux_partial_upsert_preserves_envelope() {
+        let db = setup_test_db();
+        sqlite_upsert_release_update(
+            &db,
+            &linux_release("2026.9.27", 2_026_009_027, Some(r#"{"payload":"new"}"#)),
+        );
+        // Re-registering without an envelope (e.g. a rollout-only bump) keeps it.
+        sqlite_upsert_release_update(&db, &linux_release("2026.9.27", 2_026_009_027, None));
+
+        let linux = sqlite_find_latest_linux(&db, "stable").unwrap();
+        assert_eq!(linux.linux_envelope.as_deref(), Some(r#"{"payload":"new"}"#));
     }
 
     #[test]
@@ -221,6 +345,7 @@ mod tests {
                 rollout_threshold: Some(100),
                 appcast_xml: Some("<xml>mac-1.0.0</xml>".to_string()),
                 win_envelope: None,
+                linux_envelope: None,
                 notes_url: None,
                 pub_date: None,
                 created_at: Some(1000),
@@ -237,6 +362,7 @@ mod tests {
                 rollout_threshold: Some(100),
                 appcast_xml: None,
                 win_envelope: Some(r#"{"version":"1.0.0"}"#.to_string()),
+                linux_envelope: None,
                 notes_url: None,
                 pub_date: None,
                 created_at: Some(1000),
@@ -272,6 +398,7 @@ mod tests {
                 rollout_threshold: Some(100),
                 appcast_xml: Some("<xml>1.0.0</xml>".to_string()),
                 win_envelope: None,
+                linux_envelope: None,
                 notes_url: None,
                 pub_date: None,
                 created_at: Some(1000),
@@ -288,6 +415,7 @@ mod tests {
                 rollout_threshold: Some(20), // 20% canary rollout
                 appcast_xml: Some("<xml>2.0.0</xml>".to_string()),
                 win_envelope: None,
+                linux_envelope: None,
                 notes_url: None,
                 pub_date: None,
                 created_at: Some(2000),
@@ -298,9 +426,10 @@ mod tests {
         let res_low = sqlite_find_latest_macos(&db, "stable", 10).unwrap();
         assert_eq!(res_low.version, "2.0.0");
 
-        // Bucket 20 (>= 20, but < 100) falls back to stable 1.0.0
-        let res_mid = sqlite_find_latest_macos(&db, "stable", 20).unwrap();
-        assert_eq!(res_mid.version, "1.0.0");
+        // Bucket 20 (>= 20) is outside the canary. It must not be offered an
+        // older release: Sparkle would present that stale version as "the
+        // newest version available" to clients already running a newer build.
+        assert!(sqlite_find_latest_macos(&db, "stable", 20).is_none());
 
         // Bucket 100 (sentinel) is not < 100, so returns None
         let res_sentinel = sqlite_find_latest_macos(&db, "stable", 100);
@@ -322,6 +451,7 @@ mod tests {
                 rollout_threshold: Some(50),
                 appcast_xml: Some("<xml>mac-1.0.0</xml>".to_string()),
                 win_envelope: None,
+                linux_envelope: None,
                 notes_url: Some("https://notes/1.0.0".to_string()),
                 pub_date: Some("2026-08-01".to_string()),
                 created_at: Some(1000),
@@ -338,6 +468,7 @@ mod tests {
                 rollout_threshold: Some(50),
                 appcast_xml: None,
                 win_envelope: Some(r#"{"version":"1.0.0"}"#.to_string()),
+                linux_envelope: None,
                 notes_url: Some("https://notes/1.0.0".to_string()),
                 pub_date: Some("2026-08-01".to_string()),
                 created_at: Some(1000),
@@ -355,6 +486,7 @@ mod tests {
                 rollout_threshold: Some(100),
                 appcast_xml: None,
                 win_envelope: None,
+                linux_envelope: None,
                 notes_url: None,
                 pub_date: None,
                 created_at: None,

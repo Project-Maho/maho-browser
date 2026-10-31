@@ -6,7 +6,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/test/bind.h"
-#include "components/version_info/version_info.h"
+#include "maho/browser/updates/maho_product_version.h"
 #include "content/public/test/browser_task_environment.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/prefs/testing_pref_service.h"
@@ -61,7 +61,7 @@ TEST_F(MahoSidebarUpdateNotificationControllerTest,
        HiddenWhenLastSeenVersionEqualsCurrent) {
   TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetString(
       prefs::kMahoUpdateLastSeenVersion,
-      std::string(version_info::GetVersionNumber()));
+      std::string(updates::kMahoProductVersion));
 
   MahoSidebarUpdateNotificationController controller(
       nullptr, base::DoNothing());
@@ -87,7 +87,7 @@ TEST_F(MahoSidebarUpdateNotificationControllerTest,
   EXPECT_EQ(TestingBrowserProcess::GetGlobal()
                 ->GetTestingLocalState()
                 ->GetString(prefs::kMahoUpdateLastSeenVersion),
-            std::string(version_info::GetVersionNumber()));
+            std::string(updates::kMahoProductVersion));
   EXPECT_FALSE(controller.BuildModel().visible);
 }
 
@@ -97,7 +97,7 @@ TEST_F(MahoSidebarUpdateNotificationControllerTest,
       "maho-simulate-update-state", "ready_to_install");
   TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetString(
       prefs::kMahoUpdateLastSeenVersion,
-      std::string(version_info::GetVersionNumber()));
+      std::string(updates::kMahoProductVersion));
 
   auto* manager = MahoUpdateManager::GetInstance();
   manager->Initialize(nullptr, TestingBrowserProcess::GetGlobal()->GetTestingLocalState());

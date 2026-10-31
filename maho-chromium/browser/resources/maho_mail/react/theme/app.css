@@ -22,13 +22,94 @@
   background: var(--background);
 }
 
-.mail-resize-handle {
-  opacity: 0;
+/* Ergonomic interaction layer — see ../../DESIGN.md §4-5. */
+:root {
+  --mail-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --mail-dur-fast: 120ms;
+  --mail-dur-base: 180ms;
 }
 
-.mail-resize-handle:hover,
-.mail-resize-handle:focus-visible {
-  opacity: 1;
+/* 8px grab area, 1px hairline that fades in on hover and stays while dragging. */
+.mail-resize-handle {
+  position: relative;
+  z-index: 20;
+  background: transparent;
+  touch-action: none;
+}
+
+.mail-resize-handle::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%) scaleX(1);
+  background: var(--primary);
+  opacity: 0;
+  transition: opacity var(--mail-dur-base) var(--mail-ease-out),
+              transform var(--mail-dur-base) var(--mail-ease-out);
+}
+
+.mail-resize-handle:hover::after,
+.mail-resize-handle:focus-visible::after {
+  opacity: 0.45;
+}
+
+.mail-resize-handle.is-resizing::after {
+  opacity: 0.8;
+  transform: translateX(-50%) scaleX(2);
+}
+
+/* List rows: calm background wash, no layout-affecting transitions. */
+.mail-row {
+  transition: background-color var(--mail-dur-fast) var(--mail-ease-out);
+}
+
+.mail-row-actions {
+  transform: translateX(4px);
+  transition: opacity var(--mail-dur-fast) var(--mail-ease-out),
+              transform var(--mail-dur-base) var(--mail-ease-out);
+}
+
+.mail-row:hover .mail-row-actions,
+.mail-row:focus-within .mail-row-actions {
+  transform: translateX(0);
+}
+
+.mail-row-date {
+  transition: opacity var(--mail-dur-fast) var(--mail-ease-out);
+}
+
+/* Physical press feedback on action buttons. */
+.mail-pressable {
+  transition: background-color var(--mail-dur-fast) var(--mail-ease-out),
+              color var(--mail-dur-fast) var(--mail-ease-out),
+              transform var(--mail-dur-fast) var(--mail-ease-out);
+}
+
+.mail-pressable:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+/* Disclosure chevrons rotate instead of swapping glyphs. */
+.mail-disclosure {
+  transition: transform var(--mail-dur-base) var(--mail-ease-out);
+}
+
+.mail-list-pane,
+.mail-reader-pane {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 @media (max-width: 1100px) {
@@ -41,7 +122,11 @@
   }
 }
 
+.mail-navigation-trigger { display: none; }
+
 @media (max-width: 850px) {
+  .mail-navigation-trigger { display: flex; }
+  .mail-navigation-drawer > div { display: block; }
   .mail-navigation,
   .mail-resize-handle {
     display: none !important;
@@ -50,6 +135,10 @@
   .mail-list-pane {
     width: min(380px, 46vw) !important;
   }
+}
+
+@media (max-width: 767px) {
+  .mail-list-pane { width: 100% !important; }
 }
 
 @theme inline {
@@ -92,6 +181,8 @@
   --color-danger: var(--destructive);
   --color-danger-hover: #dc2626;
   --color-info: var(--primary);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-selected: var(--surface-selected);
 }
 
 /* Dark theme (default) — zinc palette */
@@ -123,6 +214,8 @@
   --chart-3: #f59e0b;
   --chart-4: #a855f7;
   --chart-5: #ef4444;
+  --surface-hover: rgba(255, 255, 255, 0.05);
+  --surface-selected: rgba(255, 255, 255, 0.09);
 }
 
 /* Light theme */
@@ -152,6 +245,8 @@
   --chart-3: #d97706;
   --chart-4: #9333ea;
   --chart-5: #dc2626;
+  --surface-hover: rgba(24, 24, 27, 0.045);
+  --surface-selected: rgba(24, 24, 27, 0.07);
 }
 
 @layer base {
@@ -239,6 +334,11 @@
   to { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @keyframes progress {
   0% { transform: translateX(-100%); }
   50% { transform: translateX(200%); }
@@ -255,6 +355,7 @@
 .animate-fade-in { animation: fade-in 200ms ease-out; }
 .animate-scale-in { animation: scale-in 200ms ease-out; }
 .animate-slide-in-right { animation: slide-in-right 200ms ease-out; }
+.animate-slide-down { animation: slide-down var(--mail-dur-base) var(--mail-ease-out); }
 .animate-bounce-gentle { animation: bounce-gentle 2s ease-in-out infinite; }
 
 /* ProseMirror (rich text editor) */
@@ -289,6 +390,8 @@ body {
 .context-menu-item {
   display: block;
   width: 100%;
+  min-height: 2rem;
+  border-radius: 0.375rem;
   padding: 0.375rem 0.75rem;
   text-align: left;
   font-size: 0.8125rem;
@@ -296,7 +399,8 @@ body {
   transition: background-color 0.1s, color 0.1s;
 }
 
-.context-menu-item:hover {
-  background-color: hsl(from var(--primary) h s l / 0.15);
+.context-menu-item:hover,
+.context-menu-item:focus-visible {
+  background-color: var(--surface-hover);
   color: var(--foreground);
 }

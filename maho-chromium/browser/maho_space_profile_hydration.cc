@@ -10,11 +10,12 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
@@ -67,7 +68,11 @@ bool MahoSpaceProfileBridge::SwitchToSpace(Browser* browser,
               g_browser_process->profile_manager()->user_data_dir().Append(
                   it->second));
       if (target_profile) {
-        Browser* target_browser = chrome::FindBrowserWithProfile(target_profile);
+        ProfileBrowserCollection* collection =
+            ProfileBrowserCollection::GetForProfile(target_profile);
+        BrowserWindowInterface* target_bwi =
+            collection ? collection->GetLastActiveBrowser() : nullptr;
+        Browser* target_browser = static_cast<Browser*>(target_bwi);
         if (target_browser) {
           browser_active_space_[target_browser] = space_id;
         }
@@ -118,9 +123,26 @@ bool MahoSpaceProfileBridge::HydrateFromCore() {
   }
   SpaceProfileHydrationChanges changes = ReplaceSpaceProfileHydrationState(
       std::move(*state), &space_to_profile_, &active_space_id_);
+  ReconcileExistingBrowsersActiveSpace();
   if (changes.structural || changes.active_space) {
     NotifyChanged(changes.structural);
   }
+  if (auto* tab_registry = MahoTabRegistry::Get()) {
+    tab_registry->ReannounceUnannouncedTabs();
+  }
+  return true;
+}
+
+bool MahoSpaceProfileBridge::HydrateFromSnapshot(
+    ProfileCatalogResult catalog,
+    SpaceProfileHydrationState state) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!ReconcileProfileRegistry(std::move(catalog))) {
+    return false;
+  }
+  ReplaceSpaceProfileHydrationState(
+      std::move(state), &space_to_profile_, &active_space_id_);
+  ReconcileExistingBrowsersActiveSpace();
   return true;
 }
 
@@ -136,8 +158,12 @@ bool MahoSpaceProfileBridge::HydrateFromSerializedStateForTesting(
 
   SpaceProfileHydrationChanges changes = MergeSpaceProfileHydrationState(
       std::move(*state), &space_to_profile_, &active_space_id_);
+  ReconcileExistingBrowsersActiveSpace();
   if (changes.structural || changes.active_space) {
     NotifyChanged(changes.structural);
+  }
+  if (auto* tab_registry = MahoTabRegistry::Get()) {
+    tab_registry->ReannounceUnannouncedTabs();
   }
   return true;
 }
@@ -148,7 +174,7 @@ std::vector<Browser*> MahoSpaceProfileBridge::GetBrowsersForSpaces(
   std::vector<Browser*> browsers;
   for (const auto& entry : browser_active_space_) {
     Browser* browser = entry.first;
-    if (!browser || !browser->profile() || browser->profile()->IsOffTheRecord()) {
+    if (!browser || !browser->GetProfile() || browser->GetProfile()->IsOffTheRecord()) {
       continue;
     }
     const std::string& active_space_id = GetActiveSpaceId(browser);
@@ -158,6 +184,57 @@ std::vector<Browser*> MahoSpaceProfileBridge::GetBrowsersForSpaces(
     }
   }
   return browsers;
+}
+
+void MahoSpaceProfileBridge::ReconcileExistingBrowsersActiveSpace() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (auto* collection = GlobalBrowserCollection::GetInstance()) {
+    collection->ForEach([this](BrowserWindowInterface* browser_interface) {
+      if (!browser_interface) {
+        return true;
+      }
+      Browser* browser_ptr = static_cast<Browser*>(browser_interface);
+      if (!browser_ptr || !browser_ptr->GetProfile() ||
+          browser_ptr->GetProfile()->IsOffTheRecord()) {
+        return true;
+      }
+      auto it = browser_active_space_.find(browser_ptr);
+      if (it != browser_active_space_.end()) {
+        auto mapped_space_it = space_to_profile_.find(it->second);
+        if (mapped_space_it == space_to_profile_.end() ||
+            mapped_space_it->second !=
+                browser_ptr->GetProfile()->GetPath().BaseName()) {
+          browser_active_space_.erase(it);
+          it = browser_active_space_.end();
+        }
+      }
+      if (it == browser_active_space_.end() || it->second.empty()) {
+        const base::FilePath browser_profile_basename =
+            browser_ptr->GetProfile()->GetPath().BaseName();
+        auto active_space_it = space_to_profile_.find(active_space_id_);
+        if (active_space_it != space_to_profile_.end() &&
+            active_space_it->second == browser_profile_basename) {
+          browser_active_space_[browser_ptr] = active_space_id_;
+          return true;
+        }
+
+        std::optional<std::string> matching_space_id;
+        for (const auto& [space_id, profile_basename] : space_to_profile_) {
+          if (profile_basename == browser_profile_basename) {
+            if (matching_space_id.has_value()) {
+              browser_active_space_.erase(browser_ptr);
+              return true;
+            }
+            matching_space_id = space_id;
+          }
+        }
+        if (matching_space_id.has_value()) {
+          browser_active_space_[browser_ptr] = std::move(*matching_space_id);
+        }
+      }
+      return true;
+    });
+  }
 }
 
 void MahoSpaceProfileBridge::ClearBrowserActiveSpacesForTesting() {
@@ -183,17 +260,15 @@ void MahoSpaceProfileBridge::OnBrowserCreated(BrowserWindowInterface* browser) {
   if (!browser) {
     return;
   }
-  Browser* browser_ptr = browser->GetBrowserForMigrationOnly();
-  if (!browser_ptr || active_space_id_.empty()) {
+  Browser* browser_ptr = static_cast<Browser*>(browser);
+  if (!browser_ptr || !browser_ptr->GetProfile() ||
+      browser_ptr->GetProfile()->IsOffTheRecord() || active_space_id_.empty()) {
     return;
   }
   auto it = space_to_profile_.find(active_space_id_);
-  if (it != space_to_profile_.end()) {
-    const base::FilePath browser_profile_basename =
-        browser_ptr->profile()->GetPath().BaseName();
-    if (browser_profile_basename != it->second) {
-      return;
-    }
+  if (it == space_to_profile_.end() ||
+      browser_ptr->GetProfile()->GetPath().BaseName() != it->second) {
+    return;
   }
   browser_active_space_.emplace(browser_ptr, active_space_id_);
 }
@@ -202,7 +277,7 @@ void MahoSpaceProfileBridge::OnBrowserClosed(BrowserWindowInterface* browser) {
   if (!browser) {
     return;
   }
-  Browser* browser_ptr = browser->GetBrowserForMigrationOnly();
+  Browser* browser_ptr = static_cast<Browser*>(browser);
   ClearBrowserActiveSpace(browser_ptr);
 }
 

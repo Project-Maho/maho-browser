@@ -45,8 +45,8 @@ impl HybridMemoryRetriever {
     pub fn fuse(
         &self,
         lexical_candidates: &[(String, String, f64)], // (id, fact, fts_score)
-        dense_candidates: &[(String, f32)],          // (id, distance)
-        facts_metadata: &HashMap<String, (f32, f32, String)>, // id -> (importance, confidence, source)
+        dense_candidates: &[(String, f32)],           // (id, distance)
+        facts_metadata: &HashMap<String, (f32, f32, String, String)>, // id -> (importance, confidence, source, fact)
         top_k: usize,
         char_budget: Option<usize>,
     ) -> Vec<HybridMemoryResult> {
@@ -75,10 +75,14 @@ impl HybridMemoryRetriever {
 
         let mut results = Vec::new();
         for id in all_ids {
-            let (importance, confidence, source) = facts_metadata
-                .get(&id)
-                .cloned()
-                .unwrap_or((0.5, 1.0, "fts".to_string()));
+            let (importance, confidence, source, fact_text) =
+                facts_metadata.get(&id).cloned().unwrap_or_else(|| {
+                    let text = lexical_ranks
+                        .get(&id)
+                        .map(|(_, text)| text.clone())
+                        .unwrap_or_else(|| id.clone());
+                    (0.5, 1.0, "fts".to_string(), text)
+                });
 
             let lex_rank = lexical_ranks.get(&id).map(|(r, _)| *r);
             let dense_rank = dense_ranks.get(&id).copied();
@@ -96,11 +100,6 @@ impl HybridMemoryRetriever {
             let confidence_factor = (0.5 + 0.5 * confidence as f64).clamp(0.1, 1.5);
 
             let final_score = rrf * importance_factor * confidence_factor;
-
-            let fact_text = lexical_ranks
-                .get(&id)
-                .map(|(_, text)| text.clone())
-                .unwrap_or_else(|| id.clone());
 
             results.push(HybridMemoryResult {
                 id,
@@ -161,15 +160,21 @@ mod tests {
             ("f1".to_string(), "fact 1".to_string(), 1.0),
             ("f2".to_string(), "fact 2".to_string(), 0.8),
         ];
-        let dense = vec![
-            ("f2".to_string(), 0.1f32),
-            ("f3".to_string(), 0.2f32),
-        ];
+        let dense = vec![("f2".to_string(), 0.1f32), ("f3".to_string(), 0.2f32)];
 
         let mut meta = HashMap::new();
-        meta.insert("f1".to_string(), (0.5, 1.0, "user".to_string()));
-        meta.insert("f2".to_string(), (0.5, 1.0, "user".to_string()));
-        meta.insert("f3".to_string(), (0.5, 1.0, "user".to_string()));
+        meta.insert(
+            "f1".to_string(),
+            (0.5, 1.0, "user".to_string(), "fact 1".to_string()),
+        );
+        meta.insert(
+            "f2".to_string(),
+            (0.5, 1.0, "user".to_string(), "fact 2".to_string()),
+        );
+        meta.insert(
+            "f3".to_string(),
+            (0.5, 1.0, "user".to_string(), "fact 3".to_string()),
+        );
 
         let results = retriever.fuse(&lexical, &dense, &meta, 10, None);
         assert!(!results.is_empty());
@@ -194,4 +199,3 @@ mod tests {
         assert!(results[0].score > results[1].score);
     }
 }
-

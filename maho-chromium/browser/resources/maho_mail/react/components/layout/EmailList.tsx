@@ -42,6 +42,7 @@ import { cn, getErrorMessage } from "../../lib/utils";
 import { usePullToRefresh } from "../../hooks/usePullToRefresh";
 import { useLongPress } from "../../hooks/useLongPress";
 import { useVirtualKeyboard } from "../../hooks/useVirtualKeyboard";
+import { emitMailUpdated } from "../../hooks/usePopoutWindow";
 
 type SearchScope = "current" | "folder" | "all";
 
@@ -376,6 +377,9 @@ const SEARCH_TIPS: SearchTip[] = [
 ];
 
 interface EmailListProps {
+  archiveFolders?: {id: string; account_id: string}[];
+  onEmailsRemoved?: (ids: string[]) => void;
+  searchRequest?: {query: string} | null;
   emails: EmailSummary[];
   selectedEmailId: string | null;
   onSelectEmail: (id: string) => void;
@@ -463,8 +467,8 @@ const EmailRow = React.memo(function EmailRow({
   const isSelected = selectedIds.has(email.id);
   const senderText = email.from_name ?? email.from_address;
   const actionButtonClassName = cn(
-    "flex items-center justify-center rounded text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-    isMobile ? "h-11 w-11" : "h-6 w-6",
+    "mail-pressable flex items-center justify-center rounded-md text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+    isMobile ? "h-11 w-11" : "h-7 w-7",
   );
   const rowSpacingClassName = isMobile
     ? "min-h-[88px] gap-2.5 pr-4 py-4"
@@ -514,16 +518,19 @@ const EmailRow = React.memo(function EmailRow({
             onClick={() => (batchMode ? toggleSelection(email.id) : onSelectEmail(email.id))}
             onKeyDown={(event) => handleRowKeyDown(event, email.id, onSelectEmail)}
             {...rowInteractionHandlers}
-            className={`group flex w-full items-start border-b border-border/50 border-l-[3px] pl-0 text-left transition-colors duration-150 ${rowSpacingClassName} ${
-              isSelected
-                ? "border-l-primary bg-primary/10"
-                : selectedEmailId === email.id
-                  ? "border-l-primary bg-primary/10"
-                  : !email.is_read
-                    ? "border-l-primary/80 bg-background/60 hover:bg-background"
-                    : "border-l-transparent hover:bg-background"
+            className={`mail-row group relative flex w-full cursor-default items-start border-b border-border/40 pl-3 text-left ${rowSpacingClassName} ${
+              isSelected || selectedEmailId === email.id
+                ? "bg-primary/10"
+                : "hover:bg-surface-hover"
             }`}
           >
+            {!email.is_read && (
+              <span
+                aria-hidden="true"
+                data-unread-dot
+                className="absolute left-1 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-primary"
+              />
+            )}
             <div role="gridcell" className={cn("flex min-w-0 flex-1 items-start", isMobile ? "gap-2.5" : "gap-0")}>
             <button
               type="button"
@@ -531,11 +538,11 @@ const EmailRow = React.memo(function EmailRow({
                 e.stopPropagation();
                 toggleSelection(email.id);
               }}
-                className={`shrink-0 rounded transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
-                 isMobile ? "mt-0 h-11 w-11 p-0" : "mt-1 w-4 p-0"} ${
+                className={`shrink-0 rounded transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                 isMobile ? "mt-0 h-11 w-11 p-0" : "-ml-1 mr-0.5 flex h-7 w-6 items-center justify-center p-0"} ${
                  batchMode || isSelected
                    ? "opacity-100"
-                   : "opacity-0 group-hover:opacity-100"
+                   : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
                } text-muted-foreground hover:text-foreground`}
              >
                {isSelected ? <CheckSquare size={isMobile ? 18 : 14} className="text-primary" /> : <Square size={isMobile ? 18 : 14} />}
@@ -544,9 +551,9 @@ const EmailRow = React.memo(function EmailRow({
                name={email.from_name || email.from_address}
                email={email.from_address}
                size={isMobile ? "md" : "sm"}
-               className={cn("shrink-0", isMobile ? "mt-0.5" : "mt-0.5")}
+               className="mt-0.5 shrink-0"
              />
-             <div className={cn("min-w-0 flex-1", isMobile ? "pt-0.5" : "ml-0.5")}>
+             <div className={cn("min-w-0 flex-1", isMobile ? "pt-0.5" : "ml-2.5")}>
                <div className="flex items-start gap-2">
                  <div className="min-w-0 flex-1">
                    <div className="flex items-center gap-2">
@@ -581,11 +588,11 @@ const EmailRow = React.memo(function EmailRow({
                 <div className={cn("ml-1 shrink-0 text-xs text-muted-foreground", isMobile ? "flex min-h-11 items-start" : "flex h-6 items-start")}>
                   <div className={cn("relative items-start justify-end", isMobile ? "flex min-h-11" : "flex h-6")}>
                     <div role="gridcell" className={cn(
-                      "absolute inset-y-0 right-0 flex items-start justify-end transition-opacity",
-                      isMobile ? "opacity-100" : "pointer-events-none opacity-0 group-hover:opacity-100",
+                      "mail-row-actions absolute right-0 flex items-start justify-end",
+                      isMobile ? "inset-y-0 opacity-100" : "-top-1 pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
                     )}>
                       <div className={cn(
-                        "flex max-w-[12rem] justify-end rounded-md bg-background/95 px-1 py-0.5 shadow-sm ring-1 ring-border/40 backdrop-blur-sm",
+                        "flex max-w-[14rem] justify-end rounded-lg bg-popover/95 p-0.5 shadow-md ring-1 ring-border/60 backdrop-blur-md",
                         isMobile ? "pointer-events-auto gap-2 flex-wrap" : "pointer-events-auto gap-1 flex-nowrap",
                       )}>
                     <button
@@ -594,7 +601,7 @@ const EmailRow = React.memo(function EmailRow({
                         e.stopPropagation();
                         void onToggleStar(email.id);
                       }}
-                       className={cn(actionButtonClassName, "hover:bg-card hover:text-foreground")}
+                       className={cn(actionButtonClassName, "hover:bg-surface-hover hover:text-foreground")}
                       aria-label={email.is_starred ? "Unstar" : "Star"}
                       title={email.is_starred ? "Unstar" : "Star"}
                     >
@@ -617,7 +624,7 @@ const EmailRow = React.memo(function EmailRow({
                          className={cn(actionButtonClassName, `transition-colors ${
                            isPinned
                              ? "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
-                             : "text-muted-foreground hover:bg-card hover:text-foreground"
+                             : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
                          }`)}
                         aria-label={isPinned ? "Unpin" : "Pin"}
                         title={isPinned ? "Unpin" : "Pin"}
@@ -632,7 +639,7 @@ const EmailRow = React.memo(function EmailRow({
                           e.stopPropagation();
                           onSnooze(email.id);
                         }}
-                         className={cn(actionButtonClassName, "hover:bg-card hover:text-foreground")}
+                         className={cn(actionButtonClassName, "hover:bg-surface-hover hover:text-foreground")}
                         aria-label="Snooze"
                         title="Snooze"
                       >
@@ -646,7 +653,7 @@ const EmailRow = React.memo(function EmailRow({
                           e.stopPropagation();
                           void onArchive(email.id);
                         }}
-                         className={cn(actionButtonClassName, "hover:bg-card hover:text-foreground")}
+                         className={cn(actionButtonClassName, "hover:bg-surface-hover hover:text-foreground")}
                         aria-label="Archive"
                         title="Archive"
                       >
@@ -659,7 +666,7 @@ const EmailRow = React.memo(function EmailRow({
                         e.stopPropagation();
                         void onToggleRead(email);
                       }}
-                       className={cn(actionButtonClassName, "hover:bg-card hover:text-foreground")}
+                       className={cn(actionButtonClassName, "hover:bg-surface-hover hover:text-foreground")}
                       aria-label={email.is_read ? "Mark unread" : "Mark read"}
                       title={email.is_read ? "Mark unread" : "Mark read"}
                     >
@@ -671,7 +678,7 @@ const EmailRow = React.memo(function EmailRow({
                         e.stopPropagation();
                         void onDelete(email.id);
                       }}
-                       className={cn(actionButtonClassName, "hover:bg-card hover:text-destructive")}
+                       className={cn(actionButtonClassName, "hover:bg-destructive/10 hover:text-destructive")}
                       aria-label="Delete"
                       title="Delete"
                     >
@@ -681,7 +688,7 @@ const EmailRow = React.memo(function EmailRow({
                     </div>
                     <span className={cn(
                       "whitespace-nowrap text-right leading-4",
-                      isMobile ? "hidden" : "pt-0.5 transition-opacity group-hover:opacity-0",
+                      isMobile ? "hidden" : "mail-row-date pt-0.5 tabular-nums group-hover:opacity-0 group-focus-within:opacity-0",
                     )}>
                       {formatRelativeDate(email.date)}
                     </span>
@@ -741,6 +748,9 @@ const EmailRow = React.memo(function EmailRow({
 });
 
 export function EmailList({
+  archiveFolders,
+  onEmailsRemoved,
+  searchRequest,
   emails,
   selectedEmailId,
   onSelectEmail,
@@ -887,7 +897,15 @@ export function EmailList({
     applySearchState(tip.query ?? "", tip.filters ?? {});
   }, [applySearchState]);
 
-  async function runSearch(query: string) {
+  const searchGeneration = useRef(0);
+  useEffect(() => {
+    searchGeneration.current += 1;
+    setSearchResults(null);
+    return () => { searchGeneration.current += 1; };
+  }, [searchQuery, effectiveSearchScope, searchFilters, accountId, folderId, searchRequest]);
+
+  async function runSearch(query: string, offset = 0) {
+    const generation = ++searchGeneration.current;
     const { naturalLanguage, normalized } = getSearchMode(query);
     if (normalized.length === 0 && !hasFilters) {
       setSearchResults(null);
@@ -896,6 +914,7 @@ export function EmailList({
     }
 
     const scope = resolveSearchScope(effectiveSearchScope, accountId, folderId);
+    setSearchLoading(true);
 
     try {
       const result = naturalLanguage
@@ -909,6 +928,7 @@ export function EmailList({
           account_id: scope.accountId,
           folder_id: scope.folderId,
           limit: 50,
+          offset,
           from: sanitizedSearchFilters.from,
           to: sanitizedSearchFilters.to,
           has_attachment: sanitizedSearchFilters.hasAttachment || undefined,
@@ -917,16 +937,18 @@ export function EmailList({
           date_from: sanitizedSearchFilters.dateFrom || undefined,
           date_to: sanitizedSearchFilters.dateTo || undefined,
           });
-      setSearchResults(result);
+      if (generation !== searchGeneration.current) return;
+      setSearchResults(current => offset && current ? {...result, emails: [...current.emails, ...result.emails]} : result);
       persistRecentSearch(query, sanitizedSearchFilters);
     } catch (err) {
-      setSearchResults(null);
+      if (generation !== searchGeneration.current) return;
+      if (!offset) setSearchResults(null);
       toast(
         "error",
         err instanceof Error ? err.message : "Failed to search emails",
       );
     } finally {
-      setSearchLoading(false);
+      if (generation === searchGeneration.current) setSearchLoading(false);
     }
   }
 
@@ -934,7 +956,7 @@ export function EmailList({
     try {
       const ok = await confirm({
         title: "Delete Email",
-        message: "Are you sure you want to delete this email? This action cannot be undone.",
+        message: "This email moves to Trash. Deleting it from Trash removes it permanently.",
         confirmLabel: "Delete",
         danger: true,
       });
@@ -942,6 +964,8 @@ export function EmailList({
       if (!ok) return;
 
       await api.deleteEmail(emailId);
+      onEmailsRemoved?.([emailId]);
+      void emitMailUpdated(emailId, "delete");
       setSearchResults((current) => removeEmailsFromSearchResult(current, [emailId]));
       toast("success", "Email deleted");
     } catch (err) {
@@ -953,20 +977,23 @@ export function EmailList({
 
       toast("error", err instanceof Error ? err.message : "Failed to delete email");
     }
-  }, [accountId, confirm, emailById, enqueueRetry, t, toast]);
+  }, [accountId, confirm, emailById, enqueueRetry, t, toast, onEmailsRemoved]);
 
   const handleArchive = useCallback(async (emailId: string) => {
-    if (!archiveFolderId) return;
+    const targetFolderId = archiveFolders?.find(folder => folder.account_id === emailById.get(emailId)?.account_id)?.id ?? archiveFolderId;
+    if (!targetFolderId) return;
 
     try {
-      await api.moveEmail(emailId, archiveFolderId);
+      await api.moveEmail(emailId, targetFolderId);
+      onEmailsRemoved?.([emailId]);
+      void emitMailUpdated(emailId, "move");
       setSearchResults((current) => removeEmailsFromSearchResult(current, [emailId]));
       toast("success", "Archived");
     } catch (err) {
       console.error("[archive] moveEmail failed:", err, { emailId, archiveFolderId });
       const retryAccountId = emailById.get(emailId)?.account_id ?? accountId;
       if (retryAccountId && enqueueRetry && isAuthRelatedError(err)) {
-        enqueueRetry(retryAccountId, () => api.moveEmail(emailId, archiveFolderId), t("app.archive"));
+        enqueueRetry(retryAccountId, () => api.moveEmail(emailId, targetFolderId), t("app.archive"));
         return;
       }
 
@@ -980,7 +1007,7 @@ export function EmailList({
               : JSON.stringify(err);
       toast("error", `Failed to archive: ${msg}`);
     }
-  }, [accountId, archiveFolderId, emailById, enqueueRetry, t, toast]);
+  }, [accountId, archiveFolderId, archiveFolders, emailById, enqueueRetry, t, toast, onEmailsRemoved]);
 
   const handleToggleRead = useCallback(async (email: EmailSummary) => {
     try {
@@ -1131,10 +1158,23 @@ export function EmailList({
     await handleBatchArchive();
   }
 
+  const appliedSearchRequest = useRef<{query: string} | null>(null);
+  useEffect(() => {
+    if (searchRequest && appliedSearchRequest.current !== searchRequest) {
+      applySearchState(searchRequest.query, {});
+    }
+  }, [searchRequest, applySearchState]);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
+    }
+    if (searchRequest && appliedSearchRequest.current !== searchRequest && searchQuery === searchRequest.query && !hasFilters) {
+      appliedSearchRequest.current = searchRequest;
+      setSearchLoading(true);
+      void runSearch(searchQuery);
+      return;
     }
     if (normalized.length >= 2 || naturalLanguage || hasFilters) {
       setSearchLoading(true);
@@ -1150,7 +1190,7 @@ export function EmailList({
         clearTimeout(debounceRef.current);
       }
     };
-  }, [searchQuery, effectiveSearchScope, normalized, naturalLanguage, hasFilters, searchFilters, accountId, folderId]);
+  }, [searchQuery, effectiveSearchScope, normalized, naturalLanguage, hasFilters, searchFilters, accountId, folderId, searchRequest]);
 
   useEffect(() => {
     const visibleEmailIds = new Set(displayEmails.map((email) => email.id));
@@ -1252,7 +1292,7 @@ export function EmailList({
                   type="button"
                   onClick={onSync}
                   disabled={syncBusy}
-                  className="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
+                  className="mail-pressable flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
                   aria-label={t("app.syncFolders")}
                   title={t("app.syncFolders")}
                 >
@@ -1264,7 +1304,7 @@ export function EmailList({
                   type="button"
                   onClick={onCompose}
                   disabled={composeDisabled}
-                  className="flex h-9 items-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-semibold text-primary-foreground shadow-sm transition-all hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50"
+                  className="flex h-9 items-center gap-2 mail-pressable rounded-lg bg-primary px-3.5 text-sm font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50"
                   aria-label={t("app.compose")}
                   title={t("app.compose")}
                 >
@@ -1275,7 +1315,7 @@ export function EmailList({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <div className="relative flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 shadow-sm transition-colors focus-within:border-primary/50 focus-within:bg-background">
+            <div className="relative flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-border/60 bg-background/70 px-3 shadow-sm transition-colors hover:border-foreground/20 focus-within:border-primary/50 focus-within:bg-background">
               <Search size={16} className="text-muted-foreground" />
               <input
                 type="text"
@@ -1294,7 +1334,7 @@ export function EmailList({
                   setSearchLoading(true);
                   void runSearch(searchQuery);
                 }}
-                className="rounded p-1 text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                className="mail-pressable flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 title="Natural language search"
                 aria-label="Ask about mail"
               >
@@ -1375,7 +1415,7 @@ export function EmailList({
                         >
                           <Badge
                             variant="outline"
-                            className="cursor-pointer border-border bg-background/80 px-3 py-1 text-left text-foreground transition-colors hover:bg-primary hover:text-primary-foreground"
+                            className="cursor-pointer border-border bg-background/80 px-3 py-1 text-left text-foreground transition-colors hover:bg-surface-selected"
                           >
                             {formatRecentSearchLabel(entry)}
                           </Badge>
@@ -1395,7 +1435,7 @@ export function EmailList({
                         key={op.prefix}
                         type="button"
                         onClick={() => { setSearchQuery(op.prefix); }}
-                        className="flex items-center gap-2 rounded-lg px-2 py-1 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                        className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                       >
                         <code className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] font-semibold text-primary">
                           {op.prefix}
@@ -1416,7 +1456,7 @@ export function EmailList({
                         key={tip.id}
                         type="button"
                         onClick={() => handleSearchTipSelect(tip)}
-                        className="rounded-xl border border-border bg-background/80 px-3 py-2 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                        className="rounded-xl border border-border bg-background/80 px-3 py-2 text-left transition-colors hover:border-foreground/20 hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                       >
                         <div className="flex items-center gap-2">
                           <span className="rounded-lg bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">
@@ -1465,7 +1505,7 @@ export function EmailList({
                 <button
                   type="button"
                   onClick={() => { setSaveSearchName(""); setShowSaveSearch(true); }}
-                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  className="mail-pressable flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                   title={t("search.saveSearch")}
                   aria-label={t("search.saveSearch")}
                 >
@@ -1496,7 +1536,7 @@ export function EmailList({
                   <button
                     type="button"
                     onClick={() => setShowSaveSearch(false)}
-                    className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                    className="mail-pressable flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground"
                   >
                     <X size={12} />
                   </button>
@@ -1517,7 +1557,7 @@ export function EmailList({
               className={`rounded-lg px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
                 smartCategory === cat
                   ? "bg-primary/15 text-primary ring-1 ring-inset ring-primary/20"
-                  : "text-muted-foreground hover:bg-card hover:text-foreground"
+                  : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
               }`}
             >
               {cat}
@@ -1535,7 +1575,7 @@ export function EmailList({
             type="button"
             onClick={clearSelection}
             className={cn(
-              "rounded text-muted-foreground hover:bg-card hover:text-foreground",
+              "mail-pressable rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground",
               isMobile ? "flex h-11 items-center px-3" : "p-1",
             )}
             aria-label="Clear selection"
@@ -1559,8 +1599,8 @@ export function EmailList({
             type="button"
             onClick={() => void handleBatchMarkRead()}
             className={cn(
-              "text-muted-foreground hover:bg-card hover:text-foreground",
-              isMobile ? "flex h-11 min-w-11 items-center justify-center rounded-lg px-3" : "rounded p-1.5",
+              "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
+              isMobile ? "flex h-11 min-w-11 items-center justify-center rounded-lg px-3" : "mail-pressable flex h-8 w-8 items-center justify-center rounded-md",
             )}
             title="Mark read"
             aria-label="Mark read"
@@ -1572,7 +1612,7 @@ export function EmailList({
             <button
               type="button"
               onClick={() => void handleBatchMarkUnread()}
-              className="flex h-11 min-w-11 items-center justify-center rounded-lg px-3 text-muted-foreground hover:bg-card hover:text-foreground"
+              className="mail-pressable flex h-11 min-w-11 items-center justify-center rounded-lg px-3 text-muted-foreground hover:bg-surface-hover hover:text-foreground"
               title="Mark unread"
               aria-label="Mark unread"
             >
@@ -1583,7 +1623,7 @@ export function EmailList({
             <button
               type="button"
               onClick={() => void handleBatchStar()}
-              className="rounded p-1.5 text-muted-foreground hover:bg-card hover:text-foreground"
+              className="mail-pressable flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground"
               title="Toggle star"
               aria-label="Toggle star"
             >
@@ -1595,8 +1635,8 @@ export function EmailList({
               type="button"
               onClick={() => void handleBatchMove()}
               className={cn(
-                "text-muted-foreground hover:bg-card hover:text-foreground",
-                isMobile ? "flex h-11 min-w-11 items-center justify-center rounded-lg px-3" : "rounded p-1.5",
+                "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
+                isMobile ? "flex h-11 min-w-11 items-center justify-center rounded-lg px-3" : "mail-pressable flex h-8 w-8 items-center justify-center rounded-md",
               )}
               title={isMobile ? "Move" : "Archive"}
               aria-label={isMobile ? "Move" : "Archive"}
@@ -1609,8 +1649,8 @@ export function EmailList({
             type="button"
             onClick={() => void handleBatchDelete()}
             className={cn(
-              "text-muted-foreground hover:bg-card hover:text-destructive",
-              isMobile ? "flex h-11 min-w-11 items-center justify-center rounded-lg px-3" : "rounded p-1.5",
+              "text-muted-foreground hover:bg-destructive/10 hover:text-destructive",
+              isMobile ? "flex h-11 min-w-11 items-center justify-center rounded-lg px-3" : "mail-pressable flex h-8 w-8 items-center justify-center rounded-md",
             )}
             title="Delete"
             aria-label="Delete"
@@ -1713,7 +1753,7 @@ export function EmailList({
                         density={density}
                         onSelectEmail={onSelectEmail}
                        onToggleStar={onToggleStar}
-                      archiveFolderId={archiveFolderId}
+                      archiveFolderId={archiveFolders?.find(folder => folder.account_id === email.account_id)?.id ?? archiveFolderId}
                       folderId={folderId}
                        onPin={handlePin}
                       onSnooze={onSnooze}
@@ -1729,6 +1769,11 @@ export function EmailList({
                  );
               })}
             </div>
+            {searchResults && !naturalLanguage && searchResults.emails.length < searchResults.total_count && (
+              <button type="button" disabled={searchLoading} onClick={() => void runSearch(searchQuery, searchResults.emails.length)} className="w-full p-3 text-sm text-primary disabled:opacity-50">
+                Load more search results
+              </button>
+            )}
             {!searchResults && hasMore && onLoadMore && (
               <div ref={sentinelRef} className="flex w-full items-center justify-center py-3">
                 {loading && <Loader2 size={16} className="animate-spin text-muted-foreground" />}

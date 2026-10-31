@@ -28,6 +28,9 @@ fn origin(value: &str) -> CredentialOrigin {
 fn login_input(origin_value: &str, username: &str, password: &str) -> VaultLoginInput {
     VaultLoginInput {
         metadata: VaultItemPublicMetadata {
+            favorite: false,
+            trashed_at: None,
+            has_notes: false,
             title: "Library account".to_string(),
             origins: vec![origin(origin_value)],
             username_hint: String::new(),
@@ -43,6 +46,8 @@ fn login_input(origin_value: &str, username: &str, password: &str) -> VaultLogin
 
 fn list_all() -> VaultItemListRequest {
     VaultItemListRequest {
+        trash: Default::default(),
+        favorites_only: false,
         schema_version: VaultSchemaVersion::CURRENT,
         provider: None,
         kinds: Vec::new(),
@@ -148,7 +153,11 @@ fn vault_library_lock_secret_use_and_delete_do_not_pollute_list_search_json() {
         ))
         .expect("add login through canonical Vault API");
     let update = VaultLoginUpdate {
+        notes: None,
         metadata: VaultItemPublicMetadata {
+            favorite: false,
+            trashed_at: None,
+            has_notes: false,
             title: "Library account renamed".to_string(),
             origins: vec![origin("https://use.example")],
             username_hint: String::new(),

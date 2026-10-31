@@ -11,7 +11,8 @@
 use core::ffi::{CStr, c_char, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use maho_stt::WhisperSession;
+use maho_stt::{CancelToken, WhisperSession};
+use std::sync::Mutex;
 
 /// Transcription succeeded; the non-negative return is the byte length written.
 pub const MAHO_STT_OK: c_int = 0;
@@ -33,7 +34,8 @@ const DEFAULT_THREADS: u32 = 0;
 
 /// Opaque session handle returned to C. Owns one [`WhisperSession`].
 pub struct MahoSttSession {
-    inner: WhisperSession,
+    inner: Mutex<WhisperSession>,
+    cancel: CancelToken,
 }
 
 /// Create a session by loading a GGML model from a NUL-terminated `model_path`.
@@ -56,7 +58,13 @@ pub unsafe extern "C" fn maho_stt_session_create(model_path: *const c_char) -> *
             return core::ptr::null_mut();
         };
         match WhisperSession::load(path, DEFAULT_THREADS) {
-            Ok(inner) => Box::into_raw(Box::new(MahoSttSession { inner })),
+            Ok(inner) => {
+                let cancel = inner.cancel_token();
+                Box::into_raw(Box::new(MahoSttSession {
+                    inner: Mutex::new(inner),
+                    cancel,
+                }))
+            }
             Err(_) => core::ptr::null_mut(),
         }
     })
@@ -84,8 +92,9 @@ pub unsafe extern "C" fn maho_stt_session_transcribe(
 ) -> c_int {
     catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: [Category 8 — FFI boundary] `handle` is null or a live pointer
-        // from `maho_stt_session_create`; `as_mut` yields None for null.
-        let Some(session) = (unsafe { handle.as_mut() }) else {
+        // from `maho_stt_session_create`; `as_ref` yields None for null.
+        // The mutex exclusively borrows the decoder, not the enclosing handle.
+        let Some(session) = (unsafe { handle.as_ref() }) else {
             return MAHO_STT_ERR_NULL_ARG;
         };
         if pcm.is_null() && n_samples != 0 {
@@ -99,7 +108,14 @@ pub unsafe extern "C" fn maho_stt_session_transcribe(
             // contract; the slice is only read during the synchronous call.
             unsafe { core::slice::from_raw_parts(pcm, n_samples) }
         };
-        match session.inner.transcribe(samples) {
+        let Ok(mut inner) = session.inner.lock() else {
+            return MAHO_STT_ERR_PANIC;
+        };
+        let result = inner.transcribe(samples);
+        // End this utterance's cancellation scope while still owning the
+        // decoder lock. Never clear at startup: that could lose a new cancel.
+        session.cancel.reset();
+        match result {
             Ok(text) => write_cstr(&text, out, out_cap),
             Err(maho_stt::SttError::Cancelled) => MAHO_STT_ERR_CANCELLED,
             Err(_) => MAHO_STT_ERR_TRANSCRIBE,
@@ -109,6 +125,7 @@ pub unsafe extern "C" fn maho_stt_session_transcribe(
 }
 
 /// Request cancellation of an in-flight transcription. Safe on a null handle.
+/// Cancellation ends with that transcription; the loaded model can be reused.
 ///
 /// # Safety
 /// `handle` must be null or a live pointer from [`maho_stt_session_create`].
@@ -118,7 +135,7 @@ pub unsafe extern "C" fn maho_stt_session_cancel(handle: *mut MahoSttSession) {
         // SAFETY: [Category 8 — FFI boundary] `handle` is null or a live pointer
         // from `maho_stt_session_create`; `as_ref` yields None for null.
         if let Some(session) = unsafe { handle.as_ref() } {
-            session.inner.cancel();
+            session.cancel.cancel();
         }
     }));
 }
@@ -127,7 +144,8 @@ pub unsafe extern "C" fn maho_stt_session_cancel(handle: *mut MahoSttSession) {
 ///
 /// # Safety
 /// `handle` must be null or a live pointer from [`maho_stt_session_create`]
-/// that has not already been freed.
+/// that has not already been freed. No other call using this handle may be
+/// active or start concurrently with free.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn maho_stt_session_free(handle: *mut MahoSttSession) {
     let _ = catch_unwind(AssertUnwindSafe(|| {

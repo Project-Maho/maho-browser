@@ -595,6 +595,12 @@ pub struct PasskeyMetadata {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VaultItemPublicMetadata {
+    #[serde(default)]
+    pub favorite: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trashed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub has_notes: bool,
     pub title: String,
     pub origins: Vec<CredentialOrigin>,
     pub username_hint: String,
@@ -620,6 +626,12 @@ pub struct EncryptedVaultItemDto {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VaultItemPublicDto {
+    #[serde(default)]
+    pub favorite: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trashed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub has_notes: bool,
     pub schema_version: VaultSchemaVersion,
     pub id: VaultItemId,
     pub revision: VaultRevision,
@@ -669,11 +681,39 @@ pub struct VaultRangeDeleteResult {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VaultItemListRequest {
+    #[serde(default)]
+    pub trash: VaultTrashFilter,
+    #[serde(default)]
+    pub favorites_only: bool,
     pub schema_version: VaultSchemaVersion,
     pub provider: Option<PasswordProviderKind>,
     pub kinds: Vec<VaultItemKind>,
     pub cursor: Option<String>,
     pub limit: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultTrashFilter {
+    #[default]
+    Exclude,
+    Only,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VaultHealthReport {
+    pub weak: Vec<VaultItemId>,
+    pub reused: Vec<Vec<VaultItemId>>,
+    pub total_logins: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VaultTotpCode {
+    pub code: String,
+    pub seconds_remaining: u64,
+    pub period: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -718,6 +758,28 @@ pub struct VaultStatus {
     pub auto_lock_minutes: u32,
     pub failed_unlock_count: u32,
     pub retry_at: Option<DateTime<Utc>>,
+    /// Whether the Vault key has an account-escrowed wrap slot (zero-input
+    /// cross-device unlock). Passphrase-provisioned vaults report false until
+    /// migrated.
+    pub account_escrowed: bool,
+}
+
+/// Ciphertext-only wire record for one Vault item's cross-device sync. The
+/// envelope is the vault database's opaque item blob (already encrypted under
+/// the vault key); the sync layer transports it without interpreting it, so the
+/// decryption key never leaves the Vault device layer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VaultItemSyncDto {
+    pub schema_version: VaultSchemaVersion,
+    pub id: VaultItemId,
+    pub revision: i64,
+    pub provider: String,
+    pub item_kind: String,
+    pub envelope: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub deleted_at: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

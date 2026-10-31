@@ -15,6 +15,7 @@
 #include "base/version.h"
 #include "chrome/browser/browser_process.h"
 #include "components/version_info/version_info.h"
+#include "maho/browser/updates/maho_product_version.h"
 #include "maho/browser/updates/maho_update_manager.h"
 #include "maho/browser/updates/maho_update_signature.h"
 #include "maho/browser/updates/manifest_pubkey.h"
@@ -35,8 +36,12 @@ class PackageUpdaterDelegate : public LinuxManifestUpdaterDelegate {
   ~PackageUpdaterDelegate() override = default;
 
   std::string GetUpdateGuidance() const override {
-    return "A newer version of Maho is available. Install it with your system "
-           "package manager (sudo apt upgrade maho, or sudo dnf upgrade maho).";
+    // Maho publishes no apt/dnf repository, so `apt upgrade` cannot find a
+    // newer build; point at the release download and a local-file install.
+    return "A newer version of Maho is available. Download the latest .deb or "
+           ".rpm from https://mahobrowser.com/download/ and install it with "
+           "your package manager (sudo apt install ./maho_<version>_amd64.deb, "
+           "or sudo dnf install ./maho-<version>-1.x86_64.rpm).";
   }
 };
 
@@ -160,7 +165,7 @@ void LinuxManifestUpdaterDelegate::ApplyVerifiedManifest(
   }
 
   base::Version latest(*latest_str);
-  base::Version current(version_info::GetVersionNumber());
+  base::Version current = updates::GetMahoProductVersion();
   // An unparseable version must NOT collapse into kUpToDate: telling a stale
   // install it is current is the failure mode this delegate exists to prevent.
   if (!latest.IsValid() || !current.IsValid()) {

@@ -5,7 +5,9 @@
 #include <memory>
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"  // nogncheck
+#include "chrome/browser/ui/browser.h"                                          // nogncheck
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck
 #include "chrome/browser/ui/webui/favicon_source.h"  // nogncheck
 #include "chrome/grit/maho_welcome_resources.h"
 #include "chrome/grit/maho_welcome_resources_map.h"
@@ -69,7 +71,8 @@ void MahoWelcomeUI::CreatePageHandler(
     mojo::PendingRemote<maho_welcome::mojom::Page> page,
     mojo::PendingReceiver<maho_welcome::mojom::PageHandler> receiver) {
   content::WebContents* web_contents = web_ui()->GetWebContents();
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+  Browser* browser = static_cast<Browser*>(
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents));
   page_handler_ = std::make_unique<MahoWelcomePageHandler>(
       std::move(receiver), std::move(page),
       Profile::FromWebUI(web_ui()), browser, web_contents);

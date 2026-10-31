@@ -16,6 +16,7 @@
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/controls/label.h"
 #include "ui/compositor/layer.h"
+#include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/views/widget/widget.h"
@@ -212,8 +213,12 @@ TEST_F(MahoSidebarSpaceDotViewTest, ConfigureNoIconActive) {
 }
 
 TEST_F(MahoSidebarSpaceDotViewTest,
-       HoveredNoIconInactiveUsesBrighterPaintThanIdle) {
+       HoveredNoIconInactiveUsesPrimaryTextRoleOverIdleGlyphRole) {
   auto view = CreateDotView();
+  MahoSidebarPalette palette;
+  palette.primary_text = SkColorSetRGB(0xF0, 0xF2, 0xF6);
+  palette.neutral_glyph = SkColorSetRGB(0xA2, 0xA8, 0xB6);
+  view->SetSidebarPalette(palette);
   view->Configure("space-2", "Space 2", "", SK_ColorRED, /*is_active=*/false);
 
   cc::PaintRecorder idle_recorder;
@@ -240,9 +245,8 @@ TEST_F(MahoSidebarSpaceDotViewTest,
       hovered_mock_canvas.draw_oval_calls()[0].paint.getColor();
 
   EXPECT_EQ(SkColorGetA(hovered_color), SkColorGetA(idle_color));
-  EXPECT_GT(SkColorGetR(hovered_color), SkColorGetR(idle_color));
-  EXPECT_GT(SkColorGetG(hovered_color), SkColorGetG(idle_color));
-  EXPECT_GT(SkColorGetB(hovered_color), SkColorGetB(idle_color));
+  EXPECT_EQ(SkColorSetA(idle_color, SK_AlphaOPAQUE), palette.neutral_glyph);
+  EXPECT_EQ(SkColorSetA(hovered_color, SK_AlphaOPAQUE), palette.primary_text);
 }
 
 TEST_F(MahoSidebarSpaceDotViewTest, SetActiveToggle) {

@@ -11,7 +11,9 @@
 // cutover + typed rows + transactional CRUD) deliberately extracted from the
 // oversized sqlite.rs; the plan mandates one dedicated Vault storage file.
 
-use rusqlite::{Connection, OptionalExtension};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use super::SqliteStorage;
 use crate::StorageError;
@@ -19,6 +21,11 @@ use crate::StorageError;
 /// Installed Vault relational schema version. Bumping this triggers the
 /// development-only destructive cutover in [`SqliteStorage::initialize_vault_schema`].
 pub(crate) const VAULT_SCHEMA_VERSION: i64 = 2;
+
+/// Bounded audit pagination: positive limits clamp to MAX_PAGE; limit 0 selects
+/// DEFAULT_PAGE. Keeps every caller's page allocation bounded.
+pub const VAULT_AUDIT_MAX_PAGE: usize = 1_000;
+pub const VAULT_AUDIT_DEFAULT_PAGE: usize = 100;
 
 const VAULT_POLICY_TABLE_SQL: &str = "\
 CREATE TABLE IF NOT EXISTS vault_agent_policies (
@@ -376,6 +383,19 @@ impl SqliteStorage {
         Ok(value)
     }
 
+    /// Acquire the writer reservation before reading the audit head. Independent
+    /// connections therefore allocate chain positions only after prior commits.
+    pub fn vault_audit_transaction<T>(
+        &self,
+        body: impl FnOnce(&VaultTx<'_>) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let handle = VaultTx { conn: &tx };
+        let value = body(&handle)?;
+        tx.commit()?;
+        Ok(value)
+    }
+
     pub fn save_vault_metadata(&self, row: &VaultMetadataRow) -> Result<(), StorageError> {
         self.vault_transaction(|tx| tx.upsert_metadata(row))
     }
@@ -561,7 +581,10 @@ impl SqliteStorage {
     }
 
     pub fn append_vault_audit(&self, row: &VaultAuditRow) -> Result<(), StorageError> {
-        self.vault_transaction(|tx| tx.append_audit(row))
+        // Immediate transaction: sequence allocation inside the writer
+        // reservation must serialize across independent connections so
+        // concurrent appends cannot fork the audit hash chain.
+        self.vault_audit_transaction(|tx| tx.append_audit(row))
     }
 
     pub fn list_vault_audit_events(&self) -> Result<Vec<VaultAuditRow>, StorageError> {
@@ -569,6 +592,38 @@ impl SqliteStorage {
         let rows = stmt.query_map([], map_audit_row)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StorageError::from)
+    }
+
+    pub fn vault_audit_tail(&self) -> Result<Option<(i64, Vec<u8>)>, StorageError> {
+        self.vault_transaction(|tx| tx.audit_tail())
+    }
+
+    pub fn page_vault_audit_events(
+        &self,
+        after_seq: Option<i64>,
+        limit: usize,
+    ) -> Result<(Vec<VaultAuditRow>, Option<i64>), StorageError> {
+        self.vault_transaction(|tx| tx.page_audit_events(after_seq, limit))
+    }
+
+    pub fn explain_query_plan(&self, sql: &str) -> Result<String, StorageError> {
+        self.conn
+            .query_row(&format!("EXPLAIN QUERY PLAN {sql}"), [], |row| row.get(3))
+            .map_err(StorageError::from)
+    }
+
+    pub fn start_audit_materialization_tracking() {
+        AUDIT_ROWS_MATERIALIZED.store(0, Ordering::SeqCst);
+        AUDIT_ROW_OBSERVER_ENABLED.store(true, Ordering::SeqCst);
+    }
+
+    pub fn audit_rows_materialized() -> usize {
+        AUDIT_ROWS_MATERIALIZED.load(Ordering::SeqCst)
+    }
+
+    pub fn stop_audit_materialization_tracking() {
+        AUDIT_ROW_OBSERVER_ENABLED.store(false, Ordering::SeqCst);
+        AUDIT_ROWS_MATERIALIZED.store(0, Ordering::SeqCst);
     }
 
     pub fn save_vault_sync_version(&self, row: &VaultSyncVersionRow) -> Result<(), StorageError> {
@@ -671,7 +726,13 @@ fn map_policy_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VaultPolicyRow> {
     })
 }
 
+static AUDIT_ROW_OBSERVER_ENABLED: AtomicBool = AtomicBool::new(false);
+static AUDIT_ROWS_MATERIALIZED: AtomicUsize = AtomicUsize::new(0);
+
 fn map_audit_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VaultAuditRow> {
+    if AUDIT_ROW_OBSERVER_ENABLED.load(Ordering::Relaxed) {
+        AUDIT_ROWS_MATERIALIZED.fetch_add(1, Ordering::Relaxed);
+    }
     Ok(VaultAuditRow {
         id: row.get(0)?,
         schema_version: row.get(1)?,
@@ -703,6 +764,85 @@ pub struct VaultTx<'conn> {
 }
 
 impl VaultTx<'_> {
+    pub fn latest_audit_event(&self) -> Result<Option<VaultAuditRow>, StorageError> {
+        self.conn
+            .query_row(
+                "SELECT id, schema_version, seq, timestamp, session_id, task_id, profile_id, \
+                 workspace_id, top_origin, frame_origin, item_id, item_alias, operation, policy, decision, reason, \
+                 device_name, prev_hash, entry_hash FROM vault_audit_events ORDER BY seq DESC, id DESC LIMIT 1",
+                [],
+                map_audit_row,
+            )
+            .optional()
+            .map_err(StorageError::from)
+    }
+
+    pub fn audit_tail(&self) -> Result<Option<(i64, Vec<u8>)>, StorageError> {
+        // Tail primitive: read only (seq, entry_hash) of the highest committed
+        // row so an append never materializes the audit history.
+        self.conn
+            .query_row(
+                "SELECT seq, entry_hash FROM vault_audit_events \
+                 ORDER BY seq DESC, id DESC LIMIT 1",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()
+            .map_err(StorageError::from)
+    }
+
+    pub fn page_audit_events(
+        &self,
+        after_seq: Option<i64>,
+        limit: usize,
+    ) -> Result<(Vec<VaultAuditRow>, Option<i64>), StorageError> {
+        // Keyset pagination over idx_vault_audit_seq: fetch limit + 1 rows so a
+        // next cursor is returned only when an extra row exists. Positive limits
+        // clamp to 1,000; zero means the bounded default page of 100.
+        if after_seq.is_some_and(|cursor| cursor < 0) {
+            return Err(StorageError::Other(
+                "invalid vault audit cursor: must be nonnegative".to_string(),
+            ));
+        }
+        let effective_limit = if limit == 0 {
+            VAULT_AUDIT_DEFAULT_PAGE
+        } else {
+            limit.min(VAULT_AUDIT_MAX_PAGE)
+        };
+        let fetch_limit = effective_limit
+            .checked_add(1)
+            .ok_or_else(|| StorageError::Other("vault audit page limit overflow".to_string()))?;
+        let fetch_limit = i64::try_from(fetch_limit).unwrap_or(i64::MAX);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, schema_version, seq, timestamp, session_id, task_id, profile_id, \
+             workspace_id, top_origin, frame_origin, item_id, item_alias, operation, policy, \
+             decision, reason, device_name, prev_hash, entry_hash FROM vault_audit_events \
+             WHERE seq > ?1 ORDER BY seq ASC, id ASC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![after_seq.unwrap_or(0), fetch_limit],
+            map_audit_row,
+        )?;
+        let mut page: Vec<VaultAuditRow> = rows.collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = if page.len() > effective_limit {
+            page.truncate(effective_limit);
+            page.last().map(|row| row.seq)
+        } else {
+            None
+        };
+        Ok((page, next_cursor))
+    }
+
+    pub fn count_active_items(&self) -> Result<u64, StorageError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM vault_items WHERE deleted_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(StorageError::from)
+    }
+
     pub fn upsert_metadata(&self, row: &VaultMetadataRow) -> Result<(), StorageError> {
         self.conn.execute(
             "INSERT INTO vault_metadata (slot, schema_version, payload, updated_at) \
@@ -861,6 +1001,23 @@ impl VaultTx<'_> {
     }
 
     pub fn append_audit(&self, row: &VaultAuditRow) -> Result<(), StorageError> {
+        // Hashes are opaque here: the caller must select the head and hash the
+        // final row inside vault_audit_transaction. Never rebase hashed fields.
+        let tail = self.audit_tail()?;
+        let (next, prev_hash) = match &tail {
+            Some((seq, hash)) => (
+                seq.checked_add(1).ok_or_else(|| {
+                    StorageError::Other("vault audit sequence overflow".to_string())
+                })?,
+                Some(hash.as_slice()),
+            ),
+            None => (1, None),
+        };
+        // Explicit forward gaps remain supported, but stale rows and incorrect
+        // predecessors must be rejected rather than silently rewritten.
+        if row.seq < next || row.prev_hash.as_deref() != prev_hash {
+            return Err(StorageError::Other("stale vault audit head".to_string()));
+        }
         self.conn.execute(
             "INSERT INTO vault_audit_events (id, schema_version, seq, timestamp, session_id, task_id, profile_id, \
              workspace_id, top_origin, frame_origin, item_id, item_alias, operation, policy, decision, reason, \
@@ -887,6 +1044,9 @@ impl VaultTx<'_> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod audit_tests;
 
 #[cfg(test)]
 mod tests {

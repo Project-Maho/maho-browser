@@ -3,9 +3,11 @@
 #include "maho/browser/ai/maho_capability_broker.h"
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/time/time.h"
+#include "maho/browser/ai/maho_mail_tool_authorization.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace maho::ai {
@@ -211,11 +213,14 @@ TEST(MahoCapabilityBrokerTest, LookupByCanonicalIdAndToolName) {
   EXPECT_EQ(desc2->canonical_id, "input.click");
   EXPECT_EQ(desc2->mutability, CapabilityMutability::kMutable);
   EXPECT_TRUE(RequiresLease(*desc2));
-  EXPECT_TRUE(RequiresApproval(*desc2));
+  // Browser manipulation is full access; only capabilities that leave the
+  // browser boundary carry a descriptor-level approval requirement.
+  EXPECT_FALSE(RequiresApproval(*desc2));
 
   const CapabilityDescriptor* desc3 =
       MahoCapabilityBroker::FindCapability("vault.credential.fill");
   ASSERT_NE(desc3, nullptr);
+  EXPECT_TRUE(RequiresApproval(*desc3));
   EXPECT_EQ(desc3->category, CapabilityCategory::kVault);
   EXPECT_EQ(desc3->user_presence_requirement,
             UserPresenceRequirement::kBiometricStrong);
@@ -527,7 +532,16 @@ TEST(MahoCapabilityBrokerTest, FinalConfirmFailsClosedOnlyOffBrowser) {
   click_ctx.active_tab_id = 42;
   click_ctx.source_origin = "https://app.example.com";
   click_ctx.lease_token = "lease-1";
-  EXPECT_TRUE(broker.Evaluate(click_ctx).RequiresApproval());
+  EXPECT_TRUE(broker.Evaluate(click_ctx).IsPermitted());
+
+  // ...and so is one the model classified as a gated consequence class.
+  click_ctx.action_consequence = "submit";
+  EXPECT_TRUE(broker.Evaluate(click_ctx).IsPermitted());
+
+  // The same holds for an Unknown-classified page read.
+  CapabilityRequestContext page_unknown = MakePageReadContext();
+  page_unknown.action_consequence = "unknown";
+  EXPECT_TRUE(broker.Evaluate(page_unknown).IsPermitted());
 }
 
 TEST(MahoCapabilityBrokerTest, FinalConfirmFalsePreservesTodayDecisions) {
@@ -551,6 +565,105 @@ TEST(MahoCapabilityBrokerTest, FinalConfirmFalsePreservesTodayDecisions) {
   ordinary_click.approval_token = "user-ok";
   ordinary_click.action_consequence = "ordinary";
   EXPECT_TRUE(broker.Evaluate(ordinary_click).IsPermitted());
+}
+
+// --- Mail authorization characterization -----------------------------------
+// AuthorizeMailTool's reason-code ORDER is a public contract shared with
+// maho/crates/maho-agent/src/permission.rs and the website docs, so the order
+// itself is pinned here, not just the individual outcomes. Every case forces
+// all LATER gates into their deny state, so only correct precedence can
+// produce the earlier reason code.
+
+constexpr MailAuthorizationContext MailContextAllOpen() {
+  MailAuthorizationContext context;
+  context.feature_enabled = true;
+  context.helper_ready = true;
+  context.helper_starting = false;
+  context.read_allowed = true;
+  context.global_policy = MailGlobalPolicy::kAllow;
+  return context;
+}
+
+TEST(MahoMailToolAuthorizationTest, ReasonCodeOrderIsStable) {
+  // 1. An unrecognized tool is rejected before any state is consulted.
+  EXPECT_EQ(AuthorizeMailTool("not_a_mail_tool", MailContextAllOpen()).reason_code,
+            "mail_tool_unknown");
+
+  // 2. Feature gate precedes helper, policy, and consent.
+  MailAuthorizationContext feature_off = MailContextAllOpen();
+  feature_off.feature_enabled = false;
+  feature_off.helper_ready = false;
+  feature_off.read_allowed = false;
+  feature_off.global_policy = MailGlobalPolicy::kDeny;
+  EXPECT_EQ(AuthorizeMailTool("mail_list_emails", feature_off).reason_code,
+            "mail_feature_disabled");
+
+  // 3. Helper lifecycle precedes policy and consent, and distinguishes a
+  //    starting helper from an unavailable one.
+  MailAuthorizationContext starting = MailContextAllOpen();
+  starting.helper_ready = false;
+  starting.helper_starting = true;
+  starting.read_allowed = false;
+  starting.global_policy = MailGlobalPolicy::kDeny;
+  EXPECT_EQ(AuthorizeMailTool("mail_list_emails", starting).reason_code,
+            "mail_helper_starting");
+
+  MailAuthorizationContext down = starting;
+  down.helper_starting = false;
+  EXPECT_EQ(AuthorizeMailTool("mail_list_emails", down).reason_code,
+            "mail_helper_unavailable");
+
+  // 4. A deny policy precedes the read-consent gate.
+  MailAuthorizationContext policy_deny = MailContextAllOpen();
+  policy_deny.global_policy = MailGlobalPolicy::kDeny;
+  policy_deny.read_allowed = false;
+  EXPECT_EQ(AuthorizeMailTool("mail_list_emails", policy_deny).reason_code,
+            "mail_global_policy_denied");
+
+  // 5. Read consent is the last gate for read tools.
+  MailAuthorizationContext no_consent = MailContextAllOpen();
+  no_consent.read_allowed = false;
+  no_consent.global_policy = MailGlobalPolicy::kPrompt;
+  EXPECT_EQ(AuthorizeMailTool("mail_list_emails", no_consent).reason_code,
+            "mail_read_consent_required");
+  EXPECT_EQ(AuthorizeMailTool("mail_list_emails", MailContextAllOpen()).action,
+            MailAuthorizationAction::kAllow);
+}
+
+TEST(MahoMailToolAuthorizationTest, WritesNeverInheritGlobalAllow) {
+  // A global allow plus read consent still resolves writes to a typed,
+  // per-call approval rather than an allow.
+  EXPECT_EQ(AuthorizeMailTool("mail_send", MailContextAllOpen()).action,
+            MailAuthorizationAction::kRequireApproval);
+  EXPECT_EQ(AuthorizeMailTool("mail_send", MailContextAllOpen()).reason_code,
+            "mail_typed_approval_required");
+  EXPECT_EQ(AuthorizeMailTool("mail_add_account", MailContextAllOpen()).reason_code,
+            "mail_typed_approval_required");
+
+  // Writes are not subject to the read-consent gate, but the earlier gates
+  // still apply to them in the same order.
+  MailAuthorizationContext no_consent = MailContextAllOpen();
+  no_consent.read_allowed = false;
+  EXPECT_EQ(AuthorizeMailTool("mail_send", no_consent).reason_code,
+            "mail_typed_approval_required");
+
+  MailAuthorizationContext feature_off = MailContextAllOpen();
+  feature_off.feature_enabled = false;
+  EXPECT_EQ(AuthorizeMailTool("mail_send", feature_off).reason_code,
+            "mail_feature_disabled");
+}
+
+TEST(MahoMailToolAuthorizationTest, ToolInventoryIsClassified) {
+  EXPECT_EQ(kMailReadTools.size(), 7u);
+  EXPECT_EQ(kMailWriteAccountTools.size(), 12u);
+  for (std::string_view tool : kMailReadTools) {
+    EXPECT_EQ(ClassifyMailTool(tool), MailToolClass::kRead) << tool;
+  }
+  for (std::string_view tool : kMailWriteAccountTools) {
+    EXPECT_EQ(ClassifyMailTool(tool), MailToolClass::kWriteAccount) << tool;
+  }
+  EXPECT_EQ(ClassifyMailTool("mail_unknown_future_tool"),
+            MailToolClass::kNotMail);
 }
 
 }  // namespace

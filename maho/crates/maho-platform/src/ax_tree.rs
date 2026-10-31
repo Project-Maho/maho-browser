@@ -195,8 +195,9 @@ print(json.dumps(out))
                     .to_string(),
             });
         }
-        let pid_arg = pid.to_string();
-        let out = runner.run_with_stdin(&program.to_string_lossy(), &[&pid_arg], ATSPI_SCRIPT)?;
+        let args = crate::linux_probe::atspi_args(pid);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = runner.run_with_stdin(&program.to_string_lossy(), &args, ATSPI_SCRIPT)?;
         if out.status != 0 {
             return Err(PlatformError::Io(format!(
                 "atspi script failed: {}",

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import importlib.util
 import os
 import plistlib
@@ -12,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from subprocess import SubprocessError
 
@@ -210,6 +212,61 @@ def omo_runtime_source():
     return None
 
 
+# Must match rpc_argv() and READY_MARKER in
+# maho/crates/maho-agent/src/omo/process.rs: the gate launches the package
+# exactly the way OmoBackend will at runtime.
+_OMO_READY_MARKER = 'rpc listening on'
+_OMO_PROBE_TIMEOUT_SECONDS = 30
+
+
+def verify_omo_runtime(bun: str, rpc_entry: str) -> str | None:
+    """Launch the omo runtime with Maho's RPC argv; return None when ready.
+
+    Returns the runtime's stderr tail (or a timeout note) when it exits or
+    stalls before reporting readiness. A package that only has
+    dist/rpc-entry.js is not enough: senpi 2026.8.x rejects `--listen` and
+    exits 1, which shipped as "omo runtime exited before it became ready".
+    """
+    import selectors
+    probe_dir = tempfile.mkdtemp(prefix='omo-probe-', dir='/tmp')
+    socket_path = os.path.join(probe_dir, 'rpc.sock')
+    proc = subprocess.Popen(
+        [bun, rpc_entry, '--listen', f'unix://{socket_path}',
+         '--no-builtin-tools'],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    seen: list[str] = []
+    deadline = time.monotonic() + _OMO_PROBE_TIMEOUT_SECONDS
+    try:
+        with selectors.DefaultSelector() as sel:
+            sel.register(proc.stderr, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return (f'no readiness within {_OMO_PROBE_TIMEOUT_SECONDS}s; '
+                            + ' | '.join(seen[-5:]))
+                if not sel.select(remaining):
+                    continue
+                line = proc.stderr.readline()
+                if not line:
+                    proc.wait(timeout=5)
+                    return (f'exited with status {proc.returncode}: '
+                            + ' | '.join(seen[-5:]))
+                if _OMO_READY_MARKER in line:
+                    return None
+                seen.append(line.strip())
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        proc.stdin.close()
+        proc.stderr.close()
+        shutil.rmtree(probe_dir, ignore_errors=True)
+
+
 def embed_omo_runtime(app_path: str, out_dir: str) -> bool:
     """Stage the omo runtime, Bun, and the browser MCP bridge into the bundle.
 
@@ -241,15 +298,30 @@ def embed_omo_runtime(app_path: str, out_dir: str) -> bool:
               'skipping omo runtime staging', file=sys.stderr)
         return False
 
-    mcp = os.path.join(
-        _WORKSPACE_ROOT, 'maho', 'target', 'release', 'maho-browser-mcp')
-    if not os.path.isfile(mcp):
-        mcp = os.path.join(
-            _WORKSPACE_ROOT, 'maho', 'target', 'debug', 'maho-browser-mcp')
-    if not os.path.isfile(mcp):
+    # build_maho_cli() builds the bridge with an explicit --target, which puts
+    # it under target/<triple>/release; plain cargo builds land in
+    # target/{release,debug}. Stage the newest one.
+    target_root = os.path.join(_WORKSPACE_ROOT, 'maho', 'target')
+    candidates = [
+        path for path in (
+            glob.glob(os.path.join(target_root, '*', 'release', 'maho-browser-mcp'))
+            + [os.path.join(target_root, 'release', 'maho-browser-mcp'),
+               os.path.join(target_root, 'debug', 'maho-browser-mcp')])
+        if os.path.isfile(path)
+    ]
+    if not candidates:
         print('warning: maho-browser-mcp not built; skipping omo runtime '
               'staging', file=sys.stderr)
         return False
+    mcp = max(candidates, key=os.path.getmtime)
+
+    failure = verify_omo_runtime(
+        bun, os.path.join(package, 'dist', 'rpc-entry.js'))
+    if failure:
+        raise RuntimeError(
+            f'omo package at {package} cannot start with Maho\'s RPC argv '
+            f'({failure}); update it (bun add -g @code-yeongyu/senpi) or '
+            'point MAHO_OMO_PACKAGE_DIR at a compatible package')
 
     bun_dest = os.path.join(macos_dir, 'bun')
     if os.path.islink(bun_dest) or os.path.isfile(bun_dest):
@@ -321,9 +393,11 @@ def maho_cli_binary_name(rust_target: str) -> str:
 def build_maho_cli(target: str | None) -> str:
     rust_target, _, _ = build_maho_core.get_target_triple(target)
     print(f"Building maho CLI for {rust_target}...")
+    cargo_cmd = ['cargo']
+    if build_maho_core._is_apple_target(rust_target):
+        cargo_cmd = ['rustup', 'run', 'nightly', 'cargo']
     subprocess.run(
-        [
-            'cargo',
+        cargo_cmd + [
             'build',
             '--release',
             '--target',
@@ -332,6 +406,11 @@ def build_maho_cli(target: str | None) -> str:
             'maho-cli',
             '--bin',
             'maho',
+            # The omo runtime's browser MCP bridge ships in the same bundle.
+            '--package',
+            'maho-browser-mcp',
+            '--bin',
+            'maho-browser-mcp',
         ],
         cwd=os.path.join(_WORKSPACE_ROOT, 'maho'),
         check=True,
@@ -383,6 +462,19 @@ def stage_maho_cli_next_to_browser(out_dir: str, cli_path: str) -> str | None:
     print(f"Staging maho CLI at {destination}")
     shutil.copy2(cli_path, destination)
     return destination
+
+
+def set_bundle_product_version(app_path: str, version: str) -> bool:
+    info_path = os.path.join(app_path, 'Contents', 'Info.plist')
+    if not os.path.isfile(info_path):
+        return False
+    with open(info_path, 'rb') as fp:
+        plist = plistlib.load(fp)
+    plist['CFBundleShortVersionString'] = version
+    plist['CFBundleVersion'] = version
+    with open(info_path, 'wb') as fp:
+        plistlib.dump(plist, fp)
+    return True
 
 
 def find_codesign_identity(release: bool = False) -> str | None:
@@ -491,6 +583,38 @@ def find_appstore_provisioning_profile(bundle_id: str) -> str | None:
     return None
 
 
+# Entitlements that only take effect when a matching provisioning profile is
+# embedded. Signing an app with these but no profile makes AMFI refuse to launch
+# it (AppleMobileFileIntegrityError -413 "No matching profile found"), so the
+# unrestricted subset must be used whenever no profile ships with the bundle.
+_RESTRICTED_ENTITLEMENT_KEYS = (
+    'com.apple.application-identifier',
+    'com.apple.developer.team-identifier',
+    'keychain-access-groups',
+)
+
+
+def unrestricted_entitlements_path(source_path: str) -> str:
+    """Write a copy of `source_path` without profile-gated entitlements.
+
+    Returns the original path when nothing needed stripping.
+    """
+    try:
+        with open(source_path, 'rb') as handle:
+            data = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException):
+        return source_path
+    stripped = {k: v for k, v in data.items()
+                if k not in _RESTRICTED_ENTITLEMENT_KEYS}
+    if len(stripped) == len(data):
+        return source_path
+    handle, temp_path = tempfile.mkstemp(
+        prefix='maho-entitlements-', suffix='.plist')
+    with os.fdopen(handle, 'wb') as out:
+        plistlib.dump(stripped, out)
+    return temp_path
+
+
 def codesign_app(identity: str, app_path: str) -> bool:
     if not os.path.isdir(app_path):
         print(f"error: app bundle not found: {app_path}", file=sys.stderr)
@@ -526,6 +650,21 @@ def codesign_app(identity: str, app_path: str) -> bool:
             'mac',
             'helper-entitlements.plist',
         )
+        # Restricted entitlements need an embedded, matching profile. Without
+        # one (Developer ID signing without a Developer ID profile) AMFI kills
+        # the process at launch, so sign the unrestricted subset instead of
+        # shipping a bundle that cannot start.
+        if provisioning_profile:
+            app_entitlements_path = entitlements_path
+        else:
+            app_entitlements_path = unrestricted_entitlements_path(
+                entitlements_path)
+            if app_entitlements_path != entitlements_path:
+                print(
+                    'No provisioning profile embedded: signing without '
+                    'restricted entitlements (application-identifier, '
+                    'keychain-access-groups).'
+                )
         maho_framework_path = os.path.join(
             frameworks_dir, 'Maho Framework.framework'
         )
@@ -533,14 +672,18 @@ def codesign_app(identity: str, app_path: str) -> bool:
             helpers_dir = os.path.join(
                 maho_framework_path, 'Versions', 'Current', 'Helpers'
             )
-            for helper_name in (
-                'Maho Helper.app',
-                'Maho Helper (Alerts).app',
-                'Maho Helper (GPU).app',
-                'Maho Helper (Renderer).app',
-            ):
-                helper_path = os.path.join(helpers_dir, helper_name)
-                if os.path.isdir(helper_path):
+            # Discover every helper app instead of enumerating names: Chromium
+            # 154 added the "Maho Helper (Aperitif*)" bundles, and a hardcoded
+            # list silently left them ad-hoc signed, which notarization rejects
+            # ("The signature of the binary is invalid" / "does not include a
+            # secure timestamp" / "hardened runtime not enabled").
+            if os.path.isdir(helpers_dir):
+                for helper_name in sorted(os.listdir(helpers_dir)):
+                    if not helper_name.endswith('.app'):
+                        continue
+                    helper_path = os.path.join(helpers_dir, helper_name)
+                    if not os.path.isdir(helper_path):
+                        continue
                     subprocess.run(
                         [
                             'codesign',
@@ -713,8 +856,8 @@ def codesign_app(identity: str, app_path: str) -> bool:
                 print(f"Signed {signed_count} native module(s) in the omo runtime")
 
         cmd = ['codesign', '--force', '--sign', identity, '--options', 'runtime']
-        if os.path.isfile(entitlements_path):
-            cmd += ['--entitlements', entitlements_path]
+        if os.path.isfile(app_entitlements_path):
+            cmd += ['--entitlements', app_entitlements_path]
         cmd += [app_path]
 
         print(f"Signing app bundle: {app_path}")
@@ -857,8 +1000,8 @@ _DMG_CONTENT_SIZE = (664, 400)
 _DMG_TITLE_BAR_HEIGHT = 28
 _DMG_WINDOW_XY = (100, 100)
 _DMG_ICON_SIZE_PT = 68
-_DMG_APP_ICON_CENTER = (215, 272)
-_DMG_APPLICATIONS_CENTER = (450, 272)
+_DMG_APP_ICON_CENTER = (215, 318)
+_DMG_APPLICATIONS_CENTER = (450, 318)
 
 
 def _write_dmg_layout(mount_point: str) -> None:
@@ -1299,6 +1442,153 @@ def ensure_args_gn(chromium_src, out_dir, platform, force, release=False, debug=
     sync_media_codec_flags(args_gn_path)
 
 
+def ensure_macos_sdk_path(args_gn_path: str) -> bool:
+    """Point a macOS args.gn at the staged SDK via a build-output symlink.
+
+    `use_clang_modules = false` (in the args templates) only compiles against
+    SDK 27 when the sysroot is the *staged* SDK whose math.h patch keeps
+    `FLT_EPSILON`/`INFINITY` defined; against the SDK inside Xcode.app the
+    build dies in protobuf with `use of undeclared identifier 'FLT_EPSILON'`.
+    The staged copy lives per-machine, so it cannot ship in the templates —
+    stage it on demand and record the path here.
+
+    Chromium 154's `sdk_inputs` action lists `$mac_sdk_path/usr/include/mach/exc.defs`
+    as an action output, requiring `mac_sdk_path` to reside within the build output
+    directory (e.g. `//out/Release/sdk/xcode_links/MacOSX.sdk`). An external
+    absolute path like `/Users/.../SDKs/MacOSX.sdk` is rejected by GN with:
+    `File is not inside output directory`.
+
+    Consistent with upstream Chromium's `//build/config/apple/sdk_info.py` convention,
+    this helper creates a symlink at `<out_dir>/sdk/xcode_links/<sdk_name>` pointing to
+    the verified staged SDK and configures `mac_sdk_path = "//{rel_out}/sdk/xcode_links/{sdk_name}"`.
+
+    Returns True when args.gn already carried a usable path or was successfully updated.
+    """
+    # Loaded lazily: this runs only on macOS, and a missing helper must never
+    # break the import of build_maho.py on the Linux/Windows builders.
+    stage_macos_sdk = load_module(
+        'maho_stage_macos_sdk', os.path.join(_SCRIPT_DIR, 'stage_macos_sdk.py')
+    )
+    if not os.path.isfile(args_gn_path):
+        return False
+    with open(args_gn_path, encoding='utf-8') as f:
+        content = f.read()
+
+    out_dir_path = os.path.dirname(os.path.abspath(args_gn_path))
+
+    # Determine the Chromium source root and the output directory relative to it.
+    src_root = None
+    cur = out_dir_path
+    while cur and cur != os.path.dirname(cur):
+        if os.path.isfile(os.path.join(cur, '.gn')):
+            src_root = cur
+            break
+        cur = os.path.dirname(cur)
+
+    if src_root:
+        rel_out = os.path.relpath(out_dir_path, src_root)
+    else:
+        try:
+            rel = os.path.relpath(out_dir_path, _CHROMIUM_SRC_ROOT)
+            if not rel.startswith('..'):
+                rel_out = rel
+            else:
+                raise ValueError()
+        except Exception:
+            parts = out_dir_path.replace('\\', '/').split('/')
+            if 'out' in parts:
+                idx = len(parts) - 1 - parts[::-1].index('out')
+                rel_out = '/'.join(parts[idx:])
+            else:
+                rel_out = f"out/{os.path.basename(out_dir_path)}"
+    rel_out = rel_out.replace('\\', '/').strip('/')
+
+    existing = re.search(r'^\s*mac_sdk_path\s*=\s*"([^"]+)"', content,
+                         re.MULTILINE)
+
+    def _resolve_real_sdk(preferred_path: str | None = None) -> str:
+        if preferred_path and stage_macos_sdk.check(preferred_path) == 0:
+            return preferred_path
+        default_dest = getattr(stage_macos_sdk, 'DEFAULT_DEST', os.path.expanduser('~/SDKs/MacOSX.sdk'))
+        if stage_macos_sdk.check(default_dest) == 0:
+            return default_dest
+        return stage_macos_sdk.stage(
+            stage_macos_sdk.find_source_sdk(), default_dest,
+            force=False,
+        )
+
+    def _ensure_symlink(target: str, link_path: str) -> None:
+        target_abs = os.path.abspath(target)
+        if os.path.islink(link_path):
+            try:
+                cur_target = os.readlink(link_path)
+                if not os.path.isabs(cur_target):
+                    cur_target = os.path.normpath(os.path.join(os.path.dirname(link_path), cur_target))
+                if os.path.abspath(cur_target) == target_abs and os.path.exists(link_path):
+                    return
+            except OSError:
+                pass
+            os.unlink(link_path)
+        elif os.path.lexists(link_path):
+            raise RuntimeError(
+                f'Refusing to replace existing non-symlink SDK path: {link_path}')
+
+        os.symlink(target, link_path)
+
+    # Check if args.gn already specifies a build-output relative symlink path (starts with //)
+    if existing and existing.group(1).startswith('//'):
+        gn_val = existing.group(1)
+        subpath = gn_val[2:].replace('/', os.sep)
+        if src_root:
+            fs_sdk_path = os.path.join(src_root, subpath)
+        elif out_dir_path.replace('\\', '/').endswith(rel_out):
+            base_dir = out_dir_path[:-len(rel_out)].rstrip('/\\')
+            fs_sdk_path = os.path.join(base_dir, subpath)
+        else:
+            fs_sdk_path = os.path.join(out_dir_path, 'sdk', 'xcode_links', os.path.basename(subpath))
+
+        # If the symlink already exists and points to a healthy staged SDK, we are idempotent.
+        if os.path.islink(fs_sdk_path):
+            try:
+                link_dest = os.readlink(fs_sdk_path)
+                if not os.path.isabs(link_dest):
+                    link_dest = os.path.normpath(os.path.join(os.path.dirname(fs_sdk_path), link_dest))
+                if stage_macos_sdk.check(link_dest) == 0:
+                    return True
+            except OSError:
+                pass
+
+        # If missing or pointing to invalid target, repair symlink
+        real_sdk = _resolve_real_sdk()
+        os.makedirs(os.path.dirname(fs_sdk_path), exist_ok=True)
+        _ensure_symlink(real_sdk, fs_sdk_path)
+        return True
+
+    # If args.gn had an existing external path, check if it's already a valid staged SDK
+    candidate_real = existing.group(1) if existing else None
+    real_sdk = _resolve_real_sdk(candidate_real)
+
+    sdk_name = os.path.basename(real_sdk.rstrip('/\\')) or 'MacOSX.sdk'
+    symlink_dir = os.path.join(out_dir_path, 'sdk', 'xcode_links')
+    os.makedirs(symlink_dir, exist_ok=True)
+    symlink_path = os.path.join(symlink_dir, sdk_name)
+    _ensure_symlink(real_sdk, symlink_path)
+
+    gn_sdk_path = f"//{rel_out}/sdk/xcode_links/{sdk_name}"
+    assignment = f'mac_sdk_path = "{gn_sdk_path}"'
+
+    if existing:
+        content = content.replace(existing.group(0), assignment)
+        print(f'  mac_sdk_path -> {gn_sdk_path} (migrated from {existing.group(1)})')
+    else:
+        content = content.rstrip('\n') + f'\n{assignment}\n'
+        print(f'  mac_sdk_path -> {gn_sdk_path}')
+
+    with open(args_gn_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    return True
+
+
 def sync_media_codec_flags(args_gn_path: str) -> bool:
     """Ensure mandatory media codecs and Widevine DRM flags are present in args.gn."""
     if not os.path.isfile(args_gn_path):
@@ -1471,17 +1761,15 @@ def build_chromium_app(out_dir, targets, extra_args):
         print('warning: no ninja targets requested; skipping chromium build')
         return
 
-    # When switching to or using siso, lingering .ninja_* files cause siso to fail.
-    # Clean them up safely before invoking autoninja.
+    # Lingering .ninja_lock causes ninja/siso to fail if a previous build was killed.
     out_dir_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir)
     if os.path.exists(out_dir_path):
-        for ninja_file in ('.ninja_log', '.ninja_deps', '.ninja_lock'):
-            target_file = os.path.join(out_dir_path, ninja_file)
-            if os.path.exists(target_file):
-                try:
-                    os.unlink(target_file)
-                except OSError:
-                    pass
+        target_file = os.path.join(out_dir_path, '.ninja_lock')
+        if os.path.exists(target_file):
+            try:
+                os.unlink(target_file)
+            except OSError:
+                pass
 
     # One invocation for every target. ninja reloads the entire build graph per
     # run, and that fixed cost measures ~25s on out/Default (68% .ninja parse,
@@ -1830,6 +2118,8 @@ def main():
             args_gn_file = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'args.gn')
             cc_wrapper_synced = sync_cc_wrapper(args_gn_file, platform)
             media_synced = sync_media_codec_flags(args_gn_file)
+            if platform == 'mac':
+                ensure_macos_sdk_path(args_gn_file)
             key_synced = sync_local_google_api_key(
                 _WORKSPACE_ROOT,
                 args_gn_file,
@@ -1874,10 +2164,15 @@ def main():
                 if platform == 'mac':
                     embed_sparkle_framework(app_path)
                     embed_mail_helper(app_path, out_dir)
-                    embed_omo_runtime(app_path, out_dir)
+                    # A skipped stage leaves whatever omo tree an earlier
+                    # build left in the bundle, which is how a runtime that
+                    # rejects --listen shipped; fail instead.
+                    if not embed_omo_runtime(app_path, out_dir):
+                        raise RuntimeError('failed to embed omo runtime into app bundle')
                     if maho_cli_path is None or not embed_maho_cli(
                             app_path, maho_cli_path):
                         raise RuntimeError('failed to embed maho CLI into app bundle')
+                    set_bundle_product_version(app_path, read_maho_version())
                 if platform == 'mac' and not args.skip_codesign:
                     identity = args.codesign_identity
                     if not identity:

@@ -3,6 +3,7 @@
 #ifndef MAHO_BROWSER_UPDATES_MAHO_UPDATE_SIGNATURE_H_
 #define MAHO_BROWSER_UPDATES_MAHO_UPDATE_SIGNATURE_H_
 
+#include <stdint.h>
 #include <string_view>
 
 #include "base/containers/span.h"

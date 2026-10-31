@@ -12,21 +12,42 @@
 #include <utility>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_store/password_store_backend.h"
 #include "components/password_manager/core/browser/password_store/password_store_consumer.h"
+#if __has_include("components/password_manager/core/browser/password_store/stored_credential.h")
+#include "components/password_manager/core/browser/password_store/stored_credential.h"
+#include "components/password_manager/core/browser/password_string.h"
+#define MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL 1
+#else
+#define MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL 0
+#endif
 #include "maho/chromium_src/components/password_manager/core/browser/password_fill_request.h"
 
+#if !MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
 namespace password_manager {
 using BackendLoginsResult = LoginsResult;
 using BackendLoginsResultOrError = LoginsResultOrError;
 }
+#endif
 
 namespace maho {
 namespace passwords {
+
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+using PasswordStoreBackendCredential = password_manager::StoredCredential;
+using ChromiumLoginsOrErrorReply =
+    password_manager::BackendLoginsOrErrorReply;
+using ChromiumBackendLoginsResult = password_manager::BackendLoginsResult;
+#else
+using PasswordStoreBackendCredential = password_manager::PasswordForm;
+using ChromiumLoginsOrErrorReply = password_manager::LoginsOrErrorReply;
+using ChromiumBackendLoginsResult = password_manager::LoginsResult;
+#endif
 
 enum class PasswordAuthorizationAction;
 
@@ -199,45 +220,53 @@ public:
 
   // password_manager::PasswordStoreBackend virtual interface implementation:
   void
-  InitBackend(password_manager::AffiliatedMatchHelper *affiliated_match_helper,
-              RemoteChangesReceived remote_form_changes_received,
+  InitBackend(RemoteChangesReceived remote_form_changes_received,
               base::RepeatingClosure sync_enabled_or_disabled_cb,
               base::OnceCallback<void(bool)> completion) override;
   void Shutdown(base::OnceClosure shutdown_completed) override;
   password_manager::ActionableError GetError() override;
-  void GetAllLoginsAsync(
-      password_manager::LoginsOrErrorReply callback) override;
+  void GetAllLoginsAsync(ChromiumLoginsOrErrorReply callback) override;
   void GetAllLoginsWithAffiliationAndBrandingAsync(
-      password_manager::LoginsOrErrorReply callback) override;
+      ChromiumLoginsOrErrorReply callback) override;
   void GetAutofillableLoginsAsync(
-      password_manager::LoginsOrErrorReply callback) override;
+      ChromiumLoginsOrErrorReply callback) override;
   void FillMatchingLoginsAsync(
-      password_manager::LoginsOrErrorReply callback, bool include_psl,
+      ChromiumLoginsOrErrorReply callback, bool include_psl,
       const std::vector<password_manager::PasswordFormDigest> &forms) override;
   void GetGroupedMatchingLoginsAsync(
       const password_manager::PasswordFormDigest &form_digest,
-      password_manager::LoginsOrErrorReply callback) override;
+      ChromiumLoginsOrErrorReply callback) override;
   void GetGroupedMatchingLoginsAsync(
       const password_manager::PasswordFormDigest &form_digest,
       const password_manager::PasswordFillRequestContext &context,
-      password_manager::LoginsOrErrorReply callback) override;
+      ChromiumLoginsOrErrorReply callback) override;
   void ResolvePasswordFill(
       const password_manager::PasswordFillRequestContext &context,
       const password_manager::PasswordFillSelection &selection,
       password_manager::PasswordFillResolver resolver) override;
-  void AddLoginAsync(
-      const password_manager::PasswordForm &form,
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+  void AddLoginAsync(PasswordStoreBackendCredential form,
+#else
+  void AddLoginAsync(const PasswordStoreBackendCredential &form,
+#endif
       password_manager::PasswordChangesOrErrorReply callback) override;
-  void UpdateLoginAsync(
-      const password_manager::PasswordForm &form,
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+  void UpdateLoginAsync(PasswordStoreBackendCredential form,
+#else
+  void UpdateLoginAsync(const PasswordStoreBackendCredential &form,
+#endif
       password_manager::PasswordChangesOrErrorReply callback) override;
   void RemoveLoginAsync(
       const base::Location &location,
-      const password_manager::PasswordForm &form,
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+      PasswordStoreBackendCredential form,
+#else
+      const PasswordStoreBackendCredential &form,
+#endif
       password_manager::PasswordChangesOrErrorReply callback) override;
   void RemoveLoginsCreatedBetweenAsync(
       const base::Location &location, base::Time delete_begin,
-      base::Time delete_end, base::OnceCallback<void(bool)> sync_completion,
+      base::Time delete_end,
       password_manager::PasswordChangesOrErrorReply callback) override;
   void DisableAutoSignInForOriginsAsync(
       const base::RepeatingCallback<bool(const GURL &)> &origin_filter,
@@ -253,8 +282,10 @@ public:
   bool IsInitialized() const;
   void GetAllLoginsMahoAsync(LoginsOrErrorReply callback);
   void GetAutofillableLoginsMahoAsync(LoginsOrErrorReply callback);
-  void FillMatchingLoginsMahoAsync(const std::string &signon_realm,
-                                   LoginsOrErrorReply callback);
+  void FillMatchingLoginsMahoAsync(
+      const std::string &signon_realm,
+      password_manager::PasswordForm::Scheme scheme,
+      LoginsOrErrorReply callback);
   void AddLoginMahoAsync(const MahoPasswordForm &form,
                          PasswordChangesOrErrorReply callback);
   void UpdateLoginMahoAsync(const MahoPasswordForm &form,
@@ -286,10 +317,11 @@ private:
                         PasswordAuthorizationAction action,
                         const std::u16string &message,
                         base::OnceCallback<void(bool)> callback);
-  void ReadLoginsForOperationMahoAsync(const std::optional<std::string> &origin,
-                                       const std::string &authorization_scope,
-                                       PasswordAuthorizationAction action,
-                                       LoginsOrErrorReply callback);
+  void ReadLoginsForOperationMahoAsync(
+      const std::optional<std::string> &origin,
+      const std::string &authorization_scope, PasswordAuthorizationAction action,
+      std::optional<password_manager::PasswordForm::Scheme> scheme,
+      LoginsOrErrorReply callback);
   void AddLoginWithResultMahoAsync(const MahoPasswordForm &form,
                                    MutationResultReply callback);
   void UpdateLoginWithResultMahoAsync(const MahoPasswordForm &form,
@@ -316,7 +348,7 @@ private:
   // signon_realm + username_value + (when set) username_element tuple selects
   // the matching duplicate from `candidates`.
   static std::optional<MahoPasswordForm>
-  ResolveTarget(const password_manager::PasswordForm &form,
+  ResolveTarget(const PasswordStoreBackendCredential &form,
                 const MahoCredentialIdentityMap &identity_map,
                 const std::vector<MahoPasswordForm> &candidates);
   // Task 3: the effective password provider is consulted PER OPERATION (never
@@ -332,6 +364,10 @@ private:
   // profile path + PrefService identity at construction.
   static bool IsMahoVaultRoutingActive();
 
+  // Vault lock-state observer: on unlock, reports unknown remote changes so
+  // form managers created while the Vault was locked refetch credentials.
+  void OnVaultLockStateChanged(bool locked);
+
   // Captured from the factory's profile path + PrefService construction
   // context. Never rebound from the browser-global core owner.
   const std::string profile_key_;
@@ -344,6 +380,8 @@ private:
   MahoCredentialIdentityMap identity_map_;
   std::map<FillContextKey, std::map<int, FillContextSnapshot>>
       fill_context_snapshots_;
+  RemoteChangesReceived remote_form_changes_received_;
+  base::CallbackListSubscription vault_lock_state_subscription_;
   base::WeakPtrFactory<MahoPasswordStoreBackend> weak_ptr_factory_{this};
 };
 

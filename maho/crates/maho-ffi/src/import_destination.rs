@@ -117,11 +117,19 @@ impl MahoCoreDestination {
 }
 
 impl ImportDestination for MahoCoreDestination {
-    fn create_space(&self, name: &str, theme_color_hex: &str, _icon: &str) -> Option<String> {
+    fn create_space(&self, name: &str, theme_color_hex: &str, icon: &str) -> Option<String> {
         let color = color::hex_to_space_color(theme_color_hex);
-        let space = self
-            .core_mut()
-            .create_space(name, color, ProfileId::default());
+        let core = self.core_mut();
+        let space = core.create_space(name, color, ProfileId::default());
+        if !icon.trim().is_empty() {
+            // maho-core canonicalizes the value (icon names -> emoji), so the
+            // importer hands over whatever the source browser stored.
+            core.update_space_config(maho_types::space::SpaceConfigUpdate {
+                space_id: space.id.clone(),
+                icon: Some(Some(icon.to_string())),
+                ..Default::default()
+            });
+        }
         Some(space.id.0.clone())
     }
 

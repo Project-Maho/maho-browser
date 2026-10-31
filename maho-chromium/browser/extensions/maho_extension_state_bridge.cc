@@ -21,6 +21,8 @@
 #include "extensions/browser/ui_util.h"
 #include "extensions/browser/uninstall_reason.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_set.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/permissions/permission_set.h"
 #include "maho/browser/maho_core_holder.h"
@@ -221,7 +223,7 @@ void MahoExtensionStateBridge::PushFullSnapshot() {
   auto* registry = extensions::ExtensionRegistry::Get(profile_);
   if (core && registry) {
     base::ListValue list;
-    auto append_set = [&list](const auto& set, bool enabled) {
+    auto append_set = [&list](const extensions::ExtensionSet& set, bool enabled) {
       for (const auto& ext : set) {
         if (!extensions::ui_util::ShouldDisplayInExtensionSettings(*ext)) {
           continue;
@@ -230,7 +232,8 @@ void MahoExtensionStateBridge::PushFullSnapshot() {
         dict.Set("id", ext->id());
         dict.Set("name", ext->name());
         dict.Set("version", ext->version().GetString());
-        dict.Set("description", ext->description());
+        dict.Set("description",
+                 extensions::DescriptionInfo::GetDescription(*ext));
         dict.Set("enabled", enabled);
         dict.Set("manifestVersion", ext->manifest_version());
 

@@ -17,12 +17,15 @@
     { "name": "images", "file": "images.icon" },
     { "name": "inbox", "file": "inbox.icon" },
     { "name": "link", "file": "link.icon" },
+    { "name": "lock", "file": "lock.icon" },
+    { "name": "lock-open", "file": "lock_open.icon" },
     { "name": "message-circle", "file": "message_circle.icon" },
     { "name": "message-square", "file": "message_square.icon" },
     { "name": "minus", "file": "minus.icon" },
     { "name": "notebook-text", "file": "notebook_text.icon" },
     { "name": "panel-left", "file": "panel_left.icon" },
     { "name": "pencil-line", "file": "pencil_line.icon" },
+    { "name": "pin", "file": "pin.icon" },
     { "name": "picture-in-picture-2", "file": "picture_in_picture_2.icon" },
     { "name": "plus", "file": "plus.icon" },
     { "name": "puzzle", "file": "puzzle.icon" },
@@ -31,6 +34,7 @@
     { "name": "search", "file": "search.icon" },
     { "name": "settings", "file": "settings.icon" },
     { "name": "share", "file": "share.icon" },
+    { "name": "shield-alert", "file": "shield_alert.icon" },
     { "name": "shield-check", "file": "shield_check.icon" },
     { "name": "shield-half", "file": "shield_half.icon" },
     { "name": "shield-question", "file": "shield_question.icon", "source_version": "0.468.0" },
@@ -55,6 +59,7 @@
     { "name": "arrow-up-right", "file": "arrow_up_right.icon" },
     { "name": "trash-2", "file": "trash_2.icon" },
     { "name": "globe", "file": "globe.icon" },
+    { "name": "languages", "file": "languages.icon" },
     { "name": "file", "file": "file.icon" }
   ]
 }

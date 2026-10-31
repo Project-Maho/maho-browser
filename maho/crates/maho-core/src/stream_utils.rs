@@ -4,6 +4,23 @@ use std::task::{Context, Poll};
 use futures_util::Stream;
 use tokio::sync::mpsc;
 
+/// Decode the complete UTF-8 prefix, retaining a code point split by transport
+/// framing. Invalid (rather than merely incomplete) UTF-8 remains an error.
+pub(crate) fn push_utf8_chunk(
+    pending: &mut Vec<u8>,
+    chunk: &[u8],
+) -> Result<String, std::str::Utf8Error> {
+    pending.extend_from_slice(chunk);
+    let valid_len = match std::str::from_utf8(pending) {
+        Ok(_) => pending.len(),
+        Err(error) if error.error_len().is_none() => error.valid_up_to(),
+        Err(error) => return Err(error),
+    };
+    let text = std::str::from_utf8(&pending[..valid_len])?.to_string();
+    pending.drain(..valid_len);
+    Ok(text)
+}
+
 pub struct UnboundedReceiverStream<T> {
     rx: mpsc::UnboundedReceiver<T>,
 }

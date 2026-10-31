@@ -25,6 +25,8 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "maho/browser/ai/maho_browser_tool_registry.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/size.h"
 #include "maho/browser/ai/maho_mail_tool_authorization.h"
 #include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
 #include "maho/browser/mcp/maho_mcp_capability_registry.h"
@@ -58,6 +60,10 @@ inline constexpr int kMahoMcpErrorApprovalDenied = -32008;
 inline constexpr int kMahoMcpErrorStaleReference = -32009;
 inline constexpr int kMahoMcpErrorActionNotApplied = -32010;
 inline constexpr int kMahoMcpErrorNativeInputUnavailable = -32011;
+// Tab-binding contract: an input/navigation mutation arrived without an
+// explicit tab_id. Automation controllers must name their target tab so two
+// concurrent sessions can never dispatch into whichever tab is focused.
+inline constexpr int kMahoMcpErrorTabBindingRequired = -32013;
 
 inline constexpr char kMahoMcpMessageTabNotFound[] = "tab not found";
 inline constexpr char kMahoMcpMessageNoEligibleActiveTab[] =
@@ -72,6 +78,8 @@ inline constexpr char kMahoMcpMessageActionNotApplied[] =
     "action dispatched but not applied";
 inline constexpr char kMahoMcpMessageNativeInputUnavailable[] =
     "native input unavailable";
+inline constexpr char kMahoMcpMessageTabBindingRequired[] =
+    "tab binding required for this mutation: pass an explicit tab_id";
 
 // Outcome of resolving a tool's target through the private-context policy.
 enum class MahoMcpTargetError {
@@ -94,6 +102,34 @@ struct ResolvedMahoMcpTarget {
 struct MahoMcpTargetResolution {
   ResolvedMahoMcpTarget target;
   MahoMcpTargetError error = MahoMcpTargetError::kNone;
+};
+
+// Real capture-time geometry produced alongside a screenshot PNG. The browser
+// delegate fills this at the moment the surface is copied, so a visual frame
+// can only ever be built from geometry a real capture observed. Size fields:
+// |bitmap_size| is physical pixels of the captured surface, |viewport_css_size|
+// is the renderer's visible viewport in CSS pixels, |view_bounds_in_screen| is
+// the view bounds in screen DIPs at capture time.
+struct MahoMcpCaptureMetrics {
+  MahoMcpCaptureMetrics();
+  ~MahoMcpCaptureMetrics();
+  MahoMcpCaptureMetrics(const MahoMcpCaptureMetrics&);
+  MahoMcpCaptureMetrics& operator=(const MahoMcpCaptureMetrics&);
+  MahoMcpCaptureMetrics(MahoMcpCaptureMetrics&&) noexcept;
+  MahoMcpCaptureMetrics& operator=(MahoMcpCaptureMetrics&&) noexcept;
+
+  int tab_id = 0;
+  gfx::Size bitmap_size;
+  gfx::SizeF viewport_css_size;
+  gfx::Rect view_bounds_in_screen;
+  float device_scale_factor = 1.0f;
+  gfx::PointF visual_viewport_offset;
+  float page_zoom_factor = 1.0f;
+  float page_scale_factor = 1.0f;
+  // No live lookups are wired for these today (lease epoch is the only live
+  // epoch compared by visual-action validation), so captures carry constant 1.
+  uint64_t document_epoch = 1;
+  uint64_t view_transform_generation = 1;
 };
 
 enum class MahoMcpActivityPhase {
@@ -355,6 +391,17 @@ class MahoMcpSession {
   }
 
  private:
+  // Visual-frame capture path: minted only from a real delegate capture that
+  // carried real geometry. See MahoMcpCaptureMetrics and the screenshot_full
+  // tool handler.
+  void OnFullScreenshotCaptured(
+      std::optional<base::Value> message_id,
+      DeferredResponseSender deferred_sender,
+      std::string b64,
+      std::optional<MahoMcpCaptureMetrics> metrics);
+  void BindVisualFrameFromCapture(const std::string& png_b64,
+                                  const MahoMcpCaptureMetrics& metrics);
+
   void HandleInitialize(const McpJsonRpcMessage& msg,
                         std::vector<std::string>& responses);
   void HandleActiveMethod(const McpJsonRpcMessage& msg,
@@ -381,6 +428,14 @@ class MahoMcpSession {
                           const base::DictValue* arguments,
                           int target_tab_id,
                           std::vector<std::string>& responses);
+  bool HandleTabBorrow(const McpJsonRpcMessage& msg,
+                       const base::DictValue* arguments,
+                       int target_tab_id,
+                       std::vector<std::string>& responses);
+  bool HandleTabReturn(const McpJsonRpcMessage& msg,
+                       const base::DictValue* arguments,
+                       int target_tab_id,
+                       std::vector<std::string>& responses);
 
   State state_ = State::kAwaitingInitialize;
 #if BUILDFLAG(IS_WIN)
@@ -558,6 +613,7 @@ class MahoMcpBrowserDelegate {
   struct QuerySelectorResult {
     std::string ref_id;
     std::string tag;
+    int match_count = 0;
   };
   virtual QuerySelectorResult QuerySelector(int tab_id,
                                             const std::string& selector) = 0;
@@ -606,7 +662,8 @@ class MahoMcpBrowserDelegate {
     BookmarkInfo& operator=(const BookmarkInfo&);
     BookmarkInfo& operator=(BookmarkInfo&&) noexcept;
 
-    int64_t id = 0;
+    // maho-core bookmark id (a string uuid), empty when nothing was stored.
+    std::string id;
     std::string title;
     std::string url;
     std::string folder;
@@ -625,11 +682,15 @@ class MahoMcpBrowserDelegate {
   virtual std::vector<HistoryEntry> SearchHistory(const std::string& query,
                                                   size_t max_results) = 0;
 
-  // Async: base64-encoded PNG passed to `callback`. Empty string on failure.
-  // Callback may be invoked on any sequence.
+  // Async: base64-encoded PNG passed to `callback` together with the real
+  // capture-time metrics (MahoMcpCaptureMetrics). Empty PNG string on failure
+  // (metrics are then meaningless and must be treated as absent). Callback may
+  // be invoked on any sequence.
   virtual void CaptureFullPagePngBase64(
       int tab_id,
-      base::OnceCallback<void(std::string)> callback) = 0;
+      base::OnceCallback<void(std::string,
+                              std::optional<MahoMcpCaptureMetrics>)>
+          callback) = 0;
 
   virtual void CaptureElementPngBase64(
       int tab_id,
@@ -652,9 +713,27 @@ class MahoMcpBrowserDelegate {
       int tab_id,
       const std::string& path,
       base::OnceCallback<void(bool)> callback);
+  virtual bool SelectFileForInput(int tab_id,
+                                  const std::string& css,
+                                  const std::string& path);
+  virtual void SelectFileForInputAsync(
+      int tab_id,
+      const std::string& css,
+      const std::string& path,
+      base::OnceCallback<void(bool)> callback);
+  virtual bool ClickForced(int tab_id, ui::AXNodeID ax_id);
+  virtual void ClickForced(
+      int tab_id,
+      ui::AXNodeID ax_id,
+      base::OnceCallback<void(InputActionOutcome)> callback);
   virtual void ClickVerified(
       int tab_id,
       ui::AXNodeID ax_id,
+      base::OnceCallback<void(InputActionOutcome)> callback);
+  virtual void ClickVerified(
+      int tab_id,
+      ui::AXNodeID ax_id,
+      bool force,
       base::OnceCallback<void(InputActionOutcome)> callback);
   virtual void TypeVerified(
       int tab_id,
@@ -675,6 +754,7 @@ class MahoMcpBrowserDelegate {
     std::optional<std::string> role;
     std::optional<std::string> name;
     bool exact = true;
+    bool force = false;
   };
 
   struct LocatorResolution {
@@ -710,6 +790,7 @@ class MahoMcpBrowserDelegate {
                         const std::vector<std::string>& modifiers) = 0;
   virtual bool ActivateTab(int tab_id) = 0;
   virtual bool Navigate(int tab_id, const GURL& url) = 0;
+  virtual bool GoBack(int tab_id);
   virtual bool SetViewportSize(int tab_id, int width, int height) = 0;
 
   struct VaultCredentialSummary {
@@ -823,6 +904,7 @@ class MahoMcpBrowserDelegate {
                               const std::string& folder_id,
                               const std::string& query,
                               int64_t max_age_seconds,
+                              const std::string& page_origin,
                               MailReadCallback callback);
   virtual void MailSendEmail(const std::string& request_json,
                              bool already_authorized,
@@ -853,6 +935,30 @@ class MahoMcpBrowserDelegate {
       std::string_view tool_name,
       const ResolvedMahoMcpTarget& target);
   virtual MahoMcpFeatureGates GetFeatureGates();
+
+  // AI Agent goal delegation: delegate a goal/prompt to the browser-owned
+  // Maho AI agent via MahoAiIngressCoordinator.
+  struct DelegateGoalResult {
+    DelegateGoalResult();
+    ~DelegateGoalResult();
+    DelegateGoalResult(const DelegateGoalResult&);
+    DelegateGoalResult(DelegateGoalResult&&) noexcept;
+    DelegateGoalResult& operator=(const DelegateGoalResult&);
+    DelegateGoalResult& operator=(DelegateGoalResult&&) noexcept;
+
+    bool accepted = false;
+    std::string request_id;
+    std::string status = "queued";
+    int browser_id = 0;
+    int error_code = 0;
+    std::string error_message;
+  };
+  virtual DelegateGoalResult DelegateGoal(
+      const std::string& goal,
+      std::optional<int> browser_id,
+      std::optional<std::string> request_id,
+      std::optional<std::string> context_intent);
+
   virtual std::string ListArtifacts(std::string_view session_id);
   virtual void ExportArtifact(std::string artifact_id,
                               base::FilePath destination,
@@ -871,6 +977,7 @@ class MahoMcpBrowserDelegate {
   // a synchronous or deferred success. Returns false when the bound
   // browser/tab/generation no longer authorizes MCP.
   virtual bool RevalidateTarget(const ResolvedMahoMcpTarget& target);
+  virtual bool IsTabWindowActive(int tab_id);
   virtual bool RevalidateRefSnapshot(const ResolvedMahoMcpTarget& target,
                                      uint64_t snapshot_token);
 

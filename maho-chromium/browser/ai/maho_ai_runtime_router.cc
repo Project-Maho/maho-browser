@@ -147,6 +147,9 @@ std::string GetProviderLastModel(PrefService* prefs, const std::string& provider
   const base::DictValue* entry = configs.FindDict(provider_id);
   if (entry) {
     const std::string* m = entry->FindString("last_model");
+    if (!m) {
+      m = entry->FindString("last_model_id");
+    }
     if (m && !m->empty()) {
       return *m;
     }
@@ -166,6 +169,7 @@ void SetProviderLastModel(PrefService* prefs,
   ScopedDictPrefUpdate update(prefs, ai_prefs::kProviderConfigs);
   base::DictValue* entry = update->EnsureDict(provider_id);
   entry->Set("last_model", model_id);
+  entry->Set("last_model_id", model_id);
 }
 
 bool IsProviderConnected(PrefService* prefs, const std::string& provider_id) {
@@ -204,7 +208,13 @@ std::optional<std::pair<std::string, std::string>> GetTaskOverride(
     return std::nullopt;
   }
   const std::string* prov = entry->FindString("provider");
+  if (!prov) {
+    prov = entry->FindString("provider_id");
+  }
   const std::string* mod = entry->FindString("model");
+  if (!mod) {
+    mod = entry->FindString("model_id");
+  }
   if (!prov || !mod || prov->empty() || mod->empty()) {
     return std::nullopt;
   }
@@ -221,7 +231,9 @@ void SetTaskOverride(PrefService* prefs,
   ScopedDictPrefUpdate update(prefs, ai_prefs::kTaskModels);
   base::DictValue entry;
   entry.Set("provider", provider_id);
+  entry.Set("provider_id", provider_id);
   entry.Set("model", model_id);
+  entry.Set("model_id", model_id);
   update->Set(TaskToString(task), std::move(entry));
 }
 

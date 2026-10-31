@@ -323,8 +323,7 @@ impl SplitConfig {
             Some(_) => return None,
             None => build_legacy_layout(pane_count, &self.orientation, &[]),
         };
-        let orientation = layout.root_orientation()?
-;
+        let orientation = layout.root_orientation()?;
         let ratios = layout.leaf_ratios(pane_count)?;
         Some(SplitViewConfig {
             panes: self
@@ -356,6 +355,9 @@ impl SplitViewConfig {
             Some(_) => return false,
             None => build_legacy_layout(pane_count, &self.orientation, &self.ratios),
         };
+        if !layout.validate_for_pane_count(pane_count) {
+            return false;
+        }
         self.orientation = layout.root_orientation().expect("validated split root");
         self.ratios = layout
             .leaf_ratios(pane_count)

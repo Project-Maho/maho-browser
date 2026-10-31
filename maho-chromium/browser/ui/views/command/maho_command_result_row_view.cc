@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "base/containers/lru_cache.h"
+#include "base/containers/hashing_lru_cache.h"
 #include "base/hash/hash.h"
 #include "base/no_destructor.h"
 #include "content/public/browser/browser_thread.h"

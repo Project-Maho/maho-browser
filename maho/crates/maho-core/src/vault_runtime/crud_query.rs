@@ -19,7 +19,17 @@ impl VaultRuntime {
         request: &VaultItemListRequest,
     ) -> Result<Vec<VaultItemPublicDto>, VaultCrudError> {
         self.with_manager(|manager| {
-            let mut items = active_dtos(manager, &repository)?;
+            let mut items = retained_records(manager, &repository)?
+                .iter()
+                .map(|(row, record)| public_dto(row, record))
+                .collect::<Result<Vec<_>, _>>()?;
+            items.retain(|item| match request.trash {
+                maho_types::vault::VaultTrashFilter::Exclude => item.trashed_at.is_none(),
+                maho_types::vault::VaultTrashFilter::Only => item.trashed_at.is_some(),
+            });
+            if request.favorites_only {
+                items.retain(|item| item.favorite);
+            }
             if let Some(provider) = request.provider.as_ref() {
                 items.retain(|item| &item.provider == provider);
             }
@@ -82,6 +92,16 @@ fn active_dtos(
 }
 
 pub(super) fn active_records(
+    manager: &VaultManager,
+    repository: &VaultRepository<'_>,
+) -> Result<Vec<(EncryptedVaultItemRow, VaultRecordPayload)>, VaultCrudError> {
+    Ok(retained_records(manager, repository)?
+        .into_iter()
+        .filter(|(_, record)| record.metadata.trashed_at.is_none())
+        .collect())
+}
+
+pub(super) fn retained_records(
     manager: &VaultManager,
     repository: &VaultRepository<'_>,
 ) -> Result<Vec<(EncryptedVaultItemRow, VaultRecordPayload)>, VaultCrudError> {

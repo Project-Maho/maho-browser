@@ -409,6 +409,10 @@ function BrowserVersionCard({store}: {store: MahoSettingsStore}) {
       listener => store.subscribe(listener), () => store.getSnapshot());
   const isDev = !state.updateSupported;
   const checking = state.updateState === BrowserUpdateState.kChecking;
+  const showGuidance = state.updateGuidance &&
+      state.updateState === BrowserUpdateState.kUpdateAvailable;
+  // Guidance now also arrives on Linux; only Windows updates via the Store.
+  const showStoreLink = /Windows/.test(navigator.userAgent);
   const readyToInstall =
       state.updateState === BrowserUpdateState.kReadyToInstall;
   const versionLine = `Maho ${state.browserVersion || '…'}${
@@ -424,7 +428,23 @@ function BrowserVersionCard({store}: {store: MahoSettingsStore}) {
             <div className="mt-1 text-sm text-muted-foreground">
               {isDev
                 ? 'Developer build — automatic updates are disabled.'
-                : UPDATE_STATE_LABELS[state.updateState] ?? ''}
+                : showGuidance ? (
+                  <>
+                    {state.updateGuidance}
+                    {showStoreLink ? (
+                      <>
+                        {' '}
+                        <a
+                          className="text-primary underline underline-offset-4"
+                          href="https://apps.microsoft.com/detail/9NF9QS2TJFXT"
+                          target="_blank"
+                          rel="noopener noreferrer">
+                          Microsoft Store
+                        </a>
+                      </>
+                    ) : null}
+                  </>
+                ) : UPDATE_STATE_LABELS[state.updateState] ?? ''}
             </div>
           </div>
           {!isDev ? (

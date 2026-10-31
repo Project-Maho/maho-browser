@@ -57,6 +57,8 @@ pub fn omo_runtime_from_bundle(
         .rpc_entry(&bundled.rpc_entry)
         .socket_path(&socket_path)
         .add_cleanup_path(&socket_path)
+        // omo exits when Maho does instead of lingering as an orphan.
+        .watch_ppid(std::process::id())
         .build()
         .map_err(|error| OmoUnavailable::Config(error.to_string()))?;
 
@@ -105,24 +107,50 @@ pub fn create_agent_runtime(
         }
     }
 
-    let agent_dir = agent_dir_for_workspace(&workspace_root);
-    let socket_path = resolve_rpc_socket_path(&agent_dir);
-    let bundled = BundledRuntime::from_executable_dir(&workspace_root);
-    let config = OmoLaunchConfig::builder(&agent_dir)
-        .runtime_binary(&bundled.runtime_binary)
-        .rpc_entry(&bundled.rpc_entry)
-        .socket_path(&socket_path)
-        .add_cleanup_path(&socket_path)
-        .build()
-        .unwrap_or_else(|_| OmoLaunchConfig::builder(&agent_dir).build().unwrap());
+    #[cfg(unix)]
+    {
+        let agent_dir = agent_dir_for_workspace(&workspace_root);
+        let socket_path = resolve_rpc_socket_path(&agent_dir);
+        let bundled = BundledRuntime::from_executable_dir(&workspace_root);
+        let config = match OmoLaunchConfig::builder(&agent_dir)
+            .runtime_binary(&bundled.runtime_binary)
+            .rpc_entry(&bundled.rpc_entry)
+            .socket_path(&socket_path)
+            .add_cleanup_path(&socket_path)
+            .watch_ppid(std::process::id())
+            .build()
+        {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(
+                    target: "maho_agent::omo",
+                    %error,
+                    "omo launch config is invalid; agent runtime unavailable"
+                );
+                return Arc::new(crate::UnavailableAgentRuntime::new(
+                    "The Maho agent runtime could not be configured.",
+                ));
+            }
+        };
 
-    let backend = OmoBackend::new(
-        config,
-        bundled.browser_mcp_binary,
-        &workspace_root,
-    );
-    backend.set_storage(storage);
-    Arc::new(backend)
+        let backend = OmoBackend::new(
+            config,
+            bundled.browser_mcp_binary,
+            &workspace_root,
+        );
+        backend.set_storage(storage);
+        Arc::new(backend)
+    }
+
+    #[cfg(not(unix))]
+    {
+        // The Omo backend spawns a Unix-domain-socket RPC runtime that has no Windows
+        // implementation yet. Fail every turn with that reason rather than answering
+        // with fabricated text, so the surface shows the real state.
+        Arc::new(crate::UnavailableAgentRuntime::new(
+            "The Maho agent runtime is not available on Windows yet.",
+        ))
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -202,9 +230,69 @@ mod tests {
 
         let workspace = tempfile::tempdir().expect("workspace");
         match omo_runtime_from_bundle(dir, workspace.path()) {
-            Ok(_) => {}
+            Ok(backend) => assert_eq!(
+                backend
+                    .config
+                    .env_vars()
+                    .get(crate::omo::config::SENPI_RPC_HOST_WATCH_PPID)
+                    .map(String::as_str),
+                Some(std::process::id().to_string().as_str()),
+                "omo must watch Maho's pid so it never outlives it"
+            ),
             Err(error) => panic!("a fully staged directory must build a runtime: {error:?}"),
         }
+    }
+
+    struct NoStorage;
+
+    #[async_trait::async_trait]
+    impl AgentStorage for NoStorage {
+        async fn get_byok_key(
+            &self,
+            _provider: &str,
+        ) -> Result<Option<crate::ZeroizedString>, crate::AgentError> {
+            Ok(None)
+        }
+        async fn get_setting(
+            &self,
+            _key: &str,
+        ) -> Result<Option<crate::ZeroizedString>, crate::AgentError> {
+            Ok(None)
+        }
+        async fn save_message(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+        ) -> Result<(), crate::AgentError> {
+            Ok(())
+        }
+        async fn get_history(
+            &self,
+            _session_id: &str,
+        ) -> Result<Vec<maho_types::chat::ChatMessage>, crate::AgentError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unbuildable_config_yields_an_unavailable_runtime_not_a_panic() {
+        // A relative workspace makes every launch config invalid (agent_dir must be absolute).
+        let runtime = create_agent_runtime(
+            Arc::new(NoStorage),
+            None,
+            PathBuf::from("relative-maho-workspace"),
+            false,
+        );
+        let result = runtime
+            .run_turn(
+                "s",
+                maho_types::chat::ChatMessage::user(maho_types::chat::ChatContent::text("hi")),
+                None,
+                None,
+            )
+            .await;
+        assert!(result.is_err());
     }
     #[test]
     fn the_omo_branch_installs_mahos_permission_callback() {

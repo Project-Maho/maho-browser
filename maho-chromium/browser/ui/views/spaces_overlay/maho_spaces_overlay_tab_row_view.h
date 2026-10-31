@@ -65,6 +65,7 @@ class MahoSpacesOverlayTabRowView : public views::View {
   raw_ptr<views::Label> subtitle_label_ = nullptr;
   raw_ptr<views::View> chip_row_ = nullptr;
   std::vector<raw_ptr<views::Label>> chip_labels_;
+  bool favicon_loaded_ = false;
   MahoSidebarPalette palette_;
 
   base::CancelableTaskTracker cancelable_task_tracker_;

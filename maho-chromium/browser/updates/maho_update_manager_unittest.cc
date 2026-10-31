@@ -4,6 +4,7 @@
 
 #include "base/command_line.h"
 #include "base/environment.h"
+#include "base/functional/bind.h"
 #include "content/public/test/browser_task_environment.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -11,10 +12,12 @@
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/version_info/version_info.h"
 #include "maho/browser/updates/crash_loop_sentinel.h"
+#include "maho/browser/updates/maho_product_version.h"
 #include "maho/browser/updates/maho_update_pref_names.h"
 #include "maho/browser/updates/maho_update_prefs.h"
 #include "maho/browser/updates/maho_update_server_url.h"
 #include "maho/browser/updates/platform_updater_delegate.h"
+#include "maho/browser/updates/platform_updater_error_mapping.h"
 #include "maho/browser/updates/rollout_bucket.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -36,13 +39,20 @@ class MockPlatformUpdaterDelegate : public PlatformUpdaterDelegate {
     last_channel = channel_name;
   }
   void ApplyUpdateAndRestart() override { ++apply_count; }
+  std::string GetUpdateGuidance() const override { return std::string(); }
+  void SetVersionHistoryHandler(base::RepeatingClosure handler) override {
+    ++set_version_history_handler_count;
+    version_history_handler = std::move(handler);
+  }
 
   int init_count = 0;
   int check_count = 0;
   int set_channel_count = 0;
   int apply_count = 0;
+  int set_version_history_handler_count = 0;
   bool last_manual = false;
   std::string last_channel;
+  base::RepeatingClosure version_history_handler;
 };
 
 class TestUpdateObserver : public MahoUpdateObserver {
@@ -83,6 +93,123 @@ class MahoUpdateManagerTest : public ::testing::Test {
   content::BrowserTaskEnvironment task_environment_{
       content::BrowserTaskEnvironment::TimeSource::MOCK_TIME};
 };
+
+TEST_F(MahoUpdateManagerTest, GuidanceDefaultsToEmpty) {
+  auto* manager = MahoUpdateManager::GetInstance();
+  EXPECT_TRUE(manager->GetUpdateGuidance().empty());
+  manager->SetDelegateForTesting(
+      std::make_unique<MockPlatformUpdaterDelegate>());
+  EXPECT_TRUE(manager->GetUpdateGuidance().empty());
+}
+
+TEST_F(MahoUpdateManagerTest, GuidanceDelegatesWithoutEnablingApply) {
+  class GuidedDelegate : public MockPlatformUpdaterDelegate {
+   public:
+    std::string GetUpdateGuidance() const override { return "external-update"; }
+  };
+  auto* manager = MahoUpdateManager::GetInstance();
+  auto delegate = std::make_unique<GuidedDelegate>();
+  auto* delegate_ptr = delegate.get();
+  manager->SetDelegateForTesting(std::move(delegate));
+  manager->TransitionToState(UpdateState::kUpdateAvailable);
+  EXPECT_EQ(manager->GetUpdateGuidance(), "external-update");
+  manager->ApplyUpdateAndRestart();
+  EXPECT_EQ(delegate_ptr->apply_count, 0);
+  manager->CheckForUpdates(true);
+  EXPECT_EQ(delegate_ptr->check_count, 1);
+}
+
+#if BUILDFLAG(IS_WIN)
+TEST_F(MahoUpdateManagerTest, UnpackagedWindowsDelegateCannotApplyInstaller) {
+  auto* manager = MahoUpdateManager::GetInstance();
+  manager->Initialize(nullptr, nullptr);
+  EXPECT_FALSE(manager->GetUpdateGuidance().empty());
+  manager->TransitionToState(UpdateState::kUpdateAvailable);
+  manager->ApplyUpdateAndRestart();
+  EXPECT_EQ(manager->GetState(), UpdateState::kUpdateAvailable);
+  manager->TransitionToState(UpdateState::kReadyToInstall);
+  manager->ApplyUpdateAndRestart();
+  EXPECT_EQ(manager->GetState(), UpdateState::kReadyToInstall);
+}
+#endif
+
+TEST_F(MahoUpdateManagerTest, VersionHistoryHandlerReachesTheDelegate) {
+  auto* manager = MahoUpdateManager::GetInstance();
+
+  // Set before any delegate exists: it must be applied when one appears.
+  int early_runs = 0;
+  manager->SetVersionHistoryHandler(
+      base::BindRepeating([](int* runs) { ++*runs; }, &early_runs));
+
+  auto delegate = std::make_unique<MockPlatformUpdaterDelegate>();
+  auto* delegate_ptr = delegate.get();
+  manager->SetDelegateForTesting(std::move(delegate));
+  ASSERT_EQ(delegate_ptr->set_version_history_handler_count, 1);
+  ASSERT_TRUE(delegate_ptr->version_history_handler);
+  delegate_ptr->version_history_handler.Run();
+  EXPECT_EQ(early_runs, 1);
+
+  // Set after the delegate exists: forwarded immediately, replacing the old
+  // handler. This is the live order -- the browser injects the handler right
+  // after MahoUpdateManager::Initialize() creates the platform delegate.
+  int late_runs = 0;
+  manager->SetVersionHistoryHandler(
+      base::BindRepeating([](int* runs) { ++*runs; }, &late_runs));
+  EXPECT_EQ(delegate_ptr->set_version_history_handler_count, 2);
+  delegate_ptr->version_history_handler.Run();
+  EXPECT_EQ(late_runs, 1);
+  EXPECT_EQ(early_runs, 1);
+}
+
+TEST_F(MahoUpdateManagerTest, NoUpdateIsNotAnUpdateFailure) {
+  // Regression: Sparkle reports SUNoUpdateError through the error parameter of
+  // -updater:didFinishUpdateCycleForUpdateCheck:error: when nothing newer
+  // exists. The macOS delegate turned every non-nil error into kConnectionFailed
+  // after updaterDidNotFindUpdate: had already set kUpToDate, so an up-to-date
+  // app displayed "Update check failed".
+  EXPECT_EQ(updates::ClassifyUpdateCycleError(/*is_sparkle_domain=*/true,
+                                              updates::kSparkleNoUpdateError),
+            updates::UpdateCycleOutcome::kNoUpdateFound);
+  EXPECT_EQ(updates::UpdateErrorFromUpdaterCode(updates::kSparkleNoUpdateError),
+            UpdateError::kNone);
+
+  // Declining the authorization prompt is a user action, not a malfunction.
+  EXPECT_EQ(
+      updates::ClassifyUpdateCycleError(
+          /*is_sparkle_domain=*/true,
+          updates::kSparkleInstallationCanceledError),
+      updates::UpdateCycleOutcome::kUserCanceled);
+
+  // A code is only interpretable inside Sparkle's error domain.
+  EXPECT_EQ(updates::ClassifyUpdateCycleError(/*is_sparkle_domain=*/false,
+                                              updates::kSparkleNoUpdateError),
+            updates::UpdateCycleOutcome::kFailure);
+
+  // Real failures still classify as failures.
+  EXPECT_EQ(updates::ClassifyUpdateCycleError(/*is_sparkle_domain=*/true,
+                                              updates::kSparkleAppcastError),
+            updates::UpdateCycleOutcome::kFailure);
+}
+
+TEST_F(MahoUpdateManagerTest, SparkleErrorCodesMapToMatchingUpdateErrors) {
+  // Signature failures are 3001/3002. The mapping used to test 2001/2002, which
+  // are download-phase codes, so a failed download was reported as a signature
+  // mismatch.
+  EXPECT_EQ(updates::UpdateErrorFromUpdaterCode(updates::kSparkleSignatureError),
+            UpdateError::kSignatureMismatch);
+  EXPECT_EQ(updates::UpdateErrorFromUpdaterCode(updates::kSparkleValidationError),
+            UpdateError::kSignatureMismatch);
+  EXPECT_EQ(updates::UpdateErrorFromUpdaterCode(updates::kSparkleDownloadError),
+            UpdateError::kDownloadFailed);
+  EXPECT_EQ(updates::UpdateErrorFromUpdaterCode(updates::kSparkleAppcastError),
+            UpdateError::kConnectionFailed);
+  // Install-phase and disk-image refusals have no taxonomy entry; they must not
+  // be misreported as connectivity problems.
+  EXPECT_EQ(updates::UpdateErrorFromUpdaterCode(/*install failure=*/4005),
+            UpdateError::kUnknown);
+  EXPECT_EQ(updates::UpdateErrorFromUpdaterCode(/*running from dmg=*/1003),
+            UpdateError::kUnknown);
+}
 
 TEST_F(MahoUpdateManagerTest, InitializeIsIdempotent_DelegateInitsExactlyOnce) {
   auto* manager = MahoUpdateManager::GetInstance();
@@ -340,7 +467,7 @@ TEST_F(MahoUpdateManagerTest, AutoCheckTimer_StoppedOnCrashLoop) {
   local_state->SetBoolean(prefs::kMahoUpdateEnabled, true);
 
   // Pre-populate the crash sentinel so the third bare start trips the loop.
-  std::string version(version_info::GetVersionNumber());
+  std::string version(updates::kMahoProductVersion);
   updates::CrashLoopSentinel::CheckAndMarkStart(local_state, version);
   updates::CrashLoopSentinel::CheckAndMarkStart(local_state, version);
 

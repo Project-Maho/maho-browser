@@ -43,6 +43,11 @@ class MahoMcpJsonRpc {
   // Append raw bytes from the socket into the internal buffer.
   void AppendData(const std::string& data);
 
+  // Inert work/retention observations; never used for admission decisions.
+  size_t buffered_bytes_for_testing() const { return buffer_.size(); }
+  size_t scanned_bytes_for_testing() const { return scanned_bytes_for_testing_; }
+  bool frame_limit_exceeded() const { return frame_limit_exceeded_; }
+
   // Take the next auto-generated error response (e.g., parse error,
   // invalid request detected during framing). Returns std::nullopt if none.
   std::optional<std::string> TakeNextResponse();
@@ -60,11 +65,19 @@ class MahoMcpJsonRpc {
                                  int code,
                                  const std::string& message);
 
+  // Same as above, with a JSON-RPC `error.data` payload for structured
+  // diagnostics that clients can consume without parsing the message text.
+  std::string BuildErrorResponse(const std::optional<base::Value>& id,
+                                 int code,
+                                 const std::string& message,
+                                 base::Value data);
+
  private:
-  void ProcessBuffer();
   void ProcessLine(const std::string& line);
 
   std::string buffer_;
+  bool frame_limit_exceeded_ = false;
+  size_t scanned_bytes_for_testing_ = 0;
   std::vector<std::string> pending_responses_;
   std::vector<McpJsonRpcMessage> pending_messages_;
 

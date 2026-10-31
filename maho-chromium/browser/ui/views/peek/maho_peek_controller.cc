@@ -34,12 +34,12 @@
 namespace maho {
 
 bool IsPeekEligible(Browser* browser) {
-  if (!browser || !browser->profile() || !browser->is_type_normal() ||
+  if (!browser || !browser->GetProfile() || !(browser->GetType() == BrowserWindowInterface::TYPE_NORMAL) ||
       browser->is_maho_mini()) {
     return false;
   }
 
-  Profile* profile = browser->profile();
+  Profile* profile = browser->GetProfile();
   if (profile->IsGuestSession() || profile->IsSystemProfile()) {
     return false;
   }
@@ -52,7 +52,7 @@ bool IsPeekContentsContextCompatible(Browser* browser,
   if (!IsPeekEligible(browser)) {
     return false;
   }
-  content::BrowserContext* context = browser->profile();
+  content::BrowserContext* context = browser->GetProfile();
   return (!source || source->GetBrowserContext() == context) &&
          (!contents || contents->GetBrowserContext() == context);
 }
@@ -232,7 +232,7 @@ content::WebContents* MahoPeekController::ShowUrl(content::WebContents* source,
       base::BindRepeating(&MahoPeekController::Hide,
                           weak_factory_.GetWeakPtr()));
   content::WebContents* hosted_contents =
-      peek_view->CreateAndLoad(browser_->profile(), url);
+      peek_view->CreateAndLoad(browser_->GetProfile(), url);
   ShowReserved(std::move(peek_view), hosted_contents);
   return hosted_contents;
 }
@@ -271,7 +271,7 @@ bool MahoPeekController::ReserveSlot(content::WebContents* source,
 
   if (source) {
     source_tab_observer_ = std::make_unique<SourceTabObserver>(
-        this, browser_->tab_strip_model(), source);
+        this, browser_->GetTabStripModel(), source);
   }
   return true;
 }
@@ -367,7 +367,7 @@ void MahoPeekController::PromoteToTab() {
       peek_view_->ReleaseContents();
   CHECK(contents);
 
-  browser_->tab_strip_model()->InsertWebContentsAt(
+  browser_->GetTabStripModel()->InsertWebContentsAt(
       /*index=*/-1, std::move(contents), AddTabTypes::ADD_ACTIVE);
   Hide();
 }

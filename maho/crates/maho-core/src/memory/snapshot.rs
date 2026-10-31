@@ -81,7 +81,7 @@ struct LegacyV1Snapshot {
 /// Load snapshot from disk, supporting both V2 and fallback from V1.
 pub fn load_snapshot(path: &Path) -> Result<MemoryIndexSnapshot, CoreError> {
     let bytes = std::fs::read(path).map_err(|e| CoreError::Storage(e.to_string()))?;
-    
+
     // First try V2 deserialization
     if let Ok(v2) = bincode::DefaultOptions::new()
         .with_limit(MEMORY_INDEX_SNAPSHOT_LIMIT)
@@ -120,7 +120,9 @@ pub fn load_snapshot(path: &Path) -> Result<MemoryIndexSnapshot, CoreError> {
         }
     }
 
-    Err(CoreError::Storage("invalid or corrupted memory index snapshot".into()))
+    Err(CoreError::Storage(
+        "invalid or corrupted memory index snapshot".into(),
+    ))
 }
 
 /// Save snapshot atomically using a temporary file.

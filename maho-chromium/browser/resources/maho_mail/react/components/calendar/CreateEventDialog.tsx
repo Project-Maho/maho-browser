@@ -16,7 +16,7 @@ import { Input } from "../ui/Input";
 import { Textarea } from "../ui/Textarea";
 import { Switch } from "../ui/Switch";
 import { useToast } from "../ui/Toast";
-import { RefreshCw, X } from "lucide-react";
+import { RefreshCw, X, TriangleAlert } from "lucide-react";
 import * as api from "../../api";
 import type { CalendarEvent, CreateCalendarEventRequest, UpdateCalendarEventRequest } from "../../types";
 import { ContactAutocomplete } from "../compose/ContactAutocomplete";
@@ -392,7 +392,7 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
           <form onSubmit={handleSubmit} className="space-y-4">
             {conflicts.length > 0 && (
               <div className="rounded-lg bg-amber-500/10 border border-amber-500/25 p-3 text-xs text-amber-600 dark:text-amber-400 space-y-1">
-                <p className="font-semibold flex items-center gap-1">⚠️ Scheduling Conflict Warning</p>
+                <p className="font-semibold flex items-center gap-1"><TriangleAlert size={13} aria-hidden="true" /> Scheduling Conflict Warning</p>
                 <p>This event overlaps with {conflicts.length} existing event(s):</p>
                 <ul className="list-disc list-inside">
                   {conflicts.map(c => (
@@ -650,8 +650,8 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
                     key={c}
                     type="button"
                     onClick={() => setColor(c)}
-                    className={`h-6 w-6 rounded-full border transition-all ${
-                      color === c ? "ring-2 ring-primary border-white" : "border-border"
+                    className={`mail-pressable h-7 w-7 rounded-full border ${
+                      color === c ? "ring-2 ring-primary ring-offset-2 ring-offset-background border-transparent" : "border-border hover:scale-110"
                     }`}
                     style={{ backgroundColor: c || "var(--primary)" }}
                     title={c || "Default"}
@@ -700,7 +700,7 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
                     <tr
                       key={hour}
                       onClick={() => handleSelectTimeSlot(hour)}
-                      className="border-b border-border/40 hover:bg-muted/40 cursor-pointer transition-colors"
+                      className="border-b border-border/40 hover:bg-surface-hover cursor-pointer transition-colors"
                     >
                       <td className="p-2 font-medium whitespace-nowrap">
                         {String(hour).padStart(2, "0")}:00 - {String(hour + 1).padStart(2, "0")}:00

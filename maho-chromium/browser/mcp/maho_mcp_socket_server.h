@@ -60,6 +60,9 @@ class MahoMcpSocketServer {
   size_t active_session_count() const { return sessions_.size(); }
 
  private:
+  friend class MahoMcpSocketServerTest;
+  friend class MahoMcpSocketMemoryThreadTest;
+
   struct ActiveConnection {
     ActiveConnection();
     ~ActiveConnection();

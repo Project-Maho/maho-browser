@@ -181,7 +181,8 @@ impl RoutineRunRegistry {
                     .map(|(k, v)| (k.clone(), v.started_at))
                     .collect();
                 terminal_entries.sort_by_key(|(_, t)| *t);
-                let remove_count = (state.runs.len() - MAX_ROUTINE_RUNS).min(terminal_entries.len());
+                let remove_count =
+                    (state.runs.len() - MAX_ROUTINE_RUNS).min(terminal_entries.len());
                 for (key, _) in terminal_entries.into_iter().take(remove_count) {
                     state.runs.remove(&key);
                 }

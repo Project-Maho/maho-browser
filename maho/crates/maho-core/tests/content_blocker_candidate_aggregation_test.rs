@@ -310,3 +310,30 @@ fn enabled_candidate_rules_reject_one_rule_over_aggregate_cap() {
     assert!(blocker.has_pending_candidate("easylist"));
     assert!(!blocker.has_pending_candidate("easyprivacy"));
 }
+
+// The default seeded set enables EasyList and EasyPrivacy together; they were
+// measured at ~81.7k and ~56.2k rules on 2026-09-27. A 100k aggregate cap made
+// that pair impossible: whichever list lost the fetch race was rejected on
+// every attempt and stayed permanently at zero rules, which left profiles
+// that lost EasyList with no ad blocking at all. Both default-sized lists must
+// therefore be accepted in the same generation.
+#[test]
+fn default_seeded_list_pair_fits_the_aggregate_rule_budget() {
+    const DEFAULT_EASYLIST_RULES: usize = 82_000;
+    const DEFAULT_EASYPRIVACY_RULES: usize = 56_000;
+
+    let mut blocker = ContentBlocker::new();
+    let easylist = "||default-ads.example^\n".repeat(DEFAULT_EASYLIST_RULES);
+    let easyprivacy = "||default-tracker.example^\n".repeat(DEFAULT_EASYPRIVACY_RULES);
+
+    assert_eq!(
+        blocker.apply_update_response(response("easylist", &easylist)),
+        Ok(FilterUpdateOutcome::CandidatePending)
+    );
+    assert_eq!(
+        blocker.apply_update_response(response("easyprivacy", &easyprivacy)),
+        Ok(FilterUpdateOutcome::CandidatePending)
+    );
+    assert!(blocker.has_pending_candidate("easylist"));
+    assert!(blocker.has_pending_candidate("easyprivacy"));
+}

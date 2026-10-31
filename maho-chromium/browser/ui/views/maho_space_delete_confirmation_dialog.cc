@@ -130,7 +130,7 @@ class MahoSpaceDeleteConfirmationDialogView : public views::DialogDelegate {
 
 void MahoSpaceDeleteConfirmationDialog::Show(Browser* browser,
                                              const std::string& space_id) {
-  if (!browser || !browser->window()) {
+  if (!browser || !browser->GetWindow()) {
     return;
   }
 
@@ -138,7 +138,7 @@ void MahoSpaceDeleteConfirmationDialog::Show(Browser* browser,
   auto delegate = std::make_unique<MahoSpaceDeleteConfirmationDialogView>(
       space_id, base::UTF8ToUTF16(space_name));
   views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
-      std::move(delegate), browser->window()->GetNativeWindow(),
+      std::move(delegate), browser->GetWindow()->GetNativeWindow(),
       gfx::NativeView());
   if (widget) {
     widget->Show();

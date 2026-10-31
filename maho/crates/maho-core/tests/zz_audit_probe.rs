@@ -39,6 +39,7 @@ fn ent(id: &str, version: u64, device_id: u32, payload: String, deleted: bool) -
         deleted,
         queue_row_id: None,
         fields_hlc_json: fields,
+        profile_id: None,
     }
 }
 

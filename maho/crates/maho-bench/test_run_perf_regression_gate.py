@@ -28,6 +28,23 @@ def test_current_measurement_takes_precedence(
     assert estimates[0].mean_ms == new_ms
 
 
+def test_target_directory_reaches_cargo(tmp_path: Path, monkeypatch) -> None:
+    import run_perf_regression_gate as gate
+    commands = []
+    monkeypatch.setattr(sys, "argv", ["gate", "--target-dir", str(tmp_path), "--bench", "tab_switch"])
+    monkeypatch.setattr(gate.shutil, "which", lambda _: "cargo")
+    def run(command):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    write_estimate(tmp_path / "criterion", "new", 1.0)
+    assert gate.main() == 0
+    assert commands
+    command = commands[0]
+    assert "--target-dir" in command
+    assert Path(command[command.index("--target-dir") + 1]) == tmp_path.resolve()
+
+
 def test_baseline_only_report_remains_readable(tmp_path: Path) -> None:
     write_estimate(tmp_path, "base", 2.0)
     estimates = parse_criterion_directory(tmp_path)

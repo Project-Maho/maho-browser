@@ -12,6 +12,7 @@
 #include "components/version_info/version_info.h"
 #include "content/public/test/browser_task_environment.h"
 #include "maho/browser/updates/linux_install_kind.h"
+#include "maho/browser/updates/maho_product_version.h"
 #include "maho/browser/updates/maho_update_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -19,7 +20,7 @@ namespace maho {
 namespace {
 
 std::string VersionNewerThanCurrent() {
-  base::Version current(version_info::GetVersionNumber());
+  base::Version current = updates::GetMahoProductVersion();
   CHECK(current.IsValid());
   std::vector<uint32_t> parts = current.components();
   parts[0] += 1;
@@ -106,6 +107,38 @@ TEST_F(LinuxUpdaterDelegateTest, OlderManifestVersionReportsUpToDate) {
   delegate->ApplyVerifiedManifest(ManifestWithVersion("0.0.0.1"));
 
   EXPECT_EQ(State(), UpdateState::kUpToDate);
+}
+
+TEST_F(LinuxUpdaterDelegateTest, EqualProductVersionReportsUpToDate) {
+  auto delegate = MakeDelegate(updates::LinuxInstallKind::kSelfContained);
+
+  delegate->ApplyVerifiedManifest(
+      ManifestWithVersion(updates::kMahoProductVersion));
+
+  EXPECT_EQ(State(), UpdateState::kUpToDate);
+}
+
+TEST_F(LinuxUpdaterDelegateTest, OlderProductVersionReportsUpToDate) {
+  auto delegate = MakeDelegate(updates::LinuxInstallKind::kSelfContained);
+
+  std::vector<uint32_t> parts = updates::GetMahoProductVersion().components();
+  ASSERT_GT(parts.back(), 0u);
+  parts.back() -= 1;
+  delegate->ApplyVerifiedManifest(
+      ManifestWithVersion(base::Version(parts).GetString()));
+
+  EXPECT_EQ(State(), UpdateState::kUpToDate);
+}
+
+TEST_F(LinuxUpdaterDelegateTest, NewerProductVersionReportsUpdateAvailable) {
+  auto delegate = MakeDelegate(updates::LinuxInstallKind::kSelfContained);
+
+  std::vector<uint32_t> parts = updates::GetMahoProductVersion().components();
+  parts.back() += 1;
+  delegate->ApplyVerifiedManifest(
+      ManifestWithVersion(base::Version(parts).GetString()));
+
+  EXPECT_EQ(State(), UpdateState::kUpdateAvailable);
 }
 
 TEST_F(LinuxUpdaterDelegateTest, UnparseableManifestVersionIsAnErrorNotUpToDate) {

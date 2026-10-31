@@ -191,7 +191,7 @@ export function CredentialsStep({ providerHint, onSuccess, onBack }: Credentials
 
   return (
     <div>
-      <button onClick={onBack} className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1.5 mb-6">
+      <button onClick={onBack} className="-ml-2 mb-6 flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
         <ArrowLeft size={16} />
         Back
       </button>

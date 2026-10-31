@@ -221,7 +221,7 @@ export function TimezoneConverter({ dtstart, dtend, sourceTimeZone }: TimezoneCo
                         key={z}
                         value={z}
                         onSelect={() => addZone(z)}
-                        className="text-xs py-1 px-2 cursor-pointer hover:bg-muted/50 text-muted-foreground hover:text-foreground"
+                        className="text-xs py-1 px-2 cursor-pointer hover:bg-surface-hover text-muted-foreground hover:text-foreground"
                       >
                         {z}
                       </CommandItem>

@@ -12,6 +12,9 @@
 
 namespace maho::ai {
 
+constexpr CapabilityFeatureGate kNativeInputBrokerGate =
+    static_cast<CapabilityFeatureGate>(100);
+
 std::string ParseRuntimeConfigTier(std::string_view raw_tier) {
   if (raw_tier == "read_only" || raw_tier == "guard" ||
       raw_tier == "full_access") {
@@ -51,9 +54,9 @@ bool FsPathInsideRuntimeWhitelist(
       continue;
     }
     if (path == trimmed ||
-        path.compare(0, trimmed.size(), trimmed) == 0 &&
-            path.size() > trimmed.size() &&
-            path[trimmed.size()] == '/') {
+        (path.compare(0, trimmed.size(), trimmed) == 0 &&
+         path.size() > trimmed.size() &&
+         path[trimmed.size()] == '/')) {
       return true;
     }
   }
@@ -333,26 +336,63 @@ std::vector<CapabilityDescriptor> BuildCanonicalDescriptors() {
   constexpr CapabilitySurfaceMask DesktopAgentAndBrowserMcp =
       CapabilitySurface::kDesktopAgent | CapabilitySurface::kBrowserMcp;
 
+  constexpr CapabilityCategory BrokerCategory_Tabs = CapabilityCategory::kTabs;
+  constexpr CapabilityCategory BrokerCategory_Navigation =
+      CapabilityCategory::kNavigation;
+  constexpr CapabilityCategory BrokerCategory_Page = CapabilityCategory::kPage;
+  constexpr CapabilityCategory BrokerCategory_Input =
+      CapabilityCategory::kInput;
+  constexpr CapabilityCategory BrokerCategory_Action =
+      CapabilityCategory::kInput;
+  constexpr CapabilityCategory BrokerCategory_History =
+      CapabilityCategory::kHistory;
+  constexpr CapabilityCategory BrokerCategory_Bookmarks =
+      CapabilityCategory::kBookmarks;
+  constexpr CapabilityCategory BrokerCategory_Policy =
+      CapabilityCategory::kPolicy;
+  constexpr CapabilityCategory BrokerCategory_Routines =
+      CapabilityCategory::kRoutines;
+  constexpr CapabilityCategory BrokerCategory_Mail = CapabilityCategory::kMail;
+  constexpr CapabilityCategory BrokerCategory_Lease =
+      CapabilityCategory::kLease;
+  constexpr CapabilityCategory BrokerCategory_Vault =
+      CapabilityCategory::kVault;
+  constexpr CapabilityCategory BrokerCategory_Capture =
+      CapabilityCategory::kCapture;
+
+  [[maybe_unused]] constexpr CapabilityFeatureGate BrokerFeatureGate_Unknown =
+      CapabilityFeatureGate::kUnknown;
+  constexpr CapabilityFeatureGate BrokerFeatureGate_Always =
+      CapabilityFeatureGate::kAlways;
+  constexpr CapabilityFeatureGate BrokerFeatureGate_MailBeta =
+      CapabilityFeatureGate::kMailBeta;
+  constexpr CapabilityFeatureGate BrokerFeatureGate_Routines =
+      CapabilityFeatureGate::kRoutines;
+  constexpr CapabilityFeatureGate BrokerFeatureGate_Vault =
+      CapabilityFeatureGate::kVault;
+  constexpr CapabilityFeatureGate BrokerFeatureGate_NativeInput =
+      kNativeInputBrokerGate;
+
 #define MAHO_BROWSER_CAPABILITY(id, canonical_id, tool_name, category,         \
                                 mutability, authority_change, broker,          \
                                 boundary, sensitivity, feature_gate, surfaces, \
                                 missing_policy, description)                   \
   descriptors.push_back(MakeCapabilityDescriptor(                              \
-      canonical_id, tool_name, CapabilityCategory::k##category,                \
+      canonical_id, tool_name, BrokerCategory_##category,                      \
       CapabilityMutability::k##mutability,                                     \
       (std::string_view(#authority_change) == "Yes"),                          \
       CapabilityBrokerType::k##broker, CapabilityBoundary::k##boundary,        \
       CapabilitySensitivity::k##sensitivity,                                   \
-      CapabilityFeatureGate::k##feature_gate, surfaces,                        \
+      BrokerFeatureGate_##feature_gate, surfaces,                              \
       CapabilityMissingPolicy::k##missing_policy, description));
 
 #define MAHO_BROWSER_ACTION_CAPABILITY(id, canonical_id, tool_name, category, \
                                        broker, boundary, feature_gate,        \
                                        surfaces, description)                 \
   descriptors.push_back(MakeBrowserActionDescriptor(                          \
-      canonical_id, tool_name, CapabilityCategory::k##category,               \
+      canonical_id, tool_name, BrokerCategory_##category,                     \
       CapabilityBrokerType::k##broker, CapabilityBoundary::k##boundary,       \
-      CapabilityFeatureGate::k##feature_gate, surfaces, description));
+      BrokerFeatureGate_##feature_gate, surfaces, description));
 
 #include "maho/browser/ai/maho_browser_capability_catalog.def"
 
@@ -391,6 +431,8 @@ bool IsFeatureActive(CapabilityFeatureGate gate,
       return features.routines_enabled;
     case CapabilityFeatureGate::kVault:
       return features.vault_enabled;
+    case kNativeInputBrokerGate:
+      return false;
   }
   return false;
 }

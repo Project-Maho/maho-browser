@@ -22,6 +22,7 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_util.h"
@@ -41,7 +42,26 @@ namespace {
 constexpr size_t kPipeBufferSize = 64 * 1024;  // 64 KiB
 constexpr DWORD kPipeTimeout = 5000;           // 5 seconds
 constexpr size_t kReadBufferSize = 4096;
+constexpr size_t kMaxFrameBytes = 1024 * 1024;
+constexpr size_t kOrdinaryResponseBytes = 1024 * 1024;
+constexpr size_t kOutputHighWater = 8 * 1024 * 1024;
+constexpr size_t kOutputLowWater = 4 * 1024 * 1024;
+constexpr size_t kOutputHardLimit = 16 * 1024 * 1024;
+constexpr size_t kProtocolErrorBytes = 4096;
+constexpr size_t kLargeResponseBytes = 64 * 1024 * 1024;
 constexpr wchar_t kPipePrefix[] = L"\\\\.\\pipe\\maho-browser-";
+
+std::string LimitResponse(std::string response, size_t limit) {
+  if (response.size() <= limit) {
+    return response;
+  }
+  const auto parsed = base::JSONReader::ReadDict(response, base::JSON_PARSE_RFC);
+  const base::Value* id = parsed ? parsed->Find("id") : nullptr;
+  MahoMcpJsonRpc framer;
+  return framer.BuildErrorResponse(
+      id ? std::optional<base::Value>(id->Clone()) : std::nullopt, -32000,
+      "response_too_large");
+}
 
 std::string GetPipeClientExecutable(HANDLE pipe) {
   ULONG client_pid = 0;
@@ -133,7 +153,7 @@ std::wstring MahoMcpPipeServer::GetCurrentUserSidString() {
 MahoMcpPipeServer::MahoMcpPipeServer(MahoMcpSessionToken* session_token)
     : pipe_name_(ComputePipeName()),
       session_token_(session_token),
-      lease_registry_(std::make_unique<MahoMcpLeaseRegistry>()) {
+      lease_registry_(std::make_shared<MahoMcpLeaseRegistry>()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
   MahoMcpSession::SetLeaseRegistryForBrowserActions(lease_registry_.get());
 }
@@ -309,8 +329,16 @@ void MahoMcpPipeServer::OnClientConnected() {
   conn->pipe_handle = std::move(listen_handle_);
   const std::string peer_executable =
       GetPipeClientExecutable(conn->pipe_handle.get());
-  conn->session = std::make_unique<MahoMcpSession>(
-      session_token_, lease_registry_.get(), peer_executable, true);
+  conn->session = std::shared_ptr<MahoMcpSession>(
+      new MahoMcpSession(session_token_, lease_registry_.get(), peer_executable,
+                         true),
+      [registry = lease_registry_](MahoMcpSession* session) {
+        content::GetUIThreadTaskRunner({})->PostTask(
+            FROM_HERE, base::BindOnce(
+                           [](std::shared_ptr<MahoMcpLeaseRegistry> registry,
+                              MahoMcpSession* session) { delete session; },
+                           registry, session));
+      });
   conn->read_buffer.resize(kReadBufferSize);
 
   conn->read_event.Set(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
@@ -322,24 +350,6 @@ void MahoMcpPipeServer::OnClientConnected() {
   conn->write_overlapped.hEvent = conn->write_event.get();
 
   const uint64_t connection_id = conn->connection_id;
-
-  // Install the deferred-response sink. The callback captures a WeakPtr to the
-  // server, the pipe sequence's task runner, and the STABLE connection id —
-  // never a raw PipeConnection* or a vector index. It hops back to the pipe
-  // sequence; OnDeferredResponse resolves the id and drops the response if the
-  // connection is gone.
-  scoped_refptr<base::SequencedTaskRunner> pipe_runner =
-      base::SequencedTaskRunner::GetCurrentDefault();
-  conn->session->SetDeferredResponseSender(base::BindRepeating(
-      [](base::WeakPtr<MahoMcpPipeServer> self,
-         scoped_refptr<base::SequencedTaskRunner> runner, uint64_t cid,
-         std::string response) {
-        runner->PostTask(
-            FROM_HERE,
-            base::BindOnce(&MahoMcpPipeServer::OnDeferredResponse, self, cid,
-                           std::move(response)));
-      },
-      weak_factory_.GetWeakPtr(), pipe_runner, connection_id));
 
   connections_.push_back(std::move(conn));
 
@@ -365,11 +375,13 @@ void MahoMcpPipeServer::BeginRead(uint64_t connection_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   PipeConnection* conn = FindConnection(connection_id);
-  if (!conn || !conn->pipe_handle.is_valid()) {
+  if (!conn || !conn->pipe_handle.is_valid() || conn->read_in_progress ||
+      conn->request_in_progress || conn->close_after_drain) {
     return;
   }
 
   ::ResetEvent(conn->read_event.get());
+  conn->read_in_progress = true;
 
   BOOL success = ::ReadFile(
       conn->pipe_handle.get(),
@@ -401,6 +413,7 @@ void MahoMcpPipeServer::OnReadComplete(uint64_t connection_id) {
   if (!conn) {
     return;
   }
+  conn->read_in_progress = false;
 
   DWORD bytes_read = 0;
   if (!::GetOverlappedResult(conn->pipe_handle.get(),
@@ -419,22 +432,103 @@ void MahoMcpPipeServer::OnReadComplete(uint64_t connection_id) {
     return;
   }
 
-  std::string data(conn->read_buffer.data(), bytes_read);
+  conn->ingress.append(conn->read_buffer.data(), bytes_read);
+  PumpRequests(connection_id);
+}
 
-  // Dispatch ProcessData() on the Chromium UI sequence: the session and its
-  // browser delegate touch UI objects, which must never be accessed on the
-  // pipe sequence. Responses come back to the pipe sequence in
-  // OnResponsesReady(), keyed by the stable connection id.
-  MahoMcpSession* session_ptr = conn->session.get();
+void MahoMcpPipeServer::PumpRequests(uint64_t connection_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  PipeConnection* conn = FindConnection(connection_id);
+  if (!conn || conn->request_in_progress || conn->close_after_drain) {
+    return;
+  }
+  if (conn->ordinary_bytes >= kOutputHighWater) {
+    conn->admission_paused = true;
+  } else if (conn->ordinary_bytes <= kOutputLowWater) {
+    conn->admission_paused = false;
+  }
+  if (conn->admission_paused || conn->large_result_pending ||
+      conn->reservations.size() >= 16 ||
+      conn->ordinary_bytes >
+          kOutputHardLimit - kProtocolErrorBytes - kOrdinaryResponseBytes) {
+    return;
+  }
+  const size_t delimiter =
+      conn->ingress.find('\n', conn->ingress_scan_offset);
+  if ((delimiter == std::string::npos &&
+       conn->ingress.size() >= kMaxFrameBytes) ||
+      (delimiter != std::string::npos && delimiter >= kMaxFrameBytes)) {
+    conn->ingress.clear();
+    conn->close_after_drain = true;
+    MahoMcpJsonRpc framer;
+    conn->write_queue.push_back(
+        framer.BuildErrorResponse(std::nullopt, -32600, "frame_too_large"));
+    conn->write_request_ids.push_back(0);
+    MaybeWriteNext(connection_id);
+    return;
+  }
+  if (delimiter == std::string::npos) {
+    conn->ingress_scan_offset = conn->ingress.size();
+    BeginRead(connection_id);
+    return;
+  }
+  std::string frame = conn->ingress.substr(0, delimiter + 1);
+  conn->ingress.erase(0, delimiter + 1);
+  conn->ingress_scan_offset = 0;
+  const auto parsed = base::JSONReader::ReadDict(frame, base::JSON_PARSE_RFC);
+  const bool expects_response = !parsed || parsed->contains("id");
+  const std::string* tool_name =
+      parsed ? parsed->FindStringByDottedPath("params.name") : nullptr;
+  const bool large =
+      tool_name && (*tool_name == "browser_screenshot_full" ||
+                    *tool_name == "browser_screenshot_element" ||
+                    *tool_name == "browser_network_stop_capture" ||
+                    *tool_name == "browser_network_get_har");
+  const size_t reservation =
+      large ? kLargeResponseBytes : kOrdinaryResponseBytes;
+  const uint64_t request_id = conn->next_request_id++;
+  conn->reservations.emplace(
+      request_id, PipeConnection::Reservation{reservation, large, false});
+  if (large) {
+    conn->large_result_pending = true;
+  } else {
+    conn->ordinary_bytes += reservation;
+  }
+  conn->request_in_progress = true;
+  auto sender = base::BindRepeating(
+      [](base::WeakPtr<MahoMcpPipeServer> self,
+         scoped_refptr<base::SequencedTaskRunner> runner, uint64_t cid,
+         uint64_t request_id, size_t limit, std::string response) {
+        runner->PostTask(
+            FROM_HERE,
+            base::BindOnce(&MahoMcpPipeServer::OnDeferredResponse, self, cid,
+                           request_id,
+                           LimitResponse(std::move(response), limit)));
+      },
+      weak_factory_.GetWeakPtr(),
+      base::SequencedTaskRunner::GetCurrentDefault(), connection_id, request_id,
+      reservation);
   content::GetUIThreadTaskRunner({})->PostTaskAndReplyWithResult(
       FROM_HERE,
-      base::BindOnce(&MahoMcpSession::ProcessData,
-                     base::Unretained(session_ptr), data),
+      base::BindOnce(
+          [](std::shared_ptr<MahoMcpSession> session, std::string frame,
+             MahoMcpSession::DeferredResponseSender sender, size_t limit) {
+            session->SetDeferredResponseSender(std::move(sender));
+            auto responses = session->ProcessData(frame);
+            for (auto& response : responses) {
+              response = LimitResponse(std::move(response), limit);
+            }
+            return responses;
+          },
+          conn->session, std::move(frame), std::move(sender), reservation),
       base::BindOnce(&MahoMcpPipeServer::OnResponsesReady,
-                     weak_factory_.GetWeakPtr(), connection_id));
+                     weak_factory_.GetWeakPtr(), connection_id, request_id,
+                     expects_response));
 }
 
 void MahoMcpPipeServer::OnResponsesReady(uint64_t connection_id,
+                                         uint64_t request_id,
+                                         bool expects_response,
                                          std::vector<std::string> responses) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -443,28 +537,34 @@ void MahoMcpPipeServer::OnResponsesReady(uint64_t connection_id,
     return;
   }
 
-  for (auto& response : responses) {
-    conn->write_queue.push_back(std::move(response));
-  }
-
+  conn->request_in_progress = false;
   const bool closed =
       conn->session->state() == MahoMcpSession::State::kClosed;
   conn->close_after_drain = conn->close_after_drain || closed;
-
-  MaybeWriteNext(connection_id);
-
-  // MaybeWriteNext() may have removed the connection (write error or a fully
-  // drained close). Re-resolve before touching it again.
+  if (responses.empty() && (!expects_response || closed)) {
+    auto it = conn->reservations.find(request_id);
+    if (it != conn->reservations.end() && !it->second.replied) {
+      if (it->second.large) {
+        conn->large_result_pending = false;
+      } else {
+        conn->ordinary_bytes -= it->second.bytes;
+      }
+      conn->reservations.erase(it);
+    }
+  }
+  for (auto& response : responses) {
+    OnDeferredResponse(connection_id, request_id, std::move(response));
+  }
   conn = FindConnection(connection_id);
   if (!conn) {
     return;
   }
-  if (!conn->close_after_drain) {
-    BeginRead(connection_id);
-  }
+  MaybeWriteNext(connection_id);
+  PumpRequests(connection_id);
 }
 
 void MahoMcpPipeServer::OnDeferredResponse(uint64_t connection_id,
+                                           uint64_t request_id,
                                            std::string response) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -476,8 +576,42 @@ void MahoMcpPipeServer::OnDeferredResponse(uint64_t connection_id,
     return;
   }
 
+  auto it = conn->reservations.find(request_id);
+  if (it == conn->reservations.end() || it->second.replied) {
+    return;
+  }
+  auto& reservation = it->second;
+  response = LimitResponse(std::move(response), reservation.bytes);
+  if (response.size() > reservation.bytes) {
+    LOG(ERROR) << "MCP: response identifier exceeds reserved output budget";
+    RemoveConnection(connection_id);
+    return;
+  }
+  if (!reservation.large) {
+    conn->ordinary_bytes -= reservation.bytes - response.size();
+  }
+  reservation.bytes = response.size();
+  reservation.replied = true;
   conn->write_queue.push_back(std::move(response));
+  conn->write_request_ids.push_back(request_id);
   MaybeWriteNext(connection_id);
+  PumpRequests(connection_id);
+}
+
+void MahoMcpPipeServer::FinishWrite(PipeConnection& conn) {
+  const uint64_t request_id = conn.write_request_ids.front();
+  auto it = conn.reservations.find(request_id);
+  if (it != conn.reservations.end()) {
+    if (it->second.large) {
+      conn.large_result_pending = false;
+    } else {
+      conn.ordinary_bytes -= it->second.bytes;
+    }
+    conn.reservations.erase(it);
+  }
+  conn.write_queue.pop_front();
+  conn.write_request_ids.pop_front();
+  conn.write_offset = 0;
 }
 
 void MahoMcpPipeServer::MaybeWriteNext(uint64_t connection_id) {
@@ -491,8 +625,7 @@ void MahoMcpPipeServer::MaybeWriteNext(uint64_t connection_id) {
   while (!conn->write_queue.empty()) {
     const std::string& front = conn->write_queue.front();
     if (conn->write_offset >= front.size()) {
-      conn->write_queue.pop_front();
-      conn->write_offset = 0;
+      FinishWrite(*conn);
       continue;
     }
 
@@ -512,12 +645,15 @@ void MahoMcpPipeServer::MaybeWriteNext(uint64_t connection_id) {
       // Completed synchronously; resolve the byte count via the overlapped
       // result (consistent with the read path) and keep draining.
       DWORD bytes_written = 0;
-      ::GetOverlappedResult(conn->pipe_handle.get(), &conn->write_overlapped,
-                            &bytes_written, FALSE);
+      if (!::GetOverlappedResult(conn->pipe_handle.get(), &conn->write_overlapped,
+                                &bytes_written, FALSE) ||
+          bytes_written == 0) {
+        RemoveConnection(connection_id);
+        return;
+      }
       conn->write_offset += bytes_written;
       if (conn->write_offset >= conn->write_queue.front().size()) {
-        conn->write_queue.pop_front();
-        conn->write_offset = 0;
+        FinishWrite(*conn);
       }
       continue;
     }
@@ -537,7 +673,8 @@ void MahoMcpPipeServer::MaybeWriteNext(uint64_t connection_id) {
   }
 
   // Queue fully drained.
-  if (conn->close_after_drain) {
+  if (conn->close_after_drain && conn->reservations.empty() &&
+      !conn->request_in_progress) {
     RemoveConnection(connection_id);
   }
 }
@@ -565,12 +702,12 @@ void MahoMcpPipeServer::OnWriteComplete(uint64_t connection_id) {
   if (!conn->write_queue.empty()) {
     conn->write_offset += bytes_written;
     if (conn->write_offset >= conn->write_queue.front().size()) {
-      conn->write_queue.pop_front();
-      conn->write_offset = 0;
+      FinishWrite(*conn);
     }
   }
 
   MaybeWriteNext(connection_id);
+  PumpRequests(connection_id);
 }
 
 void MahoMcpPipeServer::RemoveConnection(uint64_t connection_id) {
@@ -586,9 +723,9 @@ void MahoMcpPipeServer::RemoveConnection(uint64_t connection_id) {
     (*it)->write_watcher.StopWatching();
     if ((*it)->pipe_handle.is_valid()) {
       ::CancelIoEx((*it)->pipe_handle.get(), nullptr);
-      ::DisconnectNamedPipe((*it)->pipe_handle.get());
     }
     if (lease_registry_ && (*it)->session) {
+      MahoMcpSession::RevokeControllerSession((*it)->session->session_id());
       lease_registry_->OnSessionDropped((*it)->session->session_id());
     }
     connections_.erase(it);
@@ -599,6 +736,7 @@ void MahoMcpPipeServer::RemoveConnection(uint64_t connection_id) {
 void MahoMcpPipeServer::CloseAllConnections() {
   for (auto& conn : connections_) {
     if (lease_registry_ && conn->session) {
+      MahoMcpSession::RevokeControllerSession(conn->session->session_id());
       lease_registry_->OnSessionDropped(conn->session->session_id());
     }
     conn->read_watcher.StopWatching();

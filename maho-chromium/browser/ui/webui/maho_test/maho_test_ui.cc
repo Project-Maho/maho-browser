@@ -30,7 +30,8 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -234,15 +235,18 @@ void SeedLevel1(Profile* profile) {
       bookmark_model->bookmark_bar_node()->children().empty()) {
     bookmark_model->AddURL(bookmark_model->bookmark_bar_node(), 0,
                            u"Maho Test Seed",
-                           GURL("about:blank#runtime-seed"));
+                           GURL("data:text/html,runtime-seed"));
   }
 
-  Browser* browser = chrome::FindBrowserWithProfile(profile);
-  if (!browser || !browser->tab_strip_model()) {
+  ProfileBrowserCollection* collection =
+      ProfileBrowserCollection::GetForProfile(profile);
+  Browser* browser = static_cast<Browser*>(
+      collection ? collection->GetLastActiveBrowser() : nullptr);
+  if (!browser || !browser->GetTabStripModel()) {
     return;
   }
 
-  auto* tab_strip_model = browser->tab_strip_model();
+  auto* tab_strip_model = browser->GetTabStripModel();
   for (int i = 0; i < tab_strip_model->count(); ++i) {
     if (tab_strip_model->IsTabPinned(i)) {
       return;
@@ -286,8 +290,11 @@ void SeedLevel2(Profile* profile) {
 
   FavoriteDebugLines().push_back("SeedLevel2 entering");
 
-  Browser* browser = chrome::FindBrowserWithProfile(profile);
-  if (!browser || !browser->tab_strip_model()) {
+  ProfileBrowserCollection* collection2 =
+      ProfileBrowserCollection::GetForProfile(profile);
+  Browser* browser = static_cast<Browser*>(
+      collection2 ? collection2->GetLastActiveBrowser() : nullptr);
+  if (!browser || !browser->GetTabStripModel()) {
     FavoriteDebugLines().push_back(
         "SeedLevel2 missing browser or tab_strip_model");
     write_favorite_debug_file();
@@ -301,7 +308,7 @@ void SeedLevel2(Profile* profile) {
     return;
   }
 
-  auto* tab_strip_model = browser->tab_strip_model();
+  auto* tab_strip_model = browser->GetTabStripModel();
 
   struct SeedTab {
     const char* url;
@@ -310,17 +317,17 @@ void SeedLevel2(Profile* profile) {
     const char* folder_name;
   };
   static constexpr SeedTab kFavoriteSeedTabs[] = {
-      {"about:blank#github", true, true, nullptr},
-      {"about:blank#docs", true, false, "Research"},
-      {"about:blank#news", false, true, "Planning"},
-      {"about:blank#shop", false, true, "Planning"},
-      {"about:blank#blog", false, false, "Work"},
-      {"about:blank#about", false, false, "Planning"},
+      {"data:text/html,github", true, true, nullptr},
+      {"data:text/html,docs", true, false, "Research"},
+      {"data:text/html,news", false, true, "Planning"},
+      {"data:text/html,shop", false, true, "Planning"},
+      {"data:text/html,blog", false, false, "Work"},
+      {"data:text/html,about", false, false, "Planning"},
   };
   static constexpr SeedTab kSupportSeedTabs[] = {
-      {"about:blank#github", true, false, nullptr},
-      {"about:blank#ycombinator", false, false, nullptr},
-      {"about:blank#runtime-seed", false, false, nullptr},
+      {"data:text/html,github", true, false, nullptr},
+      {"data:text/html,ycombinator", false, false, nullptr},
+      {"data:text/html,runtime-seed", false, false, nullptr},
   };
 
   // Open all tabs first WITHOUT pinning. Pin state is applied later, after
@@ -396,6 +403,34 @@ void SeedLevel2(Profile* profile) {
     FavoriteDebugLines().push_back("SeedLevel2 missing active_space_id");
     write_favorite_debug_file();
     return;
+  }
+
+  // Level 2 is the multi-space fixture: guarantee a second (inactive) space so
+  // space switching and per-window space isolation have a target. Mirrors the
+  // sidebar create-space flow: core record, bridge registration, footer
+  // invalidation. Core create_space leaves the active space unchanged.
+  if (auto* space_bridge = maho::MahoSpaceProfileBridge::GetInstance();
+      space_bridge && space_bridge->GetRegisteredSpaceCount() < 2u) {
+    char* created = maho_core_create_space(
+        core, "Seed Space 2",
+        R"({"hue":140.0,"saturation":0.6,"brightness":0.9,"grain":0.0})",
+        "default");
+    if (created) {
+      std::optional<base::Value> parsed_space =
+          base::JSONReader::Read(created, base::JSON_PARSE_RFC);
+      maho_string_free(created);
+      const std::string* second_space_id =
+          parsed_space && parsed_space->is_dict()
+              ? parsed_space->GetDict().FindString("id")
+              : nullptr;
+      if (second_space_id && !second_space_id->empty()) {
+        space_bridge->RegisterSpace(*second_space_id,
+                                    base::FilePath::FromASCII("Default"));
+        maho::SidebarCacheInvalidation invalidation;
+        invalidation.fragments = maho::SidebarCoreFragment::kFooter;
+        maho::InvalidateSidebarCoreCache(invalidation);
+      }
+    }
   }
 
   auto log_favorite_tab_readback = [&](const SeedTab& seed,
@@ -640,13 +675,13 @@ void SeedLevel2(Profile* profile) {
   };
 
   auto custom_title_for_favorite_seed = [](const std::string& url) -> std::string {
-    if (url == "about:blank#github") {
+    if (url == "data:text/html,github") {
       return "GitHub";
     }
-    if (url == "about:blank#news") {
+    if (url == "data:text/html,news") {
       return "Example News";
     }
-    if (url == "about:blank#shop") {
+    if (url == "data:text/html,shop") {
       return "Example Shop";
     }
     return {};
@@ -789,10 +824,10 @@ void SeedLevel2(Profile* profile) {
   }
 
   auto custom_title_for_support_seed = [](const std::string& url) -> std::string {
-    if (url == "about:blank#github") {
+    if (url == "data:text/html,github") {
       return "Page not found · GitHub · GitHub";
     }
-    if (url == "about:blank#runtime-seed") {
+    if (url == "data:text/html,runtime-seed") {
       return "Maho Test Page";
     }
     return {};
@@ -994,7 +1029,10 @@ std::string BuildSidebarSnapshotHtml(Profile* profile) {
     return html;
   }
 
-  Browser* browser = chrome::FindBrowserWithProfile(profile);
+  ProfileBrowserCollection* collection =
+      ProfileBrowserCollection::GetForProfile(profile);
+  Browser* browser = static_cast<Browser*>(
+      collection ? collection->GetLastActiveBrowser() : nullptr);
   maho::MahoSidebarStateAdapter adapter;
   if (const auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
     adapter.SetFavoritesModel(

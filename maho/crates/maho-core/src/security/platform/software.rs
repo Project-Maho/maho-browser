@@ -15,8 +15,8 @@ use crate::security::{
     AuthenticatedKeyOperationCompletion, AuthenticatedKeyOperationKind,
     AuthenticatedKeyOperationRequest, AuthenticatedKeyOperationResult, BiometricAuthenticator,
     DeviceKeyStore, HardwareOperationId, HardwareSecurityCapabilities, HardwareSecurityError,
-    HardwareSecurityProvider, ProtectionLevel, UserPresenceAvailability,
-    UserPresenceCompletion, UserPresencePolicy, UserPresenceRequest, UserPresenceResult,
+    HardwareSecurityProvider, ProtectionLevel, UserPresenceAvailability, UserPresenceCompletion,
+    UserPresencePolicy, UserPresenceRequest, UserPresenceResult,
 };
 use maho_types::hardware_security::{
     DeviceKeyAlgorithm, DeviceKeyHandle, DeviceKeyPolicy, DeviceKeyPurpose, DeviceSignature,
@@ -318,7 +318,9 @@ impl HardwareSecurityProvider for SoftwareHardwareSecurityProvider {
                     &request.input_payload,
                     &request.aad,
                 ) {
-                    Ok(wrapped) => completion(Ok(AuthenticatedKeyOperationResult::Wrapped(wrapped))),
+                    Ok(wrapped) => {
+                        completion(Ok(AuthenticatedKeyOperationResult::Wrapped(wrapped)))
+                    }
                     Err(e) => completion(Err(e)),
                 }
             }
@@ -334,9 +336,9 @@ impl HardwareSecurityProvider for SoftwareHardwareSecurityProvider {
                     &wrapped,
                     &request.aad,
                 ) {
-                    Ok(unwrapped) => {
-                        completion(Ok(AuthenticatedKeyOperationResult::Unwrapped(unwrapped.to_vec())))
-                    }
+                    Ok(unwrapped) => completion(Ok(AuthenticatedKeyOperationResult::Unwrapped(
+                        unwrapped.to_vec(),
+                    ))),
                     Err(e) => completion(Err(e)),
                 }
             }

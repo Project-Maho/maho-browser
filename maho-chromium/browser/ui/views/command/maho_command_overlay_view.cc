@@ -145,6 +145,36 @@ gfx::Insets EmptyStateInsets(bool compact) {
 }
 
 
+bool IsExecutableSuggestion(const CommandSuggestion& suggestion) {
+  if (!suggestion.action_id.empty()) {
+    return true;
+  }
+  if (suggestion.type == CommandSuggestionType::kRecentSearch) {
+    return !suggestion.title.empty();
+  }
+  if (suggestion.type == CommandSuggestionType::kCalculator ||
+      suggestion.type == CommandSuggestionType::kUnitConversion) {
+    return !suggestion.title.empty();
+  }
+  if (!suggestion.browser_session_id.empty() &&
+      !suggestion.tab_session_id.empty()) {
+    return true;
+  }
+  if (suggestion.type == CommandSuggestionType::kTab &&
+      (!suggestion.stable_tab_id.empty() || suggestion.tab_index >= 0 ||
+       (suggestion.is_suspended && !suggestion.tab_core_id.empty()))) {
+    return true;
+  }
+  if (!suggestion.execution_payload.empty()) {
+    GURL gurl(suggestion.execution_payload);
+    if (gurl.SchemeIsHTTPOrHTTPS() || gurl.SchemeIs("chrome") ||
+        gurl.SchemeIs("maho")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 class CommandPaletteTextfield : public views::Textfield {
  public:
   bool SkipDefaultKeyEventProcessing(const ui::KeyEvent& event) override {
@@ -311,7 +341,11 @@ MahoCommandOverlayView::MahoCommandOverlayView(
                         kDividerBottomGapDp, kDividerHorizontalInsetDp)));
   divider_->SetVisible(false);
 
-  scroll_view_ = AddChildView(std::make_unique<views::ScrollView>());
+  // Scroll with layers so each results rebuild re-rasters into a cleared
+  // layer; without it, partial repaints over the translucent palette leave
+  // the previous rows visible underneath (seen on Windows 11 vibrancy).
+  scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
+      views::ScrollView::ScrollWithLayers::kEnabled));
   scroll_view_->SetDrawOverflowIndicator(false);
   scroll_view_->SetHorizontalScrollBarMode(
       views::ScrollView::ScrollBarMode::kDisabled);
@@ -382,7 +416,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       select_initial_text_(select_initial_text) {
   DCHECK(browser_);
   context_class_ =
-      MahoClassifyProfile(browser_ ? browser_->profile() : nullptr);
+      MahoClassifyProfile(browser_ ? browser_->GetProfile() : nullptr);
   GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
   GetViewAccessibility().SetName(u"Command Palette");
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -525,7 +559,11 @@ MahoCommandOverlayView::MahoCommandOverlayView(
                         kDividerBottomGapDp, kDividerHorizontalInsetDp)));
   divider_->SetVisible(false);
 
-  scroll_view_ = AddChildView(std::make_unique<views::ScrollView>());
+  // Scroll with layers so each results rebuild re-rasters into a cleared
+  // layer; without it, partial repaints over the translucent palette leave
+  // the previous rows visible underneath (seen on Windows 11 vibrancy).
+  scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
+      views::ScrollView::ScrollWithLayers::kEnabled));
   scroll_view_->SetDrawOverflowIndicator(false);
   scroll_view_->SetHorizontalScrollBarMode(
       views::ScrollView::ScrollBarMode::kDisabled);
@@ -577,7 +615,13 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   UpdateSearchLeadingAccessory();
 
   if (!initial_text.empty() && mode_ == CommandOverlayMode::kCurrentTab) {
-    textfield_->SetText(base::UTF8ToUTF16(initial_text));
+    // Show the URL the way the omnibox does: percent-escaped UTF-8 (e.g. Korean
+    // paths) is decoded for display, while URL-significant escapes stay intact
+    // so re-submitting the text reaches the same page.
+    initial_display_text_ = base::UTF16ToUTF8(
+        base::UnescapeAndDecodeUTF8URLComponentWithAdjustments(
+            initial_text, base::UnescapeRule::NORMAL, nullptr));
+    textfield_->SetText(base::UTF8ToUTF16(initial_display_text_));
     if (select_initial_text_) {
       textfield_->SelectAll(true);
     }
@@ -717,6 +761,11 @@ void MahoCommandOverlayView::RequestFocus() {
   } else {
     views::View::RequestFocus();
   }
+}
+
+bool MahoCommandOverlayView::OnMousePressed(const ui::MouseEvent& event) {
+  RequestFocus();
+  return true;
 }
 
 gfx::Size MahoCommandOverlayView::GetMinimumSize() const {
@@ -876,12 +925,11 @@ void MahoCommandOverlayView::OnThemeChanged() {
   if (!cp)
     return;
 
-  textfield_->SetTextColor(cp->GetColor(kMahoColorPrimaryText));
-  textfield_->set_placeholder_text_color(
+  textfield_->SetTextColorId(kMahoColorPrimaryText);
+  textfield_->SetMahoResolvedPlaceholderTextColor(
       SkColorSetA(cp->GetColor(kMahoColorPrimaryText), 0xA3));
-  textfield_->SetSelectionBackgroundColor(
-      cp->GetColor(kMahoColorCommandBarInputSelection));
-  textfield_->SetSelectionTextColor(cp->GetColor(kMahoColorPrimaryText));
+  textfield_->SetSelectionBackgroundColorId(kMahoColorCommandBarInputSelection);
+  textfield_->SetSelectionTextColorId(kMahoColorPrimaryText);
   UpdateSearchRowChrome();
   UpdateTrailingAccessoryPresentation();
   UpdateTextfieldPresentation();
@@ -892,6 +940,7 @@ void MahoCommandOverlayView::OnThemeChanged() {
 void MahoCommandOverlayView::ContentsChanged(
     views::Textfield* sender,
     const std::u16string& new_contents) {
+  user_navigated_results_ = false;
   if (suppress_search_) {
     return;
   }
@@ -927,7 +976,7 @@ void MahoCommandOverlayView::TriggerSearchForCurrentText() {
   std::string query = base::UTF16ToUTF8(textfield_->GetText());
 
   if (mode_ == CommandOverlayMode::kCurrentTab && !initial_url_.empty() &&
-      query == initial_url_) {
+      (query == initial_url_ || query == initial_display_text_)) {
     query.clear();
   }
   VLOG(1) << "[maho-cmdl-diag] TriggerSearch mode=" << static_cast<int>(mode_)
@@ -955,6 +1004,10 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
     return false;
   }
 
+  // Deleting must never be undone by an inline completion re-appearing.
+  suppress_inline_autocomplete_ = key_event.key_code() == ui::VKEY_BACK ||
+                                  key_event.key_code() == ui::VKEY_DELETE;
+
   switch (key_event.key_code()) {
     case ui::VKEY_ESCAPE:
       return HandleEscape();
@@ -977,6 +1030,7 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
       if (count > 0) {
         int next = std::min(model_->selected_index() + 1, count - 1);
         UpdateSelection(next);
+        user_navigated_results_ = true;
       }
       return true;
     }
@@ -985,6 +1039,7 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
       if (count > 0) {
         int prev = std::max(model_->selected_index() - 1, 0);
         UpdateSelection(prev);
+        user_navigated_results_ = true;
       }
       return true;
     }
@@ -1074,6 +1129,87 @@ void MahoCommandOverlayView::OnSearchResults(
   }
   UpdateResultViews(results);
   UpdateSearchLeadingAccessory();
+  MaybeApplyInlineAutocomplete();
+}
+
+// static
+std::optional<std::string> MahoCommandOverlayView::ComputeInlineCompletion(
+    const std::string& typed,
+    const std::vector<CommandSuggestion>& results) {
+  if (typed.empty() || typed.find_first_of(" \t") != std::string::npos ||
+      !base::IsStringASCII(typed)) {
+    return std::nullopt;
+  }
+  const std::string lower_typed = base::ToLowerASCII(typed);
+  for (const auto& suggestion : results) {
+    if (suggestion.type != CommandSuggestionType::kHistory &&
+        suggestion.type != CommandSuggestionType::kTab) {
+      continue;
+    }
+    const GURL url(suggestion.execution_payload);
+    if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS() || !url.has_host()) {
+      continue;
+    }
+    // Complete against "host[/path]" without the scheme, the way Arc and the
+    // omnibox complete visited sites. A leading "www." is optional.
+    std::string display(url.host());
+    if (url.has_port()) {
+      display += ":";
+      display += url.port();
+    }
+    if (url.path() != "/") {
+      display += url.path();
+    }
+    if (!base::StartsWith(lower_typed, "www.") &&
+        base::StartsWith(base::ToLowerASCII(display), "www.")) {
+      display.erase(0, 4);
+    }
+    // Only complete within the host unless the user already typed a path.
+    if (lower_typed.find('/') == std::string::npos) {
+      const size_t slash = display.find('/');
+      if (slash != std::string::npos) {
+        display.resize(slash);
+      }
+    }
+    if (display.size() > typed.size() &&
+        base::StartsWith(base::ToLowerASCII(display), lower_typed)) {
+      return typed + display.substr(typed.size());
+    }
+  }
+  return std::nullopt;
+}
+
+void MahoCommandOverlayView::MaybeApplyInlineAutocomplete() {
+  if (!model_ || suppress_inline_autocomplete_ ||
+      palette_action_ != PaletteAction::kSearch ||
+      (mode_ != CommandOverlayMode::kCurrentTab &&
+       mode_ != CommandOverlayMode::kNewTab &&
+       mode_ != CommandOverlayMode::kSearch) ||
+      textfield_->HasCompositionText() ||
+      !textfield_->GetSelectedRange().is_empty()) {
+    return;
+  }
+  const std::u16string text16(textfield_->GetText());
+  if (textfield_->GetCursorPosition() != text16.size()) {
+    return;
+  }
+  const std::string typed = base::UTF16ToUTF8(text16);
+  // Only complete what the results were computed for.
+  if (typed != model_->query()) {
+    return;
+  }
+  const std::optional<std::string> completion =
+      ComputeInlineCompletion(typed, model_->results());
+  if (!completion) {
+    return;
+  }
+  const std::u16string completed = base::UTF8ToUTF16(*completion);
+  suppress_search_ = true;
+  textfield_->SetText(completed);
+  // Select the completed tail, caret at the end of what was typed: the next
+  // keystroke replaces it, Enter accepts it.
+  textfield_->SetSelectedRange(gfx::Range(completed.size(), text16.size()));
+  suppress_search_ = false;
 }
 
 void MahoCommandOverlayView::UpdateResultViews(
@@ -1104,7 +1240,7 @@ void MahoCommandOverlayView::UpdateResultViews(
           auto* row = results_container_->AddChildView(
               std::make_unique<MahoCommandResultRowView>(
                   presented_suggestion, static_cast<int>(i), stored_size,
-                  base::BindRepeating(&MahoCommandOverlayView::UpdateSelection,
+                  base::BindRepeating(&MahoCommandOverlayView::OnRowHovered,
                                       weak_factory_.GetWeakPtr()),
                   base::BindRepeating(
                       &MahoCommandOverlayView::ActivateResultAtIndex,
@@ -1178,7 +1314,7 @@ void MahoCommandOverlayView::UpdateResultViews(
     auto* row = results_container_->AddChildView(
         std::make_unique<MahoCommandResultRowView>(
             presented_suggestion, static_cast<int>(i), results_size,
-            base::BindRepeating(&MahoCommandOverlayView::UpdateSelection,
+            base::BindRepeating(&MahoCommandOverlayView::OnRowHovered,
                                 weak_factory_.GetWeakPtr()),
             base::BindRepeating(&MahoCommandOverlayView::ActivateResultAtIndex,
                                 weak_factory_.GetWeakPtr())));
@@ -1206,6 +1342,41 @@ void MahoCommandOverlayView::UpdateResultViews(
 }
 
 void MahoCommandOverlayView::UpdateSelection(int new_index) {
+  UpdateSelectionImpl(new_index, /*sync_textfield=*/true);
+}
+
+void MahoCommandOverlayView::OnRowHovered(int index) {
+  // Hover only moves the highlight; it must not rewrite what the user typed.
+  UpdateSelectionImpl(index, /*sync_textfield=*/false);
+}
+
+// static
+std::string MahoCommandOverlayView::TextfieldTextForSuggestion(
+    const CommandSuggestion& suggestion) {
+  // Search rows show their query, never the provider's search URL.
+  if (suggestion.type == CommandSuggestionType::kSearch) {
+    for (const std::string_view prefix : {"search:", "remote-search:"}) {
+      if (base::StartsWith(suggestion.key, prefix)) {
+        return suggestion.key.substr(prefix.size());
+      }
+    }
+    return std::string();
+  }
+  if (suggestion.type == CommandSuggestionType::kRecentSearch) {
+    return suggestion.title;
+  }
+  // Only URL-bearing rows put their URL in the field; actions, folders and
+  // calculator rows keep the typed text.
+  const GURL url(suggestion.execution_payload);
+  if (url.is_valid() && (url.SchemeIsHTTPOrHTTPS() || url.SchemeIs("chrome") ||
+                         url.SchemeIsFile())) {
+    return suggestion.execution_payload;
+  }
+  return std::string();
+}
+
+void MahoCommandOverlayView::UpdateSelectionImpl(int new_index,
+                                                 bool sync_textfield) {
   if (!model_)
     return;
   int old_index = model_->selected_index();
@@ -1224,9 +1395,10 @@ void MahoCommandOverlayView::UpdateSelection(int new_index) {
     row->SetSelected(true);
     row->ScrollViewToVisible();
     textfield_->GetViewAccessibility().SetActiveDescendant(*row);
-    if (new_index < static_cast<int>(model_->results().size())) {
-      const auto& sel = model_->results()[new_index];
-      const std::string& payload = sel.execution_payload;
+    if (sync_textfield &&
+        new_index < static_cast<int>(model_->results().size())) {
+      const std::string payload =
+          TextfieldTextForSuggestion(model_->results()[new_index]);
       if (!payload.empty()) {
         suppress_search_ = true;
         const std::u16string new_text = base::UTF8ToUTF16(payload);
@@ -1268,7 +1440,23 @@ void MahoCommandOverlayView::UpdateSelectionA11yForTesting(int old_index,
 
 void MahoCommandOverlayView::ActivateResultAtIndex(int index) {
   UpdateSelection(index);
+  // A click is an explicit choice of this row, exactly like arrowing to it;
+  // without this the typed-text fast path below navigated the row's URL in
+  // the current tab instead of switching to / restoring the clicked row.
+  user_navigated_results_ = true;
   ActivateSelected();
+}
+
+void MahoCommandOverlayView::RecordSuggestionUsage(
+    const CommandSuggestion& suggestion) {
+  if (suggestion.key.empty() || !browser_ ||
+      browser_->GetProfile()->IsOffTheRecord() ||
+      context_class_ != MahoPrivateContextClass::kRegular) {
+    return;
+  }
+  if (MahoCore* core = maho::GetCore()) {
+    maho_core_record_usage(core, suggestion.key.c_str());
+  }
 }
 
 void MahoCommandOverlayView::ActivateSelected() {
@@ -1289,31 +1477,69 @@ void MahoCommandOverlayView::ActivateSelected() {
     return;
   }
 
-  const auto& results = model_->results();
-  int index = model_->selected_index();
+  std::string typed_text = base::UTF16ToUTF8(textfield_->GetText());
+  base::TrimWhitespaceASCII(typed_text, base::TRIM_ALL, &typed_text);
+
+  if (debounce_timer_.IsRunning()) {
+    debounce_timer_.Stop();
+  }
+
+  // Site search: the field holds only the search terms; expand the engine's
+  // own URL template instead of falling through to the default engine.
+  if (mode_ == CommandOverlayMode::kSiteSearch && !typed_text.empty() &&
+      !user_navigated_results_ && model_) {
+    const GURL site_url =
+        model_->BuildSiteSearchUrl(site_search_prefix_, typed_text);
+    if (site_url.is_valid()) {
+      const WindowOpenDisposition disposition = DispositionForMode();
+      Dismiss();
+      NavigateParams params(browser_, site_url, ui::PAGE_TRANSITION_GENERATED);
+      params.disposition = disposition;
+      Navigate(&params);
+      return;
+    }
+  }
+
+  // If the user typed or pasted text and has not arrow-selected a suggestion,
+  // and model results are stale (pending debounce or query mismatch),
+  // navigate the typed text directly.
+  if (!typed_text.empty() && !user_navigated_results_ &&
+      (!model_ || model_->query() != typed_text)) {
+    NavigateTypedText();
+    return;
+  }
+
+  const auto& results = model_ ? model_->results() : std::vector<CommandSuggestion>();
+  int index = model_ ? model_->selected_index() : -1;
 
   if (index >= 0 && index < static_cast<int>(results.size())) {
     CommandSuggestion suggestion = results[index];
-    if (!model_->query().empty() && !browser_->profile()->IsOffTheRecord()) {
-      model_->SaveRecentSearch(model_->query());
+    if (IsExecutableSuggestion(suggestion)) {
+      if (!model_->query().empty() && !browser_->GetProfile()->IsOffTheRecord()) {
+        model_->SaveRecentSearch(model_->query());
+      }
+      RecordSuggestionUsage(suggestion);
+      const WindowOpenDisposition disposition = DispositionForMode();
+      Dismiss();
+      VLOG(1) << "[maho-command-trace] ActivateSelected: index=" << index
+              << " type=" << static_cast<int>(suggestion.type)
+              << " payload=" << suggestion.execution_payload;
+      OpenCommandSuggestion(browser_, suggestion, disposition);
+      return;
     }
-    const WindowOpenDisposition disposition = DispositionForMode();
-    Dismiss();
-    VLOG(1) << "[maho-command-trace] ActivateSelected: index=" << index
-            << " type=" << static_cast<int>(suggestion.type)
-            << " payload=" << suggestion.execution_payload;
-    OpenCommandSuggestion(browser_, suggestion, disposition);
-    return;
   }
 
   NavigateTypedText();
 }
 
 void MahoCommandOverlayView::ActivateFirstNavigation() {
-  const auto& results = model_->results();
+  if (debounce_timer_.IsRunning()) {
+    debounce_timer_.Stop();
+  }
+  const auto& results = model_ ? model_->results() : std::vector<CommandSuggestion>();
   for (const auto& s : results) {
     if (s.type == CommandSuggestionType::kNavigation) {
-      if (!model_->query().empty() && !browser_->profile()->IsOffTheRecord()) {
+      if (!model_->query().empty() && !browser_->GetProfile()->IsOffTheRecord()) {
         model_->SaveRecentSearch(model_->query());
       }
       const WindowOpenDisposition disposition = DispositionForMode();
@@ -1335,24 +1561,16 @@ void MahoCommandOverlayView::NavigateTypedText() {
     return;
   }
 
-  // Try the raw input as a URL first.
-  GURL gurl(text);
-
-  // If that didn't parse into a navigable scheme, try adding https:// — this
-  // handles bare domains like "example.com" and "localhost:3000".
-  if (!gurl.is_valid() || !gurl.SchemeIsHTTPOrHTTPS()) {
-    GURL with_scheme("https://" + text);
-    // Accept if the resulting host looks like a real domain (contains a dot)
-    // or is localhost.
-    if (with_scheme.is_valid() && with_scheme.SchemeIsHTTPOrHTTPS() &&
-        (with_scheme.host().find('.') != std::string::npos ||
-         with_scheme.host() == "localhost")) {
-      gurl = with_scheme;
-    }
-  }
-
-  // Allow chrome:// URLs through as-is.
-  if (!gurl.is_valid() || (!gurl.SchemeIsHTTPOrHTTPS() && !gurl.SchemeIs("chrome"))) {
+  // Classify with the omnibox's rules (known TLDs, IPs, ports, localhost,
+  // explicit schemes). Scheme-less input canonicalizes to http:// and is
+  // upgraded by HTTPS-Upgrades with an http fallback, so local and intranet
+  // http servers keep working.
+  const std::optional<MahoCommandModel::TypedNavigation> typed_navigation =
+      MahoCommandModel::ClassifyTypedNavigation(text);
+  GURL gurl;
+  if (typed_navigation) {
+    gurl = typed_navigation->url;
+  } else {
     // Fall back to the configured default search engine.
     MahoCore* core = maho::GetCore();
     if (!core) {
@@ -1369,7 +1587,7 @@ void MahoCommandOverlayView::NavigateTypedText() {
     maho_string_free(search_url);
   }
 
-  if (!model_->query().empty() && !browser_->profile()->IsOffTheRecord()) {
+  if (!model_->query().empty() && !browser_->GetProfile()->IsOffTheRecord()) {
     model_->SaveRecentSearch(model_->query());
   }
   const WindowOpenDisposition disposition = DispositionForMode();
@@ -1385,13 +1603,17 @@ void MahoCommandOverlayView::NavigateTypedText() {
   // origin_mode_,
   // so a new-tab palette that transitioned into site-search will still produce
   // NEW_FOREGROUND_TAB here without needing a separate mode_ == kNewTab check.
-  if (disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB) {
-    NavigateToNewForegroundTab(browser_, gurl, ui::PAGE_TRANSITION_GENERATED);
-    return;
-  }
-
-  NavigateParams params(browser_, gurl, ui::PAGE_TRANSITION_GENERATED);
+  // Typed URLs are recorded like omnibox entries (typed-count, history
+  // ranking); searches stay GENERATED as in the omnibox.
+  const ui::PageTransition transition =
+      typed_navigation
+          ? ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
+                                      ui::PAGE_TRANSITION_FROM_ADDRESS_BAR)
+          : ui::PAGE_TRANSITION_GENERATED;
+  NavigateParams params(browser_, gurl, transition);
   params.disposition = disposition;
+  params.url_typed_with_http_scheme =
+      typed_navigation && typed_navigation->typed_http_scheme;
   Navigate(&params);
 }
 
@@ -1670,8 +1892,11 @@ void MahoCommandOverlayView::ApplyVibrancyBackgroundTransparency(bool vibrancy_a
   if (scroll_view_) {
     scroll_view_->SetBackgroundColor(std::nullopt);
     scroll_view_->SetDrawOverflowIndicator(false);
+    // The results area is translucent under vibrancy, so none of the scroll
+    // layers may claim to fill their bounds opaquely: an opaque-marked layer
+    // skips the clear on partial re-raster and leaves stale rows behind.
     if (scroll_view_->layer()) {
-      scroll_view_->layer()->SetFillsBoundsOpaquely(true);
+      scroll_view_->layer()->SetFillsBoundsOpaquely(false);
     }
   }
   if (results_container_) {

@@ -10,6 +10,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/device_reauth/device_authenticator.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/passwords/maho_password_provider_utils.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -62,6 +63,11 @@ void MahoPasswordAuthorizationService::AuthorizeForProfile(
     return;
   }
 
+  if (!RequiresDeviceReauth()) {
+    std::move(callback).Run(true);
+    return;
+  }
+
   device_reauth::DeviceAuthParams params(
       kAuthorizationLifetime, device_reauth::DeviceAuthSource::kPasswordManager,
       "PasswordManager.ReauthToAccessPasswordInSettings");
@@ -77,14 +83,21 @@ void MahoPasswordAuthorizationService::Authorize(
     std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
     const std::u16string &message, base::OnceCallback<void(bool)> callback) {
   const std::string canonical_scope = CanonicalizeOriginScope(origin_scope);
-  if (profile_key.empty() || canonical_scope.empty() || !authenticator) {
+  if (profile_key.empty() || canonical_scope.empty()) {
     std::move(callback).Run(false);
     return;
   }
 
   const AuthorizationKey key{profile_key, canonical_scope, action};
+  // An existing grant, or an unlocked Vault while device reauth is not
+  // required, authorizes without a platform authenticator. Platforms without
+  // one (Linux desktop) pass a null authenticator.
   if (ConsumeAuthorization(profile_key, canonical_scope, action)) {
     std::move(callback).Run(true);
+    return;
+  }
+  if (!authenticator) {
+    std::move(callback).Run(false);
     return;
   }
 
@@ -118,6 +131,12 @@ bool MahoPasswordAuthorizationService::ConsumeAuthorization(
     return false;
   }
 
+  // While the device re-authentication requirement is disabled, an unlocked
+  // Vault authorizes every operation; the unlock itself is the boundary.
+  if (!RequiresDeviceReauth()) {
+    return true;
+  }
+
   const AuthorizationKey key{profile_key, canonical_scope, action};
   auto it = grants_.find(key);
   if (it == grants_.end() && canonical_scope != kAllOriginsScope &&
@@ -134,6 +153,14 @@ bool MahoPasswordAuthorizationService::ConsumeAuthorization(
     return false;
   }
   return true;
+}
+
+bool MahoPasswordAuthorizationService::IsPageFillLookupAllowed(
+    const std::string &profile_key, const std::string &origin_scope) const {
+  const bool vault_locked =
+      vault_locked_override_.value_or(maho::IsVaultLockedForUi());
+  return !profile_key.empty() &&
+         !CanonicalizeOriginScope(origin_scope).empty() && !vault_locked;
 }
 
 void MahoPasswordAuthorizationService::RevokeProfile(
@@ -184,7 +211,20 @@ void MahoPasswordAuthorizationService::ResetForTesting() {
   RevokeAll();
   next_request_id_ = 1;
   vault_locked_override_.reset();
+  device_reauth_required_for_testing_.reset();
   interactive_authorization_enabled_for_testing_ = false;
+}
+
+void MahoPasswordAuthorizationService::SetDeviceReauthRequiredForTesting(
+    bool required) {
+  device_reauth_required_for_testing_ = required;
+}
+
+bool MahoPasswordAuthorizationService::RequiresDeviceReauth() {
+  if (device_reauth_required_for_testing_.has_value()) {
+    return *device_reauth_required_for_testing_;
+  }
+  return maho::passwords::IsVaultDeviceReauthRequired();
 }
 
 void MahoPasswordAuthorizationService::

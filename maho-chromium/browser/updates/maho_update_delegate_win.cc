@@ -10,23 +10,22 @@
 #include "maho/browser/updates/maho_update_manager.h"
 
 #include <crtdbg.h>
+#include <stdint.h>
 #include <windows.h>
 #include <appmodel.h>
+#include <ratio>
 #include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.Foundation.h>
 
-#include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include <optional>
+#include <vector>
+
 #include "base/functional/bind.h"
-#include "base/memory/weak_ptr.h"
 #include "base/json/json_reader.h"
-#include "base/command_line.h"
-#include "base/logging.h"
-#include "base/path_service.h"
-#include "base/process/launch.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/task/thread_pool.h"
+#include "base/task/bind_post_task.h"
 #include "base/threading/thread.h"
 #include "base/values.h"
 #include "base/version.h"
@@ -37,15 +36,17 @@
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/updates/maho_update_pref_names.h"
 #include "maho/browser/updates/maho_update_signature.h"
-#include "maho/browser/updates/maho_update_signature_win.h"
 #include "maho/browser/updates/rollout_bucket.h"
+#include "net/base/net_errors.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
+#include "url/gurl.h"
 
 #include "maho/browser/updates/manifest_pubkey.h"
+#include "maho/browser/updates/maho_product_version.h"
 
 using namespace winrt::Windows::ApplicationModel;
 using namespace winrt::Windows::Foundation;
@@ -74,6 +75,7 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
  public:
   PlatformUpdaterDelegateWin() = default;
   ~PlatformUpdaterDelegateWin() override {
+    weak_factory_.InvalidateWeakPtrs();
     if (winrt_thread_) {
       winrt_thread_->task_runner()->PostTask(
           FROM_HERE, base::BindOnce(&UninitWinRTApartment));
@@ -97,15 +99,16 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
 
   void Check(bool manual_check) override {
     if (is_msix_) {
-      // SAFETY: winrt_thread_ is a dedicated cross-thread task runner owned by
-      // this object. Use WeakPtr so the callback silently no-ops if |this| is
-      // destroyed before CheckMsixUpdate runs (e.g. rapid shutdown).
       winrt_thread_->task_runner()->PostTask(
           FROM_HERE,
           base::BindOnce(&PlatformUpdaterDelegateWin::CheckMsixUpdate,
-                         weak_factory_.GetWeakPtr()));
+                         base::BindPostTask(
+                             content::GetUIThreadTaskRunner({}),
+                             base::BindOnce(
+                                 &PlatformUpdaterDelegateWin::OnMsixUpdateChecked,
+                                 weak_factory_.GetWeakPtr()))));
     } else {
-      CheckCustomDownloaderUpdate(manual_check);
+      CheckManifestUpdate();
     }
   }
 
@@ -114,47 +117,18 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
   }
 
   void ApplyUpdateAndRestart() override {
-    if (is_msix_) {
-      return;
-    }
+    // Windows updates are delivered exclusively through the Microsoft Store.
+  }
 
-    if (verified_installer_path_.empty()) {
-      return;
-    }
-
-    base::ThreadPool::PostTask(
-        FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-        base::BindOnce(
-            [](const base::FilePath& installer_path, const std::string& hash,
-               const std::string& cn) {
-              // Re-verify immediately before execution to close the TOCTOU
-              // window between OnVerificationComplete and this deferred launch:
-              // another process running as this user could otherwise swap the
-              // fixed-path installer for a malicious binary after verification.
-              if (!updates::VerifySha256(installer_path, hash) ||
-                  !updates::VerifyAuthenticode(installer_path, cn)) {
-                LOG(ERROR) << "Maho: installer failed re-verification before "
-                              "launch; aborting update.";
-                base::DeleteFile(installer_path);
-                return;
-              }
-              base::LaunchOptions options;
-              options.start_hidden = true;
-              base::CommandLine cmd(installer_path);
-              // TODO(maho): Maho ships NSIS today; "/S" is NSIS-specific.
-              // If installer toolchain changes, update flags here AND
-              // installer/README.md. NSIS: "/S"   Inno Setup:
-              // "/VERYSILENT /SUPPRESSMSGBOXES"   MSI: invoked via
-              // msiexec /i <pkg> /qn.
-              cmd.AppendArg("/S");
-              base::LaunchProcess(cmd, options);
-            },
-            verified_installer_path_, installer_sha256_,
-            installer_signer_cn_));
+  std::string GetUpdateGuidance() const override {
+    return is_msix_ ? std::string()
+                    : "Maho for Windows updates through the Microsoft Store. "
+                      "Get the latest version from the Store.";
   }
 
  private:
-  void CheckMsixUpdate() {
+  static void CheckMsixUpdate(
+      base::OnceCallback<void(UpdateState, UpdateError)> reply) {
     // Chromium builds with C++ exceptions disabled, so the throwing C++/WinRT
     // projections (op.get() / try-catch on winrt::hresult_error) cannot be
     // used. Drive the async operation via a completion handler + WaitableEvent
@@ -200,23 +174,23 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
       }
     }
 
-    content::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            [](UpdateState state, UpdateError error) {
-              if (state == UpdateState::kError) {
-                MahoUpdateManager::GetInstance()->TransitionToError(error);
-              } else {
-                MahoUpdateManager::GetInstance()->TransitionToState(state);
-              }
-            },
-            next_state, err));
+    std::move(reply).Run(next_state, err);
   }
 
-  void CheckCustomDownloaderUpdate(bool manual_check) {
+  void OnMsixUpdateChecked(UpdateState state, UpdateError error) {
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    if (state == UpdateState::kError) {
+      MahoUpdateManager::GetInstance()->TransitionToError(error);
+    } else {
+      MahoUpdateManager::GetInstance()->TransitionToState(state);
+    }
+  }
+
+  void CheckManifestUpdate() {
     if (manifest_loader_) {
       return;
     }
+    MahoUpdateManager::GetInstance()->TransitionToState(UpdateState::kChecking);
 
     auto request = std::make_unique<network::ResourceRequest>();
     const std::string& base_url =
@@ -302,13 +276,9 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
     const base::DictValue& m = payload->GetDict();
 
     const std::string* version = m.FindString("version");
-    const std::string* installer_url = m.FindString("installer_url");
-    const std::string* sha256 = m.FindString("installer_sha256");
-    const std::string* signer_cn = m.FindString("installer_signer_cn");
     std::optional<int> rollout_bucket = m.FindInt("rollout_bucket");
 
-    if (!version || !installer_url || !sha256 || !signer_cn ||
-        !rollout_bucket) {
+    if (!version || !rollout_bucket) {
       MahoUpdateManager::GetInstance()->TransitionToError(
           UpdateError::kUnknown);
       return;
@@ -319,7 +289,7 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
     // validly signed) manifest+installer could otherwise be replayed to force
     // a downgrade to a known-vulnerable version. Mirrors the Linux delegate.
     base::Version latest(*version);
-    base::Version current(version_info::GetVersionNumber());
+    base::Version current = updates::GetMahoProductVersion();
     if (!latest.IsValid() || !current.IsValid() || latest <= current) {
       MahoUpdateManager::GetInstance()->TransitionToState(
           UpdateState::kUpToDate);
@@ -338,98 +308,8 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
       return;
     }
 
-    installer_url_ = *installer_url;
-    installer_sha256_ = *sha256;
-    installer_signer_cn_ = *signer_cn;
-
-    StartDownload();
-  }
-
-  void StartDownload() {
     MahoUpdateManager::GetInstance()->TransitionToState(
-        UpdateState::kDownloading);
-
-    auto request = std::make_unique<network::ResourceRequest>();
-    request->url = GURL(installer_url_);
-    request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-
-    net::NetworkTrafficAnnotationTag traffic_annotation =
-        net::DefineNetworkTrafficAnnotation("maho_update_installer_download", R"(
-          semantics {
-            sender: "Maho Auto-Update Manager"
-            description: "Downloads browser installer for verification on Windows."
-            trigger: "Triggered after a valid update manifest is verified."
-            data: "No user data."
-            destination: WEBSITE
-          }
-          policy {
-            cookies_allowed: NO
-            setting: "Auto-updates are gated by the maho.update.enabled pref."
-          }
-        )");
-
-    download_loader_ = network::SimpleURLLoader::Create(std::move(request),
-                                                        traffic_annotation);
-
-    base::FilePath temp_dir;
-    base::PathService::Get(base::DIR_TEMP, &temp_dir);
-    base::FilePath dest_path =
-        temp_dir.Append(FILE_PATH_LITERAL("maho_update.exe"));
-
-    auto* factory = g_browser_process->shared_url_loader_factory().get();
-    download_loader_->DownloadToFile(
-        factory,
-        base::BindOnce(&PlatformUpdaterDelegateWin::OnDownloadComplete,
-                       base::Unretained(this)),
-        dest_path);
-  }
-
-  void OnDownloadComplete(base::FilePath path) {
-    std::unique_ptr<network::SimpleURLLoader> loader =
-        std::move(download_loader_);
-    if (path.empty() || loader->NetError() != net::OK) {
-      MahoUpdateManager::GetInstance()->TransitionToError(
-          UpdateError::kDownloadFailed);
-      return;
-    }
-
-    MahoUpdateManager::GetInstance()->TransitionToState(
-        UpdateState::kVerifying);
-
-    base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-        base::BindOnce(
-            [](const base::FilePath& file_path, const std::string& hash,
-               const std::string& cn) {
-              if (!updates::VerifySha256(file_path, hash)) {
-                return UpdateError::kHashMismatch;
-              }
-              if (!updates::VerifyAuthenticode(file_path, cn)) {
-                return UpdateError::kAuthenticodeFailed;
-              }
-              return UpdateError::kNone;
-            },
-            path, installer_sha256_, installer_signer_cn_),
-        // SAFETY: The reply runs back on the originating sequence (same sequence
-        // as the delegate), but use WeakPtr so the callback silently no-ops if
-        // |this| is destroyed between posting and the reply being dispatched.
-        base::BindOnce(&PlatformUpdaterDelegateWin::OnVerificationComplete,
-                       weak_factory_.GetWeakPtr(), path));
-  }
-
-  void OnVerificationComplete(base::FilePath path, UpdateError error) {
-    if (error != UpdateError::kNone) {
-      base::ThreadPool::PostTask(
-          FROM_HERE, {base::MayBlock()},
-          base::BindOnce([](const base::FilePath& p) { base::DeleteFile(p); },
-                         path));
-      MahoUpdateManager::GetInstance()->TransitionToError(error);
-      return;
-    }
-
-    verified_installer_path_ = path;
-    MahoUpdateManager::GetInstance()->TransitionToState(
-        UpdateState::kReadyToInstall);
+        UpdateState::kUpdateAvailable);
   }
 
   bool is_msix_ = false;
@@ -437,15 +317,8 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
   std::string channel_;
 
   std::unique_ptr<network::SimpleURLLoader> manifest_loader_;
-  std::unique_ptr<network::SimpleURLLoader> download_loader_;
 
-  std::string installer_url_;
-  std::string installer_sha256_;
-  std::string installer_signer_cn_;
-  base::FilePath verified_installer_path_;
-
-  // Must be last: invalidates WeakPtrs on destruction so cross-thread tasks
-  // posted with GetWeakPtr() silently no-op if |this| is destroyed first.
+  // Only the UI completion dereferences this weak receiver.
   base::WeakPtrFactory<PlatformUpdaterDelegateWin> weak_factory_{this};
 };
 

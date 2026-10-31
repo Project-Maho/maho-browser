@@ -1,8 +1,0 @@
-{
-  "version": 1,
-  "duration": 12.6,
-  "assertions": [
-    { "kind": "appearsBy", "selector": "#spaces-browser-wrapper", "bySec": 0 },
-    { "kind": "staysInFrame", "selector": "#spaces-scene" }
-  ]
-}

@@ -87,6 +87,10 @@ impl TabLifecycleManager {
         }
     }
 
+    pub fn queue_update(&mut self, update: CoreUpdate) {
+        self.pending_updates.push(update);
+    }
+
     pub fn create_tab(
         &mut self,
         space_id: SpaceId,
@@ -373,7 +377,11 @@ impl TabLifecycleManager {
         let url = Some(original.url.clone());
         let parent_id = original.parent_id.clone();
         let window_id = original.window_id;
-        Some(self.create_tab(space_id, url, parent_id, window_id, false))
+        // Carry the privacy flag across: persistence, the closed-tab stack,
+        // snapshots and sync all filter on `is_private`, so a duplicate that
+        // drops it turns a private URL into ordinary persisted state.
+        let is_private = original.is_private;
+        Some(self.create_tab(space_id, url, parent_id, window_id, is_private))
     }
 
     pub fn move_tab(
@@ -1320,7 +1328,7 @@ impl TabLifecycleManager {
         closed
     }
 
-    /// Returns non-pinned, non-archived, non-suspended tab IDs whose `last_active_at` is strictly older
+    /// Returns non-pinned, non-archived tab IDs whose `last_active_at` is strictly older
     /// than `cutoff_ts` (epoch seconds) and belong to the active `space_id`. Read-only —
     /// does NOT mutate state. Unparseable `last_active_at` is skipped so newly-created tabs
     /// (no activation yet) are kept.
@@ -1336,9 +1344,6 @@ impl TabLifecycleManager {
                     return false;
                 }
                 if matches!(tab.state, TabLifecycleState::Archived { .. }) {
-                    return false;
-                }
-                if matches!(tab.state, TabLifecycleState::Suspended { .. }) {
                     return false;
                 }
                 match chrono::DateTime::parse_from_rfc3339(&tab.last_active_at.0) {
@@ -1413,6 +1418,40 @@ impl TabLifecycleManager {
             }
         }
         false
+    }
+
+    /// Resets a favorite's live URL back to its authored home (pinned) URL
+    /// without navigating. Called when a favorite is put to sleep by a close
+    /// action: a closed favorite must reopen at its home page, not at the page
+    /// it was left on. No-op for non-favorites and for tabs without a pinned
+    /// URL, so pinned-tab close behavior and automatic lifecycle suspension
+    /// keep their existing semantics. Emits a TabUpdated update when the URL
+    /// actually changes.
+    pub fn reset_favorite_url_to_pinned(&mut self, tab_id: &TabId) -> bool {
+        let tab = match self.tabs.get_mut(tab_id) {
+            Some(tab) => tab,
+            None => return false,
+        };
+        let favorite_role = tab.role.is_favorite(); // L3-EXEMPT: role query
+        if !favorite_role {
+            return false;
+        }
+        let pinned_url = match tab.pinned_url.clone() {
+            Some(pinned_url) => pinned_url,
+            None => return false,
+        };
+        if tab.url == pinned_url {
+            return false;
+        }
+        tab.url = pinned_url.clone();
+        (self.on_update)(CoreUpdate::TabUpdated {
+            tab_id: tab_id.clone(),
+            changes: TabStateUpdate {
+                url: Some(pinned_url.0),
+                ..Default::default()
+            },
+        });
+        true
     }
 
     fn reset_active_timestamps(&mut self, tab_id: &TabId) {
@@ -1900,7 +1939,7 @@ mod tests {
     }
 
     #[test]
-    fn find_tabs_older_than_excludes_suspended() {
+    fn find_tabs_older_than_includes_suspended_sidebar_tabs() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
@@ -1920,7 +1959,14 @@ mod tests {
         }
 
         let found = manager.find_tabs_older_than(1_700_000_000, &space_id);
-        assert_eq!(found.len(), 0);
+        assert_eq!(found, vec![tab_id.clone()]);
+
+        // Clear must preserve the same pinned-tab protection after a tab
+        // loses its live WebContents.
+        manager.pin_tab(&tab_id);
+        assert!(manager
+            .find_tabs_older_than(1_700_000_000, &space_id)
+            .is_empty());
     }
 
     #[test]
@@ -2099,5 +2145,42 @@ mod tests {
         let recent = manager.get_recent_tabs(10);
         let ids: Vec<TabId> = recent.iter().map(|t| t.id.clone()).collect();
         assert_eq!(ids, vec![good_id, bad_id]);
+    }
+
+    #[test]
+    fn duplicate_tab_keeps_the_private_flag_of_the_original() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-private");
+
+        let private_tab = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://private.example.com")),
+            None,
+            None,
+            true,
+        );
+        assert!(private_tab.is_private);
+
+        let duplicated = manager
+            .duplicate_tab(&private_tab.id)
+            .expect("duplicating an existing tab returns the new tab");
+
+        // A duplicate that drops is_private turns a private URL into ordinary
+        // persisted state: push_closed_tab, saved state, and snapshot export
+        // all filter on this flag, so losing it leaks the private URL.
+        assert!(duplicated.is_private);
+        assert_eq!(duplicated.url, private_tab.url);
+
+        let normal_tab = manager.create_tab(
+            space_id,
+            Some(Url::new("https://normal.example.com")),
+            None,
+            None,
+            false,
+        );
+        let normal_duplicate = manager
+            .duplicate_tab(&normal_tab.id)
+            .expect("duplicating an existing tab returns the new tab");
+        assert!(!normal_duplicate.is_private);
     }
 }

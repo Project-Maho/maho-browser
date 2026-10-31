@@ -19,6 +19,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_vibrancy.h"
@@ -102,6 +105,9 @@ gfx::Rect ComputeCenteredPopupBounds(const gfx::Rect& parent_bounds,
 
 MahoCommandOverlayController::MahoCommandOverlayController(Browser* browser)
     : browser_(browser) {
+  if (browser_ && browser_->GetTabStripModel()) {
+    browser_->GetTabStripModel()->AddObserver(this);
+  }
   resize_animation_.SetSlideDuration(kResizeDuration);
   resize_animation_.SetTweenType(gfx::Tween::FAST_OUT_SLOW_IN);
 }
@@ -114,6 +120,10 @@ bool MahoCommandOverlayController::ShouldCreateForContext(
 }
 
 MahoCommandOverlayController::~MahoCommandOverlayController() {
+  Observe(nullptr);
+  if (browser_ && browser_->GetTabStripModel()) {
+    browser_->GetTabStripModel()->RemoveObserver(this);
+  }
   event_monitor_.reset();
   UnregisterParentEscAccelerator();
   if (parent_widget_) {
@@ -143,6 +153,7 @@ void MahoCommandOverlayController::Hide() {
 
   deactivation_hide_timer_.Stop();
   is_hiding_ = true;
+  Observe(nullptr);
 
   event_monitor_.reset();
   UnregisterParentEscAccelerator();
@@ -186,6 +197,7 @@ void MahoCommandOverlayController::FinishHideAnimation() {
   if (!widget_)
     return;
 
+  Observe(nullptr);
   widget_->RemoveObserver(this);
   widget_->Hide();
   is_hiding_ = false;
@@ -321,7 +333,8 @@ void MahoCommandOverlayController::MaybeHideAfterDeactivation() {
   // holds focus. GetActiveBrowser() is null iff no Chrome browser window is the
   // active window, which is exactly the "switched apps" case.
   auto* collection = GlobalBrowserCollection::GetInstance();
-  if (!collection || !collection->GetActiveBrowser()) {
+  if (!treat_chrome_window_active_for_testing_ &&
+      (!collection || !collection->GetActiveBrowser())) {
     return;
   }
   // Ignore spurious activation churn during the open transition, but reschedule
@@ -448,7 +461,7 @@ void MahoCommandOverlayController::Show(views::View* anchor,
     return;
 
   if (browser_ && !ShouldCreateForContext(
-                      MahoClassifyProfile(browser_->profile()))) {
+                      MahoClassifyProfile(browser_->GetProfile()))) {
     return;
   }
 
@@ -576,6 +589,10 @@ void MahoCommandOverlayController::Show(views::View* anchor,
   StartOutsideClickMonitor();
   RegisterParentEscAccelerator();
 
+  if (browser_ && browser_->GetTabStripModel()) {
+    Observe(browser_->GetTabStripModel()->GetActiveWebContents());
+  }
+
   // RequestFocus() is posted rather than called synchronously so that the
   // platform's native window activation (triggered by Activate() above) has
   // a chance to be processed before the view-system focus is set.  Without
@@ -598,7 +615,8 @@ void MahoCommandOverlayController::OnEvent(const ui::Event& event) {
   if (!IsVisible() || !event_monitor_ || !widget_) {
     return;
   }
-  if (event.type() != ui::EventType::kMousePressed) {
+  if (event.type() != ui::EventType::kMousePressed &&
+      event.type() != ui::EventType::kTouchPressed) {
     return;
   }
   const gfx::Point screen_point = event_monitor_->GetLastMouseLocation();
@@ -624,13 +642,70 @@ bool MahoCommandOverlayController::CanHandleAccelerators() const {
   return IsVisible();
 }
 
+void MahoCommandOverlayController::DidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  if (navigation_handle->IsInPrimaryMainFrame() &&
+      navigation_handle->HasCommitted() &&
+      !navigation_handle->IsSameDocument()) {
+    if (IsVisible()) {
+      Hide();
+    }
+  }
+}
+
+void MahoCommandOverlayController::OnTabStripModelChanged(
+    TabStripModel* tab_strip_model,
+    const TabStripModelChange& change,
+    const TabStripSelectionChange& selection) {
+  if (selection.active_tab_changed()) {
+    if (IsVisible()) {
+      Hide();
+    }
+    Observe(selection.new_contents);
+  }
+}
+
+void MahoCommandOverlayController::OnTabStripModelDestroyed(
+    TabStripModel* tab_strip_model) {
+  tab_strip_model->RemoveObserver(this);
+}
+
+void MahoCommandOverlayController::OnWillChangeFocus(
+    views::View* focused_before,
+    views::View* focused_now) {}
+
+void MahoCommandOverlayController::OnDidChangeFocus(
+    views::View* focused_before,
+    views::View* focused_now) {
+  if (!IsVisible() || !focused_now || !widget_) {
+    return;
+  }
+  if (focused_now->GetWidget() == widget_.get()) {
+    return;
+  }
+  if (overlay_view_ && overlay_view_->IsPickerOpen()) {
+    return;
+  }
+  Hide();
+}
+
+void MahoCommandOverlayController::OnFocusManagerDestroying(
+    views::FocusManager* focus_manager) {
+  if (focus_manager == esc_target_focus_manager_) {
+    focus_manager->RemoveFocusChangeListener(this);
+    focus_manager->UnregisterAccelerator(
+        ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE), this);
+    esc_target_focus_manager_ = nullptr;
+  }
+}
+
 void MahoCommandOverlayController::StartOutsideClickMonitor() {
   if (!parent_widget_) {
     return;
   }
   event_monitor_ = views::EventMonitor::CreateApplicationMonitor(
       this, parent_widget_->GetNativeWindow(),
-      {ui::EventType::kMousePressed});
+      {ui::EventType::kMousePressed, ui::EventType::kTouchPressed});
 }
 
 void MahoCommandOverlayController::RegisterParentEscAccelerator() {
@@ -642,18 +717,17 @@ void MahoCommandOverlayController::RegisterParentEscAccelerator() {
     return;
   }
   esc_target_focus_manager_ = focus_manager;
-  // Normal priority (registered late, so tried first among normal handlers) so
-  // the renderer still gets Escape first when a web page has focus; only an
-  // unhandled Escape falls through here to close a visible palette.
   focus_manager->RegisterAccelerator(
       ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE),
-      ui::AcceleratorManager::kNormalPriority, this);
+      ui::AcceleratorManager::kHighPriority, this);
+  focus_manager->AddFocusChangeListener(this);
 }
 
 void MahoCommandOverlayController::UnregisterParentEscAccelerator() {
   if (!esc_target_focus_manager_) {
     return;
   }
+  esc_target_focus_manager_->RemoveFocusChangeListener(this);
   esc_target_focus_manager_->UnregisterAccelerator(
       ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE), this);
   esc_target_focus_manager_ = nullptr;

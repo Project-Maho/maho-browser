@@ -45,8 +45,17 @@ const IDENTITY_SCOPES: &str = "openid email profile";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(900);
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
+// Per-connection read budget, deliberately much shorter than CALLBACK_TIMEOUT.
+//
+// REGRESSION CONTRACT: docs/operations/google-signin-loopback-reliability.md
+// (F5). The loopback port is reachable by anything on the machine, and a
+// connection that is accepted but never sends a request used to inherit the
+// whole 900s budget as its read timeout, wedging the flow until the backstop
+// expired. The overall CALLBACK_TIMEOUT budget still bounds the flow; this only
+// bounds one connection so the listener can move on to the next one.
+const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
-const SUCCESS_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<html><head><meta charset=\"utf-8\"></head><body><h2>Signed in</h2><p>Returning to Maho\u{2026}</p><script>window.close()</script></body></html>";
+const SUCCESS_BODY: &str = "<html><head><meta charset=\"utf-8\"></head><body><h2>Signed in</h2><p>Returning to Maho\u{2026}</p><script>window.close()</script></body></html>";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StartGoogleSignIn {
@@ -264,13 +273,50 @@ fn accept_and_exchange(
     expected_state: &str,
     cancel: &AtomicBool,
 ) -> Result<GoogleSignInResult> {
-    let mut stream = accept_with_timeout(listener, cancel)?;
-    let request = read_http_request(&mut stream)?;
+    let start = std::time::Instant::now();
+    loop {
+        let mut stream = accept_with_timeout(listener, cancel, start)?;
 
-    let callback_state = query_param(&request, "state")
+        // A connection that never sends a complete request (a speculative
+        // preconnect socket, a local security scanner probing the freshly
+        // opened listening port, a bare TCP health check) must not consume the
+        // flow: drop it and keep waiting for the real redirect. Before F5 this
+        // single connection inherited the entire 900s budget as its read
+        // timeout, so the OAuth redirect that arrived on the *next* connection
+        // was never accepted and the provider page hung indefinitely.
+        let request = match read_http_request(&mut stream) {
+            Ok(request) if is_oauth_callback(&request) => request,
+            Ok(_) => {
+                write_error_response(&mut stream, "Not the Maho sign-in callback", 400);
+                continue;
+            }
+            Err(_) => {
+                let _ = stream.shutdown(Shutdown::Both);
+                continue;
+            }
+        };
+
+        return handle_callback(&mut stream, &request, expected_state);
+    }
+}
+
+/// True when the request carries any OAuth redirect parameter, i.e. it is
+/// plausibly Google's callback rather than an unrelated probe.
+fn is_oauth_callback(request: &str) -> bool {
+    query_param(request, "state").is_some()
+        || query_param(request, "code").is_some()
+        || query_param(request, "error").is_some()
+}
+
+fn handle_callback(
+    stream: &mut TcpStream,
+    request: &str,
+    expected_state: &str,
+) -> Result<GoogleSignInResult> {
+    let callback_state = query_param(request, "state")
         .ok_or_else(|| CoreError::Parse("no state parameter in callback".to_string()))?;
     if callback_state != expected_state {
-        write_error_response(&mut stream, "Sign-in state mismatch (possible CSRF)", 400);
+        write_error_response(stream, "Sign-in state mismatch (possible CSRF)", 400);
         return Err(CoreError::Parse(
             "sign-in state mismatch (possible CSRF)".to_string(),
         ));
@@ -279,34 +325,37 @@ fn accept_and_exchange(
     let entry = take_pending(expected_state)
         .ok_or_else(|| CoreError::Parse("unknown sign-in state".to_string()))?;
 
-    let code = match extract_code(&request) {
+    let code = match extract_code(request) {
         Ok(code) => code,
         Err(e) => {
-            write_error_response(&mut stream, &e.to_string(), 400);
+            write_error_response(stream, &e.to_string(), 400);
             return Err(e);
         }
     };
 
     match exchange_code(&entry, &code) {
         Ok(id_token) => {
-            write_success_response(&mut stream);
+            write_success_response(stream);
             Ok(GoogleSignInResult {
                 id_token,
                 nonce: entry.nonce,
             })
         }
         Err(e) => {
-            write_error_response(&mut stream, &e.to_string(), 502);
+            write_error_response(stream, &e.to_string(), 502);
             Err(e)
         }
     }
 }
 
-fn accept_with_timeout(listener: &TcpListener, cancel: &AtomicBool) -> Result<TcpStream> {
+fn accept_with_timeout(
+    listener: &TcpListener,
+    cancel: &AtomicBool,
+    start: std::time::Instant,
+) -> Result<TcpStream> {
     listener
         .set_nonblocking(true)
         .map_err(|e| CoreError::Network(format!("set_nonblocking failed: {e}")))?;
-    let start = std::time::Instant::now();
     loop {
         if cancel.load(Ordering::SeqCst) {
             return Err(CoreError::Network("sign-in cancelled".to_string()));
@@ -322,7 +371,7 @@ fn accept_with_timeout(listener: &TcpListener, cancel: &AtomicBool) -> Result<Tc
                     .set_nonblocking(false)
                     .map_err(|e| CoreError::Network(format!("set blocking failed: {e}")))?;
                 stream
-                    .set_read_timeout(Some(CALLBACK_TIMEOUT))
+                    .set_read_timeout(Some(CONNECTION_READ_TIMEOUT))
                     .map_err(|e| CoreError::Network(format!("set_read_timeout failed: {e}")))?;
                 return Ok(stream);
             }
@@ -498,8 +547,21 @@ pub fn read_http_request<R: std::io::Read>(reader: &mut R) -> Result<String> {
     Ok(String::from_utf8_lossy(&data).into_owned())
 }
 
+/// The full loopback success response. Built rather than stored as a constant
+/// so `Content-Length` always matches the body: a length-delimited body
+/// completes the moment it is written, instead of depending on how the peer
+/// interprets the socket teardown.
+fn success_response() -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+        SUCCESS_BODY.len(),
+        SUCCESS_BODY
+    )
+}
+
 fn write_success_response(stream: &mut TcpStream) {
-    if let Err(e) = stream.write_all(SUCCESS_RESPONSE.as_bytes()) {
+    let response = success_response();
+    if let Err(e) = stream.write_all(response.as_bytes()) {
         log_write_failure(e);
         return;
     }

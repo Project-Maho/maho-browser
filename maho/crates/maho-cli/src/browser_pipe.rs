@@ -15,6 +15,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
+/// Ops a pipe line may set in `op`. Included in every protocol error so a
+/// truncated reader still sees the next legal call.
+pub const PIPE_OPS: &str = "act, native, grant, observe, click, type, navigate, wait, upload";
+
+/// One legal line. Quoted so it can be copied into stdin as-is.
+pub const PIPE_EXAMPLE: &str = r#"{"id":1,"op":"observe","tab_id":1,"mode":"interactive"}"#;
+
+pub fn pipe_protocol_hint() -> String {
+    format!("Valid ops: {PIPE_OPS}. Example: {PIPE_EXAMPLE}")
+}
+
+fn missing_op_message() -> String {
+    format!("Missing 'op' field. {}", pipe_protocol_hint())
+}
+
+fn unknown_op_message(op: &str) -> String {
+    format!("Unknown operation: {op}. {}", pipe_protocol_hint())
+}
+
 /// Session state maintained across pipe operations.
 #[derive(Debug, Default, Clone)]
 pub struct PipeSession {
@@ -255,6 +274,21 @@ async fn handle_act(
         if let Some(value) = req.get(key) {
             args.insert(key.to_string(), value.clone());
         }
+    }
+    // Tab-binding contract: an act without an explicit tab_id would otherwise
+    // fall back to the focused tab on the server. Reject here with an example
+    // so callers fix their script instead of racing another controller.
+    let bound_tab_id = args
+        .get("tab_id")
+        .and_then(Value::as_i64)
+        .filter(|tab| *tab != 0);
+    if bound_tab_id.is_none() {
+        return PipeResponse::error(
+            id,
+            "invalid_params",
+            "Missing required 'tab_id' field for act: pipe never guesses the focused tab. Example: {\"id\":1,\"op\":\"act\",\"tab_id\":1,\"action\":{\"kind\":\"click\"},\"locator\":{\"css\":\"button\"}}",
+            None,
+        );
     }
     match client
         .call_capability_with_timeout(
@@ -591,7 +625,18 @@ async fn handle_click(
             return PipeResponse::error(
                 id,
                 "invalid_params",
-                "Missing required 'locator' field for click",
+                "Missing required 'locator' field for click. Example: {\"id\":1,\"op\":\"click\",\"tab_id\":1,\"locator\":{\"css\":\"button.submit\"}}",
+                None,
+            )
+        }
+    };
+    let tab_id = match req.get("tab_id").and_then(Value::as_i64) {
+        Some(tab_id) if tab_id != 0 => tab_id,
+        _ => {
+            return PipeResponse::error(
+                id,
+                "invalid_params",
+                "Missing required 'tab_id' field for click: pipe never guesses the focused tab, so two concurrent pipes cannot click into each other's pages. Example: {\"id\":1,\"op\":\"click\",\"tab_id\":1,\"locator\":{\"css\":\"button.submit\"}}",
                 None,
             )
         }
@@ -608,9 +653,10 @@ async fn handle_click(
     if let Some(wait) = req.get("wait") {
         args.insert("wait".to_string(), wait.clone());
     }
-    if let Some(tab_id) = req.get("tab_id").and_then(Value::as_i64) {
-        args.insert("tab_id".to_string(), Value::Number(tab_id.into()));
-    }
+    args.insert(
+        "tab_id".to_string(),
+        Value::Number(tab_id.into()),
+    );
 
     match client
         .call_capability_with_timeout(
@@ -641,7 +687,18 @@ async fn handle_type(
             return PipeResponse::error(
                 id,
                 "invalid_params",
-                "Missing required 'locator' field for type",
+                "Missing required 'locator' field for type. Example: {\"id\":1,\"op\":\"type\",\"tab_id\":1,\"locator\":{\"css\":\"input\"},\"text\":\"hello\"}",
+                None,
+            )
+        }
+    };
+    let tab_id = match req.get("tab_id").and_then(Value::as_i64) {
+        Some(tab_id) if tab_id != 0 => tab_id,
+        _ => {
+            return PipeResponse::error(
+                id,
+                "invalid_params",
+                "Missing required 'tab_id' field for type: pipe never guesses the focused tab. Example: {\"id\":1,\"op\":\"type\",\"tab_id\":1,\"locator\":{\"css\":\"input\"},\"text\":\"hello\"}",
                 None,
             )
         }
@@ -674,9 +731,10 @@ async fn handle_type(
     if let Some(wait) = req.get("wait") {
         args.insert("wait".to_string(), wait.clone());
     }
-    if let Some(tab_id) = req.get("tab_id").and_then(Value::as_i64) {
-        args.insert("tab_id".to_string(), Value::Number(tab_id.into()));
-    }
+    args.insert(
+        "tab_id".to_string(),
+        Value::Number(tab_id.into()),
+    );
 
     match client
         .call_capability_with_timeout(
@@ -717,10 +775,15 @@ async fn handle_grant(
         }
     };
 
+    // The browser exposes this capability on the control plane only; a
+    // public `tools/call` is rejected with -32601.
     match client
-        .call_capability_with_timeout(
-            "browser_grant_exact_origin",
-            json!({ "origin": origin }),
+        .call_without_reconnect_with_timeout(
+            "maho/control/call",
+            json!({
+                "name": "browser_grant_exact_origin",
+                "arguments": { "origin": origin },
+            }),
             crate::browser::tool_timeout("browser_grant_exact_origin"),
         )
         .await
@@ -750,18 +813,43 @@ async fn handle_navigate(
             )
         }
     };
+    let tab_id = match req.get("tab_id").and_then(Value::as_i64) {
+        Some(tab_id) if tab_id != 0 => tab_id,
+        _ => {
+            return PipeResponse::error(
+                id,
+                "invalid_params",
+                "Missing required 'tab_id' field for navigate: pipe never guesses the focused tab. Example: {\"id\":1,\"op\":\"navigate\",\"tab_id\":1,\"url\":\"https://example.com\"}",
+                None,
+            )
+        }
+    };
 
     let mut args = Map::new();
     args.insert("url".to_string(), Value::String(url.to_string()));
-    if let Some(tab_id) = req.get("tab_id").and_then(Value::as_i64) {
-        args.insert("tab_id".to_string(), Value::Number(tab_id.into()));
+    args.insert(
+        "tab_id".to_string(),
+        Value::Number(tab_id.into()),
+    );
+
+    if let Err(err) = crate::browser::send_control_call(
+        client,
+        "browser_acquire_lease",
+        json!({"tab_id": tab_id, "ttl_seconds": 60}),
+    )
+    .await
+    {
+        return PipeResponse::error(id, "lease_required", err.to_string(), None);
     }
 
+    // The browser session dispatches navigate/wait/tab-list by MCP tool name
+    // only; their canonical ids (navigation.navigate, navigation.wait,
+    // page.wait_for_selector, tab.list) fall through to -32601 "unknown tool".
     let nav_result = match client
         .call_capability_with_timeout(
-            "navigation.navigate",
+            "browser_navigate",
             Value::Object(args),
-            crate::browser::tool_timeout("navigation.navigate"),
+            crate::browser::tool_timeout("browser_navigate"),
         )
         .await
     {
@@ -797,10 +885,10 @@ async fn handle_navigate(
             }
             let _ = client
                 .call_capability_with_timeout(
-            "navigation.wait",
-            Value::Object(wait_args),
-            crate::browser::tool_timeout("navigation.wait"),
-        )
+                    "browser_wait_for_navigation",
+                    Value::Object(wait_args),
+                    crate::browser::tool_timeout("browser_wait_for_navigation"),
+                )
                 .await;
         } else if let Value::Object(map) = wait_val {
             if let Some(sel) = map.get("selector").and_then(Value::as_str) {
@@ -816,10 +904,10 @@ async fn handle_navigate(
                 }
                 let _ = client
                     .call_capability_with_timeout(
-            "page.wait_for_selector",
-            Value::Object(sel_args),
-            crate::browser::tool_timeout("page.wait_for_selector"),
-        )
+                        "page_wait_for_selector",
+                        Value::Object(sel_args),
+                        crate::browser::tool_timeout("page_wait_for_selector"),
+                    )
                     .await;
             }
         }
@@ -855,10 +943,10 @@ async fn handle_wait(
 
         match client
             .call_capability_with_timeout(
-            "page.wait_for_selector",
-            Value::Object(args),
-            crate::browser::tool_timeout("page.wait_for_selector"),
-        )
+                "page_wait_for_selector",
+                Value::Object(args),
+                crate::browser::tool_timeout("page_wait_for_selector"),
+            )
             .await
         {
             Ok(raw) => {
@@ -874,12 +962,12 @@ async fn handle_wait(
 
         while start.elapsed() < timeout {
             let tab_list_res = client
-            .call_capability_with_timeout(
-                "tab.list",
-                json!({}),
-                crate::browser::tool_timeout("tab.list"),
-            )
-            .await;
+                .call_capability_with_timeout(
+                    "browser_tab_list",
+                    json!({}),
+                    crate::browser::tool_timeout("browser_tab_list"),
+                )
+                .await;
             if let Ok(raw) = tab_list_res {
                 let res = unwrap_mcp_result(raw);
                 if let Some(tabs) = res.get("tabs").and_then(Value::as_array) {
@@ -924,6 +1012,83 @@ async fn handle_wait(
     }
 }
 
+async fn handle_upload(
+    session: &mut PipeSession,
+    client: &BrowserClient,
+    id: Value,
+    req: &Map<String, Value>,
+) -> PipeResponse {
+    let tab_id = match req.get("tab_id").and_then(Value::as_i64) {
+        Some(tab_id) if tab_id != 0 => tab_id,
+        _ => {
+            return PipeResponse::error(
+                id,
+                "invalid_params",
+                "Missing required 'tab_id' field for upload: pipe never guesses the focused tab. Example: {\"id\":1,\"op\":\"upload\",\"tab_id\":1,\"path\":\"/path/to/file\"}",
+                None,
+            );
+        }
+    };
+
+    let path = match req.get("path").and_then(Value::as_str) {
+        Some(p) if !p.trim().is_empty() => p.trim(),
+        _ => {
+            return PipeResponse::error(
+                id,
+                "invalid_params",
+                "Missing required 'path' field for upload. Example: {\"id\":1,\"op\":\"upload\",\"tab_id\":1,\"path\":\"/path/to/file\"}",
+                None,
+            );
+        }
+    };
+
+    let selector = match req.get("selector") {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
+        Some(Value::Null) | None => None,
+        _ => {
+            return PipeResponse::error(
+                id,
+                "invalid_params",
+                "Invalid 'selector' field: must be a CSS selector string",
+                None,
+            );
+        }
+    };
+
+    let mut upload_args = Map::new();
+    upload_args.insert("path".to_string(), Value::String(path.to_string()));
+    upload_args.insert("tab_id".to_string(), Value::Number(tab_id.into()));
+    if let Some(sel) = selector {
+        upload_args.insert("selector".to_string(), Value::String(sel));
+    }
+
+    if let Err(err) = crate::browser::send_control_call(
+        client,
+        "browser_acquire_lease",
+        serde_json::json!({"tab_id": tab_id, "ttl_seconds": 60}),
+    )
+        .await
+    {
+        return PipeResponse::error(id, "lease_required", err.to_string(), None);
+    }
+
+    match client
+        .call_capability_with_timeout(
+            "browser_file_upload_select",
+            Value::Object(upload_args),
+            crate::browser::tool_timeout("browser_file_upload_select"),
+        )
+        .await
+    {
+        Ok(raw) => {
+            let res = unwrap_mcp_result(raw);
+            update_snapshot_token(session, &res);
+            PipeResponse::success(id, res)
+        }
+        Err(err) => PipeResponse::bridge_error(id, &err),
+    }
+}
+
 /// Process a single NDJSON line.
 pub async fn handle_pipe_line(
     session: &mut PipeSession,
@@ -945,7 +1110,12 @@ pub async fn handle_pipe_line(
     let op = match obj.get("op").and_then(Value::as_str) {
         Some(op) => op,
         None => {
-            return PipeResponse::error(id, "invalid_params", "Missing 'op' field", None);
+            return PipeResponse::error(
+                id,
+                "invalid_params",
+                missing_op_message(),
+                Some(pipe_protocol_hint()),
+            );
         }
     };
 
@@ -958,11 +1128,12 @@ pub async fn handle_pipe_line(
         "type" => handle_type(session, client, id, &obj).await,
         "navigate" => handle_navigate(session, client, id, &obj).await,
         "wait" => handle_wait(session, client, id, &obj).await,
+        "upload" => handle_upload(session, client, id, &obj).await,
         other => PipeResponse::error(
             id,
             "unknown_op",
-            format!("Unknown operation: {other}"),
-            None,
+            unknown_op_message(other),
+            Some(pipe_protocol_hint()),
         ),
     }
 }
@@ -1002,6 +1173,20 @@ pub async fn run_pipe(socket_path: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protocol_errors_name_valid_ops_and_an_example() {
+        let missing = missing_op_message();
+        let unknown = unknown_op_message("call");
+        for message in [&missing, &unknown] {
+            assert!(message.contains("observe"), "{message}");
+            assert!(message.contains("click"), "{message}");
+            assert!(message.contains("upload"), "{message}");
+            assert!(message.contains(PIPE_EXAMPLE), "{message}");
+        }
+        assert!(unknown.contains("Unknown operation: call"));
+        assert!(!unknown.contains("Unknown operation: call. Unknown"));
+    }
 
     #[test]
     fn test_matches_url_pattern() {

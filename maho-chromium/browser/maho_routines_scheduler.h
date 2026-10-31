@@ -7,6 +7,8 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
+#include <optional>
+#include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 
 struct MahoCore;
@@ -26,8 +28,8 @@ class MahoRoutinesScheduler {
   void Start();
   void Stop();
 
-  // Drives exactly one scheduler pass synchronously, as the repeating timer
-  // would. Tests use this to exercise the Vault auto-lock evaluation and the
+  // Drives the same scheduler evaluation synchronously. Tests exercise the
+  // Vault auto-lock evaluation and the
   // lock-state broadcast without waiting on wall-clock time.
   void RunTickForTesting(int64_t now_sec);
 
@@ -40,12 +42,12 @@ class MahoRoutinesScheduler {
   void OnTick();
   void RunTick(int64_t now_sec);
 
-  // Reads the Vault lock state from the core and publishes it through
-  // maho::NotifyVaultLockStateChanged when it differs from the last broadcast.
-  void PublishVaultLockState();
+  static std::optional<bool> EvaluateTick(MahoCore* core, int64_t now_sec);
 
   raw_ptr<MahoCore> core_;
   base::RepeatingTimer timer_;
+  bool tick_in_flight_ = false;
+  base::WeakPtrFactory<MahoRoutinesScheduler> weak_factory_{this};
 };
 
 }  // namespace maho

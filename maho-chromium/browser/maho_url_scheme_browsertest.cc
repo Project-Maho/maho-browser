@@ -28,8 +28,13 @@
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -40,6 +45,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -58,6 +64,7 @@
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "net/base/url_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_mode.h"
@@ -78,7 +85,7 @@ namespace {
 constexpr char kDisableLoginGateSwitch[] = "maho-disable-login-gate";
 
 content::WebContents* ActiveWebContents(Browser* browser) {
-  return browser->tab_strip_model()->GetActiveWebContents();
+  return browser->GetTabStripModel()->GetActiveWebContents();
 }
 
 content::NavigationEntry* LastCommittedEntry(content::WebContents* contents) {
@@ -120,7 +127,11 @@ void ExpectCommittedWebUI(content::WebContents* contents,
   ASSERT_NE(nullptr, main_frame);
   EXPECT_EQ(expected_actual_url, main_frame->GetLastCommittedURL());
   EXPECT_NE("maho", main_frame->GetLastCommittedOrigin().scheme());
-  EXPECT_NE("maho", main_frame->GetSiteInstance()->GetSiteURL().scheme());
+  EXPECT_NE("maho",
+            main_frame->GetSiteInstance()
+                ->GetSecurityPrincipal()
+                .GetDeprecatedSiteURL()
+                .scheme());
 
   const int child_id = main_frame->GetProcess()->GetID().GetUnsafeValue();
   EXPECT_TRUE(content::ChildProcessSecurityPolicy::GetInstance()
@@ -216,7 +227,7 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeTrustedInputBrowserTest,
   if (!MahoWelcomeWindow::GetHostedWebContents()) {
     content::TestNavigationObserver navigation{GURL(kMahoWelcomeURL)};
     navigation.StartWatchingNewWebContents();
-    MahoWelcomeWindow::Show(browser()->profile());
+    MahoWelcomeWindow::Show(browser()->GetProfile());
     navigation.Wait();
     ASSERT_TRUE(navigation.last_navigation_succeeded());
   }
@@ -225,7 +236,7 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeTrustedInputBrowserTest,
   auto* window = MahoWelcomeWindow::FromWebContents(contents);
   ASSERT_TRUE(window);
   ASSERT_TRUE(window->GetWidget()->IsVisible());
-  EXPECT_EQ(-1, browser()->tab_strip_model()->GetIndexOfWebContents(contents));
+  EXPECT_EQ(-1, browser()->GetTabStripModel()->GetIndexOfWebContents(contents));
   ASSERT_TRUE(content::WaitForLoadStop(contents));
 
   // Subscribe to React's initial DOM before checking readiness. No polling or
@@ -560,7 +571,7 @@ class MahoWelcomeProviderRestartBrowserTest : public MahoUrlSchemeBrowserTest {
     EXPECT_TRUE(profile_->GetPrefs()->GetBoolean(maho::welcome::kWelcomeCompleted));
     EXPECT_FALSE(profile_->GetPrefs()->GetBoolean(maho::welcome::kLoginGateActive));
     ASSERT_TRUE(browser());
-    EXPECT_TRUE(browser()->window()->IsVisible());
+    EXPECT_TRUE(browser()->GetWindow()->IsVisible());
   }
 
   void ExpectVaultOperation(
@@ -819,7 +830,7 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeIncompleteBypassRestartBrowserTest,
   EXPECT_FALSE(profile_->GetPrefs()->GetBoolean(welcome::kLoginGateActive));
   EXPECT_FALSE(MahoWelcomeWindow::GetHostedWebContents());
   ASSERT_TRUE(browser());
-  EXPECT_TRUE(browser()->window()->IsVisible());
+  EXPECT_TRUE(browser()->GetWindow()->IsVisible());
 }
 
 // Substitute only the picker. The handler and its asynchronous disk write are
@@ -902,7 +913,7 @@ class MahoWelcomeSaveBrowserTest : public MahoUrlSchemeBrowserTest {
     InProcessBrowserTest::SetUpOnMainThread();
     ASSERT_TRUE(directory_.CreateUniqueTempDir());
     content::WebContents* contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     if (!contents) {
       const GURL url("about:blank");
       base::test::ScopedRunLoopTimeout timeout(
@@ -910,7 +921,7 @@ class MahoWelcomeSaveBrowserTest : public MahoUrlSchemeBrowserTest {
       content::TestNavigationObserver navigation(url);
       navigation.StartWatchingNewWebContents();
       contents = chrome::AddSelectedTabWithURL(
-          browser(), url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
+          static_cast<Browser*>(browser()), url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
       ASSERT_TRUE(contents);
       navigation.Wait();
       ASSERT_TRUE(navigation.last_navigation_succeeded());
@@ -923,7 +934,7 @@ class MahoWelcomeSaveBrowserTest : public MahoUrlSchemeBrowserTest {
     handler_ = std::make_unique<MahoWelcomePageHandler>(
         mojo::PendingReceiver<maho_welcome::mojom::PageHandler>(),
         mojo::PendingRemote<maho_welcome::mojom::Page>(),
-        browser()->profile(), browser(), contents);
+        browser()->GetProfile(), static_cast<Browser*>(browser()), contents);
   }
 
   void TearDownOnMainThread() override {
@@ -1067,7 +1078,7 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeSaveBrowserTest,
 }
 IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
                        FreshProfileRegistersProviderOAuthSettings) {
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   for (const char* key : {
            ai_prefs::kOAuthOpenAIClientId,
            ai_prefs::kOAuthOpenAIRefreshEncryptedB64,
@@ -1083,12 +1094,30 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
   }
 }
 
+IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
+                       ShowPasswordManagerRoutesToMahoPasswordPane) {
+  chrome::ShowPasswordManager(browser());
+  content::WebContents* contents =
+      ActiveWebContents(static_cast<Browser*>(browser()));
+  ASSERT_TRUE(contents);
+  ASSERT_TRUE(content::WaitForLoadStop(contents));
+
+  const GURL url = contents->GetLastCommittedURL();
+  EXPECT_NE("password-manager", url.host())
+      << "ShowPasswordManager must not open chrome://password-manager";
+  EXPECT_EQ(maho::kMahoSettingsHost, url.host())
+      << "ShowPasswordManager must route to Maho settings; got " << url;
+  std::string pane;
+  ASSERT_TRUE(net::GetValueForKeyInQuery(url, "pane", &pane));
+  EXPECT_EQ("passwords", pane);
+}
+
 class MahoWelcomeByokBrowserTest : public MahoUrlSchemeBrowserTest {
  protected:
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
     ASSERT_FALSE(MahoWelcomeWindow::GetByokSettingsDialogWebContents());
-    auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
+    auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
     if (!contents) {
       const GURL url("about:blank");
       base::test::ScopedRunLoopTimeout timeout(
@@ -1096,7 +1125,7 @@ class MahoWelcomeByokBrowserTest : public MahoUrlSchemeBrowserTest {
       content::TestNavigationObserver navigation(url);
       navigation.StartWatchingNewWebContents();
       contents = chrome::AddSelectedTabWithURL(
-          browser(), url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
+          static_cast<Browser*>(browser()), url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
       ASSERT_TRUE(contents);
       navigation.Wait();
       ASSERT_TRUE(navigation.last_navigation_succeeded());
@@ -1106,7 +1135,7 @@ class MahoWelcomeByokBrowserTest : public MahoUrlSchemeBrowserTest {
     handler_ = std::make_unique<MahoWelcomePageHandler>(
         mojo::PendingReceiver<maho_welcome::mojom::PageHandler>(),
         mojo::PendingRemote<maho_welcome::mojom::Page>(),
-        browser()->profile(), browser(), contents);
+        browser()->GetProfile(), static_cast<Browser*>(browser()), contents);
     base::test::TestFuture<bool> configured;
     handler_->GetByokCredentialConfigured(configured.GetCallback());
     ASSERT_TRUE(configured.IsReady());
@@ -1270,7 +1299,7 @@ IN_PROC_BROWSER_TEST_F(MahoWelcomeByokBrowserTest,
   EXPECT_EQ(true, clicked.Get().verified) << clicked.Get().reason;
   ASSERT_EQ(true, content::EvalJs(contents, "window.byokInputReady",
                                 content::EXECUTE_SCRIPT_NO_USER_GESTURE));
-  EXPECT_EQ("openai", browser()->profile()->GetPrefs()->GetString(
+  EXPECT_EQ("openai", browser()->GetProfile()->GetPrefs()->GetString(
                           ai_prefs::kProvider));
 
   locator.css = R"(input[aria-label="OpenAI BYOK Key"])";
@@ -1389,59 +1418,59 @@ class MahoCommandAliasCompatibilityTest : public MahoUrlSchemeBrowserTest {};
 
 IN_PROC_BROWSER_TEST_F(MahoSettingsNavigationAliasTest,
                        ReusesExistingAliasTab) {
-  const int tab_count = browser()->tab_strip_model()->count();
+  const int tab_count = browser()->GetTabStripModel()->count();
   const GURL alias_url(kMahoSettingsPublicURL);
   const GURL actual_url = RequiredActualUrlForAlias(alias_url);
 
-  ASSERT_NE(nullptr, NavigateAndGetEntry(browser(), alias_url));
-  OpenMahoSettingsPane(browser(), std::string());
-  WaitForActiveTabLoad(browser());
+  ASSERT_NE(nullptr, NavigateAndGetEntry(static_cast<Browser*>(browser()), alias_url));
+  OpenMahoSettingsPane(static_cast<Browser*>(browser()), std::string());
+  WaitForActiveTabLoad(static_cast<Browser*>(browser()));
 
-  EXPECT_EQ(tab_count, browser()->tab_strip_model()->count());
-  ExpectCommittedWebUI(ActiveWebContents(browser()), actual_url, alias_url);
+  EXPECT_EQ(tab_count, browser()->GetTabStripModel()->count());
+  ExpectCommittedWebUI(ActiveWebContents(static_cast<Browser*>(browser())), actual_url, alias_url);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSettingsNavigationAliasTest,
                        ReusesExistingLegacyTab) {
-  const int tab_count = browser()->tab_strip_model()->count();
+  const int tab_count = browser()->GetTabStripModel()->count();
   const GURL legacy_url(kMahoSettingsURL);
 
-  ASSERT_NE(nullptr, NavigateAndGetEntry(browser(), legacy_url));
-  OpenMahoSettingsPane(browser(), std::string());
-  WaitForActiveTabLoad(browser());
+  ASSERT_NE(nullptr, NavigateAndGetEntry(static_cast<Browser*>(browser()), legacy_url));
+  OpenMahoSettingsPane(static_cast<Browser*>(browser()), std::string());
+  WaitForActiveTabLoad(static_cast<Browser*>(browser()));
 
-  EXPECT_EQ(tab_count, browser()->tab_strip_model()->count());
-  ExpectCommittedWebUI(ActiveWebContents(browser()), legacy_url, legacy_url);
+  EXPECT_EQ(tab_count, browser()->GetTabStripModel()->count());
+  ExpectCommittedWebUI(ActiveWebContents(static_cast<Browser*>(browser())), legacy_url, legacy_url);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSettingsNavigationAliasTest,
                        RepeatedOpenAndPaneChangeNoDuplicate) {
-  OpenMahoSettingsPane(browser(), "appearance");
-  WaitForActiveTabLoad(browser());
+  OpenMahoSettingsPane(static_cast<Browser*>(browser()), "appearance");
+  WaitForActiveTabLoad(static_cast<Browser*>(browser()));
 
-  const int tab_count_after_first_open = browser()->tab_strip_model()->count();
+  const int tab_count_after_first_open = browser()->GetTabStripModel()->count();
   const GURL appearance_alias = WithPane(GURL(kMahoSettingsPublicURL),
                                         "appearance");
   const GURL appearance_actual = RequiredActualUrlForAlias(appearance_alias);
-  ExpectCommittedWebUI(ActiveWebContents(browser()), appearance_actual,
+  ExpectCommittedWebUI(ActiveWebContents(static_cast<Browser*>(browser())), appearance_actual,
                        appearance_alias);
 
-  OpenMahoSettingsPane(browser(), "notifications");
-  WaitForActiveTabLoad(browser());
+  OpenMahoSettingsPane(static_cast<Browser*>(browser()), "notifications");
+  WaitForActiveTabLoad(static_cast<Browser*>(browser()));
 
   const GURL notifications_alias =
       WithPane(GURL(kMahoSettingsPublicURL), "notifications");
   const GURL notifications_actual = RequiredActualUrlForAlias(notifications_alias);
-  EXPECT_EQ(tab_count_after_first_open, browser()->tab_strip_model()->count());
-  ExpectCommittedWebUI(ActiveWebContents(browser()), notifications_actual,
+  EXPECT_EQ(tab_count_after_first_open, browser()->GetTabStripModel()->count());
+  ExpectCommittedWebUI(ActiveWebContents(static_cast<Browser*>(browser())), notifications_actual,
                        notifications_alias);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSettingsPersistenceBrowserTest,
                        PeekTogglesPersistAcrossReload) {
-  OpenMahoSettingsPane(browser(), "maho-mini");
-  WaitForActiveTabLoad(browser());
-  content::WebContents* contents = ActiveWebContents(browser());
+  OpenMahoSettingsPane(static_cast<Browser*>(browser()), "maho-mini");
+  WaitForActiveTabLoad(static_cast<Browser*>(browser()));
+  content::WebContents* contents = ActiveWebContents(static_cast<Browser*>(browser()));
 
   const std::string toggle_and_wait_script = R"js(
     (async () => {
@@ -1495,7 +1524,7 @@ IN_PROC_BROWSER_TEST_F(MahoSettingsPersistenceBrowserTest,
   )js";
   EXPECT_EQ("ok", content::EvalJs(contents, toggle_and_wait_script));
 
-  PrefService* handler_prefs = browser()->profile()->GetPrefs();
+  PrefService* handler_prefs = browser()->GetProfile()->GetPrefs();
   EXPECT_FALSE(
       handler_prefs->GetBoolean(maho::sidebar_prefs::kPeekEnabled));
   EXPECT_FALSE(handler_prefs->GetBoolean(
@@ -1550,13 +1579,13 @@ IN_PROC_BROWSER_TEST_F(MahoSettingsPersistenceBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoAiPopupAliasTest,
                        FloatingUsesAliasVirtualChromeActual) {
-  Browser::CreateParams popup_params(Browser::TYPE_POPUP, browser()->profile(),
+  BrowserWindowCreateParams popup_params(Browser::TYPE_POPUP, browser()->GetProfile(),
                                      /*user_gesture=*/true);
-  popup_params.trusted_source = true;
+  popup_params.is_trusted_source = true;
   popup_params.omit_from_session_restore = true;
-  Browser* popup = Browser::Create(popup_params);
+  Browser* popup = static_cast<Browser*>(CreateBrowserWindow(std::move(popup_params)));
   ASSERT_NE(nullptr, popup);
-  popup->window()->Show();
+  popup->GetWindow()->Show();
 
   const GURL alias_url(kMahoAIPublicURL);
   const GURL actual_url = RequiredActualUrlForAlias(alias_url);
@@ -1565,7 +1594,7 @@ IN_PROC_BROWSER_TEST_F(MahoAiPopupAliasTest,
   ASSERT_NE(nullptr, popup_contents);
   ASSERT_TRUE(content::WaitForLoadStop(popup_contents));
 
-  EXPECT_TRUE(popup->is_type_popup());
+  EXPECT_TRUE((popup->GetType() == BrowserWindowInterface::TYPE_POPUP));
   ExpectCommittedWebUI(popup_contents, actual_url, alias_url);
 }
 
@@ -1583,9 +1612,9 @@ IN_PROC_BROWSER_TEST_F(MahoCommandAliasCompatibilityTest,
                        EmbeddedAiSidePanelKeepsChromeOrigin) {
   const GURL legacy_ai_url(kMahoAIURL);
 
-  ASSERT_NE(nullptr, NavigateAndGetEntry(browser(), legacy_ai_url));
+  ASSERT_NE(nullptr, NavigateAndGetEntry(static_cast<Browser*>(browser()), legacy_ai_url));
 
-  ExpectCommittedWebUI(ActiveWebContents(browser()), legacy_ai_url,
+  ExpectCommittedWebUI(ActiveWebContents(static_cast<Browser*>(browser())), legacy_ai_url,
                        legacy_ai_url);
   EXPECT_FALSE(ResolveActualUrlToMahoAlias(GURL(kMahoBoostUntrustedURL),
                                            nullptr));
@@ -1595,9 +1624,9 @@ IN_PROC_BROWSER_TEST_F(MahoCommandAliasCompatibilityTest,
                        BoostEditorKeepsChromeUntrustedOrigin) {
   const GURL boost_editor_url(kMahoBoostUntrustedURL);
 
-  ASSERT_NE(nullptr, NavigateAndGetEntry(browser(), boost_editor_url));
+  ASSERT_NE(nullptr, NavigateAndGetEntry(static_cast<Browser*>(browser()), boost_editor_url));
 
-  content::WebContents* contents = ActiveWebContents(browser());
+  content::WebContents* contents = ActiveWebContents(static_cast<Browser*>(browser()));
   content::NavigationEntry* entry = LastCommittedEntry(contents);
   ASSERT_NE(nullptr, entry);
   EXPECT_EQ(boost_editor_url, entry->GetURL());
@@ -1606,7 +1635,8 @@ IN_PROC_BROWSER_TEST_F(MahoCommandAliasCompatibilityTest,
             contents->GetPrimaryMainFrame()->GetLastCommittedOrigin().scheme());
   EXPECT_NE("maho", contents->GetPrimaryMainFrame()
                         ->GetSiteInstance()
-                        ->GetSiteURL()
+                        ->GetSecurityPrincipal()
+                        .GetDeprecatedSiteURL()
                         .scheme());
   EXPECT_FALSE(IsValidMahoUrlAlias(GURL("maho://boost/")));
 }
@@ -1616,11 +1646,11 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
   const GURL alias_url(kMahoSettingsPublicURL);
   const GURL actual_url = RequiredActualUrlForAlias(alias_url);
 
-  ASSERT_NE(nullptr, NavigateAndGetEntry(browser(), alias_url));
+  ASSERT_NE(nullptr, NavigateAndGetEntry(static_cast<Browser*>(browser()), alias_url));
 
   content::NavigationEntry* entry =
-      LastCommittedEntry(ActiveWebContents(browser()));
-  ExpectCommittedWebUI(ActiveWebContents(browser()), actual_url, alias_url);
+      LastCommittedEntry(ActiveWebContents(static_cast<Browser*>(browser())));
+  ExpectCommittedWebUI(ActiveWebContents(static_cast<Browser*>(browser())), actual_url, alias_url);
   EXPECT_EQ(u"Maho Settings", entry->GetTitle());
   EXPECT_EQ(u"Maho Settings", entry->GetTitleForDisplay());
 }
@@ -1629,24 +1659,24 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
                        BrandedFallbackTitleUsesAliasWhenTitleCleared) {
   const GURL alias_url(kMahoSettingsPublicURL);
   const GURL actual_url = RequiredActualUrlForAlias(alias_url);
-  content::NavigationEntry* entry = NavigateAndGetEntry(browser(), alias_url);
+  content::NavigationEntry* entry = NavigateAndGetEntry(static_cast<Browser*>(browser()), alias_url);
   ASSERT_NE(nullptr, entry);
 
   entry->SetTitle(std::u16string());
 
-  ExpectCommittedWebUI(ActiveWebContents(browser()), actual_url, alias_url);
+  ExpectCommittedWebUI(ActiveWebContents(static_cast<Browser*>(browser())), actual_url, alias_url);
   EXPECT_EQ(u"maho://settings/", entry->GetTitleForDisplay());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
                        LegacyFallbackTitleUsesChromeWhenTitleCleared) {
   const GURL legacy_url(kMahoSettingsURL);
-  content::NavigationEntry* entry = NavigateAndGetEntry(browser(), legacy_url);
+  content::NavigationEntry* entry = NavigateAndGetEntry(static_cast<Browser*>(browser()), legacy_url);
   ASSERT_NE(nullptr, entry);
 
   entry->SetTitle(std::u16string());
 
-  ExpectCommittedWebUI(ActiveWebContents(browser()), legacy_url, legacy_url);
+  ExpectCommittedWebUI(ActiveWebContents(static_cast<Browser*>(browser())), legacy_url, legacy_url);
   EXPECT_EQ(u"chrome://maho-settings/", entry->GetTitleForDisplay());
 }
 
@@ -1655,18 +1685,18 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
   const GURL alias_url(kMahoSettingsPublicURL);
   const GURL actual_url = RequiredActualUrlForAlias(alias_url);
 
-  ASSERT_NE(nullptr, NavigateAndGetEntry(browser(), alias_url));
+  ASSERT_NE(nullptr, NavigateAndGetEntry(static_cast<Browser*>(browser()), alias_url));
 
-  ReloadActiveTabAndExpectUrls(browser(), actual_url, alias_url);
+  ReloadActiveTabAndExpectUrls(static_cast<Browser*>(browser()), actual_url, alias_url);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
                        LegacyReloadPreservesChrome) {
   const GURL legacy_url(kMahoSettingsURL);
 
-  ASSERT_NE(nullptr, NavigateAndGetEntry(browser(), legacy_url));
+  ASSERT_NE(nullptr, NavigateAndGetEntry(static_cast<Browser*>(browser()), legacy_url));
 
-  ReloadActiveTabAndExpectUrls(browser(), legacy_url, legacy_url);
+  ReloadActiveTabAndExpectUrls(static_cast<Browser*>(browser()), legacy_url, legacy_url);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
@@ -1674,14 +1704,14 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
   const GURL alias_url(kMahoSettingsPublicURL);
   const GURL actual_url = RequiredActualUrlForAlias(alias_url);
 
-  NavigateAwayAndBackToExpectUrls(browser(), actual_url, alias_url);
+  NavigateAwayAndBackToExpectUrls(static_cast<Browser*>(browser()), actual_url, alias_url);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
                        LegacyBackForwardPreservesChrome) {
   const GURL legacy_url(kMahoSettingsURL);
 
-  NavigateAwayAndBackToExpectUrls(browser(), legacy_url, legacy_url);
+  NavigateAwayAndBackToExpectUrls(static_cast<Browser*>(browser()), legacy_url, legacy_url);
 }
 
 }  // namespace maho

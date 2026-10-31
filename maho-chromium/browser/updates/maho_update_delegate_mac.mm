@@ -2,10 +2,15 @@
 
 #include "maho/browser/updates/maho_update_manager.h"
 #include "maho/browser/updates/platform_updater_delegate.h"
+#include "maho/browser/updates/platform_updater_error_mapping.h"
 
+#import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <Sparkle/Sparkle.h>
 
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "base/logging.h"
 
 // macOS Sparkle 2 integration.
@@ -17,9 +22,17 @@
 // update with a signature-verification error. Treat this file as wired but
 // non-functional for end-to-end updates.
 
-@interface MahoSparkleDelegate : NSObject <SPUUpdaterDelegate>
+namespace maho {
+class PlatformUpdaterDelegateMac;
+}  // namespace maho
+
+@interface MahoSparkleDelegate
+    : NSObject <SPUUpdaterDelegate, SPUStandardUserDriverDelegate>
 @property(nonatomic, strong) NSURL* testFeedURL;
 @property(nonatomic, copy) NSString* channelName;
+// Non-owning back-pointer: the C++ delegate owns this Objective-C object and
+// outlives it.
+@property(nonatomic, assign) maho::PlatformUpdaterDelegateMac* owner;
 @end
 
 namespace maho {
@@ -31,13 +44,18 @@ class PlatformUpdaterDelegateMac : public PlatformUpdaterDelegate {
 
   void Initialize() override {
     delegate_ = [[MahoSparkleDelegate alloc] init];
+    delegate_.owner = this;
     // channelName intentionally left nil; the manager's SetChannel() runs
     // immediately after Initialize(). If nil, feedURLStringForUpdater:
     // falls back to "stable".
+    //
+    // The user driver delegate is set so Sparkle asks Maho to show the full
+    // release notes ("Version History") instead of opening the appcast's
+    // releaseNotesLink in the system browser.
     controller_ =
         [[SPUStandardUpdaterController alloc] initWithStartingUpdater:NO
                                                       updaterDelegate:delegate_
-                                                   userDriverDelegate:nil];
+                                                   userDriverDelegate:delegate_];
   }
 
   void Check(bool manual_check) override {
@@ -52,6 +70,10 @@ class PlatformUpdaterDelegateMac : public PlatformUpdaterDelegate {
     }
   }
 
+  // macOS updates run through Sparkle, which drives its own UI, so there is no
+  // extra guidance to surface.
+  std::string GetUpdateGuidance() const override { return std::string(); }
+
   void SetChannel(const std::string& channel_name) override {
     if (delegate_) {
       delegate_.channelName =
@@ -61,6 +83,21 @@ class PlatformUpdaterDelegateMac : public PlatformUpdaterDelegate {
 
   void ApplyUpdateAndRestart() override {
     // SPUStandardUpdaterController handles installation and relaunch automatically.
+  }
+
+  void SetVersionHistoryHandler(base::RepeatingClosure handler) override {
+    version_history_handler_ = std::move(handler);
+  }
+
+  // Runs the browser-layer handler that opens Maho's own changelog surface.
+  // Returns false when no handler was injected, so the caller can fall back to
+  // the appcast link rather than doing nothing.
+  bool ShowVersionHistory() const {
+    if (!version_history_handler_) {
+      return false;
+    }
+    version_history_handler_.Run();
+    return true;
   }
 
   void SetTestFeedURL(const std::string& url_str) {
@@ -90,6 +127,7 @@ class PlatformUpdaterDelegateMac : public PlatformUpdaterDelegate {
 
   SPUStandardUpdaterController* controller_ = nil;
   MahoSparkleDelegate* delegate_ = nil;
+  base::RepeatingClosure version_history_handler_;
   bool updater_started_ = false;
 };
 
@@ -104,6 +142,25 @@ std::unique_ptr<PlatformUpdaterDelegate> CreatePlatformUpdaterDelegate() {
 
 @synthesize testFeedURL;
 @synthesize channelName;
+@synthesize owner;
+
+// Sparkle's standard user driver offers a "Version History" button when a
+// manual check finds no update. Without this delegate method Sparkle hands the
+// appcast's releaseNotesLink to the system browser; that URL is a GitHub
+// release asset served as an attachment, so the user only got a downloaded
+// .html file. Show the bundled changelog surface instead and keep the appcast
+// link as the fallback when no in-app handler was injected.
+- (void)standardUserDriverShowVersionHistoryForAppcastItem:
+    (SUAppcastItem*)item {
+  maho::PlatformUpdaterDelegateMac* owner = self.owner;
+  if (owner && owner->ShowVersionHistory()) {
+    return;
+  }
+  NSURL* url = item.fullReleaseNotesURL ?: item.releaseNotesURL;
+  if (url) {
+    [[NSWorkspace sharedWorkspace] openURL:url];
+  }
+}
 
 - (NSString *)feedURLStringForUpdater:(SPUUpdater *)updater {
   if (self.testFeedURL) {
@@ -141,11 +198,14 @@ std::unique_ptr<PlatformUpdaterDelegate> CreatePlatformUpdaterDelegate() {
 - (void)updater:(SPUUpdater *)updater
     failedToDownloadUpdate:(SUAppcastItem *)item
                      error:(NSError *)error {
+  // Download-phase failures are never benign, so kNone falls back to
+  // kDownloadFailed.
   maho::UpdateError err = maho::UpdateError::kDownloadFailed;
-  if ([error.domain isEqualToString:@"SUSparkleErrorDomain"]) {
-    // Sparkle error codes related to signature verification (e.g. 2001, 2002)
-    if (error.code == 2001 || error.code == 2002) {
-      err = maho::UpdateError::kSignatureMismatch;
+  if ([error.domain isEqualToString:SUSparkleErrorDomain]) {
+    const maho::UpdateError classified =
+        maho::updates::UpdateErrorFromUpdaterCode((int)error.code);
+    if (classified != maho::UpdateError::kNone) {
+      err = classified;
     }
   }
   maho::MahoUpdateManager::GetInstance()->TransitionToError(err);
@@ -154,14 +214,26 @@ std::unique_ptr<PlatformUpdaterDelegate> CreatePlatformUpdaterDelegate() {
 - (void)updater:(SPUUpdater *)updater
     didFinishUpdateCycleForUpdateCheck:(SPUUpdateCheck)updateCheck
                                  error:(NSError *)error {
-  if (error) {
-    maho::UpdateError err = maho::UpdateError::kConnectionFailed;
-    if ([error.domain isEqualToString:@"SUSparkleErrorDomain"]) {
-      if (error.code == 2001 || error.code == 2002) {
-        err = maho::UpdateError::kSignatureMismatch;
-      }
-    }
-    maho::MahoUpdateManager::GetInstance()->TransitionToError(err);
+  if (!error) {
+    return;
+  }
+  const bool is_sparkle = [error.domain isEqualToString:SUSparkleErrorDomain];
+  switch (maho::updates::ClassifyUpdateCycleError(is_sparkle,
+                                                  (int)error.code)) {
+    case maho::updates::UpdateCycleOutcome::kNoUpdateFound:
+      maho::MahoUpdateManager::GetInstance()->TransitionToState(
+          maho::UpdateState::kUpToDate);
+      return;
+    case maho::updates::UpdateCycleOutcome::kUserCanceled:
+      // The user declined the authorization prompt; nothing failed and the
+      // existing state still describes the downloaded update.
+      return;
+    case maho::updates::UpdateCycleOutcome::kFailure:
+      maho::MahoUpdateManager::GetInstance()->TransitionToError(
+          is_sparkle
+              ? maho::updates::UpdateErrorFromUpdaterCode((int)error.code)
+              : maho::UpdateError::kConnectionFailed);
+      return;
   }
 }
 

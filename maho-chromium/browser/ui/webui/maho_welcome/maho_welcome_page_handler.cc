@@ -29,7 +29,9 @@
 #include "chrome/browser/shell_integration.h"  // nogncheck
 #include "chrome/browser/sessions/session_restore.h"  // nogncheck
 #include "chrome/browser/ui/browser.h"  // nogncheck
-#include "chrome/browser/ui/browser_finder.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"   // nogncheck
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
 #include "chrome/browser/ui/browser_navigator.h"  // nogncheck
 #include "chrome/browser/ui/browser_navigator_params.h"  // nogncheck
@@ -238,8 +240,7 @@ MahoWelcomePageHandler::MahoWelcomePageHandler(
   if (g_browser_process && g_browser_process->os_crypt_async()) {
     g_browser_process->os_crypt_async()->GetInstance(
         base::BindOnce(&MahoWelcomePageHandler::OnOsCryptReady,
-                       weak_factory_.GetWeakPtr()),
-        os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+                       weak_factory_.GetWeakPtr()));
   }
   maho::MahoMailService* service = maho::MahoMailServiceFactory::GetForProfile(profile_);
   if (service) {
@@ -909,7 +910,7 @@ void MahoWelcomePageHandler::SignupFromWelcome(
     return;
   }
 
-  if (!encryptor_.has_value()) {
+  if (!encryptor_) {
     std::move(callback).Run(false, "Encryption not ready. Please try again.");
     return;
   }
@@ -937,7 +938,7 @@ void MahoWelcomePageHandler::SignupFromWelcome(
 }
 
 void MahoWelcomePageHandler::OnOsCryptReady(
-    os_crypt_async::Encryptor encryptor) {
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   encryptor_ = std::move(encryptor);
 }
 
@@ -1035,27 +1036,31 @@ void MahoWelcomePageHandler::RevealBrowserAndCloseWelcome() {
   // this becomes the sole browser and its sidebar claims the per-profile media
   // dialog delegate exactly once, avoiding the SetDialogDelegate DCHECK.
   // FindTabbedBrowser is a defensive idempotency guard for the non-gated path.
-  Browser* main_browser =
-      chrome::FindTabbedBrowser(profile_, /*match_original_profiles=*/false);
-  if (!main_browser) {
-    main_browser = SessionRestore::RestoreSession(
+  ProfileBrowserCollection* collection =
+      ProfileBrowserCollection::GetForProfile(profile_);
+  BrowserWindowInterface* main_bwi =
+      collection ? collection->FindTabbedBrowser(/*match_original_profiles=*/false)
+                 : nullptr;
+  if (!main_bwi) {
+    main_bwi = SessionRestore::RestoreSession(
         profile_, /*browser=*/nullptr,
         SessionRestore::SYNCHRONOUS | SessionRestore::RESTORE_BROWSER,
         StartupTabs());
   }
-  if (!main_browser) {
-    Browser::CreateParams params(profile_, true);
-    params.creation_source = Browser::CreationSource::kStartupCreator;
-    main_browser = Browser::Create(params);
+  if (!main_bwi) {
+    BrowserWindowCreateParams params(profile_, true);
+    params.creation_source = BrowserWindowCreateParams::CreationSource::kStartupCreator;
+    main_bwi = CreateBrowserWindow(std::move(params));
   }
-  main_browser->window()->Show();
-  main_browser->window()->Activate();
+  main_bwi->GetWindow()->Show();
+  main_bwi->GetWindow()->Activate();
 
 #if BUILDFLAG(IS_MAC)
   app_controller_mac::DrainQueuedNativeUrlsAfterMahoWelcome(profile_);
 #endif
 
-  auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(main_browser);
+  auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(
+      static_cast<Browser*>(main_bwi));
   overlay->Show(u"Welcome to Maho", u"Import complete. Start exploring.");
 
   // Destroys the welcome window and this handler; must be the last statement.
@@ -1085,7 +1090,7 @@ void MahoWelcomePageHandler::CloseWelcomeTab() {
   }
 
   if (!browser_ || !web_contents_) return;
-  TabStripModel* model = browser_->tab_strip_model();
+  TabStripModel* model = browser_->GetTabStripModel();
   int index = model->GetIndexOfWebContents(web_contents_);
   if (index == TabStripModel::kNoTab) return;
   model->CloseWebContentsAt(index, TabCloseTypes::CLOSE_USER_GESTURE);
@@ -1100,7 +1105,7 @@ void MahoWelcomePageHandler::LoginFromWelcome(
     return;
   }
 
-  if (!encryptor_.has_value()) {
+  if (!encryptor_) {
     std::move(callback).Run(false, "Encryption not ready. Please try again.");
     return;
   }
@@ -1130,18 +1135,19 @@ void MahoWelcomePageHandler::LoginFromWelcome(
 
 void MahoWelcomePageHandler::SignInWithGoogleFromWelcome(
     SignInWithGoogleFromWelcomeCallback callback) {
-  if (!encryptor_.has_value()) {
+  if (!encryptor_) {
     std::move(callback).Run(false, "Encryption not ready. Please try again.");
     return;
   }
 
+  ProfileBrowserCollection* collection =
+      ProfileBrowserCollection::GetForProfile(profile_);
   BrowserWindowInterface* last_active =
-      chrome::FindLastActiveWithProfile(profile_);
-  Browser* peek_host_browser =
-      last_active ? last_active->GetBrowserForMigrationOnly() : nullptr;
+      collection ? collection->GetLastActiveBrowser() : nullptr;
+  Browser* peek_host_browser = static_cast<Browser*>(last_active);
   if (!maho::IsPeekEligible(peek_host_browser) ||
-      peek_host_browser->profile() != profile_ ||
-      peek_host_browser->profile() != web_contents_->GetBrowserContext()) {
+      peek_host_browser->GetProfile() != profile_ ||
+      peek_host_browser->GetProfile() != web_contents_->GetBrowserContext()) {
     peek_host_browser = nullptr;
   }
 
@@ -1522,9 +1528,10 @@ void MahoWelcomePageHandler::CloseMailOAuthTab(
   if (!oauth_contents) {
     return;
   }
-  Browser* oauth_browser = chrome::FindBrowserWithTab(oauth_contents);
+  Browser* oauth_browser = static_cast<Browser*>(
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(oauth_contents));
   if (oauth_browser) {
-    TabStripModel* model = oauth_browser->tab_strip_model();
+    TabStripModel* model = oauth_browser->GetTabStripModel();
     int index = model->GetIndexOfWebContents(oauth_contents);
     if (index != TabStripModel::kNoTab) {
       model->CloseWebContentsAt(index, TabCloseTypes::CLOSE_USER_GESTURE);
@@ -1549,17 +1556,18 @@ void MahoWelcomePageHandler::ReactivateWelcomeTab() {
     web_contents_->Focus();
     return;
   }
-  Browser* welcome_browser = chrome::FindBrowserWithTab(web_contents_);
+  Browser* welcome_browser = static_cast<Browser*>(
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents_));
   if (!welcome_browser) {
     return;
   }
-  TabStripModel* model = welcome_browser->tab_strip_model();
+  TabStripModel* model = welcome_browser->GetTabStripModel();
   int index = model->GetIndexOfWebContents(web_contents_);
   if (index != TabStripModel::kNoTab) {
     model->ActivateTabAt(index);
   }
-  if (welcome_browser->window()) {
-    welcome_browser->window()->Activate();
+  if (welcome_browser->GetWindow()) {
+    welcome_browser->GetWindow()->Activate();
   }
   web_contents_->Focus();
 }

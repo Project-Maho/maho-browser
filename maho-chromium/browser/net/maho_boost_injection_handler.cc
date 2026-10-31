@@ -20,6 +20,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "maho/browser/maho_core_holder.h"
@@ -71,14 +72,18 @@ std::string BuildBoostCssScript(const std::string& css) {
 std::string LoadClassicContentScript(int resource_id) {
   std::string script = ui::ResourceBundle::GetSharedInstance()
                            .LoadDataResourceString(resource_id);
-  constexpr std::string_view kModuleMarker = "export {};";
-  const size_t marker_offset = script.rfind(kModuleMarker);
-  if (marker_offset != std::string::npos &&
-      base::TrimWhitespaceASCII(
-          script.substr(marker_offset + kModuleMarker.size()),
-          base::TRIM_ALL)
-          .empty()) {
-    script.erase(marker_offset);
+  // tsc emits a trailing ES-module marker that is a SyntaxError when the file
+  // runs as a classic script. Debug builds keep tsc's `export {};`; release
+  // builds pass through terser, which emits `export{};` (no space). Missing
+  // the minified form made every content script fail to parse, so Zap and
+  // the element picker never appeared.
+  const std::string_view trimmed =
+      base::TrimWhitespaceASCII(script, base::TRIM_TRAILING);
+  for (std::string_view marker : {"export {};", "export{};"}) {
+    if (base::EndsWith(trimmed, marker)) {
+      script.resize(trimmed.size() - marker.size());
+      break;
+    }
   }
   return script;
 }
@@ -263,19 +268,32 @@ void MahoBoostInjectionHandler::InjectBoostCss(
     return;
   }
 
-  std::string css = maho::core::GetBoostInjectionCss(core, url.c_str());
-  VLOG(1) << "[MahoBoost] InjectBoostCss: url=" << url
-          << " css_length=" << css.size();
-  std::string script = BuildBoostCssScript(css);
-  if (render_frame_host->GetLastCommittedURL().SchemeIs("chrome-error")) {
-    render_frame_host->ExecuteJavaScript(base::UTF8ToUTF16(script),
-                                         base::DoNothing());
-    return;
-  }
-  render_frame_host->ExecuteJavaScriptInIsolatedWorld(
-      base::UTF8ToUTF16(script),
-      base::DoNothing(),
-      kIsolatedWorldIdForBoost);
+  const uint64_t generation = maho::GetCoreGeneration();
+  maho::PostCoreTask<std::string>(
+      FROM_HERE,
+      base::BindOnce([](uint64_t generation, std::string url) {
+        if (generation != maho::GetCoreGeneration() || !maho::GetCore()) {
+          return std::string();
+        }
+        return BuildBoostCssScript(
+            maho::core::GetBoostInjectionCss(maho::GetCore(), url.c_str()));
+      }, generation, url),
+      base::BindOnce([](base::WeakPtr<MahoBoostInjectionHandler> owner,
+                        content::WeakDocumentPtr document, uint64_t generation,
+                        std::string script) {
+        auto* frame = document.AsRenderFrameHostIfValid();
+        if (!owner || !frame || !frame->IsRenderFrameLive() || !frame->IsActive() ||
+            generation != maho::GetCoreGeneration() || script.empty()) {
+          return;
+        }
+        if (frame->GetLastCommittedURL().SchemeIs("chrome-error")) {
+          frame->ExecuteJavaScript(base::UTF8ToUTF16(script), base::DoNothing());
+          return;
+        }
+        frame->ExecuteJavaScriptInIsolatedWorld(
+            base::UTF8ToUTF16(script), base::DoNothing(), kIsolatedWorldIdForBoost);
+      }, weak_factory_.GetWeakPtr(), render_frame_host->GetWeakDocumentPtr(),
+         generation));
 }
 
 void MahoBoostInjectionHandler::InjectContentScript() {

@@ -63,6 +63,8 @@ def _git_sources() -> tuple[SourceFile, ...]:
         SourceFile(str(path), (_WORKSPACE / path).read_text(encoding="utf-8"))
         for path in paths
         if str(path).startswith(_SIDEBAR) and path.suffix in {".cc", ".h"}
+        # --cached still lists tracked files deleted in the working tree.
+        and (_WORKSPACE / path).is_file()
     )
 
 

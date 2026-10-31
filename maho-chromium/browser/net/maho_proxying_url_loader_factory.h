@@ -75,6 +75,7 @@ class MahoProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
   mojo::Remote<network::mojom::URLLoaderFactory> target_factory_;
   base::WeakPtr<MahoAdBlockTabHelper> tab_helper_;
   content::GlobalRenderFrameHostId page_id_;
+  base::WeakPtrFactory<MahoProxyingURLLoaderFactory> weak_factory_{this};
 };
 
 #endif  // MAHO_BROWSER_NET_MAHO_PROXYING_URL_LOADER_FACTORY_H_

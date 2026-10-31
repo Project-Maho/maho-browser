@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/functional/callback.h"
@@ -14,6 +15,7 @@
 // Forward-declared rather than #included so this facade does not re-export that
 // frequently-regenerated header to its includers, avoiding mass recompiles.
 struct MahoCore;
+struct MahoTraceRecorder;
 struct MahoVaultBackendBuffer;
 struct MahoVaultBackendResult;
 struct MahoVaultBackendSession;
@@ -67,6 +69,27 @@ bool LockVault(MahoCore* core);
 
 using VaultLockCallbackForTesting = base::RepeatingCallback<bool(MahoCore*)>;
 void SetVaultLockCallbackForTesting(VaultLockCallbackForTesting callback);
+
+// Vault password manager parity operations (JSON in/out).
+// Owned char* envelopes returned by FFI are converted to std::string and freed
+// with maho_string_free. For sensitive payloads (notes, TOTP codes, generated
+// passwords), response buffers are securely wiped before deallocation.
+void SecureClearString(std::string* value);
+void SecureClearBuffer(char* buffer, size_t length);
+
+std::string VaultTrashItemJson(MahoCore* core, const char* request_json);
+std::string VaultRestoreItemJson(MahoCore* core, const char* request_json);
+std::string VaultSetFavoriteJson(MahoCore* core, const char* request_json);
+std::string VaultEmptyTrashJson(MahoCore* core);
+std::string VaultGetNotesJson(MahoCore* core, const char* request_json);
+std::string VaultAddSecureNoteJson(MahoCore* core, const char* request_json);
+std::string VaultUpdateSecureNoteJson(MahoCore* core, const char* request_json);
+std::string VaultSetLoginTotpJson(MahoCore* core, const char* request_json);
+std::string VaultTotpCodeJson(MahoCore* core, const char* request_json);
+std::string VaultHealthReportJson(MahoCore* core);
+std::string VaultGeneratePasswordJson(MahoCore* core, const char* request_json);
+std::string VaultPasswordStrengthJson(MahoCore* core, const char* request_json);
+
 
 enum class VaultBackendResultStatus : uint8_t {
   kSuccess = 0,
@@ -238,6 +261,14 @@ std::string SearchHistory(MahoCore* core,
 std::string SearchBookmarks(MahoCore* core,
                             const char* query);
 
+// Stores a bookmark and returns the stored entry as JSON
+// (`{"id","url","title","folder"}`), or an empty string when nothing was
+// stored (private tab, import in progress, invalid input).
+std::string AddBookmark(MahoCore* core,
+                        const char* url,
+                        const char* title,
+                        const char* folder_id);
+
 // Get password provider registry (returns JSON)
 std::string GetPasswordProviderRegistry();
 
@@ -251,5 +282,31 @@ void FreeString(char* str);
 void InstallLogCallback();
 
 }  // namespace maho::core
+
+namespace maho {
+
+// C++ RAII wrapper over Rust MahoTraceRecorder.
+class TraceRecorder {
+ public:
+  TraceRecorder();
+  ~TraceRecorder();
+
+  TraceRecorder(const TraceRecorder&) = delete;
+  TraceRecorder& operator=(const TraceRecorder&) = delete;
+
+  void RecordClick(const std::optional<std::string>& target_ref,
+                   double x,
+                   double y);
+  void RecordFill(const std::string& text,
+                  const std::optional<std::string>& selector);
+  void RecordNavigate(const std::string& url);
+  void RecordHover(const std::optional<std::string>& target_ref);
+  std::string FinishAndExportJson();
+
+ private:
+  struct MahoTraceRecorder* handle_{nullptr};
+};
+
+}  // namespace maho
 
 #endif  // MAHO_CHROMIUM_THIRD_PARTY_MAHO_MAHO_BRIDGE_H_

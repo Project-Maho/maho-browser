@@ -5,6 +5,7 @@
 #include "maho/browser/mcp/maho_mcp_network_observer.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/time/time.h"
@@ -22,6 +23,22 @@
 namespace maho {
 
 namespace {
+
+constexpr size_t kMaxCaptureEntries = 10000;
+constexpr size_t kMaxCaptureBytes = 8 * 1024 * 1024;
+constexpr size_t kMaxEntryBytes = 64 * 1024;
+
+void SetCaptureLimits(base::DictValue& har,
+                      size_t dropped_entries,
+                      size_t retained_bytes) {
+  if (dropped_entries == 0) {
+    return;
+  }
+  har.Set("_truncated", true);
+  har.Set("_droppedEntries", static_cast<int>(dropped_entries));
+  har.Set("_retainedBytes", static_cast<int>(retained_bytes));
+  har.Set("_limitBytes", static_cast<int>(kMaxCaptureBytes));
+}
 
 std::string RedactDataUrlPayload(const GURL& url) {
   std::string spec = url.spec();
@@ -75,6 +92,12 @@ MahoMcpNetworkObserver::Entry::Entry(Entry&&) = default;
 MahoMcpNetworkObserver::Entry& MahoMcpNetworkObserver::Entry::operator=(
     Entry&&) = default;
 
+MahoMcpNetworkObserver::Snapshot::Snapshot() = default;
+MahoMcpNetworkObserver::Snapshot::~Snapshot() = default;
+MahoMcpNetworkObserver::Snapshot::Snapshot(Snapshot&&) = default;
+MahoMcpNetworkObserver::Snapshot&
+MahoMcpNetworkObserver::Snapshot::operator=(Snapshot&&) = default;
+
 MahoMcpNetworkObserver::MahoMcpNetworkObserver() = default;
 MahoMcpNetworkObserver::~MahoMcpNetworkObserver() = default;
 
@@ -82,6 +105,8 @@ void MahoMcpNetworkObserver::StartCapture() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   capturing_ = true;
   entries_.clear();
+  dropped_entries_ = 0;
+  retained_bytes_ = 0;
 }
 
 void MahoMcpNetworkObserver::StartCapture(content::WebContents* web_contents) {
@@ -96,17 +121,44 @@ void MahoMcpNetworkObserver::StopCapture() {
   Observe(nullptr);
 }
 
+MahoMcpNetworkObserver::Snapshot MahoMcpNetworkObserver::TakeSnapshot() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  StopCapture();
+  Snapshot snapshot;
+  snapshot.entries.swap(entries_);
+  snapshot.dropped_entries = std::exchange(dropped_entries_, 0);
+  snapshot.retained_bytes = std::exchange(retained_bytes_, 0);
+  snapshot.truncated = snapshot.dropped_entries != 0;
+  return snapshot;
+}
+
 void MahoMcpNetworkObserver::RecordEntry(Entry entry) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!capturing_) {
     return;
   }
+  size_t bytes = sizeof(Entry) + entry.url.size() + entry.method.size() +
+                 entry.status_text.size() + entry.mime_type.size();
+  for (const auto* headers : {&entry.request_headers, &entry.response_headers}) {
+    for (const auto pair : *headers) {
+      bytes += sizeof(base::Value) + pair.first.size() +
+               pair.second.GetString().size();
+    }
+  }
+  if (entries_.size() >= kMaxCaptureEntries || bytes > kMaxEntryBytes ||
+      bytes > kMaxCaptureBytes - retained_bytes_) {
+    ++dropped_entries_;
+    return;
+  }
+  retained_bytes_ += bytes;
   entries_.push_back(std::move(entry));
 }
 
 base::DictValue MahoMcpNetworkObserver::GetHarRaw() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return BuildHarFromEntries(entries_);
+  base::DictValue har = BuildHarFromEntries(entries_);
+  SetCaptureLimits(har, dropped_entries_, retained_bytes_);
+  return har;
 }
 
 // static
@@ -190,6 +242,22 @@ base::DictValue MahoMcpNetworkObserver::BuildHarFromEntries(
   return har;
 }
 
+// static
+base::DictValue MahoMcpNetworkObserver::BuildHarFromSnapshot(
+    Snapshot snapshot) {
+  base::DictValue har = BuildHarFromEntries(snapshot.entries);
+  if (snapshot.truncated) {
+    SetCaptureLimits(har, snapshot.dropped_entries, snapshot.retained_bytes);
+  }
+  return har;
+}
+
+// static
+Redacted<base::DictValue>
+MahoMcpNetworkObserver::BuildRedactedHarFromSnapshot(Snapshot snapshot) {
+  return MahoMcpFirewall::WrapHar(BuildHarFromSnapshot(std::move(snapshot)));
+}
+
 void MahoMcpNetworkObserver::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -238,6 +306,7 @@ void MahoMcpNetworkObserver::DidFinishNavigation(
 void MahoMcpNetworkObserver::ResourceLoadComplete(
     content::RenderFrameHost* render_frame_host,
     const content::GlobalRequestID& request_id,
+    const GURL& original_url,
     const blink::mojom::ResourceLoadInfo& resource_load_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!capturing_ || !resource_load_info.final_url.is_valid()) {

@@ -41,6 +41,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
@@ -116,7 +119,7 @@ class MahoCommandOverlayInteractiveUiTest : public InProcessBrowserTest {
   }
 
   content::WebContents* GetActiveWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 };
 
@@ -786,7 +789,7 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   maho::MahoCommandOverlayController* controller = GetController();
   ASSERT_TRUE(controller);
 
-  Browser* second_browser = CreateBrowser(browser()->profile());
+  Browser* second_browser = static_cast<Browser*>(CreateBrowser(browser()->GetProfile()));
   ASSERT_TRUE(second_browser);
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(second_browser));
 
@@ -923,7 +926,7 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   maho::MahoCommandOverlayController* controller = GetController();
   ASSERT_TRUE(controller);
 
-  Browser* second_browser = CreateBrowser(browser()->profile());
+  Browser* second_browser = static_cast<Browser*>(CreateBrowser(browser()->GetProfile()));
   ASSERT_TRUE(second_browser);
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(second_browser));
 
@@ -965,8 +968,8 @@ class MahoMiniInteractiveTest : public InProcessBrowserTest {
     Browser* result = nullptr;
     for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
       if (bwi->GetType() == BrowserWindowInterface::TYPE_POPUP &&
-          bwi->GetBrowserForMigrationOnly() != browser()) {
-        result = bwi->GetBrowserForMigrationOnly();
+          bwi != browser()) {
+        result = static_cast<Browser*>(bwi);
         break;
       }
     }
@@ -985,7 +988,7 @@ IN_PROC_BROWSER_TEST_F(MahoMiniInteractiveTest,
   const size_t initial_browser_count =
       GlobalBrowserCollection::GetInstance()->GetSize();
 
-  maho::ExecuteCommandAction(browser(), "maho_mini");
+  maho::ExecuteCommandAction(static_cast<Browser*>(browser()), "maho_mini");
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return GlobalBrowserCollection::GetInstance()->GetSize() >
@@ -1020,7 +1023,7 @@ IN_PROC_BROWSER_TEST_F(MahoMiniInteractiveTest,
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(
       request.url,
-      popup->tab_strip_model()->GetActiveWebContents()->GetLastCommittedURL());
+      popup->GetTabStripModel()->GetActiveWebContents()->GetLastCommittedURL());
 
   CloseBrowserSynchronously(popup);
 }
@@ -1032,11 +1035,11 @@ IN_PROC_BROWSER_TEST_F(MahoMiniInteractiveTest,
   base::RunLoop().RunUntilIdle();
 
   const GURL opener_url = browser()
-                              ->tab_strip_model()
+                              ->GetTabStripModel()
                               ->GetActiveWebContents()
                               ->GetLastCommittedURL();
 
-  maho::ExecuteCommandAction(browser(), "maho_mini");
+  maho::ExecuteCommandAction(static_cast<Browser*>(browser()), "maho_mini");
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return FindPopupBrowser() != nullptr;
@@ -1050,11 +1053,11 @@ IN_PROC_BROWSER_TEST_F(MahoMiniInteractiveTest,
   base::RunLoop().RunUntilIdle();
 
   const GURL popup_url =
-      popup->tab_strip_model()->GetActiveWebContents()->GetLastCommittedURL();
+      popup->GetTabStripModel()->GetActiveWebContents()->GetLastCommittedURL();
   EXPECT_EQ(nav_url, popup_url) << "Popup must navigate to the target URL";
 
   const GURL opener_url_after = browser()
-                                    ->tab_strip_model()
+                                    ->GetTabStripModel()
                                     ->GetActiveWebContents()
                                     ->GetLastCommittedURL();
   EXPECT_EQ(opener_url, opener_url_after)
@@ -1069,7 +1072,7 @@ IN_PROC_BROWSER_TEST_F(MahoMiniInteractiveTest,
       browser(), embedded_test_server()->GetURL("/title1.html")));
   base::RunLoop().RunUntilIdle();
 
-  maho::ExecuteCommandAction(browser(), "maho_mini");
+  maho::ExecuteCommandAction(static_cast<Browser*>(browser()), "maho_mini");
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return FindPopupBrowser() != nullptr;
@@ -1082,7 +1085,7 @@ IN_PROC_BROWSER_TEST_F(MahoMiniInteractiveTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(popup, nav_url));
   base::RunLoop().RunUntilIdle();
 
-  const int opener_tab_count_before = browser()->tab_strip_model()->count();
+  const int opener_tab_count_before = browser()->GetTabStripModel()->count();
 
   maho::ExecuteCommandAction(popup, "maho_mini");
 
@@ -1090,11 +1093,11 @@ IN_PROC_BROWSER_TEST_F(MahoMiniInteractiveTest,
     return FindPopupBrowser() == nullptr;
   })) << "maho_mini from popup must close the popup via PromoteToTab";
 
-  EXPECT_EQ(opener_tab_count_before + 1, browser()->tab_strip_model()->count())
+  EXPECT_EQ(opener_tab_count_before + 1, browser()->GetTabStripModel()->count())
       << "Promoted tab must be inserted into the normal browser";
 
   const GURL promoted_url = browser()
-                                ->tab_strip_model()
+                                ->GetTabStripModel()
                                 ->GetActiveWebContents()
                                 ->GetLastCommittedURL();
   EXPECT_EQ(nav_url, promoted_url)
@@ -1113,7 +1116,7 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   base::RunLoop().RunUntilIdle();
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
 
-  const int initial_tab_count = browser()->tab_strip_model()->count();
+  const int initial_tab_count = browser()->GetTabStripModel()->count();
 
   BrowserView* bv = GetBrowserView();
   ASSERT_TRUE(bv);
@@ -1145,14 +1148,14 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   })) << "Pressing Enter must dismiss the overlay";
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
-    return browser()->tab_strip_model()->count() > initial_tab_count;
+    return browser()->GetTabStripModel()->count() > initial_tab_count;
   })) << "Enter in new-tab mode must create a new tab";
 
-  EXPECT_EQ(initial_tab_count + 1, browser()->tab_strip_model()->count())
+  EXPECT_EQ(initial_tab_count + 1, browser()->GetTabStripModel()->count())
       << "Tab count must increase by exactly 1";
 
   content::WebContents* new_active =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(new_active);
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
@@ -1163,7 +1166,7 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
 
   EXPECT_EQ(
       initial_url,
-      browser()->tab_strip_model()->GetWebContentsAt(0)->GetLastCommittedURL())
+      browser()->GetTabStripModel()->GetWebContentsAt(0)->GetLastCommittedURL())
       << "Original tab URL must remain unchanged after new-tab open";
 }
 
@@ -1179,10 +1182,10 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   base::RunLoop().RunUntilIdle();
 
-  browser()->tab_strip_model()->ActivateTabAt(0);
+  browser()->GetTabStripModel()->ActivateTabAt(0);
   ASSERT_EQ(page1, GetActiveWebContents()->GetLastCommittedURL());
 
-  const int tab_count_before = browser()->tab_strip_model()->count();
+  const int tab_count_before = browser()->GetTabStripModel()->count();
   ASSERT_EQ(2, tab_count_before);
 
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
@@ -1219,7 +1222,7 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
     return !c || !c->IsVisible();
   })) << "Pressing Enter on an existing-tab result must dismiss the overlay";
 
-  EXPECT_EQ(tab_count_before, browser()->tab_strip_model()->count())
+  EXPECT_EQ(tab_count_before, browser()->GetTabStripModel()->count())
       << "Tab count must not increase: selecting an existing tab activates it, "
          "never duplicates it";
 
@@ -1240,7 +1243,7 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   base::RunLoop().RunUntilIdle();
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
 
-  const int tab_count_before = browser()->tab_strip_model()->count();
+  const int tab_count_before = browser()->GetTabStripModel()->count();
 
   BrowserView* bv = GetBrowserView();
   ASSERT_TRUE(bv);
@@ -1275,16 +1278,16 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
          "the overlay";
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
-    return browser()->tab_strip_model()->count() > tab_count_before;
+    return browser()->GetTabStripModel()->count() > tab_count_before;
   })) << "Selecting a navigation suggestion in new-tab mode must open a NEW "
          "tab, not reuse the current one";
 
-  EXPECT_EQ(tab_count_before + 1, browser()->tab_strip_model()->count())
+  EXPECT_EQ(tab_count_before + 1, browser()->GetTabStripModel()->count())
       << "Tab count must increase by exactly 1";
 
   EXPECT_EQ(
       initial_url,
-      browser()->tab_strip_model()->GetWebContentsAt(0)->GetLastCommittedURL())
+      browser()->GetTabStripModel()->GetWebContentsAt(0)->GetLastCommittedURL())
       << "The original tab must remain at its original URL";
 }
 

@@ -95,6 +95,7 @@ source_set("unittests") {
     ":maho_mcp",
     "//base",
     "//base/test:test_support",
+    "//chrome/test:test_support",
     "//crypto",
     "//net",
     "//net:test_support",
@@ -128,6 +129,7 @@ test("maho_mcp_session_test") {
     ":maho_mcp",
     "//base",
     "//base/test:test_support",
+    "//maho/browser:maho_mcp_integration",
     "//testing/gtest",
   ]
 }
@@ -141,6 +143,8 @@ test("maho_mcp_lease_registry_test") {
     ":maho_mcp",
     "//base",
     "//base/test:test_support",
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_core_prebuilt",
     "//testing/gtest",
   ]
 }
@@ -184,8 +188,10 @@ test("maho_mcp_network_observer_test") {
     ":maho_mcp",
     "//base",
     "//base/test:test_support",
+    "//chrome/test:test_support",
     "//content/test:run_all_unittests",
     "//content/test:test_support",
+    "//maho/browser:maho_mcp_integration",
     "//testing/gmock",
     "//testing/gtest",
     "//third_party/re2",

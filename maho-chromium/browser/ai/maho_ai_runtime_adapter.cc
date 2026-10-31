@@ -8,6 +8,15 @@ MahoAiRuntimeEvent& MahoAiRuntimeEvent::operator=(MahoAiRuntimeEvent&&) =
     default;
 MahoAiRuntimeEvent::~MahoAiRuntimeEvent() = default;
 
+// Defaults mirror the broker's CapabilityRequestContext defaults and the
+// maho-ffi AgentRuntimeConfig::default(): guard / confirm-on / proactive-off.
+MahoAiRuntimeConfig::MahoAiRuntimeConfig()
+    : permission_tier("guard"), final_confirm(true), proactive_mode(false) {}
+MahoAiRuntimeConfig::MahoAiRuntimeConfig(const MahoAiRuntimeConfig&) = default;
+MahoAiRuntimeConfig& MahoAiRuntimeConfig::operator=(
+    const MahoAiRuntimeConfig&) = default;
+MahoAiRuntimeConfig::~MahoAiRuntimeConfig() = default;
+
 void MahoAiRuntimeAdapter::RespondToInteraction(
     const std::string& interaction_id,
     const std::string& answer_json) {}
@@ -55,5 +64,11 @@ std::string MahoAiRuntimeAdapter::RegisterWait(const std::string& run_id,
                                               const std::string& filter_json,
                                               uint64_t timeout_ms) {
   return "";
+}
+
+void MahoAiRuntimeAdapter::StartSession(const std::string& session_id) {}
+
+void MahoAiRuntimeAdapter::ResetSession(const std::string& session_id) {
+  StartSession(session_id);
 }
 

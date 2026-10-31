@@ -70,6 +70,8 @@ mod tests {
 
     #[test]
     fn import_gate_excludes_concurrent_ops() {
+        // `IMPORT_ACTIVE` is process-global; exclude gated-call tests.
+        let _gate_lock = crate::common::import_gate_exclusive();
         // Reset to known state first (tests may run in any order)
         exit();
 

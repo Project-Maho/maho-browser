@@ -58,6 +58,9 @@ async fn query_selector_match(
     apply_tab_id(&mut args, tab_id);
     let result = super::send_tool_call_with(client, "page_query_selector", args, false).await?;
     let payload = projected_payload(&result);
+    if payload.get("match_count").and_then(Value::as_i64).unwrap_or(0) > 1 {
+        bail!("selector matches multiple DOM elements; refine the selector");
+    }
     let Some(ref_id) = payload
         .get("ref_id")
         .and_then(Value::as_str)
@@ -323,13 +326,15 @@ fn snapshot_contains_ref(snapshot: &Value, wanted: i64) -> bool {
     false
 }
 
-pub(super) async fn resolve_selector_ref(
+pub(crate) async fn resolve_selector_ref(
     client: &maho_browser_mcp::client::BrowserClient,
     selector: &str,
     tab_id: Option<i64>,
 ) -> Result<i64> {
     if let Some(reference) = selector.strip_prefix('@') {
         let reference = reference
+            .strip_prefix('e')
+            .unwrap_or(reference)
             .parse::<i64>()
             .map_err(|_| anyhow::anyhow!("invalid accessibility ref selector: {selector}"))?;
         let snapshot = super::send_tool_call_with(
@@ -559,6 +564,8 @@ fn build_v2_locator(selector: Option<&str>, object: &Map<String, Value>) -> Resu
     if let Some(selector) = selector {
         if let Some(reference) = selector.strip_prefix('@') {
             let reference = reference
+                .strip_prefix('e')
+                .unwrap_or(reference)
                 .parse::<i64>()
                 .map_err(|_| anyhow::anyhow!("invalid accessibility ref selector: {selector}"))?;
             return Ok(json!({ "ref": reference }));
@@ -834,5 +841,32 @@ mod tests {
             ..Default::default()
         };
         assert!(find_unique_ref(&snapshot, &fingerprint).is_err());
+    }
+
+    #[test]
+    fn observed_ref_selector_accepts_e_prefix_and_rejects_malformed_ref() {
+        let args = Map::new();
+        assert_eq!(build_v2_locator(Some("@e31"), &args).unwrap(), json!({"ref":31}));
+        assert_eq!(build_v2_locator(Some("@31"), &args).unwrap(), json!({"ref":31}));
+        assert!(build_v2_locator(Some("@e"), &args).is_err());
+    }
+
+    #[test]
+    fn native_select_matches_unique_field_name_not_another_combobox() {
+        let snapshot = json!({"role":"WebArea","children":[
+            {"role":"combobox","fieldName":"OtherSelect","ref":30},
+            {"role":"combobox","fieldName":"CategorySelect","ref":31}
+        ]});
+        let fingerprint = SelectorFingerprint {
+            tag: "select".into(),
+            field_name: "CategorySelect".into(),
+            ..Default::default()
+        };
+        assert_eq!(find_unique_ref(&snapshot, &fingerprint).unwrap(), 31);
+        let duplicate = json!({"role":"WebArea","children":[
+            {"role":"combobox","fieldName":"CategorySelect","ref":31},
+            {"role":"combobox","fieldName":"CategorySelect","ref":32}
+        ]});
+        assert!(find_unique_ref(&duplicate, &fingerprint).is_err());
     }
 }

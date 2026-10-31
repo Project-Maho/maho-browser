@@ -2,10 +2,12 @@
 
 #include "maho/browser/net/maho_proxying_url_loader_factory.h"
 
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/net_errors.h"
@@ -83,69 +85,87 @@ void MahoProxyingURLLoaderFactory::CreateLoaderAndStart(
     const network::ResourceRequest& request,
     mojo::PendingRemote<network::mojom::URLLoaderClient> client,
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
-  MahoCore* core = maho::GetCore();
-  // Cheap gate first. In non-native modes CheckRequest is a guaranteed no-op,
-  // but reaching that conclusion costs two std::string allocations, an FFI hop,
-  // a JSON serialize in Rust and a JSON parse in C++ — per request — because
-  // the mode is only consulted on the Rust side after the crossing.
-  //
-  // GetContentBlockingMode returns a plain int with no allocation, and asking
-  // core every time keeps it the single source of truth. A cached C++ copy was
-  // tried and rejected: the mode also changes via ShellEvent::
-  // SetContentBlockingMode / ToggleContentBlocker and via settings updates
-  // (including ones arriving through sync), none of which notify this layer, so
-  // a cache could go stale in the fail-open direction and silently stop
-  // blocking. The extra int call in native mode is far cheaper than that risk.
-  if (core && maho::core::GetContentBlockingMode(core) ==
-                  kContentBlockingModeNative) {
-    const std::string url = request.url.spec();
-    const std::string source =
-        request.request_initiator.has_value()
-            ? request.request_initiator->GetURL().spec()
-            : std::string();
-    const char* type = maho::MapRequestToFilterType(request);
-    // CheckRequest applies mode (native/extension/disabled) and site
-    // exceptions internally; non-native modes return a no-block result.
-    maho::core::BlockResult result =
-        maho::core::CheckRequest(core, url.c_str(), source.c_str(), type);
-
-    const std::string& replacement =
-        !result.redirect.empty() ? result.redirect : result.rewritten_url;
-    if (!replacement.empty()) {
-      GURL new_url(replacement);
-      if (new_url.is_valid() && new_url.SchemeIsHTTPOrHTTPS()) {
-        network::ResourceRequest new_request = request;
-        new_request.url = new_url;
-        RecordBlockedRequest(request, type);
-        target_factory_->CreateLoaderAndStart(std::move(loader), request_id,
-                                               options, new_request,
-                                              std::move(client),
-                                              traffic_annotation);
-        return;
-      }
-      // A non-network (e.g. data:) redirect/rewrite target cannot be served by
-      // the terminal network factory, so block the original request instead of
-      // forwarding an unsupported URL.
-      result.blocked = true;
-    }
-    if (result.blocked) {
-      RecordBlockedRequest(request, type);
-      // Complete the client with ERR_BLOCKED_BY_CLIENT and drop the loader
-      // receiver so the request is cancelled before hitting the network. The
-      // OnComplete message is written to the pipe synchronously, so it is
-      // delivered even though `client_remote` is destroyed on return.
-      mojo::Remote<network::mojom::URLLoaderClient> client_remote(
-          std::move(client));
-      client_remote->OnComplete(
-          network::URLLoaderCompletionStatus(net::ERR_BLOCKED_BY_CLIENT));
-      return;
-    }
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!maho::GetCore()) {
+    target_factory_->CreateLoaderAndStart(std::move(loader), request_id, options,
+                                         request, std::move(client),
+                                         traffic_annotation);
+    return;
   }
 
-  // Allowed (or fail-open when core is unavailable): forward unchanged.
-  target_factory_->CreateLoaderAndStart(std::move(loader), request_id, options,
-                                        request, std::move(client),
-                                        traffic_annotation);
+  const uint64_t generation = maho::GetCoreGeneration();
+  const std::string source = request.request_initiator.has_value()
+                                 ? request.request_initiator->GetURL().spec()
+                                 : std::string();
+  const std::string type = maho::MapRequestToFilterType(request);
+  maho::PostCoreTask<std::optional<maho::core::BlockResult>>(
+      FROM_HERE,
+      base::BindOnce(
+          [](uint64_t generation, std::string url, std::string source,
+             std::string type) -> std::optional<maho::core::BlockResult> {
+            if (generation != maho::GetCoreGeneration()) {
+              return std::nullopt;
+            }
+            MahoCore* core = maho::GetCore();
+            if (!core) {
+              return std::nullopt;
+            }
+            if (maho::core::GetContentBlockingMode(core) !=
+                kContentBlockingModeNative) {
+              return maho::core::BlockResult{};
+            }
+            return maho::core::CheckRequest(
+                core, url.c_str(), source.c_str(), type.c_str());
+          },
+          generation, request.url.spec(), source, type),
+      base::BindOnce(
+          [](base::WeakPtr<MahoProxyingURLLoaderFactory> factory,
+             uint64_t generation,
+             mojo::PendingReceiver<network::mojom::URLLoader> loader,
+             int32_t request_id, uint32_t options,
+             network::ResourceRequest request,
+             mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+             net::MutableNetworkTrafficAnnotationTag traffic_annotation,
+             std::string type,
+             std::optional<maho::core::BlockResult> result) {
+            DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+            if (!factory || !result ||
+                generation != maho::GetCoreGeneration()) {
+              mojo::Remote<network::mojom::URLLoaderClient> client_remote(
+                  std::move(client));
+              client_remote->OnComplete(
+                  network::URLLoaderCompletionStatus(net::ERR_ABORTED));
+              return;
+            }
+            const std::string& replacement = !result->redirect.empty()
+                                                 ? result->redirect
+                                                 : result->rewritten_url;
+            if (!replacement.empty()) {
+              GURL new_url(replacement);
+              if (new_url.is_valid() && new_url.SchemeIsHTTPOrHTTPS()) {
+                factory->RecordBlockedRequest(request, type.c_str());
+                request.url = std::move(new_url);
+                factory->target_factory_->CreateLoaderAndStart(
+                    std::move(loader), request_id, options, request,
+                    std::move(client), traffic_annotation);
+                return;
+              }
+              result->blocked = true;
+            }
+            if (result->blocked) {
+              factory->RecordBlockedRequest(request, type.c_str());
+              mojo::Remote<network::mojom::URLLoaderClient> client_remote(
+                  std::move(client));
+              client_remote->OnComplete(network::URLLoaderCompletionStatus(
+                  net::ERR_BLOCKED_BY_CLIENT));
+              return;
+            }
+            factory->target_factory_->CreateLoaderAndStart(
+                std::move(loader), request_id, options, request,
+                std::move(client), traffic_annotation);
+          },
+          weak_factory_.GetWeakPtr(), generation, std::move(loader), request_id,
+          options, request, std::move(client), traffic_annotation, type));
 }
 
 void MahoProxyingURLLoaderFactory::RecordBlockedRequest(

@@ -204,6 +204,9 @@ fn page_adapters_ladder_gains_adapter_tier_before_dom_tier_order() {
     assert_eq!(decision.attempted_tier, FallbackTier::TypedDomainApi);
     assert_eq!(decision.selected_tier, FallbackTier::ExactOriginPageAdapter);
 
+    // Progress is recorded only once the dispatched tier is confirmed to have succeeded.
+    ladder.record_outcome("browser_type", FallbackTier::ExactOriginPageAdapter, true);
+
     // Once Adapter tier succeeds for this action class, downgrading to DomRefLocator or lower is blocked
     let downgrade_req = FallbackSelectionRequest {
         tool_name: "browser_type",

@@ -70,10 +70,19 @@ impl CliConfig {
     }
 
     pub fn redacted_display(&self) -> String {
+        // Count characters, never bytes: tokens may hold multi-byte text and a
+        // byte slice panics on a char boundary. Tokens too short to mask
+        // partially are masked whole - revealing a prefix of a short secret
+        // exposes most of it.
         let redact = |s: &Option<String>| -> String {
             match s {
-                Some(v) if v.len() > 8 => format!("{}...{}", &v[..4], &v[v.len() - 4..]),
-                Some(v) => format!("{}...", &v[..v.len().min(4)]),
+                Some(v) if v.chars().count() > 8 => {
+                    let total = v.chars().count();
+                    let head: String = v.chars().take(4).collect();
+                    let tail: String = v.chars().skip(total - 4).collect();
+                    format!("{head}...{tail}")
+                }
+                Some(_) => "(redacted)".to_string(),
                 None => "(not set)".to_string(),
             }
         };

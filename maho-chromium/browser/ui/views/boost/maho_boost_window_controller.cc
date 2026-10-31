@@ -195,11 +195,11 @@ class MahoBoostWindowDelegate : public views::WidgetDelegate {
   }
 
  private:
-  std::optional<int> NonClientHitTest(const gfx::Point& point) const {
+  int NonClientHitTest(const gfx::Point& point) const {
     if (contents_ && contents_->ContainsDraggablePoint(point)) {
       return HTCAPTION;
     }
-    return std::nullopt;
+    return HTNOWHERE;
   }
 
   raw_ptr<MahoBoostWindowContentsView> contents_;
@@ -316,12 +316,12 @@ content::WebContents* GetTargetTabForBoost(
 MahoBoostWindowController::MahoBoostWindowController(Browser* browser)
     : BrowserUserData<MahoBoostWindowController>(browser),
       browser_(browser),
-      profile_(browser ? browser->profile() : nullptr) {
+      profile_(browser ? browser->GetProfile() : nullptr) {
   if (browser_) {
     if (auto* collection = GlobalBrowserCollection::GetInstance()) {
       browser_collection_observation_.Observe(collection);
     }
-    TabStripModel* tab_strip = browser_->tab_strip_model();
+    TabStripModel* tab_strip = browser_->GetTabStripModel();
     if (tab_strip) {
       observed_tab_strip_ = tab_strip;
       tab_strip->AddObserver(this);
@@ -386,7 +386,7 @@ bool MahoBoostWindowController::ActivateTarget(
   if (!browser_ || !target_tab) {
     return false;
   }
-  TabStripModel* model = browser_->tab_strip_model();
+  TabStripModel* model = browser_->GetTabStripModel();
   if (!model) {
     return false;
   }
@@ -394,8 +394,8 @@ bool MahoBoostWindowController::ActivateTarget(
   if (index == TabStripModel::kNoTab) {
     return false;
   }
-  if (browser_->window()) {
-    browser_->window()->Activate();
+  if (browser_->GetWindow()) {
+    browser_->GetWindow()->Activate();
   }
   if (model->active_index() != index) {
     model->ActivateTabAt(index);
@@ -549,8 +549,8 @@ void MahoBoostWindowController::SetMode(
     // is to the right of the parent window's center (per Zen semantics).
     code_mode_offset_applied_ = false;
     gfx::Rect parent_bounds;
-    if (browser_->window()) {
-      parent_bounds = browser_->window()->GetBounds();
+    if (browser_->GetWindow()) {
+      parent_bounds = browser_->GetWindow()->GetBounds();
     }
     int parent_center_x = parent_bounds.x() + parent_bounds.width() / 2;
     if (bounds.right() > parent_center_x) {
@@ -594,7 +594,7 @@ void MahoBoostWindowController::ScheduleDestroy() {
 
 void MahoBoostWindowController::OnBrowserClosed(
     BrowserWindowInterface* browser) {
-  if (!browser || browser->GetBrowserForMigrationOnly() != browser_) {
+  if (!browser || browser != browser_) {
     return;
   }
   ScheduleDestroy();

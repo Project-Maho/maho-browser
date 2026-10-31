@@ -370,6 +370,8 @@ fn to_vault_password_entries(items: Vec<VaultItemPublicDto>) -> *mut c_char {
 
 fn vault_login_items(core: &MahoCore) -> Vec<VaultItemPublicDto> {
     let request = VaultItemListRequest {
+        trash: Default::default(),
+        favorites_only: false,
         schema_version: VaultSchemaVersion::CURRENT,
         provider: Some(maho_types::passwords::PasswordProviderKind::MahoNative),
         kinds: vec![VaultItemKind::Login],
@@ -2043,6 +2045,9 @@ pub unsafe extern "C" fn maho_core_add_password(
             if let Some(origin) = credential_origin_from_domain(domain) {
                 let input = maho_core::vault_manager::VaultLoginInput {
                     metadata: maho_types::vault::VaultItemPublicMetadata {
+                        favorite: false,
+                        trashed_at: None,
+                        has_notes: false,
                         title: domain.to_string(),
                         origins: vec![origin],
                         username_hint: username.to_string(),
@@ -2097,6 +2102,9 @@ pub unsafe extern "C" fn maho_core_update_password_username(
                 return false;
             };
             let metadata = VaultItemPublicMetadata {
+                favorite: false,
+                trashed_at: None,
+                has_notes: false,
                 title: item.title,
                 origins: item.origins,
                 username_hint: username.to_string(),
@@ -2105,6 +2113,7 @@ pub unsafe extern "C" fn maho_core_update_password_username(
                 passkey: item.passkey,
             };
             let update = maho_core::vault_manager::VaultLoginUpdate {
+                notes: None,
                 metadata,
                 username: username.to_string(),
                 password: None,
@@ -4220,6 +4229,62 @@ pub unsafe extern "C" fn maho_core_remove_bookmark(ptr: *mut MahoCore, bookmark_
             core.remove_bookmark(bookmark_id_str);
         },
         ()
+    )
+}
+
+/// Adds a bookmark and returns it as JSON (`{"id","url","title","folder"}`),
+/// so callers can answer with the stored entry instead of guessing its id.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `url` and `title` must be valid null-terminated C strings.
+/// `folder_id` may be null to use the default folder.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_add_bookmark_json(
+    ptr: *mut MahoCore,
+    url: *const c_char,
+    title: *const c_char,
+    folder_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || url.is_null() || title.is_null() {
+                return ptr::null_mut();
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &mut *ptr;
+            let url_str = match CStr::from_ptr(url).to_str() {
+                Ok(s) => s,
+                Err(_) => return ptr::null_mut(),
+            };
+            let title_str = match CStr::from_ptr(title).to_str() {
+                Ok(s) => s,
+                Err(_) => return ptr::null_mut(),
+            };
+            let folder = if folder_id.is_null() {
+                None
+            } else {
+                match CStr::from_ptr(folder_id).to_str() {
+                    Ok(s) if !s.is_empty() => Some(s),
+                    Ok(_) => None,
+                    Err(_) => return ptr::null_mut(),
+                }
+            };
+            match core.add_bookmark_returning_id(url_str, title_str, folder) {
+                Some(id) => to_json_cstring(&serde_json::json!({
+                    "id": id,
+                    "url": url_str,
+                    "title": title_str,
+                    "folder": folder,
+                })),
+                None => ptr::null_mut(),
+            }
+        },
+        ptr::null_mut()
     )
 }
 
@@ -8775,6 +8840,115 @@ pub unsafe extern "C" fn maho_core_configure_sync_bootstrap(
 
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `server_url` and `bootstrap_seed` must be valid null-terminated C strings.
+/// `escrow_kdf_params_b64` and `escrow_wrapped_key_b64` may be null (no account
+/// escrow record) or valid null-terminated base64 strings.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_configure_sync_bootstrap_with_escrow(
+    ptr: *mut MahoCore,
+    server_url: *const c_char,
+    bootstrap_seed: *const c_char,
+    escrow_kdf_params_b64: *const c_char,
+    escrow_wrapped_key_b64: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || server_url.is_null() || bootstrap_seed.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &mut *ptr;
+            let url = match CStr::from_ptr(server_url).to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            let seed = match CStr::from_ptr(bootstrap_seed).to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            let escrow_kdf = if escrow_kdf_params_b64.is_null() {
+                None
+            } else {
+                match CStr::from_ptr(escrow_kdf_params_b64).to_str() {
+                    Ok(value) => Some(value),
+                    Err(_) => return ptr::null_mut(),
+                }
+            };
+            let escrow_wrapped = if escrow_wrapped_key_b64.is_null() {
+                None
+            } else {
+                match CStr::from_ptr(escrow_wrapped_key_b64).to_str() {
+                    Ok(value) => Some(value),
+                    Err(_) => return ptr::null_mut(),
+                }
+            };
+            let json = match core.configure_sync_encryption_from_bootstrap_with_escrow(
+                url,
+                seed,
+                escrow_kdf,
+                escrow_wrapped,
+            ) {
+                Ok(room_id) => serde_json::json!({
+                    "success": true,
+                    "roomId": room_id,
+                    "deviceId": core.sync_device_id(),
+                    "vault": core.last_vault_account_outcome_code().unwrap_or("none")
+                }),
+                Err(error) => serde_json::json!({
+                    "success": false,
+                    "error": error
+                }),
+            };
+            CString::new(json.to_string())
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Exports the account-escrow vault key slots (base64) for publication to the
+/// account bootstrap record. `success: true` without the slots means the vault
+/// currently has no account wrap.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_export_vault_account_escrow(
+    ptr: *mut MahoCore,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &mut *ptr;
+            let escrow = core.export_vault_account_escrow_b64().unwrap_or(None);
+            let json = match escrow {
+                Some((kdf_params, wrapped_account_key)) => serde_json::json!({
+                    "success": true,
+                    "kdfParams": kdf_params,
+                    "wrappedAccountKey": wrapped_account_key
+                }),
+                None => serde_json::json!({"success": true}),
+            };
+            CString::new(json.to_string())
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `device_id` must be a valid null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_remove_sync_device(
@@ -10319,6 +10493,7 @@ pub unsafe extern "C" fn maho_core_chat_append_assistant_message(
 // ============================================================
 
 /// Catches panics at FFI boundaries and returns a fallback value.
+/// Release builds use `panic = "abort"`: panics abort instead of reaching this fallback.
 /// Usage: `ffi_safe!({ <expr> }, <fallback>)`
 #[macro_export]
 macro_rules! ffi_safe {
@@ -11264,7 +11439,7 @@ use maho_agent::{AgentRuntime, MutexAgentStorage, SessionRuntime};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-use crate::agent::callback_lease::UnifiedEventCallbackRegistration;
+use crate::agent::callback_lease::{dispatch_unified_event, UnifiedEventCallbackRegistration};
 use crate::agent::session::{
     load_runtime_config_from_store, persist_runtime_config_to_store, AgentRuntimeConfig,
 };
@@ -11331,10 +11506,10 @@ pub struct MahoAgentSession {
     // `maho_agent_set_artifact_created_callback` (ABI-stable setter, not a
     // create/send param). Read during turn setup to add the ArtifactCreated
     // event arm. `user_data` stored as usize (raw pointer is not Send).
-    artifact_created_cb: Option<
-        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, artifact_json: *const c_char),
-    >,
-    artifact_created_user_data: usize,
+    artifact_registration: Mutex<(
+        Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+        usize,
+    )>,
     // Unified runtime-event plumbing (agent::events FFI seam). These MUST live
     // on this struct — the only `MahoAgentSession` the exported create/send
     // symbols construct — so every exported session-taking symbol locks the
@@ -11577,7 +11752,9 @@ impl FfiBrowserToolBridge {
         let user_data = self.user_data.0 as *mut std::ffi::c_void;
         // SAFETY: the callback and user data remain owned by the session/turn
         // lease, and both C strings remain live for the duration of this call.
-        let result = unsafe { callback(user_data, request.as_ptr(), args.as_ptr()) };
+        let result = tokio::task::block_in_place(|| unsafe {
+            callback(user_data, request.as_ptr(), args.as_ptr())
+        });
 
         let read_and_free = |pointer: *mut c_char| {
             if pointer.is_null() {
@@ -11831,7 +12008,7 @@ mod ffi_browser_tool_bridge_tests {
         })
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_discovery_requests_tools_list_and_decodes_two_descriptors() {
         let (bridge, context) = bridge_with_responses([Ok(serde_json::json!({
             "tools": [
@@ -11856,7 +12033,7 @@ mod ffi_browser_tool_bridge_tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_discovery_fails_closed_on_malformed_or_missing_metadata() {
         for malformed in [
             serde_json::json!({"tools": [descriptor("browser.tabs.list", "browser_list_tabs"), {"name": "missing_metadata"}]}),
@@ -11872,7 +12049,7 @@ mod ffi_browser_tool_bridge_tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_execution_uses_canonical_capability_id_and_preserves_typed_receipt() {
         let (bridge, context) = bridge_with_responses([Ok(serde_json::json!({
             "outputJson": "{\"ok\":true}",
@@ -11900,7 +12077,7 @@ mod ffi_browser_tool_bridge_tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_execution_rejects_receipt_mismatch_and_malformed_typed_metadata() {
         for (response, expected_code) in [
             (
@@ -11934,7 +12111,7 @@ mod ffi_browser_tool_bridge_tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_execution_wraps_legacy_raw_result_with_safe_boundary_receipt() {
         let (bridge, _context) =
             bridge_with_responses([Ok(serde_json::json!({"tabs": [{"id": 7}]}))]);
@@ -11999,7 +12176,7 @@ mod ffi_browser_tool_bridge_tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_callback_preserves_typed_error_kind_and_frees_every_field() {
         for (callback, expected_code, expected_retryable) in [
             (
@@ -12045,7 +12222,7 @@ mod ffi_browser_tool_bridge_tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_callback_error_and_empty_result_fail_closed() {
         let (error_bridge, _context) =
             bridge_with_responses([Err("desktop callback unavailable".to_string())]);
@@ -12220,7 +12397,9 @@ unsafe fn maho_agent_create_session_impl(
                         .parent()
                         .map(|p| p.to_path_buf())
                         .unwrap_or_else(|| {
-                            std::env::var("HOME").map(std::path::PathBuf::from).unwrap_or(cwd)
+                            std::env::var("HOME")
+                                .map(std::path::PathBuf::from)
+                                .unwrap_or(cwd)
                         })
                 } else {
                     cwd
@@ -12284,23 +12463,12 @@ unsafe fn maho_agent_create_session_impl(
                         + 'static,
                 > = Box::new(move |req| {
                     let _ = &callback_lease;
-                    let cb = cb_sendable.0;
-                    let user_data = user_data_ptr.0 as *mut std::ffi::c_void;
-                    let tool_name_c = match CString::new(req.tool_name) {
-                        Ok(s) => s,
-                        Err(_) => CString::new("unknown").unwrap(),
-                    };
-                    let arguments_c = match CString::new(req.arguments) {
-                        Ok(s) => s,
-                        Err(_) => CString::new("{}").unwrap(),
-                    };
-                    let decision =
-                        unsafe { cb(user_data, tool_name_c.as_ptr(), arguments_c.as_ptr()) };
-                    let p_decision = if decision == MahoAgentPermissionDecision::Allow {
-                        maho_agent::PermissionDecision::Allow
-                    } else {
-                        maho_agent::PermissionDecision::Deny
-                    };
+                    let p_decision = crate::agent::secure_storage::invoke_permission(
+                        cb_sendable.0,
+                        user_data_ptr.0,
+                        req.tool_name,
+                        req.arguments,
+                    );
                     Box::pin(async move { p_decision })
                 });
                 callback
@@ -12342,6 +12510,7 @@ unsafe fn maho_agent_create_session_impl(
                         }
                     };
                     let secure_key = unsafe { cb(user_data, provider_c.as_ptr()) };
+                    let _strings = crate::agent::secure_storage::SecureKeyStrings(secure_key);
                     if secure_key.ptr.is_null() {
                         return Err(maho_agent::CredentialError::ProviderNotConfigured.into());
                     }
@@ -12381,11 +12550,7 @@ unsafe fn maho_agent_create_session_impl(
                         let s = unsafe { CStr::from_ptr(secure_key.base_url) }
                             .to_string_lossy()
                             .into_owned();
-                        if let Some(free_fn) = secure_key.cstring_free_fn {
-                            unsafe {
-                                free_fn(secure_key.base_url);
-                            }
-                        }
+
                         Some(s)
                     } else {
                         None
@@ -12395,11 +12560,7 @@ unsafe fn maho_agent_create_session_impl(
                         let s = unsafe { CStr::from_ptr(secure_key.model) }
                             .to_string_lossy()
                             .into_owned();
-                        if let Some(free_fn) = secure_key.cstring_free_fn {
-                            unsafe {
-                                free_fn(secure_key.model);
-                            }
-                        }
+
                         Some(s)
                     } else {
                         None
@@ -12455,8 +12616,7 @@ unsafe fn maho_agent_create_session_impl(
                 core: core_ptr,
                 workspace_root: session_workspace_root,
                 active_space_id,
-                artifact_created_cb: None,
-                artifact_created_user_data: 0,
+                artifact_registration: Mutex::new((None, 0)),
                 unified_event_registration: Arc::new(Mutex::new(None)),
                 turn_controller: Arc::new(Mutex::new(
                     maho_agent::turn_control::SessionTurnController::new(&sid),
@@ -12598,13 +12758,28 @@ pub unsafe extern "C" fn maho_agent_session_free(session: *mut MahoAgentSession)
             if !session.is_null() {
                 let session_ref = &*session;
                 session_ref.accepted_leased_turns.signal_current();
+                {
+                    let mut controller = session_ref
+                        .turn_controller
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    controller.queue.clear();
+                    if let Some(turn) = &controller.active_turn {
+                        turn.cancel();
+                    }
+                }
                 // SAFETY: the core pointer is required to outlive every agent session.
                 unsafe { session_ref.core.as_ref() }
                     .mark_conversation_session_inactive(&session_ref.session_id);
                 let runtime = Arc::clone(&session_ref.runtime);
                 let session_id = session_ref.session_id.clone();
                 let isolation = Arc::clone(&session_ref.isolation);
-                let _ = isolation.block_on(async move { runtime.cancel(&session_id).await });
+                if let Err(error) = isolation.block_on_with_timeout(
+                    async move { runtime.cancel(&session_id).await },
+                    std::time::Duration::from_secs(2),
+                ) {
+                    tracing::warn!(%error, "Agent session cancellation failed or timed out");
+                }
                 drop(Box::from_raw(session));
             }
         },
@@ -12657,6 +12832,16 @@ unsafe fn maho_agent_send_message_impl(
                 Ok(s) => s.to_string(),
                 Err(_) => return false,
             };
+            let spawn_handle = match session
+                .isolation
+                .block_on(async { tokio::runtime::Handle::current() })
+            {
+                Ok(handle) => handle,
+                Err(error) => {
+                    tracing::warn!(%error, "Agent runtime unavailable");
+                    return false;
+                }
+            };
             let runtime = Arc::clone(&session.runtime);
             let session_id = session.session_id.clone();
             apply_agent_skill_system_prompt(session, runtime.as_ref());
@@ -12670,65 +12855,177 @@ unsafe fn maho_agent_send_message_impl(
             } else {
                 runtime.set_allowed_tools(None);
             }
+            let turn_id = uuid::Uuid::new_v4().to_string();
+            let turn_controller = Arc::clone(&session.turn_controller);
+            if turn_controller
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .start_turn(turn_id.clone())
+                .is_err()
+            {
+                return false;
+            }
             let turn_callback_lease = callback_release_policy
                 .map(|policy| Arc::new(TurnCallbackLease::new(policy.callback, policy.user_data)));
             let session_callback_lease = clone_callback_lease(&session.callback_lease);
 
-            let on_token_cb = on_token.map(|cb| {
-                let cb_sendable = SendableCallback(cb);
+            let unified_reg = session
+                .unified_event_registration
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+
+            let event_seq_counter = Arc::clone(&session.event_seq_counter);
+            let default_run_id = session_id.clone();
+
+            let on_token_cb = if on_token.is_some() || unified_reg.is_some() {
+                let on_token_sendable = SendableCallback(on_token);
                 let user_data_val = SendableUserData(user_data as usize);
                 let turn_callback_lease = clone_callback_lease(&turn_callback_lease);
                 let session_callback_lease = clone_callback_lease(&session_callback_lease);
+                let unified_reg = unified_reg.clone();
+                let runtime_clone = Arc::clone(&runtime);
+                let session_id_clone = session_id.clone();
+                let event_seq_counter = Arc::clone(&event_seq_counter);
+                let default_run_id = default_run_id.clone();
+
                 let callback: Box<dyn Fn(&str) + Send + Sync> = Box::new(move |token| {
                     let _ = (&turn_callback_lease, &session_callback_lease);
-                    let cb = cb_sendable.0;
-                    let udata = user_data_val.0 as *mut std::ffi::c_void;
-                    let token_c = match CString::new(token) {
-                        Ok(s) => s,
-                        Err(_) => return,
-                    };
-                    unsafe {
-                        cb(udata, token_c.as_ptr());
+                    if let Some(cb) = on_token_sendable.0 {
+                        let udata = user_data_val.0 as *mut std::ffi::c_void;
+                        if let Ok(token_c) = CString::new(token) {
+                            unsafe {
+                                cb(udata, token_c.as_ptr());
+                            }
+                        }
+                    }
+                    if unified_reg.is_some() {
+                        let run_id = runtime_clone
+                            .latest_run_id(&session_id_clone)
+                            .map(|r| r.0)
+                            .unwrap_or_else(|| default_run_id.clone());
+                        let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                        let payload = serde_json::json!({ "token": token }).to_string();
+                        dispatch_unified_event(
+                            &unified_reg,
+                            &turn_callback_lease,
+                            &session_callback_lease,
+                            &run_id,
+                            seq,
+                            MahoAgentEventKindV2::Token,
+                            &payload,
+                        );
                     }
                 });
-                callback
-            });
+                Some(callback)
+            } else {
+                None
+            };
 
+            let (artifact_cb, artifact_user_data) = *session
+                .artifact_registration
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let on_event_cb = if on_tool_call.is_some()
                 || on_tool_result.is_some()
                 || on_thinking.is_some()
-                || session.artifact_created_cb.is_some()
+                || artifact_cb.is_some()
+                || unified_reg.is_some()
             {
                 let on_tool_call_sendable = SendableCallback(on_tool_call);
                 let on_tool_result_sendable = SendableCallback(on_tool_result);
                 let on_thinking_sendable = SendableCallback(on_thinking);
-                let artifact_cb_sendable = SendableCallback(session.artifact_created_cb);
-                let artifact_udata = SendableUserData(session.artifact_created_user_data);
+                let artifact_cb_sendable = SendableCallback(artifact_cb);
+                let artifact_udata = SendableUserData(artifact_user_data);
                 let user_data_val = SendableUserData(user_data as usize);
                 let turn_callback_lease = clone_callback_lease(&turn_callback_lease);
                 let session_callback_lease = clone_callback_lease(&session_callback_lease);
+                let unified_reg = unified_reg.clone();
+                let runtime_clone = Arc::clone(&runtime);
+                let session_id_clone = session_id.clone();
+                let event_seq_counter = Arc::clone(&event_seq_counter);
+                let default_run_id = default_run_id.clone();
+
                 let callback = move |event: maho_agent::AgentStreamEvent| {
                     let _ = (&turn_callback_lease, &session_callback_lease);
                     let udata = user_data_val.0 as *mut std::ffi::c_void;
+                    let run_id = runtime_clone
+                        .latest_run_id(&session_id_clone)
+                        .map(|r| r.0)
+                        .unwrap_or_else(|| default_run_id.clone());
+
                     match event {
                         maho_agent::AgentStreamEvent::Thinking(thinking) => {
                             if let Some(cb) = on_thinking_sendable.0 {
-                                if let Ok(thinking_c) = CString::new(thinking) {
+                                if let Ok(thinking_c) = CString::new(thinking.as_str()) {
                                     unsafe {
                                         cb(udata, thinking_c.as_ptr());
                                     }
                                 }
                             }
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload =
+                                    serde_json::json!({ "thinking": thinking }).to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::Thinking,
+                                    &payload,
+                                );
+                            }
                         }
                         maho_agent::AgentStreamEvent::ToolCall { id, name, args } => {
                             if let Some(cb) = on_tool_call_sendable.0 {
-                                if let (Ok(id_c), Ok(name_c), Ok(args_c)) =
-                                    (CString::new(id), CString::new(name), CString::new(args))
-                                {
+                                if let (Ok(id_c), Ok(name_c), Ok(args_c)) = (
+                                    CString::new(id.as_str()),
+                                    CString::new(name.as_str()),
+                                    CString::new(args.as_str()),
+                                ) {
                                     unsafe {
                                         cb(udata, id_c.as_ptr(), name_c.as_ptr(), args_c.as_ptr());
                                     }
                                 }
+                            }
+                            if unified_reg.is_some() {
+                                if name == "ask_user_question"
+                                    || name == "request_action_confirmation"
+                                {
+                                    let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                    let payload = serde_json::json!({
+                                        "request_id": id,
+                                        "kind": if name == "ask_user_question" { "question" } else { "confirmation" },
+                                        "args": args,
+                                    }).to_string();
+                                    dispatch_unified_event(
+                                        &unified_reg,
+                                        &turn_callback_lease,
+                                        &session_callback_lease,
+                                        &run_id,
+                                        seq,
+                                        MahoAgentEventKindV2::InteractionRequest,
+                                        &payload,
+                                    );
+                                }
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::json!({
+                                    "id": id,
+                                    "name": name,
+                                    "args": args,
+                                })
+                                .to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::ToolCall,
+                                    &payload,
+                                );
                             }
                         }
                         maho_agent::AgentStreamEvent::ToolResult {
@@ -12738,9 +13035,11 @@ unsafe fn maho_agent_send_message_impl(
                             succeeded,
                         } => {
                             if let Some(cb) = on_tool_result_sendable.0 {
-                                if let (Ok(id_c), Ok(name_c), Ok(result_c)) =
-                                    (CString::new(id), CString::new(name), CString::new(result))
-                                {
+                                if let (Ok(id_c), Ok(name_c), Ok(result_c)) = (
+                                    CString::new(id.as_str()),
+                                    CString::new(name.as_str()),
+                                    CString::new(result.as_str()),
+                                ) {
                                     unsafe {
                                         cb(
                                             udata,
@@ -12751,6 +13050,25 @@ unsafe fn maho_agent_send_message_impl(
                                         );
                                     }
                                 }
+                            }
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::json!({
+                                    "id": id,
+                                    "name": name,
+                                    "result": result,
+                                    "succeeded": succeeded,
+                                })
+                                .to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::ToolResult,
+                                    &payload,
+                                );
                             }
                         }
                         maho_agent::AgentStreamEvent::ArtifactCreated { artifact } => {
@@ -12764,8 +13082,44 @@ unsafe fn maho_agent_send_message_impl(
                                     }
                                 }
                             }
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::to_string(&artifact).unwrap_or_default();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::ArtifactCreated,
+                                    &payload,
+                                );
+                            }
                         }
-                        _ => {}
+                        maho_agent::AgentStreamEvent::Status {
+                            elapsed_secs,
+                            message,
+                        } => {
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::json!({
+                                    "elapsed_secs": elapsed_secs,
+                                    "message": message,
+                                })
+                                .to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::Status,
+                                    &payload,
+                                );
+                            }
+                        }
+                        maho_agent::AgentStreamEvent::ProofOrReason { .. } => {}
+                        maho_agent::AgentStreamEvent::Token(_) => {}
                     }
                 };
                 Some(Arc::new(callback)
@@ -12789,53 +13143,149 @@ unsafe fn maho_agent_send_message_impl(
                 session_id.clone(),
             );
 
+            let on_token_cb = on_token_cb.map(Arc::from);
+            let failure_controller = Arc::clone(&turn_controller);
+            let failure_turn_id = turn_id.clone();
             let fut = async move {
                 let _active_guard = active_guard;
-                let user_chat_msg = maho_types::chat::ChatMessage::user(
-                    maho_types::chat::ChatContent::text(msg_str),
-                );
-                let result = runtime
-                    .run_turn(&session_id, user_chat_msg, on_token_cb, on_event_cb)
-                    .await;
-                invoke_with_turn_callback_lease(turn_callback_lease, || match result {
-                    Ok(response) => {
-                        let text = match &response.content {
-                            maho_types::chat::ChatContent::Text(t) => t.clone(),
-                            _ => String::new(),
-                        };
-                        let Some(text_c) = cstring_or_fallback(&text, "") else {
-                            return;
-                        };
-                        let Some(empty_json) = cstring_or_fallback("[]", "[]") else {
-                            return;
-                        };
-                        if let Some(cb) = on_complete.0 {
-                            cb(
-                                user_data_val.0 as *mut std::ffi::c_void,
-                                text_c.as_ptr(),
-                                empty_json.as_ptr(),
-                            );
+                let mut turn_id = turn_id;
+                let mut message = msg_str;
+                loop {
+                    let cancellation = {
+                        let controller = turn_controller.lock().unwrap_or_else(|e| e.into_inner());
+                        controller
+                            .active_turn
+                            .as_ref()
+                            .filter(|turn| turn.turn_id == turn_id)
+                            .map(|turn| {
+                                (turn.cancellation_token(), Arc::clone(&turn.cancel_notify))
+                            })
+                    };
+                    let token_callback =
+                        on_token_cb
+                            .as_ref()
+                            .map(|callback: &Arc<dyn Fn(&str) + Send + Sync>| {
+                                let callback = Arc::clone(callback);
+                                Box::new(move |token: &str| callback(token))
+                                    as Box<dyn Fn(&str) + Send + Sync>
+                            });
+                    let user_chat_msg = maho_types::chat::ChatMessage::user(
+                        maho_types::chat::ChatContent::text(message),
+                    );
+                    let result = if let Some((cancelled, notify)) = cancellation {
+                        tokio::select! {
+                            biased;
+                            _ = async {
+                                if !cancelled.load(std::sync::atomic::Ordering::SeqCst) { notify.notified().await; }
+                            } => Err(maho_agent::AgentError::ExecutionError("Turn cancelled".to_string())),
+                            result = runtime.run_turn(&session_id, user_chat_msg, token_callback, on_event_cb.clone()) => result,
                         }
-                    }
-                    Err(e) => {
-                        let error_text = agent_error_callback_text(&e);
-                        let Some(err_c) = cstring_or_fallback(&error_text, "unknown error") else {
-                            return;
-                        };
-                        if let Some(cb) = on_error.0 {
-                            cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
+                    } else {
+                        Err(maho_agent::AgentError::ExecutionError(
+                            "Turn replaced".to_string(),
+                        ))
+                    };
+                    let run_id = runtime
+                        .latest_run_id(&session_id)
+                        .map(|r| r.0)
+                        .unwrap_or_else(|| default_run_id.clone());
+
+                    invoke_with_turn_callback_lease(turn_callback_lease.clone(), || match result {
+                        Ok(response) => {
+                            let text = match &response.content {
+                                maho_types::chat::ChatContent::Text(t) => t.clone(),
+                                _ => String::new(),
+                            };
+                            let Some(text_c) = cstring_or_fallback(&text, "") else {
+                                return;
+                            };
+                            let Some(empty_json) = cstring_or_fallback("[]", "[]") else {
+                                return;
+                            };
+                            if let Some(cb) = on_complete.0 {
+                                cb(
+                                    user_data_val.0 as *mut std::ffi::c_void,
+                                    text_c.as_ptr(),
+                                    empty_json.as_ptr(),
+                                );
+                            }
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::json!({
+                                    "full_text": text,
+                                    "tool_calls": "[]",
+                                })
+                                .to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::Completed,
+                                    &payload,
+                                );
+                            }
                         }
-                    }
-                });
-                drop(on_complete);
-                drop(on_error);
+                        Err(e) => {
+                            let error_text = agent_error_callback_text(&e);
+                            let Some(err_c) = cstring_or_fallback(&error_text, "unknown error")
+                            else {
+                                return;
+                            };
+                            if let Some(cb) = on_error.0 {
+                                cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
+                            }
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::json!({
+                                    "error": error_text,
+                                })
+                                .to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::Error,
+                                    &payload,
+                                );
+                            }
+                        }
+                    });
+                    let next = {
+                        let mut controller =
+                            turn_controller.lock().unwrap_or_else(|e| e.into_inner());
+                        let next = controller.complete_turn(&turn_id);
+                        if let Some(next) = &next {
+                            if let Err(error) = controller.start_turn(next.id.clone()) {
+                                tracing::error!(%error, "Queued turn admission failed");
+                                break;
+                            }
+                        }
+                        next
+                    };
+                    let Some(next) = next else {
+                        break;
+                    };
+                    turn_id = next.id;
+                    message = next.message;
+                }
             };
 
-            let isolation = Arc::clone(&session.isolation);
-            let _handle = isolation.block_on(async move {
-                tokio::spawn(fut);
-            });
-            true
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| spawn_handle.spawn(fut)))
+            {
+                Ok(_) => true,
+                Err(error) => {
+                    tracing::warn!("Agent turn spawn failed: {:?}", error);
+                    failure_controller
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .complete_turn(&failure_turn_id);
+                    false
+                }
+            }
         },
         false
     )
@@ -13108,12 +13558,32 @@ pub unsafe extern "C" fn maho_agent_cancel(session: *mut MahoAgentSession) -> bo
             }
             let session = &*session;
             let accepted_leased_turn = session.accepted_leased_turns.signal_current();
+            let cancellation = {
+                let controller = session
+                    .turn_controller
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                controller
+                    .active_turn
+                    .as_ref()
+                    .map(|turn| (turn.cancellation_token(), Arc::clone(&turn.cancel_notify)))
+            };
             let runtime = Arc::clone(&session.runtime);
             let session_id = session.session_id.clone();
 
             let isolation = Arc::clone(&session.isolation);
-            let res = isolation.block_on(async move { runtime.cancel(&session_id).await });
-            accepted_leased_turn || res.is_ok()
+            let res = isolation.block_on_with_timeout(
+                async move { runtime.cancel(&session_id).await },
+                std::time::Duration::from_secs(2),
+            );
+            if let Err(error) = &res {
+                tracing::warn!(%error, "Agent cancellation failed or timed out");
+            }
+            if let Some((cancelled, notify)) = cancellation {
+                cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                notify.notify_one();
+            }
+            accepted_leased_turn || matches!(res, Ok(Ok(())))
         },
         false
     )
@@ -13247,9 +13717,11 @@ pub unsafe extern "C" fn maho_agent_set_artifact_created_callback(
             if session.is_null() {
                 return;
             }
-            let session = &mut *session;
-            session.artifact_created_cb = cb;
-            session.artifact_created_user_data = user_data as usize;
+            let session = &*session;
+            *session
+                .artifact_registration
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = (cb, user_data as usize);
         },
         ()
     )
@@ -15377,6 +15849,156 @@ pub unsafe extern "C" fn maho_routines_latest(
         },
         ptr::null_mut()
     )
+}
+
+// ---------------------------------------------------------------------------
+// Semantic Trace v3 Recorder FFI
+// ---------------------------------------------------------------------------
+
+pub struct MahoTraceRecorder(pub maho_agent::trace_recorder::TraceRecorder<fn() -> std::time::Instant>);
+
+/// Creates a new heap-allocated TraceRecorder.
+///
+/// # Safety
+/// Caller must free with `maho_trace_recorder_destroy` or `maho_trace_recorder_finish_json`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_trace_recorder_create() -> *mut MahoTraceRecorder {
+    Box::into_raw(Box::new(MahoTraceRecorder(
+        maho_agent::trace_recorder::TraceRecorder::new(),
+    )))
+}
+
+/// Destroys a `MahoTraceRecorder` without finishing.
+///
+/// # Safety
+/// `recorder` may be null or must be a valid pointer from `maho_trace_recorder_create`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_trace_recorder_destroy(recorder: *mut MahoTraceRecorder) {
+    if !recorder.is_null() {
+        drop(Box::from_raw(recorder));
+    }
+}
+
+/// Records a click step.
+///
+/// # Safety
+/// `recorder` must be a valid pointer from `maho_trace_recorder_create`.
+/// `target_ref` may be null or a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_trace_recorder_record_click(
+    recorder: *mut MahoTraceRecorder,
+    target_ref: *const c_char,
+    x: f64,
+    y: f64,
+) {
+    if recorder.is_null() {
+        return;
+    }
+    let target = if target_ref.is_null() {
+        None
+    } else {
+        CStr::from_ptr(target_ref)
+            .to_str()
+            .ok()
+            .map(|s| s.to_string())
+    };
+    (*recorder).0.record_click(target, x, y);
+}
+
+/// Records typed text into a fill step (coalesced within 400ms window).
+///
+/// # Safety
+/// `recorder` must be a valid pointer from `maho_trace_recorder_create`.
+/// `text` must be a valid null-terminated C string.
+/// `selector` may be null or a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_trace_recorder_record_fill(
+    recorder: *mut MahoTraceRecorder,
+    text: *const c_char,
+    selector: *const c_char,
+) {
+    if recorder.is_null() || text.is_null() {
+        return;
+    }
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return,
+    };
+    let sel = if selector.is_null() {
+        None
+    } else {
+        CStr::from_ptr(selector)
+            .to_str()
+            .ok()
+            .map(|s| s.to_string())
+    };
+    (*recorder).0.record_fill(text_str, sel);
+}
+
+/// Records page navigation.
+///
+/// # Safety
+/// `recorder` must be a valid pointer from `maho_trace_recorder_create`.
+/// `url` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_trace_recorder_record_navigate(
+    recorder: *mut MahoTraceRecorder,
+    url: *const c_char,
+) {
+    if recorder.is_null() || url.is_null() {
+        return;
+    }
+    let url_str = match CStr::from_ptr(url).to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return,
+    };
+    (*recorder).0.record_navigate(url_str);
+}
+
+/// Records a hover step.
+///
+/// # Safety
+/// `recorder` must be a valid pointer from `maho_trace_recorder_create`.
+/// `target_ref` may be null or a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_trace_recorder_record_hover(
+    recorder: *mut MahoTraceRecorder,
+    target_ref: *const c_char,
+) {
+    if recorder.is_null() {
+        return;
+    }
+    let target = if target_ref.is_null() {
+        None
+    } else {
+        CStr::from_ptr(target_ref)
+            .to_str()
+            .ok()
+            .map(|s| s.to_string())
+    };
+    (*recorder).0.record_hover(target);
+}
+
+/// Finishes recording and returns the TraceV3 JSON string.
+///
+/// # Safety
+/// Deallocates `recorder`. Caller owns the returned string and must free it via `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_trace_recorder_finish_json(
+    recorder: *mut MahoTraceRecorder,
+) -> *mut c_char {
+    if recorder.is_null() {
+        return ptr::null_mut();
+    }
+    let rec = Box::from_raw(recorder);
+    let trace = rec.0.finish();
+    match trace.to_json() {
+        Ok(json) => match CString::new(json) {
+            Ok(c) => c.into_raw(),
+            Err(_) => ptr::null_mut(),
+        },
+        Err(_) => ptr::null_mut(),
+    }
 }
 
 /// Sets the available browser capabilities for skill activation and filtering.
@@ -17964,6 +18586,8 @@ struct VaultRecoveryUnlockRequest {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultLoginRequest {
+    #[serde(default)]
+    notes: Option<String>,
     metadata: VaultItemPublicMetadata,
     username: String,
     password: String,
@@ -18026,6 +18650,8 @@ where
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VaultLoginUpdateRequest {
+    #[serde(default)]
+    notes: Option<String>,
     id: VaultItemId,
     #[serde(
         default,
@@ -18095,6 +18721,279 @@ struct VaultMatchItemsRequest {
     policy: VaultMatchPolicyRequest,
 }
 
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultParityMutationRequest {
+    id: VaultItemId,
+    #[serde(alias = "expected_revision", deserialize_with = "deserialize_vault_revision")]
+    expected_revision: VaultRevision,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultFavoriteRequest {
+    id: VaultItemId,
+    #[serde(deserialize_with = "deserialize_vault_revision")]
+    expected_revision: VaultRevision,
+    favorite: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultNoteRequest {
+    title: String,
+    notes: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultNoteUpdateRequest {
+    id: VaultItemId,
+    #[serde(deserialize_with = "deserialize_vault_revision")]
+    expected_revision: VaultRevision,
+    title: String,
+    notes: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultTotpRequest {
+    id: VaultItemId,
+    #[serde(deserialize_with = "deserialize_vault_revision")]
+    expected_revision: VaultRevision,
+    secret: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VaultItemRequest { id: VaultItemId }
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VaultStrengthRequest { password: String }
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_trash_item_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultParityMutationRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_trash_item(request.id, request.expected_revision) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_restore_item_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultParityMutationRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_restore_item(request.id, request.expected_revision) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_set_favorite_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultFavoriteRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_set_favorite(request.id, request.expected_revision, request.favorite) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_empty_trash_json(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        match core.vault_empty_trash() {
+            Ok(result) => vault_ok(result),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_get_notes_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultItemRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_get_notes(request.id) {
+            Ok(result) => match core.vault_get_username(request.id) {
+                Ok(username) => vault_ok(serde_json::json!({
+                    "notes": result.as_str(),
+                    "username": username.as_str(),
+                })),
+                Err(error) => vault_crud_error(error),
+            },
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_add_secure_note_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultNoteRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_add_secure_note(request.title, Zeroizing::new(request.notes)) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_update_secure_note_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultNoteUpdateRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_update_secure_note(request.id, request.expected_revision, request.title, Zeroizing::new(request.notes)) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_set_login_totp_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultTotpRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_set_login_totp(request.id, request.expected_revision, &Zeroizing::new(request.secret)) {
+            Ok(result) => vault_ok(VaultMutationResult::from(result)),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_totp_code_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        // SAFETY: The caller guarantees a readable NUL-terminated UTF-8 request.
+        let request = match unsafe { vault_parse_json::<VaultItemRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match core.vault_totp_code(request.id, u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(0)) {
+            Ok(result) => vault_ok(result),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and valid UTF-8 C request, when present.
+/// Free the returned JSON with maho_string_free.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_health_report_json(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller owns the core and request for this synchronous FFI call.
+        let Some(core) = (unsafe { vault_core(core) }) else { return ptr::null_mut(); };
+        match core.vault_health_report() {
+            Ok(result) => vault_ok(result),
+            Err(error) => vault_crud_error(error),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and readable NUL-terminated request.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_generate_password_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller guarantees the core and request remain valid for this call.
+        if unsafe { vault_core(core) }.is_none() { return ptr::null_mut(); }
+        // SAFETY: The request is caller-owned readable NUL-terminated UTF-8.
+        let request = match unsafe { vault_parse_json::<maho_types::vault_generator::PasswordGeneratorOptions>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        match maho_core::vault_generator::generate_password(&request) {
+            Ok(result) => vault_ok(result),
+            Err(error) => vault_error(VaultErrorCode::StorageFailure, error.to_string()),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and readable NUL-terminated request.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_password_strength_json(core: *mut MahoCore, request_json: *const c_char) -> *mut c_char {
+    ffi_safe!({
+        // SAFETY: The caller guarantees the core and request remain valid for this call.
+        if unsafe { vault_core(core) }.is_none() { return ptr::null_mut(); }
+        // SAFETY: The request is caller-owned readable NUL-terminated UTF-8.
+        let request = match unsafe { vault_parse_json::<VaultStrengthRequest>(request_json) } {
+            Ok(request) => request, Err(error) => return error,
+        };
+        vault_ok(maho_core::vault_generator::estimate_strength(&Zeroizing::new(request.password)))
+    }, ptr::null_mut())
+}
+
 fn vault_ok<T: serde::Serialize>(data: T) -> *mut c_char {
     to_json_cstring(&VaultFfiResponse {
         ok: true,
@@ -18122,6 +19021,9 @@ fn vault_lifecycle_error(error: VaultManagerError) -> *mut c_char {
         VaultManagerError::RateLimited => VaultErrorCode::RateLimited,
         VaultManagerError::InvalidCredentials => VaultErrorCode::InvalidCredentials,
         VaultManagerError::CorruptedVaultData => VaultErrorCode::UnsupportedSchemaVersion,
+        // The vault file has no wrapped key slot for the requested unlock kind,
+        // so this file cannot be opened that way: same class as CorruptedVaultData.
+        VaultManagerError::NoAccountWrap => VaultErrorCode::UnsupportedSchemaVersion,
         VaultManagerError::Storage(_) => VaultErrorCode::StorageFailure,
         VaultManagerError::DeviceProtector(_) => VaultErrorCode::ProviderUnavailable,
         VaultManagerError::DeviceWrapper(_) => VaultErrorCode::StorageFailure,
@@ -18403,6 +19305,38 @@ pub unsafe extern "C" fn maho_vault_unlock_with_recovery_json(
     )
 }
 
+/// Silently unlocks the profile-owned Vault with the device-wrapped key that
+/// the last successful passphrase/recovery/account unlock enrolled for this
+/// device (a 0600 file next to the profile database; the OS keystore is
+/// never used). Returns the same
+/// envelope as `maho_vault_unlock_json`.
+///
+/// # Safety
+/// `core` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_unlock_with_device_json(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            match core.unlock_vault_with_platform_device() {
+                Ok(()) => vault_ok(core.vault_status()),
+                Err(error) => vault_lifecycle_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Opts this process into the file-backed Vault device protector. Only the
+/// browser calls this, once at startup; tests and tools never create device key
+/// files. The OS keystore (Keychain/Secret Service/DPAPI) is never used.
+#[no_mangle]
+pub extern "C" fn maho_vault_enable_platform_device_protector() {
+    maho_core::maho_core::set_platform_device_protector_enabled(true);
+}
+
 /// Locks the profile-owned Vault and revokes active grants.
 ///
 /// # Safety
@@ -18441,11 +19375,21 @@ pub unsafe extern "C" fn maho_vault_add_login_json(
                 Ok(request) => request,
                 Err(response) => return response,
             };
+             let mut form_details = request.form_details;
+            if let Some(notes) = request.notes {
+                let details = form_details.get_or_insert_with(maho_core::vault_manager::VaultCredentialFormDetails::default);
+                details.notes.clear();
+                if !notes.is_empty() {
+                    let mut note = maho_core::vault_manager::VaultCredentialNote::default();
+                    note.value = notes;
+                    details.notes.push(note);
+                }
+            }
             let input = VaultLoginInput {
                 metadata: request.metadata,
                 username: request.username,
                 password: zeroize::Zeroizing::new(request.password),
-                form_details: request.form_details,
+                form_details,
             };
             match core.vault_add_login(input) {
                 Ok(item) => vault_ok(VaultMutationResult::from(item)),
@@ -18560,6 +19504,7 @@ pub unsafe extern "C" fn maho_vault_update_login_json(
                 Err(response) => return response,
             };
             let update = VaultLoginUpdate {
+                notes: request.notes.map(Zeroizing::new),
                 metadata: request.metadata,
                 username: request.username,
                 password: request.password.map(zeroize::Zeroizing::new),
@@ -19148,6 +20093,42 @@ mod vault_ffi_tests {
             read_owned_json(unsafe { maho_vault_status_json(core) })["data"]["lockState"],
             "auto_locked"
         );
+        free_core(core, &path);
+    }
+
+    #[test]
+    fn vault_ffi_device_unlock_after_passphrase_unlock_uses_file_key() {
+        maho_vault_enable_platform_device_protector();
+        let (_key_lock, core, path) = core_with_storage();
+        let init = initialize_request();
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_initialize_json(core, init.as_ptr()) })["ok"],
+            true
+        );
+        // SAFETY: the core is a valid profile-owned core.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_lock_json(core) })["data"]["lockState"],
+            "locked"
+        );
+        let unlock = request(serde_json::json!({"masterPassphrase": MASTER}));
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_unlock_json(core, unlock.as_ptr()) })["data"]
+                ["lockState"],
+            "unlocked"
+        );
+        let device_key = path.join("maho_vault_device.key");
+        assert!(device_key.exists(), "passphrase unlock must enroll the device key file");
+        // SAFETY: the core is a valid profile-owned core.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_lock_json(core) })["data"]["lockState"],
+            "locked"
+        );
+
+        // SAFETY: the core is a valid profile-owned core.
+        let device = read_owned_json(unsafe { maho_vault_unlock_with_device_json(core) });
+        assert_eq!(device["data"]["lockState"], "unlocked", "{device}");
         free_core(core, &path);
     }
 

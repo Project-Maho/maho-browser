@@ -5,8 +5,8 @@ pub mod migration;
 pub mod platform;
 pub mod policy;
 
-use std::sync::{Arc, RwLock};
 pub use maho_types::hardware_security::*;
+use std::sync::{Arc, RwLock};
 use zeroize::Zeroizing;
 
 pub type UserPresenceCompletion =

@@ -192,7 +192,7 @@ views::Widget* MahoSpaceThemePickerDialog::Open(
     registry.erase(existing);
   }
 
-  Profile* profile = browser->profile();
+  Profile* profile = browser->GetProfile();
   if (!profile) {
     return nullptr;
   }
@@ -202,7 +202,7 @@ views::Widget* MahoSpaceThemePickerDialog::Open(
   MahoSpaceThemePickerDialogDelegate* delegate_raw = delegate.get();
 
   gfx::NativeWindow parent_window =
-      browser->window() ? browser->window()->GetNativeWindow()
+      browser->GetWindow() ? browser->GetWindow()->GetNativeWindow()
                         : gfx::NativeWindow();
 
   views::Widget* widget = views::DialogDelegate::CreateDialogWidget(

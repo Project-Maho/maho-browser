@@ -38,6 +38,11 @@ struct VisualCaptureValidationResult {
 };
 
 struct VisualCaptureSpec {
+  VisualCaptureSpec();
+  VisualCaptureSpec(const VisualCaptureSpec&);
+  VisualCaptureSpec& operator=(const VisualCaptureSpec&);
+  ~VisualCaptureSpec();
+
   std::string id;
   std::string owner_test;
   std::string surface;
@@ -53,6 +58,10 @@ VisualCaptureValidationResult ValidateVisualCaptureArtifact(
     base::Time minimum_mtime);
 
 class MahoBoostVisualCaptureTestBase : public MahoBoostInteractiveUiTest {
+ public:
+  MahoBoostVisualCaptureTestBase();
+  ~MahoBoostVisualCaptureTestBase() override;
+
  protected:
   const std::vector<VisualCaptureSpec>& visual_capture_matrix();
   const std::vector<base::FilePath>& visual_source_paths();

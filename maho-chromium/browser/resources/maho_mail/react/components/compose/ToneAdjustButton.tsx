@@ -5,6 +5,8 @@ import { useToast } from "../ui/Toast";
 
 interface ToneAdjustButtonProps {
   body: string;
+  bodyHtml?: string;
+  splitBody?: (text: string, html: string) => { userText: string; signatureText: string; quoteText: string; signatureHtml: string; quoteHtml: string };
   setBody: (text: string) => void;
   setBodyHtml?: (html: string) => void;
   plainTextToHtml: (text: string) => string;
@@ -14,12 +16,20 @@ type ToneType = "professional" | "friendly" | "concise" | "formal";
 
 export function ToneAdjustButton({
   body,
+  bodyHtml,
+  splitBody,
   setBody,
   setBodyHtml,
   plainTextToHtml,
 }: ToneAdjustButtonProps) {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
+  const currentBodyRef = useRef(body);
+  currentBodyRef.current = body;
+  const currentHtmlRef = useRef(bodyHtml);
+  currentHtmlRef.current = bodyHtml;
+  const [previousHtml, setPreviousHtml] = useState<string | null>(null);
+  const inFlightRef = useRef(false);
   const [previousBody, setPreviousBody] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
@@ -34,7 +44,34 @@ export function ToneAdjustButton({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, [isOpen]);
+
   const handleAdjust = useCallback(async (tone: ToneType) => {
+    if (inFlightRef.current) return;
     if (!body.trim()) {
       toast("error", "Please add text before adjusting the tone.");
       return;
@@ -42,23 +79,31 @@ export function ToneAdjustButton({
 
     setIsOpen(false);
     setLoading(true);
+    inFlightRef.current = true;
     try {
+      const parts = splitBody?.(body, bodyHtml ?? "");
       const result = await api.adjustTone({
-        text: body,
+        text: parts?.userText ?? body,
         tone,
       });
+      if (currentBodyRef.current !== body || currentHtmlRef.current !== bodyHtml) {
+        toast("error", "The message changed during rewrite. Your edits were kept.");
+        return;
+      }
       setPreviousBody(body);
-      setBody(result.adjusted_text);
+      setPreviousHtml(bodyHtml ?? plainTextToHtml(body));
+      setBody(result.adjusted_text + (parts?.signatureText ?? "") + (parts?.quoteText ?? ""));
       if (setBodyHtml) {
-        setBodyHtml(plainTextToHtml(result.adjusted_text));
+        setBodyHtml(plainTextToHtml(result.adjusted_text) + (parts?.signatureHtml ?? "") + (parts?.quoteHtml ?? ""));
       }
       toast("success", `Tone adjusted to ${tone}`);
     } catch (err) {
       toast("error", err instanceof Error ? err.message : "Failed to adjust tone");
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
     }
-  }, [body, toast, setBody, setBodyHtml, plainTextToHtml]);
+  }, [body, bodyHtml, splitBody, toast, setBody, setBodyHtml, plainTextToHtml]);
 
   useEffect(() => {
     const handleAdjustToneEvent = (e: Event) => {
@@ -78,12 +123,13 @@ export function ToneAdjustButton({
       const current = body;
       setBody(previousBody);
       if (setBodyHtml) {
-        setBodyHtml(plainTextToHtml(previousBody));
+        setBodyHtml(previousHtml ?? plainTextToHtml(previousBody));
       }
       setPreviousBody(current); // Toggle redo
+      setPreviousHtml(bodyHtml ?? plainTextToHtml(current));
       toast("success", "Tone adjustment undone");
     }
-  }, [body, previousBody, toast, setBody, setBodyHtml, plainTextToHtml]);
+  }, [body, bodyHtml, previousHtml, previousBody, toast, setBody, setBodyHtml, plainTextToHtml]);
 
   return (
     <div className="relative flex items-center gap-1.5" ref={dropdownRef} data-testid="tone-adjust-container">
@@ -91,7 +137,7 @@ export function ToneAdjustButton({
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         disabled={loading}
-        className="flex items-center gap-1.5 rounded-lg border border-border bg-card/50 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+        className="mail-pressable flex h-10 items-center gap-1.5 rounded-lg px-3 text-sm text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
         aria-label="Rewrite message"
       >
         {loading ? (
@@ -110,7 +156,7 @@ export function ToneAdjustButton({
               key={t}
               type="button"
               onClick={() => void handleAdjust(t)}
-              className="w-full rounded-lg px-2.5 py-1.5 text-left text-sm text-foreground hover:bg-muted capitalize transition-colors"
+              className="flex h-8 w-full items-center rounded-md px-2.5 text-left text-sm text-foreground hover:bg-surface-hover capitalize transition-colors"
             >
               {t}
             </button>
@@ -122,7 +168,7 @@ export function ToneAdjustButton({
         <button
           type="button"
           onClick={handleUndo}
-          className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card/50 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="mail-pressable flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           title="Undo rewrite"
           aria-label="Undo Tone"
         >

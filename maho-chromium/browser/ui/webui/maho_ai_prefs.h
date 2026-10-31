@@ -20,6 +20,9 @@ inline constexpr char kProviderAdapterV2Enabled[] =
 inline constexpr char kUiThinModeEnabled[] = "maho.ai.ui_thin_mode_enabled";
 inline constexpr char kSessionListJson[] = "maho.ai.session_list_json";
 inline constexpr char kApprovalPolicy[] = "maho.ai.approval_policy";
+inline constexpr char kPermissionTier[] = "maho.ai.permission_tier";
+inline constexpr char kFinalConfirm[] = "maho.ai.final_confirm";
+inline constexpr char kProactiveMode[] = "maho.ai.proactive_mode";
 inline constexpr char kSessionPersistenceEnabled[] =
     "maho.ai.session_persistence_enabled";
 inline constexpr char kSessionEventLogs[] =
@@ -41,6 +44,21 @@ inline constexpr char kTranslationProvider[] = "maho.translation.provider";
 // creation. Empty string means "no key configured" → agent fails closed.
 inline constexpr char kByokOpenAIEncryptedB64[] = "maho.ai.byok.openai.encrypted_b64";
 inline constexpr char kByokAnthropicEncryptedB64[] = "maho.ai.byok.anthropic.encrypted_b64";
+// Provider OAuth sign-in state. The access token itself is stored in the
+// matching kByok*EncryptedB64 slot so the agent credential path is unchanged;
+// only the renewal material lives here.
+inline constexpr char kOAuthOpenAIClientId[] = "maho.ai.oauth.openai.client_id";
+inline constexpr char kOAuthOpenAIRefreshEncryptedB64[] =
+    "maho.ai.oauth.openai.refresh_encrypted_b64";
+inline constexpr char kOAuthOpenAIExpiresAt[] =
+    "maho.ai.oauth.openai.expires_at";
+inline constexpr char kOAuthAnthropicClientId[] =
+    "maho.ai.oauth.anthropic.client_id";
+inline constexpr char kOAuthAnthropicRefreshEncryptedB64[] =
+    "maho.ai.oauth.anthropic.refresh_encrypted_b64";
+inline constexpr char kOAuthAnthropicExpiresAt[] =
+    "maho.ai.oauth.anthropic.expires_at";
+
 inline constexpr char kAgentToolGrants[] = "maho.ai.extensions.agent_tool_grants";
 inline constexpr char kMcpCredentials[] = "maho.ai.byok.mcp_credentials";
 
@@ -51,7 +69,6 @@ inline constexpr char kByokOpenAICompatibleEncryptedB64[] =
     "maho.ai.byok.openai_compatible.encrypted_b64";
 inline constexpr char kModelsSettingsMigratedV1[] =
     "maho.ai.models_settings_migrated_v1";
-
 
 // One-time migration flag: true once macOS defaults have been copied into
 // Chromium prefs. Prevents re-migration on subsequent launches.

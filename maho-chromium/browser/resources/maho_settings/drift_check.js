@@ -34,7 +34,7 @@ function snakeToCamel(str) {
 function extractStructFields(structBody) {
   const fields = [];
   for (const rawStatement of structBody.split(";")) {
-    const statement = rawStatement.trim();
+    const statement = rawStatement.replace(/=[^=]*$/, '').trim();
     if (statement.length === 0) continue;
     const nameMatch = statement.match(/([A-Za-z_][A-Za-z0-9_]*)\s*$/);
     if (nameMatch) fields.push(nameMatch[1]);

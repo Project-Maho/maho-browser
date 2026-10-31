@@ -26,4 +26,17 @@ impl MahoCore {
             self.item_persist_fault_enabled(),
         ))
     }
+
+    pub(super) fn vault_mutation_repository(
+        &self,
+        operation: maho_types::vault::VaultAuditOperation,
+    ) -> Result<VaultRepository<'_>, StorageError> {
+        let storage = self
+            .storage
+            .as_ref()
+            .ok_or_else(|| StorageError::Other("vault storage not configured".to_string()))?;
+        let profile_id = self.get_active_profile_id().cloned().unwrap_or_default();
+        let audit = crate::vault_runtime::audit::AuditContext::new(profile_id, operation);
+        Ok(VaultRepository::new(storage, self.item_persist_fault_enabled()).with_audit(audit))
+    }
 }

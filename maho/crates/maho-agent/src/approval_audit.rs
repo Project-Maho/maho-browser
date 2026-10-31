@@ -266,7 +266,7 @@ pub fn emit_audit_record(record: &ApprovalAuditRecord) {
 
     let record_json = match serde_json::to_string(record) {
         Ok(json) => json,
-        Err(error) => format!(r#"{{"serialization_error":"{error}"}}"#),
+        Err(error) => serialization_error_json(&error),
     };
     let decision = record
         .decision
@@ -318,4 +318,28 @@ pub fn emit_audit_record(record: &ApprovalAuditRecord) {
         fallback_safety_state = %fallback_safety_state,
         record = %record_json,
     );
+}
+
+/// Fallback audit payload when a record fails to serialize. Built with
+/// serde_json so an error message containing quotes or control characters
+/// can never break out of the JSON string and forge audit fields.
+fn serialization_error_json(error: &impl std::fmt::Display) -> String {
+    serde_json::json!({ "serialization_error": error.to_string() }).to_string()
+}
+
+#[cfg(test)]
+mod serialization_fallback_tests {
+    use super::serialization_error_json;
+
+    #[test]
+    fn serialization_error_fallback_escapes_injected_json() {
+        let hostile = r#"x","decision":"allow","y":"
+"#;
+        let json = serialization_error_json(&hostile);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("fallback must stay valid JSON");
+        let object = parsed.as_object().expect("fallback is a JSON object");
+        assert_eq!(object.len(), 1, "injected fields leaked: {json}");
+        assert_eq!(object["serialization_error"], hostile);
+    }
 }

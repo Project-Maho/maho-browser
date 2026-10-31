@@ -91,15 +91,10 @@ fn resolve_from(contacts: &[Contact], handles: &[String]) -> Vec<Contact> {
 pub fn search(query: &str) -> Result<Vec<Contact>, PlatformError> {
     #[cfg(target_os = "macos")]
     {
-        if query.trim().is_empty() {
-            // The framework fetch is predicate-scoped; an empty query has no
-            // meaningful predicate, so it deterministically yields no results.
-            return Ok(Vec::new());
-        }
-        let name = mac::ns_string(query);
-        let predicate = mac::predicate_matching_name(&name);
-        let contacts = mac_fetch(&predicate)?;
-        Ok(filter_contacts(&contacts, query))
+        search_with(query, |name| {
+            let predicate = name.map(|name| mac::predicate_matching_name(&mac::ns_string(name)));
+            mac_fetch(predicate.as_deref())
+        })
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -110,6 +105,19 @@ pub fn search(query: &str) -> Result<Vec<Contact>, PlatformError> {
             remediation: NON_MACOS_REMEDIATION.to_string(),
         })
     }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn search_with(
+    query: &str,
+    fetch: impl FnOnce(Option<&str>) -> Result<Vec<Contact>, PlatformError>,
+) -> Result<Vec<Contact>, PlatformError> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    // Name-only predicates discard supported phone/email substring matches.
+    let contacts = fetch(None)?;
+    Ok(filter_contacts(&contacts, query))
 }
 
 pub fn resolve(handles: &[String]) -> Result<Vec<Contact>, PlatformError> {
@@ -135,7 +143,7 @@ pub fn resolve(handles: &[String]) -> Result<Vec<Contact>, PlatformError> {
                 .expect("CNPhoneNumber factory must return a value");
                 mac::predicate_matching_phone(&number)
             };
-            let contacts = mac_fetch(&contacts)?;
+            let contacts = mac_fetch(Some(&contacts))?;
             for c in resolve_from(&contacts, std::slice::from_ref(&handle.to_string())) {
                 if !found.iter().any(|f| f.identifier == c.identifier) {
                     found.push(c);
@@ -232,14 +240,25 @@ mod mac {
         err.localizedDescription().to_string()
     }
 
-    pub(super) fn fetch(predicate: &NSPredicate) -> Result<Vec<Contact>, PlatformError> {
+    pub(super) fn fetch(predicate: Option<&NSPredicate>) -> Result<Vec<Contact>, PlatformError> {
         // SAFETY: read-only store usage; no access request is ever made.
         let store = unsafe { CNContactStore::new() };
         let keys = keys_to_fetch();
-        // SAFETY: read-only fetch; predicate and keys are live objects.
-        let array =
+        let array = if let Some(predicate) = predicate {
+            // SAFETY: read-only fetch; predicate and keys are live objects.
             unsafe { store.unifiedContactsMatchingPredicate_keysToFetch_error(predicate, &keys) }
+                .map_err(|e| PlatformError::Io(ns_err_text(&e)))?
+        } else {
+            use objc2::AnyThread;
+            use objc2_contacts::CNContactFetchRequest;
+            // SAFETY: a nil predicate enumerates authorized contacts read-only.
+            let request = unsafe {
+                CNContactFetchRequest::initWithKeysToFetch(CNContactFetchRequest::alloc(), &keys)
+            };
+            let result = unsafe { store.enumeratorForContactFetchRequest_error(&request) }
                 .map_err(|e| PlatformError::Io(ns_err_text(&e)))?;
+            unsafe { result.value() }.allObjects()
+        };
 
         let mut out = Vec::with_capacity(array.len());
         for c in array.iter() {
@@ -276,7 +295,9 @@ mod mac {
 }
 
 #[cfg(target_os = "macos")]
-fn mac_fetch(predicate: &objc2_foundation::NSPredicate) -> Result<Vec<Contact>, PlatformError> {
+fn mac_fetch(
+    predicate: Option<&objc2_foundation::NSPredicate>,
+) -> Result<Vec<Contact>, PlatformError> {
     if !mac::authorized() {
         return Err(mac::permission_error());
     }
@@ -302,6 +323,25 @@ mod tests {
                 emails: vec!["jane@example.org".to_string()],
             },
         ]
+    }
+
+    #[test]
+    fn search_fetches_phone_and_email_candidates() {
+        for query in ["555", "example.org"] {
+            let found = search_with(query, |name| {
+                Ok(sample()
+                    .into_iter()
+                    .filter(|contact| {
+                        name.is_none_or(|name| {
+                            contact.name.to_lowercase().contains(&name.to_lowercase())
+                        })
+                    })
+                    .collect())
+            })
+            .unwrap();
+            assert_eq!(found.len(), 1, "missing contact for {query}");
+            assert_eq!(found[0].identifier, "id-2");
+        }
     }
 
     #[test]

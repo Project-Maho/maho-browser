@@ -162,14 +162,16 @@ pub fn propose_skill_from_journal(
         )
     });
 
-    let slug = skill_name
-        .to_lowercase()
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-        .collect::<String>()
-        .replace(' ', "-");
+    let sanitize = |raw: &str| -> String {
+        raw.to_lowercase()
+            .replace(' ', "-")
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect::<String>()
+    };
+    let slug = sanitize(&skill_name);
     let safe_id = if slug.is_empty() {
-        format!("custom-skill-{}", run_id.0)
+        format!("custom-skill-{}", sanitize(&run_id.0))
     } else {
         slug
     };
@@ -228,6 +230,20 @@ pub fn activate_skill_proposal(
         };
     }
 
+    // Installing must never overwrite an existing skill (including built-in and first-party
+    // skills, which live in the same catalog); changing one goes through `update_skill`.
+    if catalog.contains_skill(&proposal.id) {
+        return SkillProposalOutcome {
+            proposal: proposal.clone(),
+            status: SkillActivationStatus::NotInstalled,
+            installed_skill_id: None,
+            message: format!(
+                "Cannot install skill '{}': a skill with this id already exists",
+                proposal.id
+            ),
+        };
+    }
+
     let skill = proposal.to_skill();
     let skill_id = skill.id.clone();
     catalog.add_skill(skill);
@@ -265,6 +281,21 @@ pub fn update_skill(
             installed_skill_id: None,
             message: format!(
                 "Cannot update skill '{}': skill does not exist in catalog",
+                proposal.id
+            ),
+        };
+    }
+
+    if catalog
+        .get_skill(&proposal.id)
+        .is_some_and(|existing| existing.is_builtin || existing.is_first_party)
+    {
+        return SkillProposalOutcome {
+            proposal: proposal.clone(),
+            status: SkillActivationStatus::NotInstalled,
+            installed_skill_id: None,
+            message: format!(
+                "Cannot update skill '{}': built-in and first-party skills are read-only",
                 proposal.id
             ),
         };
@@ -345,6 +376,67 @@ mod tests {
         assert_eq!(proposal.steps_summary.len(), 2);
         assert!(proposal.system_prompt_template.contains("web_search"));
         assert!(proposal.system_prompt_template.contains("{user_input}"));
+    }
+
+    #[test]
+    fn proposal_id_slugifies_spaces_before_filtering_and_sanitizes_fallback() {
+        let mut journal = RunJournal::new();
+        let run_id = AgentRunId::new("run:abc/1");
+        journal.start_run(run_id.clone(), "s").unwrap();
+        journal
+            .append_event(&run_id, "user_prompt", r#"{"user_input":"do it"}"#)
+            .unwrap();
+        journal
+            .record_terminal(&run_id, RunCheckpointKind::Completed, None)
+            .unwrap();
+
+        let proposal = propose_skill_from_journal(&run_id, &journal, Some("Async Research")).unwrap();
+        assert_eq!(proposal.id, "async-research");
+
+        let fallback = propose_skill_from_journal(&run_id, &journal, Some("!!!")).unwrap();
+        assert_eq!(fallback.id, "custom-skill-runabc1");
+        assert!(!fallback.slash_command.contains(':'));
+    }
+
+    #[test]
+    fn install_rejects_existing_and_builtin_ids() {
+        let mut catalog = SkillsManager::new();
+        let builtin = catalog
+            .get_all_skills()
+            .into_iter()
+            .find(|s| s.is_builtin || s.is_first_party)
+            .expect("catalog ships builtin skills")
+            .clone();
+        let mut proposal = SkillProposal {
+            id: builtin.id.clone(),
+            name: "Evil".to_string(),
+            slash_command: "/evil".to_string(),
+            description: "overwrite".to_string(),
+            trigger_prompt: "x".to_string(),
+            system_prompt_template: "evil template".to_string(),
+            allowed_tools: vec![],
+            steps_summary: vec![],
+            created_at: 0,
+        };
+
+        let outcome = activate_skill_proposal(&proposal, true, &mut catalog);
+        assert_eq!(outcome.status, SkillActivationStatus::NotInstalled);
+        assert_eq!(catalog.get_skill(&builtin.id).unwrap().system_prompt, builtin.system_prompt);
+
+        let update = update_skill(&proposal, true, &mut catalog);
+        assert_eq!(update.status, SkillActivationStatus::NotInstalled);
+        assert_eq!(catalog.get_skill(&builtin.id).unwrap().system_prompt, builtin.system_prompt);
+
+        // A fresh id installs once; a second install of the same id is rejected.
+        proposal.id = "fresh-skill".to_string();
+        assert_eq!(
+            activate_skill_proposal(&proposal, true, &mut catalog).status,
+            SkillActivationStatus::Installed
+        );
+        assert_eq!(
+            activate_skill_proposal(&proposal, true, &mut catalog).status,
+            SkillActivationStatus::NotInstalled
+        );
     }
 
     #[test]

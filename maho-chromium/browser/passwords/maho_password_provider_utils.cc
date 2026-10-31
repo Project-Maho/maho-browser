@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/json/json_reader.h"
+#include "build/build_config.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -383,6 +384,34 @@ std::string GetActivePasswordProviderModeForProfileKey(
 bool IsNativePasswordProviderActive() {
   return GetEffectivePasswordProviderForProfileKey(GetCoreOwnerProfileKey()) ==
          EffectivePasswordProvider::kMahoNative;
+}
+
+bool IsVaultDeviceReauthRequired() {
+#if BUILDFLAG(IS_LINUX)
+  // Linux desktop has no platform DeviceAuthenticator (the factory returns
+  // null), so device reauth can never succeed there. The Vault unlock is the
+  // authorization boundary; requiring reauth would reject every Vault write.
+  return false;
+#else
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return true;
+  }
+  std::optional<std::string> settings =
+      TakeMahoString(maho_core_get_settings(core));
+  if (!settings) {
+    return true;
+  }
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(*settings, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return true;
+  }
+  const base::DictValue* autofill = parsed->GetDict().FindDict("autofill");
+  const std::optional<bool> required =
+      autofill ? autofill->FindBool("vaultRequireDeviceAuth") : std::nullopt;
+  return required.value_or(true);
+#endif
 }
 
 bool ShouldEnableChromiumPasswordManager() {

@@ -6,6 +6,8 @@
 pub fn bgra_to_rgba_inplace(buf: &mut [u8]) {
     for px in buf.chunks_exact_mut(4) {
         px.swap(0, 2);
+        // BI_RGB's fourth byte is reserved, not an alpha channel.
+        px[3] = 255;
     }
 }
 
@@ -18,6 +20,13 @@ mod tests {
         let mut buf = vec![1, 2, 3, 255, 4, 5, 6, 255];
         bgra_to_rgba_inplace(&mut buf);
         assert_eq!(buf, vec![3, 2, 1, 255, 6, 5, 4, 255]);
+    }
+
+    #[test]
+    fn gdi_reserved_byte_does_not_make_screenshot_transparent() {
+        let mut buf = [1, 2, 3, 0, 4, 5, 6, 127];
+        bgra_to_rgba_inplace(&mut buf);
+        assert_eq!(buf, [3, 2, 1, 255, 6, 5, 4, 255]);
     }
 
     #[test]

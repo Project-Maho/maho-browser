@@ -38,7 +38,7 @@ describe("useAppLifecycle", () => {
 
     expect(
       addEventListenerSpy.mock.calls.some(
-        (call: [string, ...unknown[]]) => call[0] === "visibilitychange"
+        (call: unknown[]) => call[0] === "visibilitychange"
       )
     ).toBe(true);
   });
@@ -52,7 +52,7 @@ describe("useAppLifecycle", () => {
     );
 
     const registeredHandler = addEventListenerSpy.mock.calls.find(
-      (call: [string, ...unknown[]]) => call[0] === "visibilitychange"
+      (call: unknown[]) => call[0] === "visibilitychange"
     )?.[1] as (() => void) | undefined;
 
     expect(registeredHandler).toBeTypeOf("function");
@@ -79,7 +79,7 @@ describe("useAppLifecycle", () => {
     );
 
     const registeredHandler = addEventListenerSpy.mock.calls.find(
-      (call: [string, ...unknown[]]) => call[0] === "visibilitychange"
+      (call: unknown[]) => call[0] === "visibilitychange"
     )?.[1] as (() => void) | undefined;
 
     Object.defineProperty(document, "visibilityState", {
@@ -104,7 +104,7 @@ describe("useAppLifecycle", () => {
     );
 
     const registeredHandler = addEventListenerSpy.mock.calls.find(
-      (call: [string, ...unknown[]]) => call[0] === "visibilitychange"
+      (call: unknown[]) => call[0] === "visibilitychange"
     )?.[1] as (() => void) | undefined;
 
     Object.defineProperty(document, "visibilityState", {
@@ -141,7 +141,7 @@ describe("useAppLifecycle", () => {
     );
 
     const registeredHandler = addEventListenerSpy.mock.calls.find(
-      (call: [string, ...unknown[]]) => call[0] === "visibilitychange"
+      (call: unknown[]) => call[0] === "visibilitychange"
     )?.[1] as (() => void) | undefined;
 
     Object.defineProperty(document, "visibilityState", {
@@ -168,7 +168,7 @@ describe("useAppLifecycle", () => {
     );
 
     const registeredHandler = addEventListenerSpy.mock.calls.find(
-      (call: [string, ...unknown[]]) => call[0] === "visibilitychange"
+      (call: unknown[]) => call[0] === "visibilitychange"
     )?.[1];
 
     unmount();

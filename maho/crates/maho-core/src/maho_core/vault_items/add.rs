@@ -10,40 +10,52 @@ impl MahoCore {
         &mut self,
         input: VaultLoginInput,
     ) -> Result<VaultItemPublicDto, VaultCrudError> {
-        let result = self
-            .vault_runtime
-            .add_login(self.vault_repository().map_err(storage_error)?, input);
-        self.record_vault_operation_result(VaultAuditOperation::ItemCreated, result)
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::ItemCreated)
+            .map_err(storage_error)?;
+        let result = self.vault_runtime.add_login(repository, input);
+        let outcome = self.record_vault_operation_result(VaultAuditOperation::ItemCreated, result);
+        self.push_vault_item_sync_after(&outcome);
+        outcome
     }
 
     pub fn vault_add_totp(
         &mut self,
         input: VaultTotpInput,
     ) -> Result<VaultItemPublicDto, VaultCrudError> {
-        let result = self
-            .vault_runtime
-            .add_totp(self.vault_repository().map_err(storage_error)?, input);
-        self.record_vault_operation_result(VaultAuditOperation::ItemCreated, result)
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::ItemCreated)
+            .map_err(storage_error)?;
+        let result = self.vault_runtime.add_totp(repository, input);
+        let outcome = self.record_vault_operation_result(VaultAuditOperation::ItemCreated, result);
+        self.push_vault_item_sync_after(&outcome);
+        outcome
     }
 
     pub fn vault_add_passkey(
         &mut self,
         input: VaultPasskeyInput,
     ) -> Result<VaultItemPublicDto, VaultCrudError> {
-        let result = self
-            .vault_runtime
-            .add_passkey(self.vault_repository().map_err(storage_error)?, input);
-        self.record_vault_operation_result(VaultAuditOperation::ItemCreated, result)
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::ItemCreated)
+            .map_err(storage_error)?;
+        let result = self.vault_runtime.add_passkey(repository, input);
+        let outcome = self.record_vault_operation_result(VaultAuditOperation::ItemCreated, result);
+        self.push_vault_item_sync_after(&outcome);
+        outcome
     }
 
     pub fn vault_add_secure_item(
         &mut self,
         input: VaultSecureItemInput,
     ) -> Result<VaultItemPublicDto, VaultCrudError> {
-        let result = self
-            .vault_runtime
-            .add_secure_item(self.vault_repository().map_err(storage_error)?, input);
-        self.record_vault_operation_result(VaultAuditOperation::ItemCreated, result)
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::ItemCreated)
+            .map_err(storage_error)?;
+        let result = self.vault_runtime.add_secure_item(repository, input);
+        let outcome = self.record_vault_operation_result(VaultAuditOperation::ItemCreated, result);
+        self.push_vault_item_sync_after(&outcome);
+        outcome
     }
 }
 

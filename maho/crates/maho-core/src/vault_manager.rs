@@ -4,6 +4,7 @@
 //! key material only. `MahoCore` coordinates opaque-slot persistence, hydration,
 //! and grant revocation. Time is an explicit timestamp seam (no sleeps).
 
+mod account;
 mod credential_form;
 mod crypto_ops;
 mod device;
@@ -26,8 +27,9 @@ pub use item_input::{
 };
 pub use origin::OriginMatchPolicy;
 pub use persistence::{
+    encode_account_wrap_slot, VaultAccountProvisionSlots, VaultAccountWrapSlot,
     VaultHydrationOutcome, VaultHydrationSlots, VaultPersistedSlots, SLOT_KDF_PARAMS,
-    SLOT_WRAPPED_RECOVERY_KEY, SLOT_WRAPPED_USER_KEY,
+    SLOT_WRAPPED_ACCOUNT_KEY, SLOT_WRAPPED_RECOVERY_KEY, SLOT_WRAPPED_USER_KEY,
 };
 
 use std::path::Path;
@@ -50,6 +52,7 @@ use state::RuntimeState;
 use throttle::UnlockThrottle;
 
 const MANAGER_WRAP_AAD: &[u8] = b"maho-vault-manager-v1";
+const ACCOUNT_WRAP_AAD: &[u8] = b"maho-vault-account-wrap-v1";
 const DEFAULT_AUTO_LOCK_MINUTES: u32 = 15;
 
 /// Typed startup classification for the persisted Vault key/database pair.
@@ -83,6 +86,7 @@ fn preflight_readable_database(snapshot: VaultDatabaseSnapshot) -> VaultPrefligh
         kdf_params: snapshot.kdf_params,
         wrapped_user_key: snapshot.wrapped_user_key,
         wrapped_recovery_key: snapshot.wrapped_recovery_key,
+        wrapped_account_key: snapshot.wrapped_account_key,
     };
     match manager.hydrate_locked(slots) {
         Ok(VaultHydrationOutcome::Uninitialized) => VaultPreflightState::Healthy,
@@ -113,6 +117,8 @@ pub enum VaultManagerError {
     DeviceWrapper(#[from] VaultDeviceWrapBundleError),
     #[error("device wrapper does not match this device binding")]
     DeviceBindingMismatch,
+    #[error("Vault has no account-wrapped key slot")]
+    NoAccountWrap,
     #[error("Crypto error: {0}")]
     Crypto(#[from] VaultCryptoError),
 }
@@ -123,6 +129,7 @@ pub struct VaultManager {
     kdf_metadata: Option<VaultKdfMetadata>,
     wrapped_user_key: Option<WrappedVaultKeyEnvelope>,
     wrapped_recovery_key: Option<WrappedVaultKeyEnvelope>,
+    wrapped_account_key: Option<WrappedVaultKeyEnvelope>,
     throttle: UnlockThrottle,
     auto_lock_minutes: u32,
     last_activity: Option<DateTime<Utc>>,
@@ -144,6 +151,7 @@ impl VaultManager {
             kdf_metadata: None,
             wrapped_user_key: None,
             wrapped_recovery_key: None,
+            wrapped_account_key: None,
             throttle: UnlockThrottle::default(),
             auto_lock_minutes: DEFAULT_AUTO_LOCK_MINUTES,
             last_activity: None,
@@ -163,6 +171,7 @@ impl VaultManager {
             auto_lock_minutes: self.auto_lock_minutes,
             failed_unlock_count: self.throttle.failed_attempts(),
             retry_at: self.throttle.retry_at(),
+            account_escrowed: self.wrapped_account_key.is_some(),
         }
     }
 
@@ -214,6 +223,7 @@ impl VaultManager {
         self.kdf_metadata = None;
         self.wrapped_user_key = None;
         self.wrapped_recovery_key = None;
+        self.wrapped_account_key = None;
         self.state = RuntimeState::Uninitialized;
         self.last_activity = None;
         self.throttle.reset();
@@ -281,8 +291,9 @@ impl VaultManager {
             persistence::HydrationDecode::Uninitialized => Ok(VaultHydrationOutcome::Uninitialized),
             persistence::HydrationDecode::Locked(decoded) => {
                 self.kdf_metadata = Some(decoded.metadata);
-                self.wrapped_user_key = Some(decoded.wrapped_user_key);
-                self.wrapped_recovery_key = Some(decoded.wrapped_recovery_key);
+                self.wrapped_user_key = decoded.wrapped_user_key;
+                self.wrapped_recovery_key = decoded.wrapped_recovery_key;
+                self.wrapped_account_key = decoded.wrapped_account_key;
                 self.active_key = None;
                 self.state = RuntimeState::Locked;
                 Ok(VaultHydrationOutcome::Locked)

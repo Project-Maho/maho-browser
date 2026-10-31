@@ -24,6 +24,8 @@
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
@@ -31,6 +33,7 @@
 #include "maho/browser/ai/maho_ffi_callback_handle.h"
 #include "maho/browser/ai/maho_tool_execution_graph.h"
 #include "components/os_crypt/async/common/encryptor.h"
+#include "maho/browser/ui/webui/maho_ai_provider_oauth.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
 
@@ -84,6 +87,18 @@ struct PermissionCallState {
   std::string sensitivity = "sensitive";
   bool page_derived_justification = false;
   std::string consequence = "unknown";
+  base::OnceCallback<void(bool)> boundary_callback;
+};
+
+// One parked human-in-the-loop help request (browser_request_help). Tracks
+// the active request while the adapter waits for the human to complete the
+// step; |timed_out| distinguishes timer expiry from explicit cancel in the
+// emitted status event.
+struct HelpRequestState {
+  std::string request_id;
+  std::string prompt;
+  base::TimeTicks started_at;
+  bool timed_out = false;
 };
 
 struct BrowserToolCallState {
@@ -233,6 +248,11 @@ struct MahoAgentFfi {
                         const char* preference_opt_json,
                         const char* available_opt_json,
                         char** out_json);
+  bool (*stage_user_image)(MahoAgentSession* session,
+                           const char* mime,
+                           const uint8_t* data,
+                           uint32_t len);
+  void (*free_string)(char* s);
 };
 
 const MahoAgentFfi* GetProductionMahoAgentFfi();
@@ -254,8 +274,13 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
 
   static void ClearActiveBYOKKeys(const std::string& provider);
   static void NotifyMailReadConsentChanged(PrefService* prefs);
+  static void NotifyAISettingsChanged(PrefService* prefs);
   static std::set<MahoUnifiedAgentAdapter*>& GetActiveAdapters();
   bool IsMailReadAllowedForTesting() const { return mail_read_allowed_; }
+  static MahoUnifiedAgentAdapter* FindForPrefs(PrefService* prefs);
+  void RequestBoundaryApproval(const std::string& tool_name,
+                               const std::string& redacted_details,
+                               base::OnceCallback<void(bool)> callback);
 
   // MahoAiRuntimeAdapter:
   std::string GetAdapterName() const override;
@@ -282,6 +307,7 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
                    RuntimeEventCallback on_event) override;
   uint64_t GetLastConsumedEventSeq(const std::string& run_id) const override;
   bool IsTurnActive() const override;
+  bool StageUserImage(std::vector<uint8_t> png_bytes) override;
   bool SubmitFollowUp(const std::string& message,
                       const std::string& intent = "queue") override;
   uint32_t GetTurnQueueDepth() const override;
@@ -291,6 +317,8 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
                            const std::string& filter_json,
                            uint64_t timeout_ms) override;
   std::string GetRuntimeSessionId() const override;
+  void StartSession(const std::string& session_id) override;
+  void ResetSession(const std::string& session_id) override;
   void Reset() override;
 
   maho::ai::MahoAuthenticatedServiceApiBroker* api_broker() const {
@@ -300,11 +328,29 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
     return channel_gateway_.get();
   }
 
+  // Human-in-the-loop help requests (browser_request_help). The adapter parks
+  // in kWaitingForHumanHelp until the human completes the step; a timeout or
+  // cancel resolves the parked request fail-closed. Returns false when another
+  // request is already active (one at a time) or the id is empty.
+  static constexpr char kHelpRequestWaitingState[] = "waiting_for_human_help";
+  bool RequestHumanHelp(const std::string& request_id,
+                        const std::string& prompt,
+                        base::TimeDelta timeout);
+  bool CompleteHumanHelp(const std::string& request_id);
+  bool CancelHumanHelp(const std::string& request_id, bool timed_out);
+  // Timer callback: WeakPtr-bound callbacks must return void.
+  void OnHelpRequestTimeout(const std::string& request_id);
+  bool IsWaitingForHumanHelp() const {
+    return active_help_request_.has_value();
+  }
+
  private:
   friend class MahoUnifiedAgentAdapterTest;
   friend class MahoUnifiedAgentAdapterTestHelper;
   friend class MahoUnifiedAgentAdapterPolicyTest;
   friend class MahoUnifiedAgentAdapterLifecycleTest;
+
+  void ResetSessionInternal(const std::string& session_id);
 
   void set_agent_ffi_for_testing(const MahoAgentFfi* ffi) { agent_ffi_ = ffi; }
 
@@ -321,7 +367,7 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
 
     std::string encrypted_byok_openai_b64;
     std::string encrypted_byok_anthropic_b64;
-    std::shared_ptr<os_crypt_async::Encryptor> encryptor;
+    scoped_refptr<os_crypt_async::Encryptor> encryptor;
     std::string custom_provider;
     std::string custom_api_key;
     std::string custom_base_url;
@@ -379,6 +425,8 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
     RAW_PTR_EXCLUSION void* callback_user_data = nullptr;
     std::shared_ptr<ByokSnapshot> byok_snapshot;
     std::unique_ptr<ByokBridge> byok_bridge;
+    // A2: Shared atomic for cross-thread generation snapshotting.
+    std::shared_ptr<std::atomic<uint64_t>> active_generation_atomic;
   };
 
   struct ActiveTurn {
@@ -468,6 +516,7 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   void TransitionToCredentialErrorForGeneration(
       uint64_t generation,
       MahoAiRuntimeErrorCode error_code);
+  bool SyncAISettingsFromPrefs(uint64_t generation = 0);
   bool ConfigurePreferredProvider(uint64_t generation);
   std::optional<MahoAiRuntimeErrorCode>
   ResolveSecureStorageOutcome(MahoAiRuntimeErrorCode error_code) const;
@@ -554,6 +603,9 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
 
   std::string session_id_;
   std::string pending_message_;
+  // PNG staged by StageUserImage() for the next SubmitMessage(); moved out at
+  // the start of that call so an early error never leaks it into a later turn.
+  std::optional<std::vector<uint8_t>> pending_user_image_;
 
   std::string permission_extension_id_;
   std::set<std::string> session_grants_;
@@ -591,6 +643,10 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   // dialog is used only as a fallback when no event consumer is attached.
   std::unordered_map<std::string, std::shared_ptr<PermissionCallState>>
       pending_approvals_;
+  // Active human-in-the-loop help request (browser_request_help). Empty while
+  // no request is parked. The timer resolves it fail-closed on expiry.
+  std::optional<HelpRequestState> active_help_request_;
+  base::OneShotTimer help_request_timeout_timer_;
   static std::string GenerateApprovalId();
   // Resolve every parked approval as deny and signal its waiter exactly once.
   // Called on turn cancel, reset, and destruction so a blocked worker fails
@@ -605,8 +661,13 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
     return pending_interactions_.size();
   }
 
-  std::shared_ptr<os_crypt_async::Encryptor> encryptor_;
-  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+  scoped_refptr<os_crypt_async::Encryptor> encryptor_;
+  void OnOsCryptReady(scoped_refptr<os_crypt_async::Encryptor> encryptor);
+  void RenewExpiringProviderOAuth(PrefService* prefs);
+  void OnProviderOAuthRenewed(const std::string& provider,
+                              bool ok,
+                              maho::ai_oauth::ProviderTokens tokens,
+                              const std::string& error_message);
 
   uint64_t tool_availability_callback_token_ = 0;
   scoped_refptr<base::SequencedTaskRunner> owning_task_runner_;
@@ -641,6 +702,29 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
 
   std::unique_ptr<maho::ai::MahoAuthenticatedServiceApiBroker> api_broker_;
   std::unique_ptr<maho::ai::MahoAgentChannelGateway> channel_gateway_;
+
+  // A2: Thread-safe snapshot of the active turn generation. Shared so that
+  // session-level FFI callbacks (which fire on Rust threads with generation=0)
+  // can read it atomically at callback entry, avoiding the owning-sequence
+  // fallback that races with turn replacement.
+  std::shared_ptr<std::atomic<uint64_t>> active_generation_atomic_ =
+      std::make_shared<std::atomic<uint64_t>>(0);
+
+  // A3: Maps run_id to the generation that was active when the run started.
+  // Events whose run_id maps to a generation that is no longer active are
+  // dropped.
+  std::unordered_map<std::string, uint64_t> run_id_to_generation_;
+
+  // A2: Combined bridge for session-level FFI callbacks that need both the
+  // FfiCallbackHandle user_data AND the active generation atomic for cross-
+  // thread generation snapshotting.
+  struct SessionCallbackBridge {
+    // RAW_PTR_EXCLUSION: see TurnFfiResources::callback_user_data; this is the
+    // FfiCallbackHandle user_data handed across the Rust FFI boundary.
+    RAW_PTR_EXCLUSION void* ffi_user_data = nullptr;
+    std::shared_ptr<std::atomic<uint64_t>> active_generation_atomic;
+  };
+  std::unique_ptr<SessionCallbackBridge> session_callback_bridge_;
 
   base::WeakPtrFactory<MahoUnifiedAgentAdapter> weak_factory_{this};
 

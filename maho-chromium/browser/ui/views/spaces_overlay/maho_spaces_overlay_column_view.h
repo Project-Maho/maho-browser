@@ -16,6 +16,10 @@
 
 class Browser;
 
+namespace gfx {
+struct VectorIcon;
+}  // namespace gfx
+
 namespace ui {
 class SimpleMenuModel;
 }  // namespace ui
@@ -69,6 +73,8 @@ class MahoSpacesOverlayColumnView : public views::View {
 
  private:
   void UpdateColors();
+  void SetFunctionalGlyphImages(views::ImageButton* button,
+                                const gfx::VectorIcon& icon);
   void HandleEditPressed();
   void HandleMenuPressed();
 
@@ -93,6 +99,7 @@ class MahoSpacesOverlayColumnView : public views::View {
   raw_ptr<views::Label> tag_chip_ = nullptr;
   raw_ptr<views::ImageButton> edit_button_ = nullptr;
   raw_ptr<views::ImageButton> menu_button_ = nullptr;
+  raw_ptr<views::ImageView> drag_handle_ = nullptr;
 
   MahoSidebarPalette palette_;
 

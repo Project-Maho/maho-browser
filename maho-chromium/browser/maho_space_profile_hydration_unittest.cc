@@ -240,12 +240,12 @@ TEST(MahoSpaceProfileHydrationTest, MergesWithoutDeletingExistingSpaces) {
       {"updated", base::FilePath::FromASCII("MahoProfile_old")},
   };
   std::string active_space_id = "existing";
-  SpaceProfileHydrationState state{
-      .space_to_profile =
-          {{"new", base::FilePath::FromASCII("Default")},
-           {"updated", base::FilePath::FromASCII("MahoProfile_new")}},
-      .active_space_id = "new",
+  SpaceProfileHydrationState state;
+  state.space_to_profile = {
+      {"new", base::FilePath::FromASCII("Default")},
+      {"updated", base::FilePath::FromASCII("MahoProfile_new")},
   };
+  state.active_space_id = "new";
 
   SpaceProfileHydrationChanges changes = MergeSpaceProfileHydrationState(
       std::move(state), &spaces, &active_space_id);
@@ -266,11 +266,11 @@ TEST(MahoSpaceProfileHydrationTest,
       {"ready", base::FilePath::FromASCII("MahoProfile_old")},
   };
   std::string active_space_id = "stale";
-  SpaceProfileHydrationState state{
-      .space_to_profile =
-          {{"ready", base::FilePath::FromASCII("MahoProfile_ready")}},
-      .active_space_id = "ready",
+  SpaceProfileHydrationState state;
+  state.space_to_profile = {
+      {"ready", base::FilePath::FromASCII("MahoProfile_ready")},
   };
+  state.active_space_id = "ready";
 
   SpaceProfileHydrationChanges changes = ReplaceSpaceProfileHydrationState(
       std::move(state), &spaces, &active_space_id);
@@ -288,11 +288,12 @@ TEST(MahoSpaceProfileHydrationTest, RepeatedMergeIsIdempotent) {
   base::flat_map<std::string, base::FilePath> spaces;
   std::string active_space_id;
   auto make_state = [] {
-    return SpaceProfileHydrationState{
-        .space_to_profile =
-            {{"work", base::FilePath::FromASCII("Default")}},
-        .active_space_id = "work",
+    SpaceProfileHydrationState state;
+    state.space_to_profile = {
+        {"work", base::FilePath::FromASCII("Default")},
     };
+    state.active_space_id = "work";
+    return state;
   };
 
   SpaceProfileHydrationChanges first = MergeSpaceProfileHydrationState(
@@ -306,6 +307,34 @@ TEST(MahoSpaceProfileHydrationTest, RepeatedMergeIsIdempotent) {
   EXPECT_FALSE(second.active_space);
   EXPECT_EQ(spaces.size(), 1u);
   EXPECT_EQ(active_space_id, "work");
+}
+
+TEST(MahoSpaceProfileHydrationTest, DeferredHydrationPreservesActiveSpaceAssociation) {
+  base::flat_map<std::string, base::FilePath> spaces;
+  std::string active_space_id;
+
+  // Simulate unhydrated initial state.
+  EXPECT_TRUE(spaces.empty());
+  EXPECT_TRUE(active_space_id.empty());
+
+  // First hydration completes once storage/bridge is ready.
+  const std::string spaces_json =
+      R"([{"id":"space-alpha","profileId":"default"},{"id":"space-beta","profileId":"default"}])";
+  const std::string active_id_json = R"("space-alpha")";
+
+  std::optional<SpaceProfileHydrationState> state =
+      ParseSpaceProfileHydrationState(spaces_json, active_id_json);
+  ASSERT_TRUE(state.has_value());
+
+  SpaceProfileHydrationChanges changes = MergeSpaceProfileHydrationState(
+      std::move(*state), &spaces, &active_space_id);
+
+  EXPECT_TRUE(changes.structural);
+  EXPECT_TRUE(changes.active_space);
+  EXPECT_EQ(active_space_id, "space-alpha");
+  EXPECT_EQ(spaces.size(), 2u);
+  EXPECT_EQ(spaces.at("space-alpha"), base::FilePath::FromASCII("Default"));
+  EXPECT_EQ(spaces.at("space-beta"), base::FilePath::FromASCII("Default"));
 }
 
 }  // namespace

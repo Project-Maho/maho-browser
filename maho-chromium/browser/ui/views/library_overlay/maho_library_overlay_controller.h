@@ -68,6 +68,13 @@ class MahoLibraryOverlayController : public views::WidgetObserver {
     delete_callback_ = std::move(callback);
   }
 
+  // Re-pulls the docked rail's authoritative snapshot and applies it to the
+  // live overlay. Wired as the overlay view's theme-refresh callback: the
+  // overlay is its own top-level widget, so a theme change delivered to that
+  // widget alone must not leave the overlay painted from a snapshot the rail has
+  // already replaced.
+  void RefreshPaletteFromSidebar();
+
   views::Widget* GetOverlayWidgetForTesting() const { return widget_.get(); }
   int GetOverlayWidthForTesting() const;
   MahoLibraryOverlayView* GetOverlayViewForTesting() const {

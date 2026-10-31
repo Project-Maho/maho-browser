@@ -127,6 +127,36 @@ pub async fn get_windows_check(req: Request, env: Env) -> Result<Response> {
     Ok(res)
 }
 
+/// Serves the signed Linux update envelope read by
+/// `maho_update_delegate_linux.cc` (`GET /updates/linux/check?channel=`).
+/// Linux is notification-only, so there is no rollout bucket: an absent
+/// release returns `{}`, which the client treats as an unsigned manifest.
+pub async fn get_linux_check(req: Request, env: Env) -> Result<Response> {
+    let db = env.d1("MAHO_DB")?;
+    let url = req.url()?;
+    let query: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
+
+    let channel = query
+        .get("channel")
+        .cloned()
+        .unwrap_or_else(|| "stable".to_string());
+
+    let body = match db::find_latest_linux_release(&db, &channel).await? {
+        Some(release) => match release.linux_envelope {
+            Some(envelope) if !envelope.trim().is_empty() => envelope,
+            _ => "{}".to_string(),
+        },
+        None => "{}".to_string(),
+    };
+
+    let mut res = Response::ok(body)?;
+    res.headers_mut()
+        .set("Content-Type", "application/json")?;
+    res.headers_mut()
+        .set("Cache-Control", CACHE_CONTROL_HEADER)?;
+    Ok(res)
+}
+
 pub async fn post_release(mut req: Request, env: Env) -> Result<Response> {
     require_release_admin(&req, &env)?;
 

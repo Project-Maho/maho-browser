@@ -155,16 +155,27 @@ fn ensure_wal_journal(conn: &Connection, db_path: &Path) -> Result<(), AppError>
     }
 }
 
-/// Names the POSIX VFS explicitly through a URI filename.
+/// Names the platform's native VFS explicitly through a URI filename.
 ///
 /// The mail helper is a Chromium process, and Chromium installs its own SQLite
 /// VFS as the default one. Naming the VFS keeps every launch of the helper
 /// opening the file the same way regardless of what the surrounding process
-/// installed.
+/// installed. Windows has no `unix` VFS (opening with it fails with "no such
+/// vfs"), so it names SQLite's `win32` VFS instead.
 fn vfs_uri(db_path: &Path) -> String {
+    #[cfg(windows)]
+    const NATIVE_VFS: &str = "win32";
+    #[cfg(not(windows))]
+    const NATIVE_VFS: &str = "unix";
+    let path = db_path.to_string_lossy().replace('\\', "/");
+    let path = if path.as_bytes().get(1) == Some(&b':') {
+        format!("/{path}")
+    } else {
+        path
+    };
     format!(
-        "file:{}?vfs=unix",
-        db_path.to_string_lossy().replace('?', "%3f").replace('#', "%23")
+        "file:{}?vfs={NATIVE_VFS}",
+        path.replace('%', "%25").replace('?', "%3f").replace('#', "%23")
     )
 }
 
@@ -299,6 +310,22 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         crate::db::migrations::run_migrations(&conn).unwrap();
         conn
+    }
+
+    #[test]
+    fn vfs_uri_names_native_vfs_and_escapes_reserved_characters() {
+        let uri = super::vfs_uri(std::path::Path::new("/tmp/a?b#c%d.db"));
+        #[cfg(not(windows))]
+        assert_eq!(uri, "file:/tmp/a%3fb%23c%25d.db?vfs=unix");
+        #[cfg(windows)]
+        assert!(uri.ends_with("?vfs=win32"), "{uri}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn vfs_uri_uses_absolute_drive_path_on_windows() {
+        let uri = super::vfs_uri(std::path::Path::new(r"C:\Users\me\mail.db"));
+        assert_eq!(uri, "file:/C:/Users/me/mail.db?vfs=win32");
     }
 
     #[test]

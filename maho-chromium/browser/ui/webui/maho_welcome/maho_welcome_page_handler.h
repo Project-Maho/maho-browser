@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "components/os_crypt/async/common/encryptor.h"
@@ -162,7 +163,7 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
       views::Widget* parent,
       OpenMigrationDialogCallback callback,
       std::vector<maho::DetectedBrowser> browsers);
-  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+  void OnOsCryptReady(scoped_refptr<os_crypt_async::Encryptor> encryptor);
 
   // Idempotent mail-helper launch, called only after relay login/signup
   // succeeds (prefs already hold a valid session, so no gate is needed).
@@ -190,7 +191,7 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
   SaveSyncKeyBackupCallback sync_save_callback_;
   std::string sync_save_content_;
 
-  std::optional<os_crypt_async::Encryptor> encryptor_;
+  scoped_refptr<os_crypt_async::Encryptor> encryptor_;
 
   base::WeakPtrFactory<MahoWelcomePageHandler> weak_factory_{this};
 };

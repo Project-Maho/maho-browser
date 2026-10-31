@@ -80,6 +80,11 @@ public:
   bool ConsumeAuthorization(const std::string &profile_key,
                             const std::string &origin_scope,
                             PasswordAuthorizationAction action);
+  // Page-load fill discovery needs only an unlocked Vault: Chromium's
+  // IsReauthBeforeFillingRequired() gates the actual fill, so a page load
+  // never prompts for device authentication.
+  bool IsPageFillLookupAllowed(const std::string &profile_key,
+                               const std::string &origin_scope) const;
   void RevokeProfile(const std::string &profile_key);
   void RevokeAll();
   void CopySecretToClipboard(std::u16string secret);
@@ -96,6 +101,8 @@ public:
   void ResetForTesting();
   void SetVaultLockedForTesting(bool locked);
   void SetInteractiveAuthorizationEnabledForTesting(bool enabled);
+  // Test seam for the core-owned `autofill.vaultRequireDeviceAuth` setting.
+  void SetDeviceReauthRequiredForTesting(bool required);
   size_t grant_count_for_testing() const;
 
 private:
@@ -125,6 +132,10 @@ private:
 
   MahoPasswordAuthorizationService();
 
+  // Device re-authentication requirement, resolved from core settings unless a
+  // test override is installed.
+  bool RequiresDeviceReauth();
+
   static std::string CanonicalizeOriginScope(const std::string &origin_scope);
   void OnDeviceAuthenticationComplete(uint64_t request_id, bool success);
   void InvalidateMatchingProfile(const std::string *profile_key);
@@ -136,6 +147,7 @@ private:
   std::map<uint64_t, PendingAuthorization> pending_authorizations_;
   base::CallbackListSubscription vault_lock_state_subscription_;
   std::optional<bool> vault_locked_override_;
+  std::optional<bool> device_reauth_required_for_testing_;
   bool interactive_authorization_enabled_for_testing_ = true;
   std::optional<std::u16string> clipboard_secret_;
   base::OneShotTimer clipboard_clear_timer_;

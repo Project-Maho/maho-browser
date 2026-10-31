@@ -27,12 +27,19 @@ import { AIActionsMenu } from "../email/AIActionsMenu";
 import { TranslationStatusBar } from "../email/TranslationStatusBar";
 import { EmailActionsToolbar } from "../email/EmailActionsToolbar";
 import * as api from "../../api";
-import type { EmailDetail, EmailSummary, Label, ComposeEmailRequest, Attachment, Email } from "../../types";
+import type { EmailDetail, EmailSummary, Label, ComposeEmailRequest, Attachment, Email, SendRequestedOptions } from "../../types";
 import { useToast } from "../ui/Toast";
 import { Avatar } from "../ui/Avatar";
 import { EmailDetailSkeleton } from "../ui/Skeleton";
 import { formatRelativeDate } from "../ui/utils";
-import { useTranslation, SUPPORTED_LANGUAGE_CODES } from "../../hooks/useTranslation";
+import {
+  useTranslation,
+  SUPPORTED_LANGUAGES,
+  SUPPORTED_LANGUAGE_CODES,
+  getTranslationTargetLang,
+  saveTranslationTargetLang,
+  type LanguageCode,
+} from "../../hooks/useTranslation";
 import { useClipboard } from "../../hooks/useClipboard";
 import { AddressPopover } from "../email/AddressPopover";
 import { parseAddressList } from "../../utils/addresses";
@@ -41,6 +48,8 @@ import { usePopoutWindow } from "../../hooks/usePopoutWindow";
 import { useEmailSecurity } from "../../hooks/useEmailSecurity";
 import { useQuickReply } from "../../hooks/useQuickReply";
 import { detectLanguage, isPotentialIdnHomograph } from "../../utils/languageDetect";
+import { sanitizeEmailHtml } from "../../utils/sanitizeHtml";
+import { blockExternalResources } from "../../utils/trackerBlocker";
 
 interface AttachmentPreviewProps {
   attachment: Attachment;
@@ -77,19 +86,28 @@ function showQwenHtmlHintOnce(toast: (type: "info", message: string) => void): v
   localStorage.setItem(QWEN_HTML_HINT_KEY, "true");
 }
 
-function generatePrintHtml(email: Email, bodyHtml: string | null): string {
+export function generatePrintHtml(email: Email, bodyHtml: string | null): string {
   const safeHtml = (s: string | null) =>
-    (s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    (s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
 
   const dateStr = new Date(email.date).toLocaleString();
   const bodyContent = bodyHtml
-    ? bodyHtml
+    ? blockExternalResources(sanitizeEmailHtml(bodyHtml), {
+        blockImages: true,
+        blockTrackers: true,
+      }).html
     : `<pre style="white-space:pre-wrap;font-family:inherit;">${safeHtml(email.body_text ?? email.snippet)}</pre>`;
 
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob: cid:; style-src 'unsafe-inline'">
   <title>${safeHtml(email.subject)}</title>
   <style>
     * { box-sizing: border-box; }
@@ -127,8 +145,7 @@ function generatePrintHtml(email: Email, bodyHtml: string | null): string {
     </table>
   </div>
   <div class="email-body">${bodyContent}</div>
-  <script>window.onload = function() { window.print(); };</script>
-</body>
+<!--maho-tt-pipeline-->
 </html>`;
 }
 
@@ -145,9 +162,10 @@ interface EmailContentProps {
   onPin?: (emailId: string) => void;
   onSnooze?: (emailId: string) => void;
   onReminder?: (emailId: string) => void;
-  onSendRequested?: (request: ComposeEmailRequest) => void;
+  onSendRequested?: (request: ComposeEmailRequest, options?: SendRequestedOptions) => void;
   onOpenAiSettings?: () => void;
   onComposeToRecipient?: (email: string) => void;
+  accountEmail?: string;
   authRecoveryError?: {
     emailId: string;
     accountEmail?: string;
@@ -172,6 +190,7 @@ export function EmailContent({
   onSendRequested,
   onOpenAiSettings,
   onComposeToRecipient,
+  accountEmail,
   authRecoveryError,
   onReconnectAccount,
 }: EmailContentProps) {
@@ -216,7 +235,7 @@ export function EmailContent({
     quickReplyRef,
     handleQuickReply,
     resetQuickReply,
-  } = useQuickReply({ email: emailDetail?.email ?? null, emailDetail, onSendRequested, toast, t });
+  } = useQuickReply({ email: emailDetail?.email ?? null, emailDetail, accountEmail, onSendRequested, toast, t });
 
   const {
     translatedText,
@@ -299,7 +318,8 @@ export function EmailContent({
     try {
       const config = JSON.parse(configRaw) as { provider?: string; defaultTargetLang?: string; alwaysTranslateFrom?: string[] };
       if (config.provider === "skip") return;
-      if (detected === (config.defaultTargetLang ?? "ko")) return;
+      const target = getTranslationTargetLang();
+      if (detected === target) return;
       if (config.alwaysTranslateFrom?.includes(detected)) {
         const bodyHtml = emailDetail.email.body_html;
         const htmlSize = bodyHtml ? bodyHtml.length : 0;
@@ -307,16 +327,16 @@ export function EmailContent({
         if (bodyHtml && config.provider === "byok") {
           if (htmlSize <= 8 * 1024) {
             setFromLang(detected as Parameters<typeof setFromLang>[0]);
-            setToLang((config.defaultTargetLang ?? "ko") as Parameters<typeof setToLang>[0]);
-            void doTranslateHtml(bodyHtml, detected, config.defaultTargetLang ?? "ko");
+            setToLang(target);
+            void doTranslateHtml(bodyHtml, detected, target);
           }
         } else {
           if (bodyHtml && config.provider === "local") {
             showQwenHtmlHintOnce(toast);
           }
           setFromLang(detected as Parameters<typeof setFromLang>[0]);
-          setToLang((config.defaultTargetLang ?? "ko") as Parameters<typeof setToLang>[0]);
-          void doTranslate(text, detected, config.defaultTargetLang ?? "ko");
+          setToLang(target);
+          void doTranslate(text, detected, target);
         }
       }
     } catch { /* invalid config, ignore */ }
@@ -487,7 +507,7 @@ export function EmailContent({
     }
   }
 
-  function handleTranslate() {
+  function handleTranslate(target: LanguageCode = getTranslationTargetLang()) {
     const configRaw = localStorage.getItem("maho-translation-config");
     let provider = "byok";
     try {
@@ -509,11 +529,13 @@ export function EmailContent({
           toast("error", "No text content to translate");
           return;
         }
-        void doTranslate(text);
+        setToLang(target);
+        void doTranslate(text, undefined, target);
 
         showQwenHtmlHintOnce(toast);
       } else {
-        void doTranslateHtml(email.body_html);
+        setToLang(target);
+        void doTranslateHtml(email.body_html, undefined, target);
       }
     } else {
       const text = email.body_text ?? email.snippet ?? "";
@@ -521,8 +543,15 @@ export function EmailContent({
         toast("error", "No text content to translate");
         return;
       }
-      void doTranslate(text);
+      setToLang(target);
+      void doTranslate(text, undefined, target);
     }
+  }
+
+  function handleChangeTranslateTarget(code: string) {
+    const target = code as LanguageCode;
+    saveTranslationTargetLang(target);
+    handleTranslate(target);
   }
 
   async function handleToggleLabel(labelId: string) {
@@ -583,12 +612,12 @@ export function EmailContent({
   return (
     <article aria-label={`${t("a11y.emailContent")}: ${email.subject}`} className="flex flex-1 flex-col bg-background animate-fade-in select-text">
       {onBack && (
-        <button type="button" onClick={onBack} aria-label="Back to email list" className="md:hidden flex items-center gap-1 p-3 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+        <button type="button" onClick={onBack} aria-label="Back to email list" className="md:hidden flex min-h-11 items-center gap-1 px-3 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
           <ArrowLeft size={18} /> Back
         </button>
       )}
       {/* Header */}
-      <div className="border-b border-border px-6 py-5">
+      <div className="border-b border-border/60 px-6 pb-5 pt-6">
         <div className="flex items-start gap-4">
           <Avatar
             name={email.from_name ?? email.from_address}
@@ -599,7 +628,7 @@ export function EmailContent({
           <div className="min-w-0 flex-1">
             <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1">
-                <h2 className="text-lg font-semibold text-foreground">
+                <h2 className="text-xl font-semibold leading-snug tracking-tight text-foreground [text-wrap:balance]">
                   <button
                     type="button"
                     onClick={() => {
@@ -609,7 +638,7 @@ export function EmailContent({
                       }
                       void copy(email.subject);
                     }}
-                    className="block w-full truncate text-left rounded -mx-1 px-1 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer"
+                    className="block w-full text-left rounded-md -mx-1.5 px-1.5 py-0.5 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer"
                     aria-label={t("email.copySubject")}
                     title={t("email.copySubject")}
                   >
@@ -625,7 +654,7 @@ export function EmailContent({
                   >
                     <button
                       type="button"
-                      className="inline-flex items-center gap-2 rounded -mx-1 px-1 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer"
+                      className="inline-flex items-center gap-2 rounded-md -mx-1.5 px-1.5 py-0.5 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer"
                       aria-label={t("email.senderOptionsFor", { name: email.from_name ?? email.from_address })}
                     >
                       <span className="font-medium text-foreground">
@@ -660,7 +689,7 @@ export function EmailContent({
                       >
                         <button
                           type="button"
-                          className="rounded -mx-0.5 px-0.5 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer"
+                          className="rounded-md -mx-1 px-1 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer"
                         >
                           {addr}
                         </button>
@@ -681,7 +710,7 @@ export function EmailContent({
                           >
                             <button
                               type="button"
-                              className="rounded -mx-0.5 px-0.5 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer"
+                              className="rounded-md -mx-1 px-1 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer"
                             >
                               {addr}
                             </button>
@@ -704,13 +733,15 @@ export function EmailContent({
                     }}
                     error={translateError}
                     onOpenAiSettings={onOpenAiSettings}
+                    languages={SUPPORTED_LANGUAGES}
+                    onChangeToLang={handleChangeTranslateTarget}
                   />
                 )}
                 <AIActionsMenu
                   onSummarize={() => void handleSummarize()}
                   onDraftReply={() => void handleDraftReply()}
                   onClassify={() => void handleClassify()}
-                  onTranslate={handleTranslate}
+                  onTranslate={() => handleTranslate()}
                   summaryLoading={summaryLoading}
                   draftLoading={draftLoading}
                   classifyLoading={classifyLoading}
@@ -731,7 +762,7 @@ export function EmailContent({
               key={label.id}
               type="button"
               onClick={() => void handleToggleLabel(label.id)}
-              className="flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive"
+              className="mail-pressable flex h-7 items-center gap-1.5 rounded-full border border-border px-2.5 text-xs text-muted-foreground hover:border-destructive/50 hover:text-destructive"
               title="Remove label"
               aria-label={`Remove label ${label.name}`}
             >
@@ -747,7 +778,7 @@ export function EmailContent({
                 setShowLabelPicker(!showLabelPicker);
                 if (!showLabelPicker) setLabelSearch("");
               }}
-              className="flex items-center gap-1 rounded-full border border-dashed border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-border hover:text-muted-foreground"
+              className="mail-pressable flex h-7 items-center gap-1 rounded-full border border-dashed border-border px-2.5 text-xs text-muted-foreground hover:border-foreground/30 hover:bg-surface-hover hover:text-foreground"
             >
               <Tag size={10} />
               Add Label
@@ -760,7 +791,7 @@ export function EmailContent({
                   aria-label="Close label picker"
                   onClick={() => { setShowLabelPicker(false); setLabelSearch(""); }}
                 />
-                <div className="absolute left-0 top-full z-50 mt-1 min-w-[160px] rounded-lg border border-border bg-card py-1 shadow-xl">
+                <div className="absolute left-0 top-full z-50 mt-1 min-w-[180px] rounded-xl border border-border bg-popover p-1 shadow-xl animate-scale-in">
                   <div className="px-2 py-1.5">
                     <input
                       type="text"
@@ -782,7 +813,7 @@ export function EmailContent({
                           setShowLabelPicker(false);
                           setLabelSearch("");
                         }}
-                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted"
+                        className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-xs text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
                       >
                         <span className="h-2 w-2 rounded-full" style={{ backgroundColor: label.color }} />
                         {label.name}
@@ -815,7 +846,7 @@ export function EmailContent({
                   type="button"
                   onClick={() => void handlePgpDecrypt()}
                   disabled={pgpDecrypting}
-                  className="flex items-center gap-1.5 rounded-lg border border-border bg-card/50 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                  className="mail-pressable flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card/50 px-3 text-xs text-muted-foreground hover:bg-surface-hover hover:text-foreground disabled:opacity-50"
                 >
                   {pgpDecrypting ? <Loader2 size={12} className="animate-spin" /> : <Unlock size={12} />}
                   Decrypt
@@ -875,7 +906,7 @@ export function EmailContent({
                   type="button"
                   onClick={() => void handleSmimeDecrypt()}
                   disabled={smimeDecrypting}
-                  className="flex items-center gap-1.5 rounded-lg border border-border bg-card/50 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                  className="mail-pressable flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card/50 px-3 text-xs text-muted-foreground hover:bg-surface-hover hover:text-foreground disabled:opacity-50"
                 >
                   {smimeDecrypting ? <Loader2 size={12} className="animate-spin" /> : <Unlock size={12} />}
                   Decrypt
@@ -998,7 +1029,7 @@ export function EmailContent({
           <button
             type="button"
             onClick={() => setMdnDismissed(true)}
-            className="ml-auto rounded p-1 text-xs text-muted-foreground hover:text-muted-foreground"
+            className="mail-pressable ml-auto flex h-7 w-7 items-center justify-center rounded-md text-xs text-muted-foreground hover:bg-surface-hover hover:text-foreground"
             aria-label="Dismiss"
             title="Dismiss"
           >
@@ -1071,7 +1102,7 @@ export function EmailContent({
                 requestAnimationFrame(() => quickReplyRef.current?.focus());
               }
             }}
-            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:border-ring"
+            className="w-full rounded-xl border border-border bg-card/40 px-4 py-2.5 text-left text-sm text-muted-foreground transition-colors hover:border-foreground/20 hover:bg-surface-hover"
           >
             {t("email.quickReplyPlaceholder")}
           </button>
@@ -1084,7 +1115,7 @@ export function EmailContent({
               placeholder={t("email.quickReplyPlaceholder")}
               aria-label={t("a11y.quickReply")}
               rows={3}
-              className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
+              className="w-full resize-none rounded-xl border border-border bg-background px-4 py-3 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary/50 focus:outline-none animate-fade-in"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
@@ -1102,7 +1133,7 @@ export function EmailContent({
                 type="button"
                 onClick={() => void handleQuickReply(false)}
                 disabled={quickReplySending || !quickReplyText.trim()}
-                className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary/80 disabled:opacity-50"
+                className="mail-pressable flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-xs font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50"
               >
                 {quickReplySending ? <Loader2 size={14} className="animate-spin" /> : <Reply size={14} />}
                 {t("email.reply")}
@@ -1111,7 +1142,7 @@ export function EmailContent({
                 type="button"
                 onClick={() => void handleQuickReply(true)}
                 disabled={quickReplySending || !quickReplyText.trim()}
-                className="flex items-center gap-1.5 rounded-lg bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                className="mail-pressable flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-foreground hover:bg-surface-hover disabled:opacity-50"
               >
                 {quickReplySending ? <Loader2 size={14} className="animate-spin" /> : <ReplyAll size={14} />}
                 {t("email.replyAll")}
@@ -1134,6 +1165,8 @@ export function EmailContent({
           if (printWindow) {
             printWindow.document.write(html);
             printWindow.document.close();
+            printWindow.focus();
+            printWindow.print();
           }
         }}
         onDelete={() => onDelete(email.id)}

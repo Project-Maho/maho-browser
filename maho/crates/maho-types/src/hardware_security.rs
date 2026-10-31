@@ -1,7 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
-use std::fmt;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Identifies the underlying hardware/platform security provider backend.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -281,17 +281,30 @@ impl fmt::Display for HardwareSecurityError {
             Self::SecretStoreUnavailable => write!(f, "OS secret store is unavailable"),
             Self::NotEnrolled => write!(f, "biometric verification is not enrolled"),
             Self::SecureLockNotConfigured => write!(f, "device lock / passcode is not configured"),
-            Self::AuthenticationRequired => write!(f, "user authentication is required for this operation"),
+            Self::AuthenticationRequired => {
+                write!(f, "user authentication is required for this operation")
+            }
             Self::AuthenticationFailed => write!(f, "user authentication failed"),
             Self::UserCanceled => write!(f, "user canceled the authentication prompt"),
             Self::TemporaryLockout => write!(f, "biometric authentication is temporarily locked"),
             Self::PermanentLockout => write!(f, "biometric authentication is permanently locked"),
             Self::AccessDenied => write!(f, "access to hardware key was denied"),
             Self::KeyNotFound => write!(f, "requested device key was not found"),
-            Self::KeyInvalidated => write!(f, "device key has been invalidated due to enrollment changes"),
-            Self::PolicyUnsatisfied => write!(f, "hardware security policy requirements could not be satisfied"),
-            Self::UnsupportedAlgorithm => write!(f, "requested algorithm is unsupported by this provider"),
-            Self::UnsupportedOperation => write!(f, "requested operation is unsupported by this key or provider"),
+            Self::KeyInvalidated => write!(
+                f,
+                "device key has been invalidated due to enrollment changes"
+            ),
+            Self::PolicyUnsatisfied => write!(
+                f,
+                "hardware security policy requirements could not be satisfied"
+            ),
+            Self::UnsupportedAlgorithm => {
+                write!(f, "requested algorithm is unsupported by this provider")
+            }
+            Self::UnsupportedOperation => write!(
+                f,
+                "requested operation is unsupported by this key or provider"
+            ),
             Self::CorruptEnvelope => write!(f, "protected key envelope is corrupted"),
             Self::VersionMismatch => write!(f, "unsupported envelope or ABI version"),
             Self::Timeout => write!(f, "hardware security operation timed out"),

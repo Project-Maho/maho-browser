@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/barrier_callback.h"
 #include "base/base64.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
@@ -22,7 +23,9 @@
 #include "base/values.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/unique_ids.h"
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
 #include "components/password_manager/core/browser/password_store/password_form_converters.h"
+#endif
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/passwords/maho_password_authorization_service.h"
 #include "maho/browser/passwords/maho_password_provider_utils.h"
@@ -410,7 +413,7 @@ ParseNotes(const base::ListValue *list) {
 // credential. LEGACY RECORDS: a record written before Task 4 has no
 // `formDetails` at all (the Rust side omits the key). In that case every field
 // below keeps the C++ default, which is exactly Chromium's own default for the
-// corresponding `StoredCredential` field, and `signon_realm`/`username`/
+// corresponding `PasswordForm` field, and `signon_realm`/`username`/
 // `password`/`date_created`/`date_last_used` still come from the top-level
 // credential fields that always existed. No read fails because of a missing
 // `formDetails`.
@@ -606,7 +609,17 @@ ParsePasswordFormFromDict(const base::DictValue &dict) {
       return std::nullopt;
     }
   }
-  // `password_value` deliberately remains empty for every discovery result.
+  if (const std::string *match = dict.FindString("matchType")) {
+    if (*match == "psl") {
+      form.match_type = password_manager::PasswordForm::MatchType::kPSL;
+    } else if (*match == "exact") {
+      form.match_type = password_manager::PasswordForm::MatchType::kExact;
+    } else {
+      return std::nullopt;
+    }
+  }
+  // `password_value` stays empty for discovery; only the context-aware fill
+  // lookup resolves secrets (see ResolveFormSecrets).
   return form;
 }
 
@@ -651,6 +664,25 @@ ResolveBackendPassword(const std::string &serving_profile_key,
     return std::nullopt;
   }
   return password_manager::PasswordFillResolution(std::move(password_utf16));
+}
+
+// Fills password_value for every discovered form from the Vault, using the same
+// revision-checked resolution path as ResolvePasswordFill. Forms whose secret
+// cannot be resolved (stale revision, locked Vault) are removed.
+void ResolveFormSecrets(const std::string &serving_profile_key,
+                        std::vector<MahoPasswordForm> &forms) {
+  std::erase_if(forms, [&](MahoPasswordForm &form) {
+    if (form.id.empty() || form.revision == 0) {
+      return true;
+    }
+    std::optional<password_manager::PasswordFillResolution> resolution =
+        ResolveBackendPassword(serving_profile_key, form.id, form.revision);
+    if (!resolution) {
+      return true;
+    }
+    form.password_value = base::UTF16ToUTF8(resolution->secret());
+    return form.password_value.empty();
+  });
 }
 
 std::optional<base::DictValue>
@@ -726,9 +758,11 @@ ParseMutationResult(const base::Value &response) {
   return result;
 }
 
-bool ReadBackendCredentials(const std::optional<std::string> &origin,
-                            const std::string &serving_profile_key,
-                            std::vector<MahoPasswordForm> &forms) {
+bool ReadBackendCredentials(
+    const std::optional<std::string> &origin,
+    const std::string &serving_profile_key,
+    std::optional<password_manager::PasswordForm::Scheme> scheme,
+    std::vector<MahoPasswordForm> &forms) {
   maho::core::VaultBackendSession session =
       maho::CreateVaultBackendSessionForProfileKey(serving_profile_key);
   if (!session.is_valid()) {
@@ -738,6 +772,12 @@ bool ReadBackendCredentials(const std::optional<std::string> &origin,
   base::DictValue req;
   if (origin && !origin->empty()) {
     req.Set("origin", *origin);
+    // The request scheme tells the vault whether this is an HTML-origin
+    // lookup or an HTTP-auth realm lookup; `Basic realm=""` makes both share
+    // one signon realm, so the stored records alone cannot decide.
+    if (scheme) {
+      req.Set("scheme", static_cast<int>(*scheme));
+    }
   }
   std::string req_json;
   base::JSONWriter::Write(req, &req_json);
@@ -770,7 +810,7 @@ bool ReadBackendCredentials(const std::optional<std::string> &origin,
   return true;
 }
 
-// Task 4: `password_manager::StoredCredential` fields this backend does NOT
+// Task 4: `password_manager::PasswordForm` fields this backend does NOT
 // round-trip. They are deliberately FAILED CLOSED: on read they are left at
 // Chromium's own default rather than guessed, so no caller can mistake a
 // reconstructed value for a stored one. Listing them here is the authoritative
@@ -809,10 +849,10 @@ constexpr const char *const kUnsupportedFields[] = {
     "actor_login_approved",
 };
 
-password_manager::StoredCredential
-ToStoredCredential(const MahoPasswordForm &form,
-                   std::optional<int> primary_key) {
-  password_manager::StoredCredential cred;
+PasswordStoreBackendCredential ToBackendCredential(
+    const MahoPasswordForm &form,
+    std::optional<int> primary_key) {
+  PasswordStoreBackendCredential cred;
   if (primary_key.has_value()) {
     cred.primary_key = password_manager::FormPrimaryKey(*primary_key);
   }
@@ -827,7 +867,12 @@ ToStoredCredential(const MahoPasswordForm &form,
   cred.username_element = base::UTF8ToUTF16(form.username_element);
   cred.password_element = base::UTF8ToUTF16(form.password_element);
   cred.username_value = base::UTF8ToUTF16(form.username_value);
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+  cred.password_value =
+      password_manager::PasswordString(base::UTF8ToUTF16(form.password_value));
+#else
   cred.password_value = base::UTF8ToUTF16(form.password_value);
+#endif
   cred.all_alternative_usernames = form.all_alternative_usernames;
   cred.date_created = form.date_created;
   cred.date_last_used = form.date_last_used;
@@ -851,8 +896,8 @@ ToStoredCredential(const MahoPasswordForm &form,
   return cred;
 }
 
-MahoPasswordForm
-FromStoredCredential(const password_manager::StoredCredential &cred) {
+MahoPasswordForm FromBackendCredential(
+    const PasswordStoreBackendCredential &cred) {
   MahoPasswordForm form;
   form.scheme = cred.scheme;
   form.signon_realm = cred.signon_realm;
@@ -865,7 +910,11 @@ FromStoredCredential(const password_manager::StoredCredential &cred) {
   form.username_element = base::UTF16ToUTF8(cred.username_element);
   form.password_element = base::UTF16ToUTF8(cred.password_element);
   form.username_value = base::UTF16ToUTF8(cred.username_value);
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+  form.password_value = base::UTF16ToUTF8(cred.password_value.value());
+#else
   form.password_value = base::UTF16ToUTF8(cred.password_value);
+#endif
   form.all_alternative_usernames = cred.all_alternative_usernames;
   form.date_created = cred.date_created;
   form.date_last_used = cred.date_last_used;
@@ -886,10 +935,10 @@ FromStoredCredential(const password_manager::StoredCredential &cred) {
   return form;
 }
 
-std::vector<password_manager::StoredCredential>
-ConvertToStoredCredentials(const std::vector<MahoPasswordForm> &forms,
-                           const MahoCredentialIdentityMap *identity_map) {
-  std::vector<password_manager::StoredCredential> results;
+ChromiumBackendLoginsResult ConvertToBackendCredentials(
+    const std::vector<MahoPasswordForm> &forms,
+    const MahoCredentialIdentityMap *identity_map) {
+  ChromiumBackendLoginsResult results;
   results.reserve(forms.size());
   for (const auto &form : forms) {
     // The map was already populated by ObserveIdentities() on this read, so the
@@ -899,14 +948,14 @@ ConvertToStoredCredentials(const std::vector<MahoPasswordForm> &forms,
       primary_key =
           identity_map->PrimaryKeyForVaultIdAndRevision(form.id, form.revision);
     }
-    results.push_back(ToStoredCredential(form, primary_key));
+    results.push_back(ToBackendCredential(form, primary_key));
   }
   return results;
 }
 
 } // namespace
 
-std::vector<std::string> UnsupportedStoredCredentialFields() {
+std::vector<std::string> UnsupportedPasswordFormFields() {
   return std::vector<std::string>(std::begin(kUnsupportedFields),
                                   std::end(kUnsupportedFields));
 }
@@ -927,9 +976,15 @@ bool MahoPasswordStoreBackend::IsMahoVaultRoutingActive() {
 bool IsPasswordOperationAuthorized(const std::string &profile_key,
                                    const std::string &origin_scope,
                                    PasswordAuthorizationAction action) {
-  return maho::CreateVaultBackendSessionForProfileKey(profile_key).is_valid() &&
-         MahoPasswordAuthorizationService::Get()->ConsumeAuthorization(
-             profile_key, origin_scope, action);
+  if (!maho::CreateVaultBackendSessionForProfileKey(profile_key).is_valid()) {
+    return false;
+  }
+  MahoPasswordAuthorizationService *service =
+      MahoPasswordAuthorizationService::Get();
+  if (action == PasswordAuthorizationAction::kFill) {
+    return service->IsPageFillLookupAllowed(profile_key, origin_scope);
+  }
+  return service->ConsumeAuthorization(profile_key, origin_scope, action);
 }
 
 MahoPasswordStoreBackend::MahoPasswordStoreBackend(bool enabled,
@@ -939,11 +994,26 @@ MahoPasswordStoreBackend::MahoPasswordStoreBackend(bool enabled,
 MahoPasswordStoreBackend::~MahoPasswordStoreBackend() = default;
 
 void MahoPasswordStoreBackend::InitBackend(
-    password_manager::AffiliatedMatchHelper *affiliated_match_helper,
     RemoteChangesReceived remote_form_changes_received,
     base::RepeatingClosure sync_enabled_or_disabled_cb,
     base::OnceCallback<void(bool)> completion) {
+  remote_form_changes_received_ = std::move(remote_form_changes_received);
+  // A Vault unlock makes previously hidden credentials available. Form
+  // managers created while the Vault was locked fetched nothing, so tell the
+  // store its logins changed; PasswordManager then refetches.
+  vault_lock_state_subscription_ = maho::AddVaultLockStateChangeCallback(
+      base::BindRepeating(&MahoPasswordStoreBackend::OnVaultLockStateChanged,
+                          weak_ptr_factory_.GetWeakPtr()));
   InitBackend(std::move(completion));
+}
+
+void MahoPasswordStoreBackend::OnVaultLockStateChanged(bool locked) {
+  if (locked || !remote_form_changes_received_) {
+    return;
+  }
+  identity_map_.Clear();
+  fill_context_snapshots_.clear();
+  remote_form_changes_received_.Run(password_manager::PasswordChanges());
 }
 
 void MahoPasswordStoreBackend::InitBackend(
@@ -1044,7 +1114,7 @@ bool MahoPasswordStoreBackend::WasSnapshotDiscoveredForContext(
 
 // static
 std::optional<MahoPasswordForm> MahoPasswordStoreBackend::ResolveTarget(
-    const password_manager::StoredCredential &cred,
+    const PasswordStoreBackendCredential &cred,
     const MahoCredentialIdentityMap &identity_map,
     const std::vector<MahoPasswordForm> &candidates) {
   // 1. The primary key this backend handed out on a previous read is
@@ -1118,7 +1188,7 @@ MahoPasswordStoreBackend::AsWeakPtr() {
 }
 
 void MahoPasswordStoreBackend::GetAllLoginsAsync(
-    password_manager::BackendLoginsOrErrorReply callback) {
+    ChromiumLoginsOrErrorReply callback) {
   // Task 3: an external provider (or a disabled/fail-closed provider state)
   // means Maho must not read the Vault at all; return the empty result the
   // PasswordStoreBackend contract expects so upstream + the extension keep
@@ -1126,12 +1196,12 @@ void MahoPasswordStoreBackend::GetAllLoginsAsync(
   if (!enabled_ || !IsMahoVaultRoutingActive()) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback),
-                                  password_manager::BackendLoginsResult()));
+                                  ChromiumBackendLoginsResult()));
     return;
   }
   GetAllLoginsMahoAsync(base::BindOnce(
       [](base::WeakPtr<MahoPasswordStoreBackend> backend,
-         password_manager::BackendLoginsOrErrorReply cb,
+         ChromiumLoginsOrErrorReply cb,
          std::vector<MahoPasswordForm> forms, bool success) {
         if (!backend || !success) {
           std::move(cb).Run(password_manager::PasswordStoreBackendError(
@@ -1140,66 +1210,137 @@ void MahoPasswordStoreBackend::GetAllLoginsAsync(
         }
         backend->ObserveIdentities(forms);
         std::move(cb).Run(
-            ConvertToStoredCredentials(forms, &backend->identity_map_));
+            ConvertToBackendCredentials(forms, &backend->identity_map_));
       },
       weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoPasswordStoreBackend::GetAllLoginsWithAffiliationAndBrandingAsync(
-    password_manager::BackendLoginsOrErrorReply callback) {
+    ChromiumLoginsOrErrorReply callback) {
   GetAllLoginsAsync(std::move(callback));
 }
 
 void MahoPasswordStoreBackend::GetAutofillableLoginsAsync(
-    password_manager::BackendLoginsOrErrorReply callback) {
-  GetAllLoginsAsync(std::move(callback));
+    ChromiumLoginsOrErrorReply callback) {
+  if (!enabled_ || !IsMahoVaultRoutingActive()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback),
+                                  ChromiumBackendLoginsResult()));
+    return;
+  }
+  GetAutofillableLoginsMahoAsync(base::BindOnce(
+      [](base::WeakPtr<MahoPasswordStoreBackend> backend,
+         ChromiumLoginsOrErrorReply cb,
+         std::vector<MahoPasswordForm> forms, bool success) {
+        if (!backend || !success) {
+          std::move(cb).Run(password_manager::PasswordStoreBackendError(
+              password_manager::PasswordStoreBackendErrorType::kUncategorized));
+          return;
+        }
+        backend->ObserveIdentities(forms);
+        std::move(cb).Run(
+            ConvertToBackendCredentials(forms, &backend->identity_map_));
+      },
+      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoPasswordStoreBackend::FillMatchingLoginsAsync(
-    password_manager::BackendLoginsOrErrorReply callback, bool include_psl,
+    ChromiumLoginsOrErrorReply callback, bool include_psl,
     const std::vector<password_manager::PasswordFormDigest> &forms) {
-  // Kill switch stays the OUTER gate for fill; the provider check decides
-  // whether Maho participates in this operation at all.
   if (!enabled_ || !NativeWriteEnabled() || !IsMahoVaultRoutingActive()) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback),
-                                  password_manager::BackendLoginsResult()));
+                                  ChromiumBackendLoginsResult()));
     return;
   }
-  std::string realm = forms.empty() ? "" : forms[0].signon_realm;
-  FillMatchingLoginsMahoAsync(
-      realm,
+
+  struct RealmSchemeQuery {
+    std::string signon_realm;
+    password_manager::PasswordForm::Scheme scheme;
+  };
+  std::vector<RealmSchemeQuery> queries;
+  for (const auto &digest : forms) {
+    if (digest.signon_realm.empty()) {
+      continue;
+    }
+    const bool already_requested = std::ranges::any_of(
+        queries, [&](const RealmSchemeQuery &query) {
+          return query.signon_realm == digest.signon_realm &&
+                 query.scheme == digest.scheme;
+        });
+    if (!already_requested) {
+      queries.push_back({digest.signon_realm, digest.scheme});
+    }
+  }
+
+  if (queries.empty()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback),
+                                  ChromiumBackendLoginsResult()));
+    return;
+  }
+
+  using RealmQueryResult = std::pair<std::vector<MahoPasswordForm>, bool>;
+  auto barrier_cb = base::BarrierCallback<RealmQueryResult>(
+      queries.size(),
       base::BindOnce(
           [](base::WeakPtr<MahoPasswordStoreBackend> backend,
-             password_manager::BackendLoginsOrErrorReply cb,
-             std::vector<MahoPasswordForm> forms, bool success) {
-            if (!backend || !success) {
-              std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                  password_manager::PasswordStoreBackendErrorType::
-                      kUncategorized));
+             bool include_psl_matches, ChromiumLoginsOrErrorReply cb,
+             std::vector<RealmQueryResult> results) {
+            if (!backend) {
               return;
             }
-            backend->ObserveIdentities(forms);
+            std::vector<MahoPasswordForm> combined_forms;
+            for (auto &[realm_forms, success] : results) {
+              if (!success) {
+                std::move(cb).Run(password_manager::PasswordStoreBackendError(
+                    password_manager::PasswordStoreBackendErrorType::
+                        kUncategorized));
+                return;
+              }
+              combined_forms.insert(combined_forms.end(),
+                                    std::make_move_iterator(realm_forms.begin()),
+                                    std::make_move_iterator(realm_forms.end()));
+            }
+            if (!include_psl_matches) {
+              std::erase_if(combined_forms, [](const MahoPasswordForm &form) {
+                return form.match_type ==
+                       password_manager::PasswordForm::MatchType::kPSL;
+              });
+            }
+            backend->ObserveIdentities(combined_forms);
             std::move(cb).Run(
-                ConvertToStoredCredentials(forms, &backend->identity_map_));
+                ConvertToBackendCredentials(combined_forms,
+                                            &backend->identity_map_));
           },
-          weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+          weak_ptr_factory_.GetWeakPtr(), include_psl, std::move(callback)));
+
+  for (const auto &query : queries) {
+    FillMatchingLoginsMahoAsync(
+        query.signon_realm, query.scheme,
+        base::BindOnce(
+            [](base::RepeatingCallback<void(RealmQueryResult)> barrier,
+               std::vector<MahoPasswordForm> forms, bool success) {
+              barrier.Run(std::make_pair(std::move(forms), success));
+            },
+            barrier_cb));
+  }
 }
 
 void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
     const password_manager::PasswordFormDigest &form_digest,
-    password_manager::BackendLoginsOrErrorReply callback) {
+    ChromiumLoginsOrErrorReply callback) {
   if (!enabled_ || !NativeWriteEnabled() || !IsMahoVaultRoutingActive()) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback),
-                                  password_manager::BackendLoginsResult()));
+                                  ChromiumBackendLoginsResult()));
     return;
   }
   FillMatchingLoginsMahoAsync(
-      form_digest.signon_realm,
+      form_digest.signon_realm, form_digest.scheme,
       base::BindOnce(
           [](base::WeakPtr<MahoPasswordStoreBackend> backend,
-             password_manager::BackendLoginsOrErrorReply cb,
+             ChromiumLoginsOrErrorReply cb,
              std::vector<MahoPasswordForm> forms, bool success) {
             if (!backend || !success) {
               std::move(cb).Run(password_manager::PasswordStoreBackendError(
@@ -1208,8 +1349,8 @@ void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
               return;
             }
             backend->ObserveIdentities(forms);
-            std::vector<password_manager::StoredCredential> creds =
-                ConvertToStoredCredentials(forms, &backend->identity_map_);
+            ChromiumBackendLoginsResult creds =
+                ConvertToBackendCredentials(forms, &backend->identity_map_);
             for (auto &c : creds) {
               if (!c.match_type.has_value()) {
                 c.match_type =
@@ -1224,11 +1365,11 @@ void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
 void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
     const password_manager::PasswordFormDigest &form_digest,
     const password_manager::PasswordFillRequestContext &context,
-    password_manager::BackendLoginsOrErrorReply callback) {
+    ChromiumLoginsOrErrorReply callback) {
   if (!enabled_ || !NativeWriteEnabled() || !IsMahoVaultRoutingActive()) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback),
-                                  password_manager::BackendLoginsResult()));
+                                  ChromiumBackendLoginsResult()));
     return;
   }
 
@@ -1238,16 +1379,16 @@ void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
   if (realm.empty()) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback),
-                                  password_manager::BackendLoginsResult()));
+                                  ChromiumBackendLoginsResult()));
     return;
   }
 
   FillMatchingLoginsMahoAsync(
-      realm,
+      realm, form_digest.scheme,
       base::BindOnce(
           [](base::WeakPtr<MahoPasswordStoreBackend> backend,
              password_manager::PasswordFillRequestContext request_context,
-             password_manager::BackendLoginsOrErrorReply cb,
+             ChromiumLoginsOrErrorReply cb,
              std::vector<MahoPasswordForm> forms, bool success) {
             if (!backend || !success) {
               std::move(cb).Run(password_manager::PasswordStoreBackendError(
@@ -1257,8 +1398,16 @@ void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
             }
             backend->ObserveIdentities(forms);
             backend->RecordFillContext(request_context, forms);
-            std::vector<password_manager::StoredCredential> creds =
-                ConvertToStoredCredentials(forms, &backend->identity_map_);
+            // Chromium fills on page load, offers suggestions, and decides
+            // save-vs-update from match.password_value, so this page-scoped
+            // lookup carries the decrypted secret. Items whose secret cannot be
+            // resolved are dropped instead of being offered password-less.
+            ResolveFormSecrets(backend->profile_key_, forms);
+            ChromiumBackendLoginsResult creds =
+                ConvertToBackendCredentials(forms, &backend->identity_map_);
+            for (auto &form : forms) {
+              form.Zeroize();
+            }
             for (auto &c : creds) {
               if (!c.match_type.has_value()) {
                 c.match_type =
@@ -1277,12 +1426,6 @@ void MahoPasswordStoreBackend::ResolvePasswordFill(
   if (!enabled_ || !initialized_ || !NativeWriteEnabled() ||
       !IsMahoVaultRoutingActive() || context.requesting_origin.opaque() ||
       !selection.primary_key || selection.observed_revision == 0) {
-    LOG(INFO) << "ResolvePasswordFill failed check 1: enabled=" << enabled_
-              << " init=" << initialized_ << " nwe=" << NativeWriteEnabled()
-              << " routing=" << IsMahoVaultRoutingActive()
-              << " opaque=" << context.requesting_origin.opaque()
-              << " pk=" << selection.primary_key.has_value()
-              << " rev=" << selection.observed_revision;
     std::move(resolver).Run(std::nullopt);
     return;
   }
@@ -1295,10 +1438,6 @@ void MahoPasswordStoreBackend::ResolvePasswordFill(
   if (!item_id || !revision || *revision != selection.observed_revision ||
       identity_map_.RevisionForVaultId(*item_id) != revision ||
       !WasSnapshotDiscoveredForContext(context, primary_key, *revision)) {
-    LOG(INFO) << "ResolvePasswordFill failed check 2: item_id=" << item_id.has_value()
-              << " rev_match=" << (revision && *revision == selection.observed_revision)
-              << " rev_vault_match=" << (item_id && revision && identity_map_.RevisionForVaultId(*item_id) == revision)
-              << " was_snapshot=" << (revision && WasSnapshotDiscoveredForContext(context, primary_key, *revision));
     std::move(resolver).Run(std::nullopt);
     return;
   }
@@ -1307,20 +1446,21 @@ void MahoPasswordStoreBackend::ResolvePasswordFill(
   if (!IsPasswordOperationAuthorized(profile_key_, origin,
                                      PasswordAuthorizationAction::kFill) ||
       !NativeWriteEnabled() || !IsMahoVaultRoutingActive()) {
-    LOG(INFO) << "ResolvePasswordFill failed check 3: auth="
-              << IsPasswordOperationAuthorized(profile_key_, origin, PasswordAuthorizationAction::kFill);
     std::move(resolver).Run(std::nullopt);
     return;
   }
 
   auto resolution = ResolveBackendPassword(profile_key_, *item_id,
                                            selection.observed_revision);
-  LOG(INFO) << "ResolvePasswordFill resolution success=" << resolution.has_value();
   std::move(resolver).Run(std::move(resolution));
 }
 
 void MahoPasswordStoreBackend::AddLoginAsync(
-    password_manager::StoredCredential cred,
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+    PasswordStoreBackendCredential cred,
+#else
+    const PasswordStoreBackendCredential &cred,
+#endif
     password_manager::PasswordChangesOrErrorReply callback) {
   if (!enabled_) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -1331,11 +1471,24 @@ void MahoPasswordStoreBackend::AddLoginAsync(
                                kUncategorized)));
     return;
   }
-  // Kill switch off, or Maho is not the effective provider: report a successful
-  // no-change write so the upstream save flow does not surface an error, and
-  // never touch the Vault. Under an external provider the extension owns the
-  // save; under a disabled provider nothing is saved natively.
-  if (!NativeWriteEnabled() || !IsMahoVaultRoutingActive()) {
+  // Under an external provider the extension owns the save, and under a
+  // disabled provider nothing is saved natively: in both cases reporting a
+  // successful no-change write is correct, because no Maho prompt was shown and
+  // no Maho write was expected.
+  //
+  // The kill switch is different. The user accepted a Maho save prompt, so
+  // reporting success while writing nothing would tell the UI the credential is
+  // stored when it is not. That must surface as an error instead.
+  if (!NativeWriteEnabled()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback),
+                       password_manager::PasswordStoreBackendError(
+                           password_manager::PasswordStoreBackendErrorType::
+                               kUncategorized)));
+    return;
+  }
+  if (!IsMahoVaultRoutingActive()) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback),
                                   password_manager::PasswordStoreChangeList()));
@@ -1343,7 +1496,7 @@ void MahoPasswordStoreBackend::AddLoginAsync(
   }
   // Task 4: the whole credential is carried to the Vault, not just
   // realm/username/password.
-  MahoPasswordForm form = FromStoredCredential(cred);
+  MahoPasswordForm form = FromBackendCredential(cred);
   AddLoginWithResultMahoAsync(
       form,
       base::BindOnce(
@@ -1358,20 +1511,24 @@ void MahoPasswordStoreBackend::AddLoginAsync(
             }
             const int primary_key = backend->identity_map_.Observe(
                 snapshot->id, snapshot->revision);
-            password_manager::StoredCredential added =
-                ToStoredCredential(*snapshot, primary_key);
+            PasswordStoreBackendCredential added =
+                ToBackendCredential(*snapshot, primary_key);
             snapshot->Zeroize();
             password_manager::PasswordStoreChangeList changes;
             changes.emplace_back(
                 password_manager::PasswordStoreChange::ADD,
-                password_manager::ToPasswordForm(std::move(added)));
+                std::move(added));
             std::move(cb).Run(std::move(changes));
           },
           weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoPasswordStoreBackend::UpdateLoginAsync(
-    password_manager::StoredCredential cred,
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+    PasswordStoreBackendCredential cred,
+#else
+    const PasswordStoreBackendCredential &cred,
+#endif
     password_manager::PasswordChangesOrErrorReply callback) {
   if (!enabled_) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -1382,7 +1539,19 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
                                kUncategorized)));
     return;
   }
-  if (!NativeWriteEnabled() || !IsMahoVaultRoutingActive()) {
+  // Same split as AddLoginAsync: a kill-switched write the user explicitly
+  // accepted must not be reported as stored, while an external/disabled
+  // provider legitimately has nothing to write natively.
+  if (!NativeWriteEnabled()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback),
+                       password_manager::PasswordStoreBackendError(
+                           password_manager::PasswordStoreBackendErrorType::
+                               kUncategorized)));
+    return;
+  }
+  if (!IsMahoVaultRoutingActive()) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback),
                                   password_manager::PasswordStoreChangeList()));
@@ -1417,9 +1586,10 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
   const std::string realm = cred.signon_realm;
   ReadLoginsForOperationMahoAsync(
       realm, realm, PasswordAuthorizationAction::kUpdate,
+      std::nullopt,
       base::BindOnce(
           [](base::WeakPtr<MahoPasswordStoreBackend> backend,
-             password_manager::StoredCredential cred,
+              PasswordStoreBackendCredential cred,
              std::optional<std::string> observed_vault_id,
              std::optional<uint64_t> observed_revision,
              password_manager::PasswordChangesOrErrorReply cb,
@@ -1448,7 +1618,7 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
                       kUncategorized));
               return;
             }
-            MahoPasswordForm form = FromStoredCredential(cred);
+            MahoPasswordForm form = FromBackendCredential(cred);
             form.id = target->id;
             form.revision = observed_revision.value_or(target->revision);
             // Discovery carries no plaintext, so an empty password is a
@@ -1478,13 +1648,13 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
                       snapshot.revision = mutation_result->revision;
                       const int primary_key = backend->identity_map_.Observe(
                           snapshot.id, snapshot.revision);
-                      password_manager::StoredCredential updated =
-                          ToStoredCredential(snapshot, primary_key);
+                      PasswordStoreBackendCredential updated =
+                          ToBackendCredential(snapshot, primary_key);
                       snapshot.Zeroize();
                       password_manager::PasswordStoreChangeList changes;
                       changes.emplace_back(
                           password_manager::PasswordStoreChange::UPDATE,
-                          password_manager::ToPasswordForm(std::move(updated)),
+                          std::move(updated),
                           password_changed);
                       std::move(reply_cb).Run(std::move(changes));
                     },
@@ -1497,7 +1667,12 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
 }
 
 void MahoPasswordStoreBackend::RemoveLoginAsync(
-    const base::Location &location, password_manager::StoredCredential cred,
+    const base::Location &location,
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+    PasswordStoreBackendCredential cred,
+#else
+    const PasswordStoreBackendCredential &cred,
+#endif
     password_manager::PasswordChangesOrErrorReply callback) {
   if (!enabled_) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -1544,9 +1719,10 @@ void MahoPasswordStoreBackend::RemoveLoginAsync(
   const std::string realm = cred.signon_realm;
   ReadLoginsForOperationMahoAsync(
       realm, realm, PasswordAuthorizationAction::kDelete,
+      std::nullopt,
       base::BindOnce(
           [](base::WeakPtr<MahoPasswordStoreBackend> backend,
-             password_manager::StoredCredential cred,
+              PasswordStoreBackendCredential cred,
              std::optional<std::string> observed_vault_id,
              std::optional<uint64_t> observed_revision,
              password_manager::PasswordChangesOrErrorReply cb,
@@ -1578,13 +1754,13 @@ void MahoPasswordStoreBackend::RemoveLoginAsync(
             std::optional<int> target_key =
                 backend->identity_map_.PrimaryKeyForVaultIdAndRevision(
                     target->id, target->revision);
-            password_manager::StoredCredential removed =
-                ToStoredCredential(*target, target_key);
+            PasswordStoreBackendCredential removed =
+                ToBackendCredential(*target, target_key);
             backend->RemoveLoginMahoAsync(
                 *target,
                 base::BindOnce(
                     [](password_manager::PasswordChangesOrErrorReply reply_cb,
-                       password_manager::StoredCredential removed,
+                       PasswordStoreBackendCredential removed,
                        bool remove_ok) {
                       if (!remove_ok) {
                         std::move(reply_cb).Run(
@@ -1597,7 +1773,7 @@ void MahoPasswordStoreBackend::RemoveLoginAsync(
                       password_manager::PasswordStoreChangeList changes;
                       changes.emplace_back(
                           password_manager::PasswordStoreChange::REMOVE,
-                          password_manager::ToPasswordForm(std::move(removed)));
+                          std::move(removed));
                       std::move(reply_cb).Run(std::move(changes));
                     },
                     std::move(cb), std::move(removed)));
@@ -1609,12 +1785,9 @@ void MahoPasswordStoreBackend::RemoveLoginAsync(
 
 void MahoPasswordStoreBackend::RemoveLoginsCreatedBetweenAsync(
     const base::Location &location, base::Time delete_begin,
-    base::Time delete_end, base::OnceCallback<void(bool)> sync_completion,
+    base::Time delete_end,
     password_manager::PasswordChangesOrErrorReply callback) {
   if (!enabled_ || !IsMahoVaultRoutingActive()) {
-    if (sync_completion) {
-      std::move(sync_completion).Run(true);
-    }
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback),
                                   password_manager::PasswordStoreChangeList()));
@@ -1625,17 +1798,13 @@ void MahoPasswordStoreBackend::RemoveLoginsCreatedBetweenAsync(
   // away.
   ReadLoginsForOperationMahoAsync(
       std::nullopt, MahoPasswordAuthorizationService::kRangeDeleteScope,
-      PasswordAuthorizationAction::kRangeDelete,
+      PasswordAuthorizationAction::kRangeDelete, std::nullopt,
       base::BindOnce(
           [](base::WeakPtr<MahoPasswordStoreBackend> backend,
              base::Time delete_begin, base::Time delete_end,
-             base::OnceCallback<void(bool)> sync_cb,
              password_manager::PasswordChangesOrErrorReply cb,
              std::vector<MahoPasswordForm> forms, bool read_ok) {
             if (!backend || !read_ok) {
-              if (sync_cb) {
-                std::move(sync_cb).Run(false);
-              }
               std::move(cb).Run(password_manager::PasswordStoreBackendError(
                   password_manager::PasswordStoreBackendErrorType::
                       kUncategorized));
@@ -1655,12 +1824,8 @@ void MahoPasswordStoreBackend::RemoveLoginsCreatedBetweenAsync(
                 base::BindOnce(
                     [](base::WeakPtr<MahoPasswordStoreBackend> backend,
                        std::vector<MahoPasswordForm> removed,
-                       base::OnceCallback<void(bool)> sync_cb2,
                        password_manager::PasswordChangesOrErrorReply cb2,
                        bool success) {
-                      if (sync_cb2) {
-                        std::move(sync_cb2).Run(success);
-                      }
                       if (!backend || !success) {
                         std::move(cb2).Run(
                             password_manager::PasswordStoreBackendError(
@@ -1685,16 +1850,14 @@ void MahoPasswordStoreBackend::RemoveLoginsCreatedBetweenAsync(
                         }
                         changes.emplace_back(
                             password_manager::PasswordStoreChange::REMOVE,
-                            password_manager::ToPasswordForm(
-                                ToStoredCredential(form, primary_key)));
+                            ToBackendCredential(form, primary_key));
                       }
                       std::move(cb2).Run(std::move(changes));
                     },
-                    backend, std::move(in_range), std::move(sync_cb),
-                    std::move(cb)));
+                    backend, std::move(in_range), std::move(cb)));
           },
           weak_ptr_factory_.GetWeakPtr(), delete_begin, delete_end,
-          std::move(sync_completion), std::move(callback)));
+          std::move(callback)));
 }
 
 void MahoPasswordStoreBackend::DisableAutoSignInForOriginsAsync(
@@ -1731,6 +1894,7 @@ void MahoPasswordStoreBackend::EnsureAuthorized(
 void MahoPasswordStoreBackend::ReadLoginsForOperationMahoAsync(
     const std::optional<std::string> &origin,
     const std::string &authorization_scope, PasswordAuthorizationAction action,
+    std::optional<password_manager::PasswordForm::Scheme> scheme,
     LoginsOrErrorReply callback) {
   if (!enabled_ || !initialized_ || !callback) {
     if (callback) {
@@ -1751,40 +1915,62 @@ void MahoPasswordStoreBackend::ReadLoginsForOperationMahoAsync(
       base::BindOnce(
           [](base::WeakPtr<MahoPasswordStoreBackend> backend,
              std::optional<std::string> read_origin, std::string scope,
-             PasswordAuthorizationAction read_action, LoginsOrErrorReply cb,
-             bool authorized) {
-            if (!backend || !authorized ||
+             PasswordAuthorizationAction read_action,
+             std::optional<password_manager::PasswordForm::Scheme> read_scheme,
+             LoginsOrErrorReply cb, bool authorized) {
+            if (!backend) {
+              std::move(cb).Run(std::vector<MahoPasswordForm>{}, false);
+              return;
+            }
+            if (!authorized ||
                 !IsPasswordOperationAuthorized(backend->profile_key_, scope,
                                                read_action)) {
-              std::move(cb).Run(std::vector<MahoPasswordForm>{}, false);
+              // A locked Vault (or a declined/unavailable authorization) is not
+              // a backend failure: report "nothing to offer" so Chromium does
+              // not treat every saved site as new. A real seam failure is
+              // still reported by ReadBackendCredentials below.
+              std::move(cb).Run(std::vector<MahoPasswordForm>{},
+                                maho::IsVaultLockedForUi() || !authorized);
               return;
             }
             std::vector<MahoPasswordForm> results;
             if (!ReadBackendCredentials(read_origin, backend->profile_key_,
-                                        results)) {
+                                        read_scheme, results)) {
               std::move(cb).Run(std::vector<MahoPasswordForm>{}, false);
               return;
             }
             std::move(cb).Run(std::move(results), true);
           },
           weak_ptr_factory_.GetWeakPtr(), origin, authorization_scope, action,
-          std::move(callback)));
+          scheme, std::move(callback)));
 }
 
 void MahoPasswordStoreBackend::GetAllLoginsMahoAsync(
     LoginsOrErrorReply callback) {
   ReadLoginsForOperationMahoAsync(
       std::nullopt, MahoPasswordAuthorizationService::kAllOriginsScope,
-      PasswordAuthorizationAction::kReadAll, std::move(callback));
+      PasswordAuthorizationAction::kReadAll, std::nullopt,
+      std::move(callback));
 }
 
 void MahoPasswordStoreBackend::GetAutofillableLoginsMahoAsync(
     LoginsOrErrorReply callback) {
-  GetAllLoginsMahoAsync(std::move(callback));
+  GetAllLoginsMahoAsync(base::BindOnce(
+      [](LoginsOrErrorReply cb, std::vector<MahoPasswordForm> forms, bool success) {
+        if (success) {
+          std::erase_if(forms, [](const MahoPasswordForm &form) {
+            return form.blocked_by_user;
+          });
+        }
+        std::move(cb).Run(std::move(forms), success);
+      },
+      std::move(callback)));
 }
 
 void MahoPasswordStoreBackend::FillMatchingLoginsMahoAsync(
-    const std::string &signon_realm, LoginsOrErrorReply callback) {
+    const std::string &signon_realm,
+    password_manager::PasswordForm::Scheme scheme,
+    LoginsOrErrorReply callback) {
   if (!NativeWriteEnabled()) {
     if (callback) {
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -1794,7 +1980,7 @@ void MahoPasswordStoreBackend::FillMatchingLoginsMahoAsync(
     return;
   }
   ReadLoginsForOperationMahoAsync(signon_realm, signon_realm,
-                                  PasswordAuthorizationAction::kFill,
+                                  PasswordAuthorizationAction::kFill, scheme,
                                   std::move(callback));
 }
 
@@ -1887,6 +2073,12 @@ void MahoPasswordStoreBackend::AddLoginWithResultMahoAsync(
 
   std::string req_json;
   base::JSONWriter::Write(req, &req_json);
+  // `req` owns its OWN copy of the plaintext password, separate from both
+  // `req_json` and the form. Wipe it here, while the dictionary is still
+  // alive, so the allocation is not released with the secret intact.
+  if (std::string *req_password = req.FindString("password")) {
+    SecureZeroizeString(*req_password);
+  }
   if (!IsMahoVaultRoutingActive() ||
       !IsPasswordOperationAuthorized(profile_key_, mutable_form.signon_realm,
                                      PasswordAuthorizationAction::kAdd)) {
@@ -2166,7 +2358,7 @@ void MahoPasswordStoreBackend::RemoveLoginsCreatedBetweenMahoAsync(
 
   ReadLoginsForOperationMahoAsync(
       std::nullopt, MahoPasswordAuthorizationService::kRangeDeleteScope,
-      PasswordAuthorizationAction::kRangeDelete,
+      PasswordAuthorizationAction::kRangeDelete, std::nullopt,
       base::BindOnce(
           [](base::WeakPtr<MahoPasswordStoreBackend> backend,
              base::Time delete_begin, base::Time delete_end,

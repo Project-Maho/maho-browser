@@ -80,6 +80,7 @@ function SpaceConfigApp(
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [profileValue, setProfileValue] = useState(DEFAULT_PROFILE_VALUE);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   const nameInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -157,37 +158,43 @@ function SpaceConfigApp(
     }
 
     setSaving(true);
+    setSaveError('');
+    try {
+      const selectedProfileId =
+          profileValue === DEFAULT_PROFILE_VALUE ? '' : profileValue;
+      const nameChanged = spaceName !== initialInfo.name;
+      const iconChanged = spaceIcon !== initialInfo.icon;
+      const profileChanged = profileValue !==
+          resolveProfileValue(profiles, initialInfo.profileId || null);
 
-    const selectedProfileId =
-        profileValue === DEFAULT_PROFILE_VALUE ? '' : profileValue;
-    const nameChanged = spaceName !== initialInfo.name;
-    const iconChanged = spaceIcon !== initialInfo.icon;
-    const profileChanged = profileValue !==
-        resolveProfileValue(profiles, initialInfo.profileId || null);
+      const promises: Array<Promise<{success: boolean}>> = [];
 
-    const promises: Array<Promise<{success: boolean}>> = [];
-
-    if (nameChanged && spaceName) {
-      promises.push(handler.updateName(spaceName));
-    }
-
-    if (iconChanged) {
-      promises.push(handler.updateIcon(spaceIcon));
-    }
-
-    if (profileChanged) {
-      promises.push(handler.updateProfile(selectedProfileId || null));
-    }
-
-    if (promises.length > 0) {
-      const results = await Promise.all(promises);
-      if (!results.every((result) => result.success)) {
-        setSaving(false);
-        return;
+      if (nameChanged && spaceName) {
+        promises.push(handler.updateName(spaceName));
       }
-    }
 
-    handler.closeDialog();
+      if (iconChanged) {
+        promises.push(handler.updateIcon(spaceIcon));
+      }
+
+      if (profileChanged) {
+        promises.push(handler.updateProfile(selectedProfileId || null));
+      }
+
+      if (promises.length > 0) {
+        const results = await Promise.all(promises);
+        if (!results.every((result) => result.success)) {
+          setSaveError('Could not save this Space. Please try again.');
+          return;
+        }
+      }
+
+      handler.closeDialog();
+    } catch {
+      setSaveError('Could not save this Space. Please try again.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -325,6 +332,7 @@ function SpaceConfigApp(
           </CardContent>
         </Card>
 
+        {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
         <div className="mt-auto flex gap-2 pt-1">
           <Button
             className="h-10 rounded-lg border border-border/80 px-4 text-sm text-muted-foreground hover:bg-muted/70 hover:text-foreground"

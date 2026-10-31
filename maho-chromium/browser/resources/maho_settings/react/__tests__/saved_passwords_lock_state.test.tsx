@@ -72,6 +72,9 @@ function createItem(): VaultItem {
     lastUsedAt: null,
     hasTotp: false,
     hasPasskey: false,
+    favorite: false,
+    trashedAt: null,
+    hasNotes: false,
   };
 }
 
@@ -244,7 +247,7 @@ describe('Saved Passwords lock-state callback', () => {
     expect(exactButton('Copy')).not.toBeNull();
     expect(exactButton('Add password')).not.toBeNull();
     expect(exactButton('Fill')).toBeNull();
-    expect(listVaultItems).toHaveBeenCalledTimes(1);
+    expect(listVaultItems).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       exactButton('Add password')!.click();
@@ -274,7 +277,7 @@ describe('Saved Passwords lock-state callback', () => {
     expect(exactButton('Add password')).toBeNull();
     expect(exactButton('Save password')).toBeNull();
     expect(exactButton('Save changes')).toBeNull();
-    expect(listVaultItems).toHaveBeenCalledTimes(1);
+    expect(listVaultItems).toHaveBeenCalledTimes(2);
     expect(useVaultSecret).not.toHaveBeenCalled();
     expect(addVaultLogin).not.toHaveBeenCalled();
     expect(updateVaultLogin).not.toHaveBeenCalled();
@@ -396,4 +399,94 @@ describe('Saved Passwords lock-state callback', () => {
            .toBeNull();
        expect(deleteVaultItem).not.toHaveBeenCalled();
      });
+});
+
+describe('Saved Passwords trash listing', () => {
+  it('requests trashed items separately so the Trash view shows them', async () => {
+    const active = createItem();
+    const trashed = {...createItem(), id: 'trashed-item', title: 'Trashed', trashedAt: '2026-09-29T00:00:00Z'};
+    // Mirrors the core contract: trashed items are returned only when trashOnly is set.
+    const listVaultItems = vi.fn((_p: unknown, _k: unknown, _c: unknown, _l: unknown, trashOnly?: boolean) =>
+      Promise.resolve({
+        result: {success: true, items: trashOnly ? [trashed] : [active], nextCursor: null, errorCode: null, errorMessage: null},
+      }));
+    const handler = {
+      getPasswordProviderStatus: vi.fn().mockResolvedValue({status: PROVIDER_STATUS}),
+      getVaultPreflightState: vi.fn().mockResolvedValue({state: VaultPreflightState.kHealthy}),
+      getVaultStatus: vi.fn().mockResolvedValue({result: createVaultResult(VaultLockState.kUnlocked)}),
+      listVaultItems,
+    };
+    const store = {
+      getCallbackRouter: () => ({onVaultLockStateChanged: {addListener: vi.fn(() => 43)}, removeListener: vi.fn()}),
+      getHandler: () => handler,
+      selectPane: vi.fn(),
+    };
+
+    await act(async () => {
+      root.render(
+          <SavedPasswordsPane
+            pane={SAVED_PASSWORDS_PANE as never}
+            settings={[{key: 'autofill.passwords_enabled', value: 'true'}]}
+            store={store as never}
+          />);
+    });
+
+    expect(listVaultItems.mock.calls.some(call => call[4] === true)).toBe(true);
+    const trashButton = document.querySelector<HTMLElement>('[data-category="trash"]')!;
+    expect(trashButton.textContent).toContain('1');
+    await act(async () => {
+      trashButton.click();
+    });
+    expect(container.textContent).toContain('Trashed');
+    expect(container.textContent).not.toContain('Trash is empty');
+  });
+});
+
+describe('Saved Passwords stale-revision retry', () => {
+  it('re-resolves the current revision and retries trash once on revision_conflict', async () => {
+    const stale = createItem();
+    const fresh = {...stale, revision: 2n};
+    let listed = stale;
+    const listVaultItems = vi.fn((_p, _k, _c, _l, trashOnly: boolean) => Promise.resolve({
+      result: {success: true, items: trashOnly ? [] : [listed], nextCursor: null, errorCode: null, errorMessage: null},
+    }));
+    const conflict = {success: false, errorCode: 'revision_conflict', errorMessage: null, status: null, item: null};
+    const trashVaultItem = vi.fn((_id: string, revision: bigint) => Promise.resolve({
+      result: revision === 2n ? {...conflict, success: true, errorCode: null} : conflict,
+    }));
+    const handler = {
+      getPasswordProviderStatus: vi.fn().mockResolvedValue({status: PROVIDER_STATUS}),
+      getVaultPreflightState: vi.fn().mockResolvedValue({state: VaultPreflightState.kHealthy}),
+      getVaultStatus: vi.fn().mockResolvedValue({result: createVaultResult(VaultLockState.kUnlocked)}),
+      listVaultItems,
+      trashVaultItem,
+    };
+    const store = {
+      getCallbackRouter: () => ({onVaultLockStateChanged: {addListener: vi.fn(() => 1)}, removeListener: vi.fn()}),
+      getHandler: () => handler,
+      selectPane: vi.fn(),
+    };
+    await act(async () => {
+      root.render(
+          <SavedPasswordsPane
+            pane={SAVED_PASSWORDS_PANE as never}
+            settings={[{key: 'autofill.passwords_enabled', value: 'true'}]}
+            store={store as never}
+          />);
+    });
+    // The row still holds revision 1; the core has moved on to revision 2.
+    listed = fresh;
+    const more = exactButton('More options');
+    expect(more).not.toBeNull();
+    await act(async () => {
+      more!.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+    });
+    const trash = document.querySelector<HTMLElement>('[data-action="move-to-trash"]');
+    expect(trash).not.toBeNull();
+    await act(async () => {
+      trash!.click();
+    });
+    expect(trashVaultItem.mock.calls.map(call => call[1])).toEqual([1n, 2n]);
+    expect(container.textContent).not.toContain('This item changed since it was loaded');
+  });
 });

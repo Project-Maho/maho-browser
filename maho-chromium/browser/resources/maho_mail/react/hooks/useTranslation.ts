@@ -23,9 +23,22 @@ export type LanguageCode = (typeof SUPPORTED_LANGUAGES)[number]["code"];
 
 const STORAGE_KEY = "maho-translation-config";
 
+function isSupportedLanguage(code: string | undefined): code is LanguageCode {
+  return !!code && (SUPPORTED_LANGUAGE_CODES as readonly string[]).includes(code);
+}
+
+// The user's browser language (e.g. "ko-KR" -> "ko"), or English when Maho
+// Mail cannot translate into it.
+function browserLanguage(): LanguageCode {
+  const base = (typeof navigator !== "undefined" ? navigator.language : "")
+    .split("-")[0]
+    ?.toLowerCase();
+  return isSupportedLanguage(base) ? base : "en";
+}
+
 const DEFAULT_CONFIG: TranslationConfig = {
   provider: "byok",
-  defaultTargetLang: "ko",
+  defaultTargetLang: "en",
   alwaysTranslateFrom: [],
 };
 
@@ -36,7 +49,22 @@ function loadConfig(): TranslationConfig {
   } catch {
     // Fall through
   }
-  return DEFAULT_CONFIG;
+  return { ...DEFAULT_CONFIG, defaultTargetLang: browserLanguage() };
+}
+
+// The language mail is translated into: the saved choice, else the browser
+// language. Previously the manual Translate action ignored the saved choice and
+// always used a hardcoded Korean target that the UI offered no way to change.
+export function getTranslationTargetLang(): LanguageCode {
+  const saved = loadConfig().defaultTargetLang;
+  return isSupportedLanguage(saved) ? saved : browserLanguage();
+}
+
+// Persists the target language picked in the translation bar.
+export function saveTranslationTargetLang(lang: LanguageCode): void {
+  const config = { ...loadConfig(), defaultTargetLang: lang };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  window.dispatchEvent(new Event("maho-translation-config-changed"));
 }
 
 interface TranslationState {
@@ -51,16 +79,16 @@ interface TranslationState {
 }
 
 export function useTranslation() {
-  const [state, setState] = useState<TranslationState>({
+  const [state, setState] = useState<TranslationState>(() => ({
     translatedText: null,
     translatedHtml: null,
     isTranslating: false,
     error: null,
     fromLang: "en",
-    toLang: "ko",
+    toLang: getTranslationTargetLang(),
     isModelLoading: false,
     partialFailureCount: 0,
-  });
+  }));
 
   const translate = useCallback(async (text: string, from?: string, to?: string) => {
     const config = loadConfig();

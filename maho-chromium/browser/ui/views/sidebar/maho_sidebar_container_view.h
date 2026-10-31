@@ -68,6 +68,10 @@ class MahoSidebarContainerView : public views::View,
 
   double GetRevealFraction() const;
   bool IsAutoHideMode() const;
+  // Width the sidebar occupies floating over the contents without reserving
+  // layout space: 0 when pinned, the invisible hover strip while auto-hidden,
+  // and the full sidebar while hover-revealed or animating.
+  int GetFloatingOverlayWidth() const;
   bool IsOverlayVisible() const;
   void ToggleSpacesOverlay();
   void DismissSpacesOverlay();
@@ -144,6 +148,10 @@ class MahoSidebarContainerView : public views::View,
 
  private:
   void MaybePersistSidebarWidth(int width);
+  int ComputeExpandedWidth() const;
+  void ApplyRevealTransform();
+  void ApplySidebarViewBackground();
+  void UpdateZOrder();
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   bool IsCursorInsideContainerScreenBounds() const;
 

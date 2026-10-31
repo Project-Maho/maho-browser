@@ -73,7 +73,20 @@ struct MahoSidebarPalette {
   SkColor outline = SK_ColorTRANSPARENT;
   SkColor focus_ring = SK_ColorTRANSPARENT;
   float grain = 0.0f;
+  // Paint mode this snapshot was resolved for. Stamped by
+  // MahoSidebarPaletteHost::Update from the sidebar's own
+  // ShouldUseOpaqueSidebarBackground(). Every surface that paints the snapshot
+  // (docked rail, Downloads/Archive library overlay, Spaces overlay) reads this
+  // field instead of deciding opacity for itself, so two surfaces of the same
+  // theme can never disagree about which stop vector to paint.
+  bool opaque = false;
 };
+
+// Value equality over every field, including `opaque`. Used by
+// MahoSidebarPaletteHost::Update to recognize a native-theme notification that
+// resolved to the snapshot already on screen.
+bool operator==(const MahoSidebarPalette& lhs, const MahoSidebarPalette& rhs);
+bool operator!=(const MahoSidebarPalette& lhs, const MahoSidebarPalette& rhs);
 
 MahoSidebarPalette ResolveMahoSidebarPalette(
     const MahoSidebarThemeEnvironment& environment);
@@ -108,6 +121,11 @@ class MahoSidebarPaletteHost {
   ~MahoSidebarPaletteHost();
 
   void SetApplyCallback(ApplyCallback callback);
+  // Resolves `environment` into the host's snapshot and publishes it to the
+  // apply callback. Returns false without touching the snapshot when the update
+  // is a no-op: kCosmetic never computes, and a kNativeTheme notification that
+  // resolves to the palette already held (including its `opaque` paint mode)
+  // does not recompute or fan out.
   bool Update(MahoSidebarPaletteUpdateReason reason,
               const MahoSidebarThemeEnvironment& environment,
               bool opaque);

@@ -54,7 +54,6 @@ class MahoFileKeyProvider : public os_crypt_async::KeyProvider {
   // os_crypt_async::KeyProvider interface.
   void GetKey(KeyCallback callback) override;
   bool UseForEncryption() override;
-  bool IsCompatibleWithOsCryptSync() override;
 
  private:
   const base::FilePath user_data_dir_;

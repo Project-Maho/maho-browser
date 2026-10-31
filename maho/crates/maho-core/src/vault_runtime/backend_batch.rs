@@ -6,14 +6,14 @@ use maho_types::vault::{
     VaultItemPublicMetadata, VaultRangeDeleteResult, VaultSchemaVersion,
 };
 
-use crate::vault_manager::origin::{canonicalize_origin, origin_matches};
+use crate::vault_manager::origin::{canonicalize_origin, origin_matches, public_suffix_matches};
 use crate::vault_manager::record::{
     decode_envelope, deserialize_record, encode_envelope, public_dto, serialize_record,
     RecordSecret, VaultRecordPayload,
 };
 use crate::vault_manager::{VaultCredentialFormDetails, VaultCrudError};
 use crate::vault_runtime::repository::{VaultRepository, VaultTombstoneCandidate};
-use crate::vault_runtime::session::VaultBackendLoginCredential;
+use crate::vault_runtime::session::{VaultBackendLoginCredential, VaultBackendMatchType};
 
 use super::VaultRuntime;
 
@@ -41,6 +41,10 @@ impl VaultRuntime {
                     .decrypt_record(&envelope, id)
                     .map_err(VaultCrudError::from)?;
                 let record = deserialize_record(&plaintext)?;
+                if record.metadata.trashed_at.is_some() {
+                    missing_ids.push(*id);
+                    continue;
+                }
                 items.push(public_dto(&row, &record)?);
             }
 
@@ -78,15 +82,10 @@ impl VaultRuntime {
             let count = u64::try_from(tombstoned_ids.len()).map_err(|_| {
                 VaultCrudError::Storage("range deletion count overflow".to_string())
             })?;
-            let item_count = manager
-                .status()
-                .item_count
-                .checked_sub(count)
-                .ok_or_else(|| VaultCrudError::Storage("vault item count underflow".to_string()))?;
-            repository
+            let remaining = repository
                 .tombstone_items(&candidates)
                 .map_err(|error| VaultCrudError::Storage(error.to_string()))?;
-            manager.set_item_count(item_count);
+            manager.set_item_count(remaining);
             Ok(VaultRangeDeleteResult {
                 schema_version: VaultSchemaVersion::CURRENT,
                 count,
@@ -100,6 +99,7 @@ impl VaultRuntime {
         &self,
         repository: VaultRepository<'_>,
         origin: Option<&str>,
+        scheme: Option<u8>,
     ) -> Result<Vec<VaultBackendLoginCredential>, VaultCrudError> {
         self.with_manager(|manager| {
             let requested = match origin {
@@ -114,24 +114,56 @@ impl VaultRuntime {
                 manager.active_key().map_err(VaultCrudError::from)?;
                 return Ok(Vec::new());
             }
+            let records = super::crud_query::active_records(manager, &repository)?;
+            // An explicit request scheme decides the lookup kind: Basic and
+            // Digest queries match the stored HTTP-auth realm, while an HTML
+            // query resolves by web origin even when a `Basic realm=""` item
+            // shares the same signon realm. Discovery without a scheme keeps
+            // the stored-realm inference: a stored Basic/Digest realm
+            // identifies an HTTP-auth query; its suffix is opaque, not a URL
+            // path.
+            let http_auth_realm = match (scheme, requested) {
+                (Some(1..=2), requested) => requested,
+                (Some(_), _) => None,
+                (None, requested) => requested.filter(|realm| {
+                    records.iter().any(|(_, record)| {
+                        record.metadata.item_kind == VaultItemKind::Login
+                            && record.form_details.as_ref().is_some_and(|details| {
+                                matches!(details.scheme, 1 | 2) && details.signon_realm == *realm
+                            })
+                    })
+                }),
+            };
             let target = match requested {
-                Some(origin) if android_realm.is_none() => Some(canonicalize_origin(origin)?),
+                Some(origin) if android_realm.is_none() && http_auth_realm.is_none() => {
+                    Some(canonicalize_origin(origin)?)
+                }
                 _ => None,
             };
             let mut credentials = Vec::new();
-            for (row, record) in super::crud_query::active_records(manager, &repository)? {
+            let mut psl_credentials = Vec::new();
+            for (row, record) in records {
                 if record.metadata.item_kind != VaultItemKind::Login {
                     continue;
                 }
-                if let Some(android_realm) = android_realm {
-                    let matches_realm = record
-                        .form_details
-                        .as_ref()
-                        .is_some_and(|details| details.signon_realm.as_str() == android_realm);
+                let mut match_type = VaultBackendMatchType::Exact;
+                if let Some(realm) = android_realm.or(http_auth_realm) {
+                    let matches_realm = record.form_details.as_ref().is_some_and(|details| {
+                        details.signon_realm == realm
+                            && (android_realm.is_some() || matches!(details.scheme, 1 | 2))
+                    });
                     if !matches_realm {
                         continue;
                     }
                 } else if let Some(target) = &target {
+                    // HTTP-auth credentials must never match by web origin alone.
+                    if record
+                        .form_details
+                        .as_ref()
+                        .is_some_and(|details| matches!(details.scheme, 1 | 2))
+                    {
+                        continue;
+                    }
                     let matches_origin = record.metadata.origins.iter().any(|stored| {
                         origin_matches(
                             stored,
@@ -140,16 +172,33 @@ impl VaultRuntime {
                         )
                     });
                     if !matches_origin {
-                        continue;
+                        // Web-only PSL affiliation (https, same eTLD+1). An
+                        // exact match above always wins, so a credential is
+                        // never duplicated as psl.
+                        let matches_psl = record
+                            .metadata
+                            .origins
+                            .iter()
+                            .any(|stored| public_suffix_matches(stored, target));
+                        if !matches_psl {
+                            continue;
+                        }
+                        match_type = VaultBackendMatchType::Psl;
                     }
                 }
                 let public = public_dto(&row, &record)?;
-                credentials.push(credential_from_record(
+                let credential = credential_from_record(
                     public,
                     record.username.clone(),
                     record.form_details.clone(),
-                ));
+                    match_type,
+                );
+                match match_type {
+                    VaultBackendMatchType::Exact => credentials.push(credential),
+                    VaultBackendMatchType::Psl => psl_credentials.push(credential),
+                }
             }
+            credentials.extend(psl_credentials);
             Ok(credentials)
         })
         .map_err(VaultCrudError::from)?
@@ -160,6 +209,8 @@ fn is_valid_android_realm(realm: &str) -> bool {
     let Some(authority) = realm.strip_prefix("android://") else {
         return false;
     };
+    // Chromium accepts one root slash, but realm identity remains unmodified.
+    let authority = authority.strip_suffix('/').unwrap_or(authority);
     if authority.is_empty() || authority.contains(['/', '?', '#']) {
         return false;
     }
@@ -188,6 +239,7 @@ fn credential_from_record(
     public: maho_types::vault::VaultItemPublicDto,
     username: Option<String>,
     form_details: Option<VaultCredentialFormDetails>,
+    match_type: VaultBackendMatchType,
 ) -> VaultBackendLoginCredential {
     // The stored `signonRealm` is authoritative when present: it can express
     // realms a canonical origin cannot (android://, HTTP-auth realms). Legacy
@@ -214,6 +266,7 @@ fn credential_from_record(
         updated_at: public.updated_at,
         last_used_at: public.last_used_at,
         form_details,
+        match_type,
     }
 }
 
@@ -232,7 +285,7 @@ fn created_in_range(
             .is_none_or(|until_exclusive| created_at < until_exclusive))
 }
 
-fn tombstone_candidate(
+pub(super) fn tombstone_candidate(
     manager: &crate::vault_manager::VaultManager,
     row: maho_storage::sqlite::EncryptedVaultItemRow,
     timestamp: &str,
@@ -246,6 +299,9 @@ fn tombstone_candidate(
     let tombstone = VaultRecordPayload {
         schema_version: VaultSchemaVersion::CURRENT,
         metadata: VaultItemPublicMetadata {
+            favorite: false,
+            trashed_at: None,
+            has_notes: false,
             title: String::new(),
             origins: Vec::new(),
             username_hint: String::new(),
@@ -257,6 +313,7 @@ fn tombstone_candidate(
         secret: RecordSecret::Tombstone,
         last_used_at: None,
         form_details: None,
+        totp_seed: None,
     };
     let envelope = manager
         .encrypt_and_wrap(&serialize_record(&tombstone)?, &id)

@@ -116,8 +116,8 @@ fn parse_contract_line(
             line: line_number,
         });
     }
-    // Both browser_file_upload_select and browser_visual_click are now full-allow (NotRequired).
-    // Approval prompts are handled in-chat only for truly destructive actions.
+    // Upload selection and OS visual clicks cross the browser boundary and
+    // require chat approval, as declared by the canonical .def.
 
     Ok(BrowserActionContract {
         tool_name,
@@ -271,12 +271,12 @@ mod tests {
     }
 
     #[test]
-    fn action_contract_boundary_actions_do_not_require_approval() {
+    fn action_contract_boundary_actions_require_approval() {
         let contracts = canonical();
         let upload = named(&contracts, "browser_file_upload_select");
-        assert_eq!(upload.approval, ApprovalRequirement::NotRequired);
+        assert_eq!(upload.approval, ApprovalRequirement::Required);
         let visual = named(&contracts, "browser_visual_click");
-        assert_eq!(visual.approval, ApprovalRequirement::NotRequired);
+        assert_eq!(visual.approval, ApprovalRequirement::Required);
     }
 
     #[test]

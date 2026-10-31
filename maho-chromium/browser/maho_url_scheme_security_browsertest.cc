@@ -4,6 +4,8 @@
 #define HAS_OUT_OF_PROC_TEST_RUNNER
 #endif
 
+#include <utility>
+
 #include "maho/browser/maho_url_scheme.h"
 
 #include <optional>
@@ -20,6 +22,9 @@
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/ui/browser.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -29,6 +34,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_url_loader_factory.h"
@@ -58,7 +64,7 @@ namespace {
 constexpr char kDisableLoginGateSwitch[] = "maho-disable-login-gate";
 
 content::WebContents* ActiveWebContents(Browser* browser) {
-  return browser->tab_strip_model()->GetActiveWebContents();
+  return browser->GetTabStripModel()->GetActiveWebContents();
 }
 
 class ScopedExternalProtocolFailureDelegate
@@ -135,7 +141,10 @@ void ExpectNoMahoCommit(content::WebContents* contents,
   EXPECT_NE("maho",
             contents->GetPrimaryMainFrame()->GetLastCommittedOrigin().scheme());
   EXPECT_NE("maho",
-            contents->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL()
+            contents->GetPrimaryMainFrame()
+                ->GetSiteInstance()
+                ->GetSecurityPrincipal()
+                .GetDeprecatedSiteURL()
                 .scheme());
 }
 
@@ -215,15 +224,15 @@ class MahoUrlSchemeSecurityBrowserTest : public InProcessBrowserTest {
     const GURL url =
         embedded_https_test_server().GetURL("a.test", "/title1.html");
     EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-    content::WebContents* contents = ActiveWebContents(browser());
+    content::WebContents* contents = ActiveWebContents(static_cast<Browser*>(browser()));
     EXPECT_EQ(url, contents->GetLastCommittedURL());
     return contents;
   }
 
   void AttemptRendererScriptAndExpectBlocked(std::string_view script) {
-    content::WebContents* contents = ActiveWebContents(browser());
+    content::WebContents* contents = ActiveWebContents(static_cast<Browser*>(browser()));
     const GURL before_url = contents->GetLastCommittedURL();
-    const int before_tab_count = browser()->tab_strip_model()->count();
+    const int before_tab_count = browser()->GetTabStripModel()->count();
 
     EXPECT_FALSE(RendererCanRequest(contents, GURL(kMahoSettingsPublicURL)));
     EXPECT_TRUE(content::ExecJs(contents, script,
@@ -231,13 +240,13 @@ class MahoUrlSchemeSecurityBrowserTest : public InProcessBrowserTest {
     base::RunLoop().RunUntilIdle();
 
     ExpectNoMahoCommit(contents, before_url);
-    EXPECT_EQ(before_tab_count, browser()->tab_strip_model()->count());
+    EXPECT_EQ(before_tab_count, browser()->GetTabStripModel()->count());
   }
 
   std::string RegisterArtifact(std::string relative_path,
                                std::string display_name,
                                std::string bytes) {
-    auto* registry = ai::MahoArtifactRegistry::GetForProfile(browser()->profile());
+    auto* registry = ai::MahoArtifactRegistry::GetForProfile(browser()->GetProfile());
     CHECK(registry);
     const base::FilePath& root = registry->artifact_root();
     CHECK(!root.empty());
@@ -261,18 +270,18 @@ class MahoUrlSchemeSecurityBrowserTest : public InProcessBrowserTest {
     EXPECT_FALSE(ui_test_utils::NavigateToURL(
         browser(), GURL(kMahoArtifactExportUntrustedURL)));
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("chrome://newtab")));
-    ASSERT_EQ(contents, ActiveWebContents(browser()));
+    ASSERT_EQ(contents, ActiveWebContents(static_cast<Browser*>(browser())));
   }
 };
 
 IN_PROC_BROWSER_TEST_F(MahoUrlSchemeSecurityBrowserTest,
                        ArtifactPreviewEndpointServesSanitizedHtmlAndStrictCsp) {
-  content::WebContents* contents = ActiveWebContents(browser());
+  content::WebContents* contents = ActiveWebContents(static_cast<Browser*>(browser()));
   InstallArtifactDataSources(contents);
   const std::string artifact_id = RegisterArtifact(
       "preview/valid.html", "preview.html",
       R"HTML(<main>safe<script>alert(1)</script><img src="https://evil.test/x" onerror="steal()"></main>)HTML");
-  auto* registry = ai::MahoArtifactRegistry::GetForProfile(browser()->profile());
+  auto* registry = ai::MahoArtifactRegistry::GetForProfile(browser()->GetProfile());
   auto capability = registry->IssueCapability(artifact_id, "preview", contents);
   ASSERT_TRUE(capability.has_value());
 
@@ -295,11 +304,11 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeSecurityBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoUrlSchemeSecurityBrowserTest,
                        ArtifactEndpointsRejectInvalidExpiredAndWrongWebContents) {
-  content::WebContents* contents = ActiveWebContents(browser());
+  content::WebContents* contents = ActiveWebContents(static_cast<Browser*>(browser()));
   InstallArtifactDataSources(contents);
   const std::string artifact_id =
       RegisterArtifact("denials/data.txt", "data.txt", "endpoint bytes");
-  auto* registry = ai::MahoArtifactRegistry::GetForProfile(browser()->profile());
+  auto* registry = ai::MahoArtifactRegistry::GetForProfile(browser()->GetProfile());
 
   EXPECT_NE(net::OK,
             FetchWebUIEndpoint(
@@ -322,7 +331,7 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeSecurityBrowserTest,
       registry->IssueCapability(artifact_id, "export", contents);
   ASSERT_TRUE(wrong_contents.has_value());
   chrome::AddTabAt(browser(), GURL("about:blank"), -1, true);
-  content::WebContents* other_contents = ActiveWebContents(browser());
+  content::WebContents* other_contents = ActiveWebContents(static_cast<Browser*>(browser()));
   ASSERT_NE(contents, other_contents);
   EXPECT_NE(net::OK,
             FetchWebUIEndpoint(
@@ -334,15 +343,15 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeSecurityBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoUrlSchemeSecurityBrowserTest,
                        ArtifactEndpointRejectsCrossProfileCapability) {
-  content::WebContents* contents = ActiveWebContents(browser());
+  content::WebContents* contents = ActiveWebContents(static_cast<Browser*>(browser()));
   InstallArtifactDataSources(contents);
   const std::string artifact_id =
       RegisterArtifact("profile/data.txt", "profile.txt", "profile bytes");
-  auto* registry = ai::MahoArtifactRegistry::GetForProfile(browser()->profile());
+  auto* registry = ai::MahoArtifactRegistry::GetForProfile(browser()->GetProfile());
   auto capability = registry->IssueCapability(artifact_id, "preview", contents);
   ASSERT_TRUE(capability.has_value());
 
-  Browser* incognito = CreateIncognitoBrowser();
+  Browser* incognito = static_cast<Browser*>(CreateIncognitoBrowser());
   ASSERT_TRUE(incognito);
   content::WebContents* incognito_contents = ActiveWebContents(incognito);
   EXPECT_FALSE(ui_test_utils::NavigateToURL(
@@ -359,12 +368,12 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeSecurityBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoUrlSchemeSecurityBrowserTest,
                        ArtifactExportEndpointReturnsExactBytesAndSafeHeaders) {
-  content::WebContents* contents = ActiveWebContents(browser());
+  content::WebContents* contents = ActiveWebContents(static_cast<Browser*>(browser()));
   InstallArtifactDataSources(contents);
   const std::string bytes("exact\0artifact\xff" "bytes", 20);
   const std::string artifact_id =
       RegisterArtifact("export/report.bin", "Quarterly report.bin", bytes);
-  auto* registry = ai::MahoArtifactRegistry::GetForProfile(browser()->profile());
+  auto* registry = ai::MahoArtifactRegistry::GetForProfile(browser()->GetProfile());
   auto capability = registry->IssueCapability(artifact_id, "export", contents);
   ASSERT_TRUE(capability.has_value());
 
@@ -382,10 +391,10 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeSecurityBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoUrlSchemeSecurityBrowserTest,
                        TrustedAiCspAllowsOnlyExactArtifactPreviewFrameHost) {
-  content::WebContents* contents = ActiveWebContents(browser());
+  content::WebContents* contents = ActiveWebContents(static_cast<Browser*>(browser()));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kMahoAIURL)));
   base::RunLoop().RunUntilIdle();
-  contents = ActiveWebContents(browser());
+  contents = ActiveWebContents(static_cast<Browser*>(browser()));
   const WebUIEndpointResponse response =
       FetchWebUIEndpoint(contents, GURL(kMahoAIURL));
   ASSERT_EQ(net::OK, response.net_error);
@@ -409,7 +418,7 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeSecurityBrowserTest,
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), alias_url));
 
-  content::WebContents* contents = ActiveWebContents(browser());
+  content::WebContents* contents = ActiveWebContents(static_cast<Browser*>(browser()));
   content::NavigationEntry* entry =
       contents->GetController().GetLastCommittedEntry();
   ASSERT_NE(nullptr, entry);

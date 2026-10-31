@@ -3,7 +3,7 @@ import { X, ChevronDown, ChevronUp, Loader2, Clock, FileText, Code, Paperclip, L
 import { useTranslation } from "react-i18next";
 import { ToneAdjustButton } from "./ToneAdjustButton";
 import * as api from "../../api";
-import type { ReplyContext, AccountSummary, ComposeEmailRequest, Signature, ComposeAttachment, EmailTemplate, SendLaterRequest } from "../../types";
+import type { ReplyContext, AccountSummary, ComposeEmailRequest, Signature, ComposeAttachment, EmailTemplate, SendRequestedOptions } from "../../types";
 import { useToast } from "../ui/Toast";
 import { useConfirm } from "../ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/Tooltip";
@@ -11,7 +11,7 @@ import { RichTextEditor } from "./RichTextEditor";
 import { SchedulePicker } from "../common/SchedulePicker";
 import { ContactAutocomplete } from "./ContactAutocomplete";
 import { useSettings } from "../../hooks/useSettings";
-import { useComposeDraft } from "../../hooks/useComposeDraft";
+import { useComposeDraft, type DraftSnapshot } from "../../hooks/useComposeDraft";
 import { useComposeAttachments } from "../../hooks/useComposeAttachments";
 import { useComposeRecipients } from "../../hooks/useComposeRecipients";
 import { useComposeSecurity } from "../../hooks/useComposeSecurity";
@@ -162,14 +162,24 @@ export interface ComposeFormProps {
   accountEmail?: string;
   initialBody?: string;
   initialBodyHtml?: string;
+  initialBodyIsComplete?: boolean;
+  initialAttachments?: ComposeAttachment[];
+  forwardEmailUid?: number;
+  forwardFolderId?: string;
   initialTo?: string;
   initialDraftId?: string;
   initialSubject?: string;
   initialCc?: string;
   initialBcc?: string;
+  initialReadReceipt?: boolean;
+  initialPgpEncrypt?: boolean;
+  initialSmimeSign?: boolean;
+  initialSmimeEncrypt?: boolean;
+  initialInReplyTo?: string;
+  initialReferences?: string;
   accounts: AccountSummary[];
   sourceAccountId?: string;
-  onSendRequested?: (request: ComposeEmailRequest) => void;
+  onSendRequested?: (request: ComposeEmailRequest, options?: SendRequestedOptions) => void | Promise<void>;
   fullscreen?: boolean;
   onToggleFullscreen?: () => void;
   isPopout?: boolean;
@@ -183,11 +193,21 @@ export function ComposeForm({
   accountEmail,
   initialBody,
   initialBodyHtml,
+  initialBodyIsComplete = false,
+  initialAttachments,
+  forwardEmailUid,
+  forwardFolderId,
   initialTo,
   initialDraftId,
   initialSubject,
   initialCc,
   initialBcc,
+  initialReadReceipt,
+  initialPgpEncrypt,
+  initialSmimeSign,
+  initialSmimeEncrypt,
+  initialInReplyTo,
+  initialReferences,
   accounts,
   sourceAccountId,
   onSendRequested,
@@ -209,6 +229,9 @@ export function ComposeForm({
   const attachmentsHeadingId = useId();
   
   const [subject, setSubject] = useState("");
+  const [pendingTo, setPendingTo] = useState("");
+  const [pendingCc, setPendingCc] = useState("");
+  const [pendingBcc, setPendingBcc] = useState("");
   const [body, setBody] = useState("");
   const [bodyHtml, setBodyHtml] = useState("");
   const bodyRef = useRef(body);
@@ -216,15 +239,19 @@ export function ComposeForm({
   const bodyHtmlRef = useRef(bodyHtml);
   bodyHtmlRef.current = bodyHtml;
   const [sending, setSending] = useState(false);
+  const submitRef = useRef(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [showSchedule, setShowSchedule] = useState(false);
+  const [loadingAttachments, setLoadingAttachments] = useState(forwardEmailUid !== undefined);
+  const [attachmentLoadError, setAttachmentLoadError] = useState<string | null>(null);
+  const [lastSavedSnapshot, setLastSavedSnapshot] = useState<DraftSnapshot | null>(null);
 
   const [signatures, setSignatures] = useState<Signature[]>([]);
   const [selectedSignatureId, setSelectedSignatureId] = useState<string>("");
   const userHasTypedRef = useRef(false);
   const prevIsOpenRef = useRef(false);
-  const security = useComposeSecurity({ isOpen: true, prevIsOpenRef });
+  const security = useComposeSecurity({ isOpen: true, prevIsOpenRef, initialReadReceipt, initialPgpEncrypt, initialSmimeSign, initialSmimeEncrypt });
   const attach = useComposeAttachments({ isOpen: true, prevIsOpenRef, t, toast: toast as (type: string, message: string) => void });
   const [editorMode, setEditorMode] = useState<"rich" | "plain">("rich");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -270,6 +297,12 @@ export function ComposeForm({
     attachments: attach.attachments,
     requestReadReceipt: security.requestReadReceipt,
     initialDraftId,
+    inReplyTo: initialInReplyTo ?? replyTo?.original_message_id ?? undefined,
+    references: initialReferences ?? replyTo?.original_references ?? replyTo?.original_message_id ?? undefined,
+    isReadingAttachments: attach.isReading,
+    onDraftSaved: (snapshot) => {
+      setLastSavedSnapshot(snapshot);
+    },
   });
   const handleDiscardRef = useRef(handleDiscard);
   handleDiscardRef.current = handleDiscard;
@@ -277,12 +310,25 @@ export function ComposeForm({
   // Listen for Escape key to close/save compose
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !e.defaultPrevented) {
+        if (showSchedule) { setShowSchedule(false); return; }
+        if (showTemplatePicker) { setShowTemplatePicker(false); return; }
         void handleDiscardRef.current();
       }
     };
     document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
+  }, [showSchedule, showTemplatePicker]);
+
+  useEffect(() => {
+    const guard = (event: BeforeUnloadEvent) => {
+      if (draft.isDirtyRef.current || attach.readingRef.current || submitRef.current) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
   }, []);
 
   // Reset form fields and resolve account when component mounts
@@ -295,11 +341,11 @@ export function ComposeForm({
     const quoteText = buildQuoteText(replyTo, forwardFrom);
     const quoteHtml = buildQuoteHtml(replyTo, forwardFrom);
 
-    const baseText = initialBody ? initialBody : "";
-    const baseHtml = initialBodyHtml ? initialBodyHtml : (initialBody ? plainTextToHtml(initialBody) : "");
+    const baseText = initialBody ?? "";
+    const baseHtml = initialBodyHtml ?? (initialBody ? plainTextToHtml(initialBody) : "");
 
-    setBody(baseText + quoteText);
-    setBodyHtml(baseHtml + quoteHtml);
+    setBody(baseText + (initialBodyIsComplete ? '' : quoteText));
+    setBodyHtml(baseHtml + (initialBodyIsComplete ? '' : quoteHtml));
 
     setSending(false);
     setSendError(null);
@@ -318,19 +364,47 @@ export function ComposeForm({
     forwardFrom,
     initialBody,
     initialBodyHtml,
+    initialBodyIsComplete,
     accountId,
     sourceAccountId,
     accounts,
   ]);
 
-  // Derived dirty tracking: compare actual user text (excluding signatures/quotes) with initial body
+  useEffect(() => {
+    if (initialAttachments) attach.setAttachments(initialAttachments);
+    if (forwardEmailUid === undefined || !forwardFolderId || !effectiveAccountId) return;
+    let cancelled = false;
+    setLoadingAttachments(true);
+    void api.getForwardedAttachments(effectiveAccountId, forwardEmailUid, forwardFolderId)
+      .then((files) => { if (!cancelled) attach.setAttachments(files); })
+      .catch((error) => {
+        if (!cancelled) setAttachmentLoadError(error instanceof Error ? error.message : "Failed to load forwarded attachments");
+      })
+      .finally(() => { if (!cancelled) setLoadingAttachments(false); });
+    return () => { cancelled = true; };
+  }, [effectiveAccountId, forwardEmailUid, forwardFolderId, initialAttachments]);
+
+  // Derived dirty tracking: compare actual user text (excluding signatures/quotes) with saved baseline
+  const baselineTo = lastSavedSnapshot ? lastSavedSnapshot.to : (initialTo ?? "");
+  const baselineCc = lastSavedSnapshot ? lastSavedSnapshot.cc : (initialCc ?? "");
+  const baselineBcc = lastSavedSnapshot ? lastSavedSnapshot.bcc : (initialBcc ?? "");
+  const baselineSubject = lastSavedSnapshot ? lastSavedSnapshot.subject : (initialSubject ?? "");
+  const baselineBody = lastSavedSnapshot ? lastSavedSnapshot.body : (initialBody ?? "");
+  const baselineHtml = lastSavedSnapshot ? lastSavedSnapshot.bodyHtml : (initialBodyHtml ?? (initialBody ? plainTextToHtml(initialBody) : ""));
+  const baselineAttachments = lastSavedSnapshot ? lastSavedSnapshot.attachments : (initialAttachments ?? []);
+  const baselineReadReceipt = lastSavedSnapshot ? lastSavedSnapshot.requestReadReceipt : (initialReadReceipt ?? false);
+
   const currentUserText = splitBodyForTone(body, bodyHtml).userText;
   const isFormDirty =
-    to.trim() !== (initialTo ?? "") ||
-    cc.trim() !== (initialCc ?? "") ||
-    bcc.trim() !== (initialBcc ?? "") ||
-    subject.trim() !== (initialSubject ?? "") ||
-    currentUserText !== (initialBody ?? "");
+    to.trim() !== baselineTo.trim() ||
+    cc.trim() !== baselineCc.trim() ||
+    bcc.trim() !== baselineBcc.trim() ||
+    subject.trim() !== baselineSubject.trim() ||
+    currentUserText !== splitBodyForTone(baselineBody, baselineHtml).userText ||
+    bodyHtml !== baselineHtml ||
+    JSON.stringify(attach.attachments) !== JSON.stringify(baselineAttachments) || attach.isReading ||
+    security.requestReadReceipt !== baselineReadReceipt || security.pgpEncrypt || security.smimeSign || security.smimeEncrypt ||
+    !!pendingTo || !!pendingCc || !!pendingBcc;
 
   draft.isDirtyRef.current = isFormDirty;
   userHasTypedRef.current = isFormDirty;
@@ -349,7 +423,7 @@ export function ComposeForm({
         const active = sigs.find((s) => s.is_default);
         if (active) {
           setSelectedSignatureId(active.id);
-          if (userHasTypedRef.current) return;
+          if (initialBodyIsComplete || userHasTypedRef.current) return;
           const sigText = buildSignatureText(active);
           const sigHtml = buildSignatureHtml(active);
           const quoteText = buildQuoteText(replyTo, forwardFrom);
@@ -398,6 +472,7 @@ export function ComposeForm({
         });
         if (!confirmed) return;
       }
+      setBodyHtml(plainTextToHtml(body));
       setEditorMode("plain");
     } else {
       setEditorMode("rich");
@@ -478,7 +553,8 @@ export function ComposeForm({
     toast("success", t("compose.templateApplied"));
   };
 
-  async function handleSend() {
+  async function handleSend(scheduledAt?: string) {
+    if (submitRef.current || attach.readingRef.current || loadingAttachments || attachmentLoadError) return;
     const autocompleteInputs = document.querySelectorAll('input[role="combobox"]');
     let blurredAny = false;
     autocompleteInputs.forEach((el) => {
@@ -489,7 +565,7 @@ export function ComposeForm({
     });
 
     if (blurredAny) {
-      setTimeout(() => void handleSend(), 0);
+      setTimeout(() => void handleSend(scheduledAt), 0);
       return;
     }
     const toAddresses = recipients.parseRecipients(to);
@@ -512,6 +588,9 @@ export function ComposeForm({
       return;
     }
 
+    submitRef.current = true;
+    setSending(true);
+    try {
     const request: ComposeEmailRequest = {
       account_id: effectiveAccountId,
       to: toAddresses,
@@ -522,8 +601,8 @@ export function ComposeForm({
       body_html: bodyHtml,
       attachments: attach.attachments.length > 0 ? attach.attachments : undefined,
       read_receipt: security.requestReadReceipt ? true : undefined,
-      in_reply_to: replyTo?.original_message_id ?? undefined,
-      references: replyTo?.original_references ?? replyTo?.original_message_id ?? undefined,
+      in_reply_to: initialInReplyTo ?? replyTo?.original_message_id ?? undefined,
+      references: initialReferences ?? replyTo?.original_references ?? replyTo?.original_message_id ?? undefined,
     };
 
     let currentBody = body;
@@ -565,7 +644,7 @@ export function ComposeForm({
       }
     }
 
-    if (security.smimeSign) {
+    if (security.smimeSign && !security.smimeEncrypt) {
       try {
         const signed = await api.signEmailSmime(effectiveAccountId, currentBody);
         currentBody = signed;
@@ -581,10 +660,19 @@ export function ComposeForm({
 
     if (security.smimeEncrypt) {
       try {
-        const encrypted = await api.encryptEmailSmime(effectiveAccountId, [], currentBody);
+        const encrypted = await api.encryptEmailSmime({
+          account_id: effectiveAccountId,
+          recipient_emails: [...request.to, ...(request.cc ?? []), ...(request.bcc ?? [])],
+          recipient_certs_pem: [],
+          body: currentBody,
+          body_html: request.body_html,
+          attachments: request.attachments,
+          sign: security.smimeSign,
+        });
         currentBody = encrypted;
         request.body_text = currentBody;
-        request.body_html = `<pre>${currentBody}</pre>`;
+        request.body_html = undefined;
+        request.attachments = undefined;
       } catch (err) {
         const message = err instanceof Error ? err.message : t("compose.smimeEncryptionFailed");
         setSendError(message);
@@ -593,11 +681,39 @@ export function ComposeForm({
       }
     }
 
+    if (scheduledAt) {
+      await api.scheduleSend({ ...request, scheduled_at: scheduledAt });
+      toast("success", t("compose.scheduled"));
+      onClose();
+      return;
+    }
+
     if (onSendRequested) {
-      onSendRequested(request);
-      if (draft.draftId) {
-        void api.deleteEmail(draft.draftId).catch(() => {});
-      }
+      await onSendRequested(request, {
+        draftId: draft.draftIdRef.current,
+        composition: {
+          accountId: effectiveAccountId,
+          to,
+          cc,
+          bcc,
+          subject,
+          body,
+          bodyHtml,
+          attachments: attach.attachments,
+          draftId: draft.draftIdRef.current,
+          replyTo,
+          forwardFrom,
+          forwardEmailUid,
+          forwardFolderId,
+          readReceipt: security.requestReadReceipt,
+          pgpEncrypt: security.pgpEncrypt,
+          smimeSign: security.smimeSign,
+          smimeEncrypt: security.smimeEncrypt,
+          inReplyTo: initialInReplyTo ?? replyTo?.original_message_id ?? undefined,
+          references: initialReferences ?? replyTo?.original_references ?? replyTo?.original_message_id ?? undefined,
+        },
+      });
+      // The shell owns delayed delivery; retain the draft until it can acknowledge success.
       onClose();
       return;
     }
@@ -609,17 +725,35 @@ export function ComposeForm({
     }
 
     await performSend(request);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("compose.failedToSchedule");
+      setSendError(message);
+      toast("error", message);
+    } finally {
+      submitRef.current = false;
+      setSending(false);
+    }
   }
 
   async function performSend(request: ComposeEmailRequest) {
     try {
       setSending(true);
       setSendError(null);
-      await api.sendEmail(request);
+      const receipt = await api.sendEmail(request);
       if (draft.draftId) {
         void api.deleteEmail(draft.draftId).catch(() => {});
       }
-      toast("success", t("compose.emailSent"));
+      switch (receipt.status) {
+        case "sent":
+          toast("success", t("app.emailSent"));
+          break;
+        case "queued":
+          toast("info", t("compose.queuedOffline"));
+          break;
+        case "uncertain":
+          toast("warning", "Delivery could not be confirmed. Verify with the recipient before sending again.");
+          break;
+      }
       void emitMailUpdated("", "send");
       onClose();
     } catch (err) {
@@ -659,6 +793,7 @@ export function ComposeForm({
   }
 
   async function handleSaveDraft() {
+    if (attach.readingRef.current || submitRef.current || loadingAttachments || attachmentLoadError) return;
     if (!effectiveAccountId) {
       setSendError(t("compose.selectAccountDraft"));
       return;
@@ -675,6 +810,9 @@ export function ComposeForm({
         body_text: body,
         body_html: bodyHtml,
         attachments: attach.attachments.length > 0 ? attach.attachments : undefined,
+        read_receipt: security.requestReadReceipt ? true : undefined,
+        in_reply_to: initialInReplyTo ?? replyTo?.original_message_id ?? undefined,
+        references: initialReferences ?? replyTo?.original_references ?? replyTo?.original_message_id ?? undefined,
       };
       if (draft.draftId) {
         await api.updateDraft(draft.draftId, request);
@@ -692,6 +830,7 @@ export function ComposeForm({
   }
 
   async function handleDiscard() {
+    if (submitRef.current) return;
     if (!draft.isDirtyRef.current) {
       onClose();
       return;
@@ -711,45 +850,7 @@ export function ComposeForm({
   }
 
   async function handleScheduleSend(scheduledAt: string) {
-    const toAddresses = recipients.parseRecipients(to);
-    if (toAddresses.length === 0) {
-      setSendError(t("compose.recipientRequired"));
-      return;
-    }
-    if (!effectiveAccountId) {
-      setSendError(t("compose.selectAccountRequired"));
-      return;
-    }
-    try {
-      setSending(true);
-      setSendError(null);
-      const request: SendLaterRequest = {
-        account_id: effectiveAccountId,
-        to: toAddresses,
-        cc: cc ? recipients.parseRecipients(cc) : undefined,
-        bcc: bcc ? recipients.parseRecipients(bcc) : undefined,
-        subject,
-        body_text: body,
-        body_html: bodyHtml,
-        attachments: attach.attachments.length > 0 ? attach.attachments : undefined,
-        scheduled_at: scheduledAt,
-        read_receipt: security.requestReadReceipt ? true : undefined,
-        in_reply_to: replyTo?.original_message_id ?? undefined,
-        references: replyTo?.original_references ?? replyTo?.original_message_id ?? undefined,
-      };
-      await api.scheduleSend(request);
-      if (draft.draftId) {
-        void api.deleteEmail(draft.draftId).catch(() => {});
-      }
-      toast("success", t("compose.emailScheduled"));
-      onClose();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : t("compose.failedToSchedule");
-      setSendError(message);
-      toast("error", message);
-    } finally {
-      setSending(false);
-    }
+    await handleSend(scheduledAt);
   }
 
   const CcBccIcon = showCcBcc ? ChevronUp : ChevronDown;
@@ -769,7 +870,7 @@ export function ComposeForm({
       )}
     >
       {/* Header */}
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
+      <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-5 py-3">
         <h2 className="text-base font-semibold text-foreground">
           {replyTo
             ? replyTo.reply_all
@@ -779,11 +880,11 @@ export function ComposeForm({
             ? t("compose.forward")
             : t("compose.newMessage")}
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           {!isPopout && onToggleFullscreen && (
             <button
               onClick={onToggleFullscreen}
-              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+              className="mail-pressable flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               title={fullscreen ? t("compose.exitFullscreen") : t("compose.fullscreen")}
               aria-label={fullscreen ? t("compose.exitFullscreen") : t("compose.fullscreen")}
               aria-pressed={fullscreen}
@@ -795,7 +896,7 @@ export function ComposeForm({
           <button
             onClick={() => void handleDiscard()}
             disabled={sending}
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+            className="mail-pressable flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={t("common.close")}
             title={t("common.close")}
           >
@@ -806,16 +907,18 @@ export function ComposeForm({
 
       {/* Main Compose Area */}
       <div
-        className="flex-1 overflow-y-auto px-4 py-3 space-y-4"
+        className="flex-1 overflow-y-auto px-5 py-3 space-y-3"
         style={{
           paddingBottom: mobile && keyboardVisible ? `${keyboardHeight + 16}px` : "16px",
         }}
       >
+        {attachmentLoadError && <div role="alert">{attachmentLoadError}</div>}
+        {loadingAttachments && <div role="status">Loading attachments...</div>}
         {sendError && (
           <div
             id={sendErrorId}
             role="alert"
-            className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-500"
+            className="rounded-xl border border-destructive/30 bg-destructive/10 px-3.5 py-3 text-xs leading-5 text-destructive animate-fade-in"
           >
             {sendError}
           </div>
@@ -825,7 +928,7 @@ export function ComposeForm({
 
         {/* Sender Account Selector */}
         {(!accountId && !sourceAccountId && accounts.length > 1) ? (
-          <div className="flex items-center gap-2 border-b border-border/60 pb-2.5">
+          <div className="flex min-h-10 items-center gap-2 border-b border-border/60 pb-2 transition-colors focus-within:border-primary/50">
             <label htmlFor={fromInputId} className="w-12 text-xs font-medium text-muted-foreground">
               {t("compose.from")}
             </label>
@@ -833,7 +936,7 @@ export function ComposeForm({
               id={fromInputId}
               value={selectedAccountId}
               onChange={(e) => setSelectedAccountId(e.target.value)}
-              className="flex-1 bg-transparent text-xs text-foreground focus:outline-none"
+              className="h-8 flex-1 cursor-pointer bg-transparent text-sm text-foreground focus:outline-none"
             >
               <option value="" disabled>
                 {t("compose.selectAccount")}
@@ -847,8 +950,8 @@ export function ComposeForm({
           </div>
         ) : (
           accounts.length > 0 && (
-            <div className="flex items-center gap-2 border-b border-border/60 pb-2.5 text-xs text-muted-foreground">
-              <span className="w-12 font-medium">{t("compose.from")}</span>
+            <div className="flex min-h-10 items-center gap-2 border-b border-border/60 pb-2 text-sm text-muted-foreground">
+              <span className="w-12 text-xs font-medium">{t("compose.from")}</span>
               <span className="flex-1 truncate">
                 {(() => {
                   const acc = accounts.find((a) => a.id === effectiveAccountId);
@@ -864,7 +967,7 @@ export function ComposeForm({
         )}
 
         {/* Recipients (To) */}
-        <div className="flex items-start gap-2 border-b border-border/60 pb-2">
+        <div className="flex items-start gap-2 border-b border-border/60 pb-2 transition-colors focus-within:border-primary/50">
           <label htmlFor={toInputId} className="w-12 pt-2 text-xs font-medium text-muted-foreground">
             {t("compose.to")}
           </label>
@@ -873,6 +976,7 @@ export function ComposeForm({
               id={toInputId}
               value={to}
               onChange={setTo}
+              onPendingChange={setPendingTo}
               placeholder={t("compose.toPlaceholder")}
               accountId={effectiveAccountId}
               autoFocus={!replyTo}
@@ -880,7 +984,7 @@ export function ComposeForm({
           </div>
           <button
             onClick={() => setShowCcBcc(!showCcBcc)}
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-card hover:text-foreground shrink-0 mt-0.5"
+            className="mail-pressable flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring mt-1 shrink-0"
             aria-label={t("compose.toggleCcBcc")}
             aria-expanded={showCcBcc}
           >
@@ -900,6 +1004,7 @@ export function ComposeForm({
                   id={ccInputId}
                   value={cc}
                   onChange={setCc}
+                  onPendingChange={setPendingCc}
                   placeholder={t("compose.ccPlaceholder")}
                   accountId={effectiveAccountId}
                 />
@@ -914,6 +1019,7 @@ export function ComposeForm({
                   id={bccInputId}
                   value={bcc}
                   onChange={setBcc}
+                  onPendingChange={setPendingBcc}
                   placeholder={t("compose.bccPlaceholder")}
                   accountId={effectiveAccountId}
                 />
@@ -923,7 +1029,7 @@ export function ComposeForm({
         )}
 
         {/* Subject */}
-        <div className="flex items-center gap-2 border-b border-border/60 pb-2.5">
+        <div className="flex min-h-10 items-center gap-2 border-b border-border/60 pb-2 transition-colors focus-within:border-primary/50">
           <label htmlFor={subjectInputId} className="w-12 text-xs font-medium text-muted-foreground">
             {t("compose.subjectLabel")}
           </label>
@@ -936,7 +1042,7 @@ export function ComposeForm({
               setSubject(e.target.value);
             }}
             placeholder={t("compose.subject")}
-            className="flex-1 bg-transparent text-sm text-foreground focus:outline-none"
+            className="h-8 flex-1 bg-transparent text-[15px] font-medium text-foreground placeholder:font-normal placeholder:text-muted-foreground focus:outline-none"
           />
         </div>
 
@@ -951,7 +1057,7 @@ export function ComposeForm({
                 setBodyHtml(html);
               }}
               placeholder={t("compose.writeMessage")}
-              ariaLabel={t("a11y.emailBodyEditor")}
+              ariaLabel={t("compose.richTextEditor")}
               autoFocus={!!replyTo}
             />
           ) : (
@@ -965,7 +1071,7 @@ export function ComposeForm({
               }}
               placeholder={t("compose.writeMessage")}
               autoFocus={!!replyTo}
-              className="w-full flex-1 resize-none bg-transparent px-6 py-4 text-sm text-foreground focus:outline-none placeholder:text-muted-foreground"
+              className="w-full flex-1 resize-none bg-transparent px-1 py-4 text-[15px] leading-7 text-foreground focus:outline-none placeholder:text-muted-foreground"
             />
           )}
         </div>
@@ -981,14 +1087,15 @@ export function ComposeForm({
                 <div
                   key={idx}
                   role="listitem"
-                  className="flex items-center gap-2 rounded-lg border border-border bg-card/50 px-3 py-1.5 text-xs text-foreground"
+                  className="flex h-8 items-center gap-2 rounded-lg border border-border bg-card/50 pl-3 pr-1 text-xs text-foreground animate-scale-in"
                 >
                   <Paperclip size={12} className="text-muted-foreground" />
                   <span className="max-w-[150px] truncate">{file.filename}</span>
                   <button
                     onClick={() => attach.removeAttachment(file.filename)}
-                    className="ml-1 rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                    className="mail-pressable flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground"
                     title={t("compose.removeAttachment")}
+                    aria-label={t("compose.removeAttachment")}
                   >
                     <X size={12} />
                   </button>
@@ -1000,34 +1107,34 @@ export function ComposeForm({
       </div>
 
       {/* Footer / Controls */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border/70 bg-card/65 px-4 py-3 backdrop-blur-xl">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border/60 bg-card/65 px-5 py-3 backdrop-blur-xl">
         <div className="flex flex-wrap items-center gap-1">
           {/* Send Buttons */}
           <button
             onClick={() => void handleSend()}
-            disabled={sending || !effectiveAccountId}
-            className="flex h-10 items-center gap-1.5 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-sm transition-all hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50"
+            disabled={sending || attach.isReading || !effectiveAccountId}
+            className="mail-pressable flex h-10 items-center gap-1.5 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50"
           >
             {sending ? <Loader2 size={14} className="animate-spin" /> : null}
             {t("compose.send")}
           </button>
 
-          <div className="ml-1 min-w-[7rem] text-xs text-muted-foreground" aria-live="polite">
+          <div className="ml-1 min-w-[7rem] text-xs tabular-nums text-muted-foreground" aria-live="polite">
             {draft.draftSavedAt ? `Saved ${draft.draftSavedAt}` : autoSaveDrafts ? "Draft autosaves" : "Not saved"}
           </div>
 
           <button
             onClick={() => void handleSaveDraft()}
-            disabled={sending || !effectiveAccountId}
-            className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
+            disabled={sending || attach.isReading || !effectiveAccountId}
+            className="mail-pressable flex h-10 items-center rounded-lg px-3 text-sm font-medium text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
           >
             {t("compose.saveDraft")}
           </button>
 
           <button
             onClick={() => setShowSchedule(!showSchedule)}
-            disabled={sending || !effectiveAccountId}
-            className="flex h-10 items-center gap-1.5 rounded-lg border border-border/60 bg-background/60 px-3 text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:opacity-50"
+            disabled={sending || attach.isReading || !effectiveAccountId}
+            className="mail-pressable flex h-10 items-center gap-1.5 rounded-lg px-3 text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             aria-label={t("compose.schedule")}
             title={t("compose.schedule")}
           >
@@ -1039,8 +1146,9 @@ export function ComposeForm({
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={sending}
-            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+            className="mail-pressable flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             title={t("compose.attachFiles")}
+            aria-label={t("compose.attachFiles")}
           >
             <Paperclip size={16} />
           </button>
@@ -1057,19 +1165,19 @@ export function ComposeForm({
             <div className="relative" ref={templatePickerRef}>
               <button
                 onClick={() => setShowTemplatePicker(!showTemplatePicker)}
-                className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+                className="mail-pressable flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 title={t("compose.insertTemplate")}
                 aria-label={t("compose.insertTemplate")}
               >
                 <FileText size={16} />
               </button>
               {showTemplatePicker && (
-                <div className="absolute bottom-full left-0 z-50 mb-2 w-48 rounded-lg border border-border bg-background py-1 shadow-lg max-h-48 overflow-y-auto">
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-52 max-h-56 overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl animate-scale-in">
                   {templates.map((tpl) => (
                     <button
                       key={tpl.id}
                       onClick={() => handleApplyTemplate(tpl)}
-                      className="w-full px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-card"
+                      className="flex h-8 w-full items-center rounded-md px-2.5 text-left text-xs text-foreground transition-colors hover:bg-surface-hover"
                     >
                       {tpl.name}
                     </button>
@@ -1082,6 +1190,8 @@ export function ComposeForm({
           {/* Tone Adjuster */}
           <ToneAdjustButton
             body={body}
+            bodyHtml={bodyHtml}
+            splitBody={splitBodyForTone}
             setBody={setBody}
             setBodyHtml={setBodyHtml}
             plainTextToHtml={plainTextToHtml}
@@ -1092,7 +1202,7 @@ export function ComposeForm({
             <select
               value={selectedSignatureId}
               onChange={(e) => handleSignatureChange(e.target.value)}
-              className="bg-transparent text-xs text-muted-foreground focus:outline-none py-1 px-1.5 rounded border border-border/40 hover:border-border transition-colors cursor-pointer"
+              className="h-8 cursor-pointer rounded-lg border border-border/40 bg-transparent px-2 text-xs text-muted-foreground transition-colors hover:border-border hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               title={t("compose.selectSignature")}
             >
               <option value="" className="bg-background text-foreground">
@@ -1112,7 +1222,7 @@ export function ComposeForm({
               <button
                 type="button"
                 onClick={() => void handleEditorModeToggle()}
-                className="flex items-center gap-1.5 rounded-lg border border-border bg-card/50 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="mail-pressable flex h-10 items-center gap-1.5 rounded-lg px-3 text-sm text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {editorMode === "rich" ? <FileText size={14} /> : <Code size={14} />}
                 {editorMode === "rich" ? t("compose.plainText") : t("compose.richText")}
@@ -1148,10 +1258,10 @@ export function ComposeForm({
                 onClick={() => security.togglePgpEncrypt(!security.pgpEncrypt)}
                 aria-pressed={security.pgpEncrypt}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                  "mail-pressable flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                   security.pgpEncrypt
                     ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-card hover:text-foreground"
+                    : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
                 )}
               >
                 <Lock size={14} />
@@ -1168,10 +1278,10 @@ export function ComposeForm({
                 onClick={() => security.toggleSmimeSign(!security.smimeSign)}
                 aria-pressed={security.smimeSign}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                  "mail-pressable flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                   security.smimeSign
                     ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-card hover:text-foreground"
+                    : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
                 )}
               >
                 <Shield size={14} />
@@ -1188,10 +1298,10 @@ export function ComposeForm({
                 onClick={() => security.toggleSmimeEncrypt(!security.smimeEncrypt)}
                 aria-pressed={security.smimeEncrypt}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                  "mail-pressable flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                   security.smimeEncrypt
                     ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-card hover:text-foreground"
+                    : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
                 )}
               >
                 <Lock size={14} />
@@ -1203,7 +1313,7 @@ export function ComposeForm({
 
           <button
             onClick={() => void handleDiscard()}
-            className="rounded-lg px-4 py-2 text-sm text-muted-foreground transition-colors hover:bg-card hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="mail-pressable flex h-10 items-center rounded-lg px-4 text-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
             {t("compose.discard")}
           </button>
@@ -1221,7 +1331,7 @@ export function ComposeForm({
       {pendingSend && (
         <UndoSendToast
           delaySeconds={undoSendDelay ?? 5}
-          onUndo={() => { setPendingSend(null); toast("success", t("compose.sendCancelled")); }}
+          onUndo={() => { setPendingSend(null); toast("success", t("app.sendCancelled")); }}
           onComplete={handleUndoSendComplete}
         />
       )}

@@ -66,11 +66,11 @@ Use this order:
 - Use `browser_tab_new` to create a tab. Pass `url` only for a known destination; omit it for a blank tab.
 - Use `browser_tab_switch` only when a tab must become visible; most tools accept `tab_id` directly.
 - Use `browser_tab_close` for tabs no longer needed.
-- When `tab_id` is optional, omit it for the active tab. Use a positive id from `browser_tab_list` for a specific tab; do not pass `0`.
+- `tab_id` is required for every mutating tool (`browser_navigate`, `browser_click`, `browser_type`, `browser_select`, `browser_scroll`, `browser_hover`, `browser_key_press`). Take a positive id from `browser_tab_list`; never pass `0` and never rely on the focused tab. A mutation without `tab_id` is rejected with `-32013 tab_binding_required`.
 
 ## Navigation
 
-- Use `browser_navigate` with a known URL. It returns after load commit, not necessarily after the page settles.
+- Use `browser_navigate` with a known URL and the target `tab_id`. It returns after load commit, not necessarily after the page settles.
 - Follow with `browser_wait_for_navigation` when a document change must finish before reading.
 - NEVER invent deep URLs, query parameters, checkout URLs, or internal routes.
 - Prefer site links or URLs obtained from the user, trusted search results, history, bookmarks, or observed page state.
@@ -78,13 +78,13 @@ Use this order:
 ## Actions
 
 - Prefer snapshot-derived accessibility refs for deterministic interaction.
-- Use `browser_click` with `ref` and optional `tab_id` when you hold a current ref.
+- Use `browser_click` with `ref` and the target `tab_id` when you hold a current ref.
 - Use `browser_locator_click` when exposed, or `input.locator_click`, when locator targeting, waits, or observation are useful.
 - A locator uses one form: `{"ref": integer}`, `{"css": string}`, or `{"role": string, "name": string}`. Use `exact` only when needed.
 - Locator `wait.mode` may be `auto`, `navigation`, `selector`, or `none`; `wait.selector` is required for selector waits.
 - Use `observe: "diff"` when the resulting page change matters. Use a returned diff before asking for another full snapshot.
 - If a mutable locator action requires a lease, use `lease: "scoped"` unless a valid lease is already held.
-- Use `browser_type` with `ref`, `text`, and optional `tab_id` for ordinary non-credential text.
+- Use `browser_type` with `ref`, `text`, and the target `tab_id` for ordinary non-credential text.
 - Use `browser_locator_type` when exposed, or `input.locator_type`, for locator typing; `submit: true` may press Enter.
 - Use `browser_select` with `ref` and option `value` for native select controls.
 - Use `browser_hover` with `ref` for hover menus, then take a fresh snapshot before acting inside them.

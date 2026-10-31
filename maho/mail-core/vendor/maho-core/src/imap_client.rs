@@ -1,5 +1,6 @@
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::sync::RwLock;
 use std::time::Duration;
 
 use imap::extensions::idle::SetReadTimeout;
@@ -116,6 +117,7 @@ pub struct BodyFetchWithMdn {
     pub mdn_requested: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct ImapEnvelope {
     pub uid: u32,
     pub message_id: String,
@@ -215,6 +217,16 @@ fn connect_starttls(host: &str, port: u16) -> Result<ImapTlsStream, AppError> {
     Ok(ImapTlsStream(tls))
 }
 
+static TEST_ROOT_CERTS: RwLock<Option<rustls::RootCertStore>> = RwLock::new(None);
+
+/// Inert test fixture injection allowing loopback IMAP test peers with self-signed test root certificates.
+/// Default is `None`, which preserves production `RustlsConnector::new_with_native_certs()`.
+pub fn set_test_root_certs_for_fixture(roots: Option<rustls::RootCertStore>) {
+    if let Ok(mut lock) = TEST_ROOT_CERTS.write() {
+        *lock = roots;
+    }
+}
+
 impl ImapClient {
     /// Select a folder only if it's not already selected.
     /// This avoids redundant IMAP SELECT calls when fetching multiple bodies
@@ -242,14 +254,19 @@ impl ImapClient {
     ) -> Result<Self, AppError> {
         let client = match encryption {
             Encryption::Tls => {
+                let tcp = connect_with_timeout(host, port)?;
+                if let Ok(guard) = TEST_ROOT_CERTS.read() {
+                    if let Some(ref roots) = *guard {
+                        let config = rustls::ClientConfig::builder()
+                            .with_root_certificates(roots.clone())
+                            .with_no_client_auth();
+                        return Self::login_tls(tcp, host, username, password, config);
+                    }
+                }
                 let connector = RustlsConnector::new_with_native_certs().map_err(|e| {
                     AppError::Network(format!("Failed to load system TLS certificates: {}", e))
                 })?;
-                let tcp = connect_with_timeout(host, port)?;
-                let tls_stream = connector
-                    .connect(host, tcp)
-                    .map_err(|e| AppError::Network(e.to_string()))?;
-                imap::Client::new(ImapTlsStream(tls_stream))
+                return Self::login_tls(tcp, host, username, password, connector);
             }
             Encryption::StartTls => {
                 let tls_stream = connect_starttls(host, port)?;
@@ -272,6 +289,23 @@ impl ImapClient {
             selected_folder: None,
             pooled: false,
         })
+    }
+
+    /// Establish a password session using the supplied TLS trust configuration.
+    /// Hostname and certificate verification remain the connector's responsibility.
+    pub fn login_tls(
+        tcp: TcpStream,
+        server_name: &str,
+        username: &str,
+        password: &str,
+        connector: impl Into<RustlsConnector>,
+    ) -> Result<Self, AppError> {
+        let tls = connector.into().connect(server_name, tcp)
+            .map_err(|e| AppError::Network(e.to_string()))?;
+        let session = imap::Client::new(ImapTlsStream(tls))
+            .login(username, password)
+            .map_err(|e| AppError::Auth(e.0.to_string()))?;
+        Ok(Self { session: Some(session), selected_folder: None, pooled: false })
     }
 
     pub fn connect_oauth2(
@@ -342,11 +376,8 @@ impl ImapClient {
             let display_name = decode_imap_utf7(f.name().as_bytes());
             let delimiter = f.delimiter().map(|s| s.to_string());
 
-            let attr_strings: Vec<String> = f
-                .attributes()
-                .iter()
-                .map(|attr| format!("{:?}", attr).to_lowercase())
-                .collect();
+            let attr_strings: Vec<String> =
+                f.attributes().iter().map(name_attribute_string).collect();
             let attr_refs: Vec<&str> = attr_strings.iter().map(|s| s.as_str()).collect();
 
             let metadata =
@@ -512,18 +543,61 @@ impl ImapClient {
         Ok((envelopes, uid_validity))
     }
 
+    pub fn fetch_envelopes_before_uid(
+        &mut self,
+        folder: &str,
+        before_uid: u32,
+    ) -> Result<(Vec<ImapEnvelope>, u32), AppError> {
+        let mailbox = self.session().select(folder)
+            .map_err(|error| AppError::Network(format!("Failed to select folder: {error}")))?;
+        self.selected_folder = Some(folder.to_string());
+        let epoch = mailbox.uid_validity.unwrap_or(0);
+        if mailbox.exists == 0 || before_uid <= 1 {
+            return Ok((Vec::new(), epoch));
+        }
+        let matches = self.session().search(format!("UID 1:{}", before_uid - 1))
+            .map_err(|error| AppError::Network(error.to_string()))?;
+        let Some(last_sequence) = matches.into_iter().max() else {
+            return Ok((Vec::new(), epoch));
+        };
+        let mut envelopes = self.fetch_envelopes_from_selected(last_sequence, 0, 500)?;
+        envelopes.retain(|envelope| envelope.uid < before_uid);
+        Ok((envelopes, epoch))
+    }
+
+    pub fn fetch_uid_flags(
+        &mut self,
+        folder: &str,
+        uids: &[u32],
+    ) -> Result<(Vec<(u32, bool, bool)>, u32), AppError> {
+        let epoch = self.get_uid_validity(folder)?;
+        if uids.is_empty() {
+            return Ok((Vec::new(), epoch));
+        }
+        let range = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let messages = self.session().uid_fetch(range, "(UID FLAGS)")
+            .map_err(|error| AppError::Network(error.to_string()))?;
+        let mut flags = Vec::new();
+        for message in messages.iter() {
+            let uid = message.uid.ok_or_else(|| AppError::Network("Missing UID in flag response".into()))?;
+            flags.push((uid, message.flags().iter().any(|flag| matches!(flag, imap::types::Flag::Seen)),
+                message.flags().iter().any(|flag| matches!(flag, imap::types::Flag::Flagged))));
+        }
+        Ok((flags, epoch))
+    }
+
     fn fetch_envelopes_from_selected(
         &mut self,
         total: u32,
         offset: u32,
         limit: u32,
     ) -> Result<Vec<ImapEnvelope>, AppError> {
-        if total == 0 {
+        if total == 0 || limit == 0 {
             return Ok(vec![]);
         }
 
         let end = total.saturating_sub(offset);
-        let start = end.saturating_sub(limit).max(1);
+        let start = end.saturating_sub(limit.saturating_sub(1)).max(1);
 
         if end == 0 || start > end {
             return Ok(vec![]);
@@ -576,6 +650,9 @@ impl ImapClient {
             }
         }
 
+        if envelopes.len() != (end - start + 1) as usize {
+            return Err(AppError::Network("Incomplete mailbox envelope page".into()));
+        }
         envelopes.reverse();
         Ok(envelopes)
     }
@@ -590,13 +667,21 @@ impl ImapClient {
         Ok(mailbox.uid_validity.unwrap_or(0))
     }
 
+    /// Select and verify the mailbox epoch before any UID mutation.
+    pub fn validate_uid_validity(&mut self, folder: &str, expected: u32) -> Result<(), AppError> {
+        if expected == 0 || self.get_uid_validity(folder)? != expected {
+            return Err(AppError::Validation("Mailbox UIDVALIDITY changed; resync required".into()));
+        }
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub fn fetch_email_body(&mut self, folder: &str, uid: u32) -> Result<Vec<u8>, AppError> {
         self.select_folder_if_needed(folder)?;
 
         let messages = self
             .session()
-            .uid_fetch(uid.to_string(), "RFC822")
+            .uid_fetch(uid.to_string(), "BODY.PEEK[]")
             .map_err(|e| AppError::Network(e.to_string()))?;
 
         let message = messages
@@ -619,7 +704,7 @@ impl ImapClient {
     ) -> Result<Vec<u8>, AppError> {
         self.select_folder_if_needed(folder)?;
 
-        let fetch_query = format!("(BODYSTRUCTURE BODY[{}])", part_id);
+        let fetch_query = format!("(BODYSTRUCTURE BODY.PEEK[{}])", part_id);
         let messages = self
             .session()
             .uid_fetch(uid.to_string(), &fetch_query)
@@ -666,6 +751,43 @@ impl ImapClient {
         Ok(())
     }
 
+    /// Resolve a message's UID in `folder` from its RFC 5322 Message-ID. A
+    /// folder move parks a negative placeholder UID on the local row until the
+    /// next sync learns the real UID, and this is how an intent queued in that
+    /// window still addresses the server copy.
+    pub fn find_uid_by_message_id(
+        &mut self,
+        folder: &str,
+        message_id: &str,
+    ) -> Result<Option<u32>, AppError> {
+        self.select_folder_if_needed(folder)?;
+        let sanitized = message_id.replace(['"', '\\'], "");
+        if sanitized.is_empty() {
+            return Ok(None);
+        }
+        let uids = self
+            .session()
+            .uid_search(format!("HEADER Message-ID \"{}\"", sanitized))
+            .map_err(|e| AppError::Network(e.to_string()))?;
+        Ok(uids.into_iter().max())
+    }
+
+    /// Apply a flag change to a whole UID set (RFC 3501 sequence-set, e.g.
+    // "1,2,3") with one UID STORE command so batch flag mutations cost one
+    // roundtrip per chunk instead of one per message.
+    pub fn set_flags_bulk(
+        &mut self,
+        folder: &str,
+        uid_set: &str,
+        flags: &str,
+    ) -> Result<(), AppError> {
+        self.select_folder_if_needed(folder)?;
+        self.session()
+            .uid_store(uid_set.to_string(), format!("+FLAGS ({})", flags))
+            .map_err(|e| AppError::Network(e.to_string()))?;
+        Ok(())
+    }
+
     pub fn remove_flags(&mut self, folder: &str, uid: u32, flags: &str) -> Result<(), AppError> {
         self.select_folder_if_needed(folder)?;
         self.session()
@@ -674,11 +796,21 @@ impl ImapClient {
         Ok(())
     }
 
-    pub fn expunge(&mut self) -> Result<(), AppError> {
-        self.session()
-            .expunge()
-            .map_err(|e| AppError::Network(e.to_string()))?;
+    pub fn delete_email(&mut self, folder: &str, uid: u32) -> Result<(), AppError> {
+        self.select_folder_if_needed(folder)?;
+        let capabilities = self.session().capabilities().map_err(|e| AppError::Network(e.to_string()))?;
+        if !capabilities.has_str("UIDPLUS") {
+            return Err(AppError::Validation("Server does not support UID-scoped expunge".into()));
+        }
+        self.set_flags(folder, uid, "\\Deleted")?;
+        self.session().uid_expunge(uid.to_string()).map_err(|e| AppError::Network(e.to_string()))?;
         Ok(())
+    }
+
+    pub fn expunge(&mut self) -> Result<(), AppError> {
+        Err(AppError::Validation(
+            "Expunge requires an explicit message UID".to_string(),
+        ))
     }
 
     pub fn move_email(
@@ -688,14 +820,15 @@ impl ImapClient {
         target_folder: &str,
     ) -> Result<(), AppError> {
         self.select_folder_if_needed(folder)?;
-        self.session()
-            .uid_copy(uid.to_string(), target_folder)
+        let capabilities = self.session().capabilities()
             .map_err(|e| AppError::Network(e.to_string()))?;
+        if !capabilities.has_str("MOVE") {
+            return Err(AppError::Validation(
+                "Server does not support safe message moves".to_string(),
+            ));
+        }
         self.session()
-            .uid_store(uid.to_string(), "+FLAGS (\\Deleted)")
-            .map_err(|e| AppError::Network(e.to_string()))?;
-        self.session()
-            .expunge()
+            .uid_mv(uid.to_string(), target_folder)
             .map_err(|e| AppError::Network(e.to_string()))?;
         Ok(())
     }
@@ -705,7 +838,7 @@ impl ImapClient {
 
         let messages = self
             .session()
-            .uid_fetch(uid.to_string(), "BODY[]")
+            .uid_fetch(uid.to_string(), "BODY.PEEK[]")
             .map_err(|e| AppError::Network(e.to_string()))?;
 
         let message = match messages.iter().next() {
@@ -737,7 +870,7 @@ impl ImapClient {
 
         let messages = self
             .session()
-            .uid_fetch(uid.to_string(), "BODY[]")
+            .uid_fetch(uid.to_string(), "BODY.PEEK[]")
             .map_err(|e| AppError::Network(e.to_string()))?;
 
         let message = match messages.iter().next() {
@@ -1177,9 +1310,47 @@ fn decode_attachment_bytes(bytes: &[u8], encoding: &'static str) -> Result<Vec<u
     }
 }
 
+/// IMAP wire form of a LIST attribute (e.g. `\Drafts`). Special-use attributes
+/// arrive as `Custom`; `Debug` would render them as `Custom("\\Drafts")`, which
+/// `classify_folder` cannot match.
+fn name_attribute_string(attr: &imap::types::NameAttribute<'_>) -> String {
+    use imap::types::NameAttribute;
+    match attr {
+        NameAttribute::NoInferiors => "\\Noinferiors".to_string(),
+        NameAttribute::NoSelect => "\\Noselect".to_string(),
+        NameAttribute::Marked => "\\Marked".to_string(),
+        NameAttribute::Unmarked => "\\Unmarked".to_string(),
+        NameAttribute::Custom(s) => s.to_string(),
+    }
+}
+
+#[cfg(test)]
+#[path = "imap_review_tests.rs"]
+mod review_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_attribute_string_keeps_special_use_classifiable() {
+        use crate::folder_normalize::classify_folder;
+        use crate::models::folder::FolderType;
+        use imap::types::NameAttribute;
+
+        let drafts = NameAttribute::from("\\Drafts");
+        assert_eq!(name_attribute_string(&drafts), "\\Drafts");
+        assert_eq!(name_attribute_string(&NameAttribute::NoSelect), "\\Noselect");
+
+        let attrs = [name_attribute_string(&drafts)];
+        let refs: Vec<&str> = attrs.iter().map(String::as_str).collect();
+        let metadata = normalize_folder("[Gmail]/Drafts", "[Gmail]/Drafts".to_string(), &refs, Some("/"));
+        assert!(matches!(classify_folder(&metadata), FolderType::Drafts));
+
+        let noselect = [name_attribute_string(&NameAttribute::NoSelect)];
+        let refs: Vec<&str> = noselect.iter().map(String::as_str).collect();
+        assert!(!normalize_folder("[Gmail]", "[Gmail]".to_string(), &refs, Some("/")).is_selectable);
+    }
 
     #[test]
     fn test_decode_rfc2047_ascii_passthrough() {

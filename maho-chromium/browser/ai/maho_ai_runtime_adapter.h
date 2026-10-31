@@ -132,15 +132,26 @@ struct MahoAiRuntimeEvent {
   std::optional<uint32_t> queue_depth;
 };
 
-// Session-scoped runtime configuration triple (plan row-1 plumbing). Mirrors
-// the broker's CapabilityRequestContext fields and the maho-ffi
-// AgentRuntimeConfig defaults: tier "guard", final_confirm true,
+// Session-scoped runtime configuration (plan row-1 plumbing, row-3 file
+// gate). The triple mirrors the broker's CapabilityRequestContext fields and
+// the maho-ffi AgentRuntimeConfig defaults: tier "guard", final_confirm true,
 // proactive_mode false. |permission_tier| is one of "read_only", "guard",
 // "full_access"; unknown values fail closed to "guard" broker-side.
+// |fs_whitelist_roots| are the session-supplied absolute directory roots for
+// the runtime permission-tier file gate (plan row 3); empty means nothing is
+// whitelisted (fail closed). Both are stamped live into every
+// CapabilityRequestContext (Wave 2A); roots must keep a single provisioning
+// source shared with the CLI surface, never per-surface lists.
 struct MahoAiRuntimeConfig {
-  std::string permission_tier = "guard";
-  bool final_confirm = true;
-  bool proactive_mode = false;
+  MahoAiRuntimeConfig();
+  MahoAiRuntimeConfig(const MahoAiRuntimeConfig&);
+  MahoAiRuntimeConfig& operator=(const MahoAiRuntimeConfig&);
+  ~MahoAiRuntimeConfig();
+
+  std::string permission_tier;
+  bool final_confirm;
+  bool proactive_mode;
+  std::vector<std::string> fs_whitelist_roots;
 };
 
 // Abstract runtime adapter interface. Each concrete adapter owns its own
@@ -229,6 +240,12 @@ class MahoAiRuntimeAdapter {
   // no session is active or the adapter does not use external session
   // identifiers.
   virtual std::string GetRuntimeSessionId() const = 0;
+
+  // Notifies the runtime adapter that a new session has started or the active
+  // session has changed. Adapters should reset turn state and switch underlying
+  // FFI/backend sessions.
+  virtual void StartSession(const std::string& session_id);
+  virtual void ResetSession(const std::string& session_id);
 
   virtual void Reset() = 0;
 };

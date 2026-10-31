@@ -19,12 +19,12 @@
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_digest.h"
 #include "components/password_manager/core/browser/password_store/password_store_change.h"
-#include "components/password_manager/core/browser/password_store/stored_credential.h"
 #include "components/password_manager/core/browser/stub_password_manager_driver.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
@@ -52,6 +52,33 @@ constexpr char kKillSwitchPassword[] = "S3NTINEL-killswitch-runtime-8E2F";
 constexpr char kRoutingPassword[] = "S3NTINEL-routing-runtime-4B9A";
 constexpr char kJitPassword[] = "S3NTINEL-jit-runtime-6D8C";
 constexpr char16_t kJitPassword16[] = u"S3NTINEL-jit-runtime-6D8C";
+
+inline const PasswordStoreBackendCredential &
+GetChangeCredential(const password_manager::PasswordStoreChange &change) {
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+  return change.credential();
+#else
+  return change.form();
+#endif
+}
+
+inline void SetCredentialPassword(PasswordStoreBackendCredential &cred,
+                                  std::u16string password) {
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+  cred.password_value = password_manager::PasswordString(std::move(password));
+#else
+  cred.password_value = std::move(password);
+#endif
+}
+
+inline std::u16string
+GetCredentialPassword(const PasswordStoreBackendCredential &cred) {
+#if MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
+  return cred.password_value.value();
+#else
+  return cred.password_value;
+#endif
+}
 
 struct ResolverFfiProbe {
   int credential_execute_calls = 0;
@@ -449,29 +476,31 @@ protected:
     bool fill_success = false;
     std::vector<MahoPasswordForm> matched_forms;
     backend.FillMatchingLoginsMahoAsync(
-        origin, base::BindOnce(
-                    [](base::RunLoop *loop, bool *success_out,
-                       std::vector<MahoPasswordForm> *forms_out,
-                       std::vector<MahoPasswordForm> forms, bool success) {
-                      *success_out = success;
-                      *forms_out = std::move(forms);
-                      loop->Quit();
-                    },
-                    &fill_loop, &fill_success, &matched_forms));
+        origin, password_manager::PasswordForm::Scheme::kHtml,
+        base::BindOnce(
+            [](base::RunLoop *loop, bool *success_out,
+               std::vector<MahoPasswordForm> *forms_out,
+               std::vector<MahoPasswordForm> forms, bool success) {
+              *success_out = success;
+              *forms_out = std::move(forms);
+              loop->Quit();
+            },
+            &fill_loop, &fill_success, &matched_forms));
     fill_loop.Run();
     return matched_forms;
   }
 
   password_manager::BackendLoginsResult
   FillPasswordStoreForms(MahoPasswordStoreBackend &backend,
-                         const std::string &origin) {
+                         const std::string &origin,
+                         password_manager::PasswordForm::Scheme scheme =
+                             password_manager::PasswordForm::Scheme::kHtml) {
     Grant(PasswordAuthorizationAction::kFill, origin);
     base::RunLoop fill_loop;
     bool fill_success = false;
     password_manager::BackendLoginsResult matched_forms;
     std::vector<password_manager::PasswordFormDigest> digests;
-    digests.emplace_back(password_manager::PasswordForm::Scheme::kHtml, origin,
-                         GURL(origin + "/login"));
+    digests.emplace_back(scheme, origin, GURL(origin + "/login"));
     const bool include_psl = false;
     backend.FillMatchingLoginsAsync(
         base::BindOnce(
@@ -592,15 +621,16 @@ protected:
     bool fill_success = false;
     std::vector<MahoPasswordForm> matched_forms;
     backend.FillMatchingLoginsMahoAsync(
-        origin, base::BindOnce(
-                    [](base::RunLoop *loop, bool *success_out,
-                       std::vector<MahoPasswordForm> *forms_out,
-                       std::vector<MahoPasswordForm> forms, bool success) {
-                      *success_out = success;
-                      *forms_out = std::move(forms);
-                      loop->Quit();
-                    },
-                    &fill_loop, &fill_success, &matched_forms));
+        origin, password_manager::PasswordForm::Scheme::kHtml,
+        base::BindOnce(
+            [](base::RunLoop *loop, bool *success_out,
+               std::vector<MahoPasswordForm> *forms_out,
+               std::vector<MahoPasswordForm> forms, bool success) {
+              *success_out = success;
+              *forms_out = std::move(forms);
+              loop->Quit();
+            },
+            &fill_loop, &fill_success, &matched_forms));
     fill_loop.Run();
     EXPECT_TRUE(fill_success);
     EXPECT_EQ(1u, matched_forms.size());
@@ -740,7 +770,7 @@ TEST_F(MahoPasswordStoreBackendTest,
   base::RunLoop fill_loop;
   bool fill_success = true;
   backend.FillMatchingLoginsMahoAsync(
-      form.signon_realm,
+      form.signon_realm, form.scheme,
       base::BindOnce(
           [](base::RunLoop *loop, bool *success,
              std::vector<MahoPasswordForm> forms, bool result) {
@@ -868,10 +898,10 @@ TEST_F(MahoPasswordStoreBackendTest,
 
   base::RunLoop wrapper_add_loop;
   bool wrapper_add_failed_closed = false;
-  password_manager::StoredCredential disabled_credential;
+  PasswordStoreBackendCredential disabled_credential;
   disabled_credential.signon_realm = "https://account-store.example";
   disabled_credential.username_value = u"account@example.com";
-  disabled_credential.password_value = u"disabled-store-password";
+  SetCredentialPassword(disabled_credential, u"disabled-store-password");
   backend.AddLoginAsync(
       std::move(disabled_credential),
       base::BindOnce(
@@ -970,7 +1000,7 @@ TEST_F(MahoPasswordStoreBackendTest, AddAndRemoveLoginAsync) {
   bool fill_success = true;
   std::vector<MahoPasswordForm> matched_forms;
   backend.FillMatchingLoginsMahoAsync(
-      "https://example.com",
+      "https://example.com", form.scheme,
       base::BindOnce(
           [](base::RunLoop *loop, bool *success_out,
              std::vector<MahoPasswordForm> *forms_out,
@@ -1098,7 +1128,7 @@ TEST_F(MahoPasswordStoreBackendTest, UnlockedVaultAddListAndFillLoginAsync) {
 }
 
 TEST_F(MahoPasswordStoreBackendTest,
-       ContextDiscoveryIsSecretFreeAndExactSelectionResolvesOnce) {
+       ContextDiscoveryCarriesSecretAndExactSelectionResolvesOnce) {
   EnableNativeWriteForTesting();
   CreateInitializedVaultCore();
   SelectPasswordProvider("maho_native", "[]");
@@ -1114,7 +1144,9 @@ TEST_F(MahoPasswordStoreBackendTest,
   password_manager::BackendLoginsResult discovered =
       DiscoverForContext(backend, origin, context);
   ASSERT_EQ(1u, discovered.size());
-  EXPECT_TRUE(discovered[0].password_value.empty());
+  // Upstream fill-on-load, suggestions and save-vs-update compare all read
+  // match.password_value, so the page-scoped lookup carries the secret.
+  EXPECT_EQ(GetCredentialPassword(discovered[0]), kJitPassword16);
   ASSERT_TRUE(discovered[0].primary_key.has_value());
 
   const int primary_key = discovered[0].primary_key->value();
@@ -1156,6 +1188,65 @@ TEST_F(MahoPasswordStoreBackendTest,
     EXPECT_TRUE(std::all_of(buffer.begin(), buffer.end(),
                             [](char byte) { return byte == 0; }));
   }
+}
+
+TEST_F(MahoPasswordStoreBackendTest,
+       ContextDiscoveryReturnsSiblingSubdomainAsPslMatch) {
+  EnableNativeWriteForTesting();
+  CreateInitializedVaultCore();
+  SelectPasswordProvider("maho_native", "[]");
+  MahoPasswordStoreBackend backend = CreateBackend();
+  backend.InitBackend(base::OnceCallback<void(bool)>());
+  task_environment_.RunUntilIdle();
+
+  ASSERT_TRUE(ImportOnePasswordCredential("https://login.psl-example.com",
+                                          "psl@example.test", kJitPassword));
+  const std::string page = "https://www.psl-example.com";
+  password_manager::BackendLoginsResult discovered =
+      DiscoverForContext(backend, page, FillContextFor(page));
+
+  ASSERT_EQ(1u, discovered.size());
+  ASSERT_TRUE(discovered[0].match_type.has_value());
+  EXPECT_EQ(password_manager::PasswordForm::MatchType::kPSL,
+            *discovered[0].match_type);
+  EXPECT_EQ(GetCredentialPassword(discovered[0]), kJitPassword16);
+}
+
+TEST_F(MahoPasswordStoreBackendTest,
+       LockedVaultContextDiscoveryIsEmptySuccessNotError) {
+  EnableNativeWriteForTesting();
+  CreateInitializedVaultCore();
+  SelectPasswordProvider("maho_native", "[]");
+  MahoPasswordStoreBackend backend = CreateBackend();
+  backend.InitBackend(base::OnceCallback<void(bool)>());
+  task_environment_.RunUntilIdle();
+  const std::string origin = "https://locked-context.example";
+  ASSERT_TRUE(
+      ImportOnePasswordCredential(origin, "locked@example.test", kJitPassword));
+  ASSERT_TRUE(LockVault());
+
+  password_manager::PasswordFormDigest digest(
+      password_manager::PasswordForm::Scheme::kHtml, origin,
+      GURL(origin + "/login"));
+  base::RunLoop loop;
+  bool got_error = true;
+  size_t count = 1;
+  backend.GetGroupedMatchingLoginsAsync(
+      digest, FillContextFor(origin),
+      base::BindOnce(
+          [](base::RunLoop *loop, bool *error_out, size_t *count_out,
+             password_manager::BackendLoginsResultOrError result) {
+            auto *forms =
+                std::get_if<password_manager::BackendLoginsResult>(&result);
+            *error_out = !forms;
+            *count_out = forms ? forms->size() : 0;
+            loop->Quit();
+          },
+          &loop, &got_error, &count));
+  loop.Run();
+
+  EXPECT_FALSE(got_error);
+  EXPECT_EQ(0u, count);
 }
 
 TEST_F(MahoPasswordStoreBackendTest,
@@ -1423,10 +1514,10 @@ TEST_F(MahoPasswordStoreBackendTest,
 
   const std::string origin = "https://manual-fill.example";
   Grant(PasswordAuthorizationAction::kAdd, origin);
-  password_manager::StoredCredential credential;
+  PasswordStoreBackendCredential credential;
   credential.signon_realm = origin;
   credential.username_value = u"manual@example.test";
-  credential.password_value = ManualPassword16();
+  SetCredentialPassword(credential, ManualPassword16());
 
   base::RunLoop add_loop;
   bool add_success = false;
@@ -1462,7 +1553,7 @@ TEST_F(MahoPasswordStoreBackendTest,
 // false (it defaults to true), native ADD must not reach the Vault and native
 // FILL must not read secrets. Re-enabling the pref restores the native
 // behavior.
-TEST_F(MahoPasswordStoreBackendTest, NativeWriteDisabled_AddIsNoOp) {
+TEST_F(MahoPasswordStoreBackendTest, NativeWriteDisabled_AddReportsError) {
   CreateInitializedVaultCore();
   TestingPrefServiceSimple *kill_switch_prefs = CreateKillSwitchPrefs();
   kill_switch_prefs->SetBoolean(prefs::kMahoNativePasswordWriteEnabled, false);
@@ -1474,33 +1565,40 @@ TEST_F(MahoPasswordStoreBackendTest, NativeWriteDisabled_AddIsNoOp) {
   SelectPasswordProvider("maho_native", "[]");
 
   const std::string origin = "https://killswitch-add.example";
-  password_manager::StoredCredential credential;
+  PasswordStoreBackendCredential credential;
   credential.signon_realm = origin;
   credential.username_value = u"killswitch@example.test";
-  credential.password_value = KillSwitchPassword16();
+  SetCredentialPassword(credential, KillSwitchPassword16());
 
   base::RunLoop add_loop;
   bool add_reported_changes = false;
+  bool add_reported_error = false;
   size_t change_count = 1;
   backend.AddLoginAsync(
       std::move(credential),
       base::BindOnce(
-          [](base::RunLoop *loop, bool *changes_out, size_t *count_out,
+          [](base::RunLoop *loop, bool *changes_out, bool *error_out,
+             size_t *count_out,
              password_manager::PasswordChangesOrError result) {
             if (auto *changes =
                     std::get_if<password_manager::PasswordChanges>(&result)) {
               *changes_out = true;
               *count_out = changes->has_value() ? (*changes)->size() : 0u;
+            } else {
+              *error_out = true;
             }
             loop->Quit();
           },
-          &add_loop, &add_reported_changes, &change_count));
+          &add_loop, &add_reported_changes, &add_reported_error,
+          &change_count));
   add_loop.Run();
 
-  // The gated add is a no-op: no error is surfaced, and no ADD change is
-  // reported to observers.
-  EXPECT_TRUE(add_reported_changes);
-  EXPECT_EQ(0u, change_count);
+  // The user accepted a Maho save prompt, so a write that never reaches the
+  // Vault must surface as an error. Reporting a successful empty change list
+  // here is what made saved passwords look stored while nothing persisted, so
+  // they vanished on the next restart.
+  EXPECT_TRUE(add_reported_error);
+  EXPECT_FALSE(add_reported_changes);
 
   // Nothing reached the Vault: a direct backend-session read (which bypasses
   // the gate) still sees no credential for this origin.
@@ -1540,7 +1638,8 @@ TEST_F(MahoPasswordStoreBackendTest, NativeWriteDisabled_FillReturnsEmpty) {
   bool maho_fill_success = true;
   std::vector<MahoPasswordForm> maho_forms;
   backend.FillMatchingLoginsMahoAsync(
-      origin, base::BindOnce(
+      origin, password_manager::PasswordForm::Scheme::kHtml,
+      base::BindOnce(
                   [](base::RunLoop *loop, bool *success_out,
                      std::vector<MahoPasswordForm> *forms_out,
                      std::vector<MahoPasswordForm> forms, bool success) {
@@ -1566,10 +1665,10 @@ TEST_F(MahoPasswordStoreBackendTest, NativeWriteEnabled_AddReachesVault) {
 
   const std::string origin = "https://killswitch-enabled.example";
   Grant(PasswordAuthorizationAction::kAdd, origin);
-  password_manager::StoredCredential credential;
+  PasswordStoreBackendCredential credential;
   credential.signon_realm = origin;
   credential.username_value = u"killswitch@example.test";
-  credential.password_value = KillSwitchPassword16();
+  SetCredentialPassword(credential, KillSwitchPassword16());
 
   base::RunLoop add_loop;
   bool add_success = false;
@@ -1597,6 +1696,67 @@ TEST_F(MahoPasswordStoreBackendTest, NativeWriteEnabled_AddReachesVault) {
   EXPECT_TRUE(filled[0].password_value.empty());
 }
 
+// Saving a password must wipe EVERY in-memory copy it made, not just the
+// serialized request buffer. AddLoginWithResultMahoAsync copies the secret into
+// the `req` dictionary (maho_password_store_backend.cc:2022) and wipes only
+// `req_json` and the form, leaving that dictionary's string to be released
+// un-zeroized.
+TEST_F(MahoPasswordStoreBackendTest, AddLoginZeroizesEveryPlaintextPasswordCopy) {
+  EnableNativeWriteForTesting();
+  CreateInitializedVaultCore();
+
+  MahoPasswordStoreBackend backend = CreateBackend();
+  backend.InitBackend(base::OnceCallback<void(bool)>());
+  task_environment_.RunUntilIdle();
+  SelectPasswordProvider("maho_native", "[]");
+
+  const std::string origin = "https://zeroize.example";
+  Grant(PasswordAuthorizationAction::kAdd, origin);
+
+  std::vector<std::string> zeroized;
+  {
+    ScopedZeroizeObserver observer(&zeroized);
+
+    PasswordStoreBackendCredential credential;
+    credential.signon_realm = origin;
+    credential.username_value = u"zeroize@example.test";
+    SetCredentialPassword(credential, KillSwitchPassword16());
+
+    base::RunLoop add_loop;
+    backend.AddLoginAsync(
+        std::move(credential),
+        base::BindOnce(
+            [](base::RunLoop *loop,
+               password_manager::PasswordChangesOrError result) {
+              loop->Quit();
+            },
+            &add_loop));
+    add_loop.Run();
+  }
+
+  // The request JSON carries the password, so it must be among the wiped
+  // buffers; that part already holds today.
+  const bool wiped_request_json =
+      std::any_of(zeroized.begin(), zeroized.end(),
+                  [](const std::string &value) {
+                    return value.find(kKillSwitchPassword) != std::string::npos;
+                  });
+  EXPECT_TRUE(wiped_request_json)
+      << "the serialized request buffer was never zeroized";
+
+  // The dictionary's own password copy is a SEPARATE allocation. Exactly one
+  // wipe means only the JSON was cleared and the plaintext string the
+  // dictionary owned was released intact.
+  const size_t plaintext_wipes =
+      std::count_if(zeroized.begin(), zeroized.end(),
+                    [](const std::string &value) {
+                      return value == kKillSwitchPassword;
+                    });
+  EXPECT_GE(plaintext_wipes, 1u)
+      << "the password copy owned by the request dictionary was released "
+         "without being zeroized";
+}
+
 // ---------------------------------------------------------------------------
 // Task 3: the backend consults the EFFECTIVE PROVIDER on every operation.
 // ---------------------------------------------------------------------------
@@ -1620,10 +1780,10 @@ TEST_F(MahoPasswordStoreBackendTest, ProviderRouting_NativeHandlesAddAndFill) {
 
   const std::string origin = "https://routing-native.example";
   Grant(PasswordAuthorizationAction::kAdd, origin);
-  password_manager::StoredCredential credential;
+  PasswordStoreBackendCredential credential;
   credential.signon_realm = origin;
   credential.username_value = u"routing@example.test";
-  credential.password_value = RoutingPassword16();
+  SetCredentialPassword(credential, RoutingPassword16());
 
   base::RunLoop add_loop;
   bool add_success = false;
@@ -1684,10 +1844,10 @@ TEST_F(MahoPasswordStoreBackendTest, ProviderRouting_BitwardenIsNoOp) {
 
   // Add is a no-op: no error surfaced, no change reported, nothing new in the
   // Vault.
-  password_manager::StoredCredential credential;
+  PasswordStoreBackendCredential credential;
   credential.signon_realm = "https://routing-bitwarden-write.example";
   credential.username_value = u"routing-write@example.test";
-  credential.password_value = KillSwitchPassword16();
+  SetCredentialPassword(credential, KillSwitchPassword16());
 
   base::RunLoop add_loop;
   bool reported_changes = false;
@@ -1796,10 +1956,10 @@ TEST_F(MahoPasswordStoreBackendTest,
 
   const std::string origin = "https://routing-flip.example";
   Grant(PasswordAuthorizationAction::kAdd, origin);
-  password_manager::StoredCredential credential;
+  PasswordStoreBackendCredential credential;
   credential.signon_realm = origin;
   credential.username_value = u"flip@example.test";
-  credential.password_value = RoutingPassword16();
+  SetCredentialPassword(credential, RoutingPassword16());
 
   base::RunLoop add_loop;
   bool add_success = false;
@@ -1877,6 +2037,7 @@ TEST_F(MahoPasswordStoreBackendTest, UnlockedVaultUpdateLoginAsync) {
   Grant(PasswordAuthorizationAction::kFill, "https://update.example.com");
   backend.FillMatchingLoginsMahoAsync(
       "https://update.example.com",
+      password_manager::PasswordForm::Scheme::kHtml,
       base::BindOnce(
           [](base::RunLoop *loop, bool *success_out,
              std::vector<MahoPasswordForm> *forms_out,
@@ -1924,6 +2085,7 @@ TEST_F(MahoPasswordStoreBackendTest, UnlockedVaultRemoveLoginAsync) {
   Grant(PasswordAuthorizationAction::kFill, "https://delete.example.com");
   backend.FillMatchingLoginsMahoAsync(
       "https://delete.example.com",
+      password_manager::PasswordForm::Scheme::kHtml,
       base::BindOnce(
           [](base::RunLoop *loop, bool *success_out,
              std::vector<MahoPasswordForm> *forms_out,
@@ -1968,6 +2130,7 @@ TEST_F(MahoPasswordStoreBackendTest, UnlockedVaultLockedOperationsFailClosed) {
   bool fill_success = true;
   backend.FillMatchingLoginsMahoAsync(
       "https://locked.example.com",
+      password_manager::PasswordForm::Scheme::kHtml,
       base::BindOnce(
           [](base::RunLoop *loop, bool *success_out,
              std::vector<MahoPasswordForm> forms, bool success) {
@@ -1977,7 +2140,8 @@ TEST_F(MahoPasswordStoreBackendTest, UnlockedVaultLockedOperationsFailClosed) {
           },
           &fill_loop, &fill_success));
   fill_loop.Run();
-  EXPECT_FALSE(fill_success);
+  // A locked Vault answers "nothing to offer" instead of failing the store.
+  EXPECT_TRUE(fill_success);
 }
 
 TEST_F(MahoPasswordStoreBackendTest, LockedVaultState) {
@@ -2075,11 +2239,10 @@ std::u16string RoundTripPassword16() {
 // A credential with EVERY field this backend claims to preserve set to a
 // distinct, non-default value, so a dropped field shows up as a concrete
 // mismatch rather than an accidental match against a default.
-password_manager::StoredCredential
-FullyPopulatedCredential(const std::string &signon_realm,
+PasswordStoreBackendCredential FullyPopulatedCredential(const std::string &signon_realm,
                          const std::u16string &username) {
-  password_manager::StoredCredential cred;
-  cred.scheme = password_manager::PasswordForm::Scheme::kBasic;
+  PasswordStoreBackendCredential cred;
+  cred.scheme = password_manager::PasswordForm::Scheme::kHtml;
   cred.signon_realm = signon_realm;
   cred.url = GURL(signon_realm + "/login/page");
   cred.action = GURL(signon_realm + "/login/submit");
@@ -2087,7 +2250,7 @@ FullyPopulatedCredential(const std::string &signon_realm,
   cred.username_element = u"user-field";
   cred.password_element = u"pass-field";
   cred.username_value = username;
-  cred.password_value = RoundTripPassword16();
+  SetCredentialPassword(cred, RoundTripPassword16());
   cred.all_alternative_usernames.emplace_back(
       password_manager::AlternativeElement::Value(u"alt@example.test"),
       autofill::FieldRendererId(9007199254740993ULL),
@@ -2127,7 +2290,7 @@ protected:
   // empty optional when it reported an error).
   std::optional<password_manager::PasswordStoreChangeList>
   AddViaStore(MahoPasswordStoreBackend &backend,
-              password_manager::StoredCredential cred) {
+              PasswordStoreBackendCredential cred) {
     base::RunLoop loop;
     std::optional<password_manager::PasswordStoreChangeList> changes;
     backend.AddLoginAsync(
@@ -2151,7 +2314,7 @@ protected:
 
   std::optional<password_manager::PasswordStoreChangeList>
   UpdateViaStore(MahoPasswordStoreBackend &backend,
-                 password_manager::StoredCredential cred) {
+                 PasswordStoreBackendCredential cred) {
     base::RunLoop loop;
     std::optional<password_manager::PasswordStoreChangeList> changes;
     backend.UpdateLoginAsync(
@@ -2175,7 +2338,7 @@ protected:
 
   std::optional<password_manager::PasswordStoreChangeList>
   RemoveViaStore(MahoPasswordStoreBackend &backend,
-                 password_manager::StoredCredential cred) {
+                 PasswordStoreBackendCredential cred) {
     base::RunLoop loop;
     std::optional<password_manager::PasswordStoreChangeList> changes;
     backend.RemoveLoginAsync(
@@ -2211,28 +2374,191 @@ protected:
 
   std::optional<password_manager::PasswordStoreChangeList>
   AddAuthorized(MahoPasswordStoreBackend &backend,
-                password_manager::StoredCredential cred) {
+                PasswordStoreBackendCredential cred) {
     Grant(PasswordAuthorizationAction::kAdd, cred.signon_realm);
     return AddViaStore(backend, std::move(cred));
   }
 
   std::optional<password_manager::PasswordStoreChangeList>
   UpdateAuthorized(MahoPasswordStoreBackend &backend,
-                   password_manager::StoredCredential cred) {
+                   PasswordStoreBackendCredential cred) {
     Grant(PasswordAuthorizationAction::kUpdate, cred.signon_realm);
     return UpdateViaStore(backend, std::move(cred));
   }
 
   std::optional<password_manager::PasswordStoreChangeList>
   RemoveAuthorized(MahoPasswordStoreBackend &backend,
-                   password_manager::StoredCredential cred) {
+                   PasswordStoreBackendCredential cred) {
     Grant(PasswordAuthorizationAction::kDelete, cred.signon_realm);
     return RemoveViaStore(backend, std::move(cred));
   }
 };
 
+TEST_F(MahoPasswordStoreBackendRoundTripTest,
+       AutofillableLoginsExcludeBlockedCredentials) {
+  // Given a saved login and a separate "never save" entry in the real Vault.
+  MahoPasswordStoreBackend backend = CreateBackend();
+  SetUpNativeBackend(backend);
+  const std::string origin = "https://autofillable.example";
+  auto saved = FullyPopulatedCredential(origin, u"saved@example.test");
+  saved.blocked_by_user = false;
+  ASSERT_TRUE(AddAuthorized(backend, std::move(saved)).has_value());
+  ASSERT_TRUE(AddAuthorized(
+                  backend, FullyPopulatedCredential(origin, u"blocked"))
+                  .has_value());
+
+  // When Chromium requests only autofillable credentials.
+  base::test::TestFuture<password_manager::BackendLoginsResultOrError> result;
+  backend.GetAutofillableLoginsAsync(result.GetCallback());
+  ASSERT_TRUE(result.Wait());
+
+  // Then only the saved login is returned.
+  const auto* forms =
+      std::get_if<password_manager::BackendLoginsResult>(&result.Get());
+  ASSERT_NE(nullptr, forms);
+  ASSERT_EQ(1u, forms->size());
+  EXPECT_EQ(u"saved@example.test", forms->front().username_value);
+  EXPECT_FALSE(forms->front().blocked_by_user);
+  EXPECT_TRUE(forms->front().primary_key.has_value());
+}
+
+TEST_F(MahoPasswordStoreBackendRoundTripTest,
+       MahoAutofillableLoginsExcludeBlockedCredentials) {
+  // Given a saved login and a separate "never save" entry in the real Vault.
+  MahoPasswordStoreBackend backend = CreateBackend();
+  SetUpNativeBackend(backend);
+  const std::string origin = "https://autofillable.example";
+  auto saved = FullyPopulatedCredential(origin, u"saved@example.test");
+  saved.blocked_by_user = false;
+  ASSERT_TRUE(AddAuthorized(backend, std::move(saved)).has_value());
+  ASSERT_TRUE(AddAuthorized(
+                  backend, FullyPopulatedCredential(origin, u"blocked"))
+                  .has_value());
+
+  // When the Maho API requests only autofillable credentials.
+  base::test::TestFuture<std::vector<MahoPasswordForm>, bool> result;
+  backend.GetAutofillableLoginsMahoAsync(result.GetCallback());
+  ASSERT_TRUE(result.Wait());
+
+  // Then it applies the same filter as the Chromium API.
+  ASSERT_TRUE(result.Get<1>());
+  ASSERT_EQ(1u, result.Get<0>().size());
+  EXPECT_EQ("saved@example.test", result.Get<0>().front().username_value);
+  EXPECT_FALSE(result.Get<0>().front().blocked_by_user);
+}
+
+TEST_F(MahoPasswordStoreBackendRoundTripTest,
+       MatchingLoginsIncludeEveryRequestedRealm) {
+  // Given credentials and grants for two distinct sites.
+  MahoPasswordStoreBackend backend = CreateBackend();
+  SetUpNativeBackend(backend);
+  const std::string first = "https://first-match.example";
+  const std::string second = "https://second-match.example";
+  ASSERT_TRUE(AddAuthorized(
+                  backend, FullyPopulatedCredential(first, u"first"))
+                  .has_value());
+  ASSERT_TRUE(AddAuthorized(
+                  backend, FullyPopulatedCredential(second, u"second"))
+                  .has_value());
+  Grant(PasswordAuthorizationAction::kFill, first);
+  Grant(PasswordAuthorizationAction::kFill, second);
+
+  // When a single request contains both site digests.
+  base::test::TestFuture<password_manager::BackendLoginsResultOrError> result;
+  backend.FillMatchingLoginsAsync(
+      result.GetCallback(), false,
+      {{password_manager::PasswordForm::Scheme::kHtml, first, GURL(first)},
+       {password_manager::PasswordForm::Scheme::kHtml, second, GURL(second)}});
+  ASSERT_TRUE(result.Wait());
+
+  // Then neither site's credentials are omitted.
+  const auto* forms =
+      std::get_if<password_manager::BackendLoginsResult>(&result.Get());
+  ASSERT_NE(nullptr, forms);
+  ASSERT_EQ(2u, forms->size());
+  EXPECT_TRUE(std::ranges::any_of(*forms, [&](const auto& form) {
+    return form.signon_realm == first && form.username_value == u"first";
+  }));
+  EXPECT_TRUE(std::ranges::any_of(*forms, [&](const auto& form) {
+    return form.signon_realm == second && form.username_value == u"second";
+  }));
+}
+
+TEST_F(MahoPasswordStoreBackendRoundTripTest,
+       MatchingLoginsWithNoDigestsReturnsEmptySuccess) {
+  // Given a native backend without any per-origin fill grant.
+  MahoPasswordStoreBackend backend = CreateBackend();
+  SetUpNativeBackend(backend);
+
+  // When the caller has no digests to query.
+  base::test::TestFuture<password_manager::BackendLoginsResultOrError> result;
+  backend.FillMatchingLoginsAsync(result.GetCallback(), false, {});
+  ASSERT_TRUE(result.Wait());
+
+  // Then the empty query succeeds without attempting an all-Vault read.
+  const auto* forms =
+      std::get_if<password_manager::BackendLoginsResult>(&result.Get());
+  ASSERT_NE(nullptr, forms);
+  EXPECT_TRUE(forms->empty());
+}
+
+// Failing-first rationale: fill queries dropped the digest's scheme, so the
+// backend guessed the lookup kind from the STORED records. A `Basic realm=""`
+// credential (whose signon realm equals the plain origin) then hijacked HTML
+// lookups for the same site and hid the stored HTML credential.
+TEST_F(MahoPasswordStoreBackendRoundTripTest,
+       MatchingLoginsSchemeDecidesHtmlVersusHttpAuthLookup) {
+  // Given an HTML login and a `Basic realm=""` HTTP-auth credential sharing
+  // one signon realm.
+  MahoPasswordStoreBackend backend = CreateBackend();
+  SetUpNativeBackend(backend);
+  const std::string origin = "https://scheme-collide.example";
+
+  PasswordStoreBackendCredential html_credential =
+      FullyPopulatedCredential(origin, u"html-user");
+  html_credential.scheme = password_manager::PasswordForm::Scheme::kHtml;
+  ASSERT_TRUE(AddAuthorized(backend, std::move(html_credential)).has_value());
+  PasswordStoreBackendCredential basic_credential =
+      FullyPopulatedCredential(origin, u"basic-user");
+  basic_credential.scheme = password_manager::PasswordForm::Scheme::kBasic;
+  ASSERT_TRUE(AddAuthorized(backend, std::move(basic_credential)).has_value());
+  Grant(PasswordAuthorizationAction::kFill, origin);
+
+  // When each scheme queries the same site.
+  base::test::TestFuture<password_manager::BackendLoginsResultOrError>
+      html_result;
+  backend.FillMatchingLoginsAsync(
+      html_result.GetCallback(), false,
+      {{password_manager::PasswordForm::Scheme::kHtml, origin, GURL(origin)}});
+  ASSERT_TRUE(html_result.Wait());
+  const auto* html_forms =
+      std::get_if<password_manager::BackendLoginsResult>(&html_result.Get());
+  ASSERT_NE(nullptr, html_forms);
+
+  // Then the HTML lookup answers with the HTML credential only.
+  ASSERT_EQ(1u, html_forms->size());
+  EXPECT_EQ(password_manager::PasswordForm::Scheme::kHtml,
+            html_forms->front().scheme);
+  EXPECT_EQ(u"html-user", html_forms->front().username_value);
+
+  // And the Basic lookup resolves the HTTP-auth credential, not the HTML one.
+  base::test::TestFuture<password_manager::BackendLoginsResultOrError>
+      basic_result;
+  backend.FillMatchingLoginsAsync(
+      basic_result.GetCallback(), false,
+      {{password_manager::PasswordForm::Scheme::kBasic, origin, GURL(origin)}});
+  ASSERT_TRUE(basic_result.Wait());
+  const auto* basic_forms =
+      std::get_if<password_manager::BackendLoginsResult>(&basic_result.Get());
+  ASSERT_NE(nullptr, basic_forms);
+  ASSERT_EQ(1u, basic_forms->size());
+  EXPECT_EQ(password_manager::PasswordForm::Scheme::kBasic,
+            basic_forms->front().scheme);
+  EXPECT_EQ(u"basic-user", basic_forms->front().username_value);
+}
+
 // Failing-first rationale: before Task 4 the adapter wrote only
-// realm/username/password and `ConvertToStoredCredentials()` reconstructed only
+// realm/username/password and `ConvertToPasswordForms()` reconstructed only
 // those three fields, so every other assertion below (scheme, url, action, form
 // elements, alternative usernames, all timestamps, blocklist state, match type,
 // store, form_data, notes) read back a default and failed.
@@ -2242,16 +2568,18 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   SetUpNativeBackend(backend);
 
   const std::string origin = "https://roundtrip.example";
-  password_manager::StoredCredential original =
+  PasswordStoreBackendCredential original =
       FullyPopulatedCredential(origin, u"roundtrip@example.test");
-  password_manager::StoredCredential expected =
+  original.scheme = password_manager::PasswordForm::Scheme::kHtml;
+  PasswordStoreBackendCredential expected =
       FullyPopulatedCredential(origin, u"roundtrip@example.test");
+  expected.scheme = password_manager::PasswordForm::Scheme::kHtml;
   ASSERT_TRUE(AddAuthorized(backend, std::move(original)).has_value());
 
   password_manager::BackendLoginsResult read_back =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, read_back.size());
-  const password_manager::StoredCredential &actual = read_back[0];
+  const PasswordStoreBackendCredential &actual = read_back[0];
 
   EXPECT_EQ(expected.scheme, actual.scheme);
   EXPECT_EQ(expected.signon_realm, actual.signon_realm);
@@ -2309,7 +2637,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
 TEST_F(MahoPasswordStoreBackendRoundTripTest,
        UnsupportedFieldsAreEnumeratedAndFailClosed) {
   const std::vector<std::string> unsupported =
-      UnsupportedStoredCredentialFields();
+      UnsupportedPasswordFormFields();
   EXPECT_EQ(std::vector<std::string>(
                 {"affiliated_web_realm", "app_display_name", "app_icon_url",
                  "previously_associated_sync_account_email",
@@ -2322,7 +2650,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   MahoPasswordStoreBackend backend = CreateBackend();
   SetUpNativeBackend(backend);
   const std::string origin = "https://failclosed.example";
-  password_manager::StoredCredential cred =
+  PasswordStoreBackendCredential cred =
       FullyPopulatedCredential(origin, u"failclosed@example.test");
   // Set two unsupported fields; they must come back as Chromium's defaults, not
   // as a reconstructed guess.
@@ -2348,19 +2676,19 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   SetUpNativeBackend(backend);
 
   const std::string origin = "https://duplicates.example";
-  password_manager::StoredCredential first =
+  PasswordStoreBackendCredential first =
       FullyPopulatedCredential(origin, u"first@example.test");
-  password_manager::StoredCredential second =
+  PasswordStoreBackendCredential second =
       FullyPopulatedCredential(origin, u"second@example.test");
-  second.password_value = u"second-original-password";
+  SetCredentialPassword(second, u"second-original-password");
   ASSERT_TRUE(AddAuthorized(backend, std::move(first)).has_value());
   ASSERT_TRUE(AddAuthorized(backend, std::move(second)).has_value());
 
   password_manager::BackendLoginsResult stored =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(2u, stored.size());
-  const password_manager::StoredCredential *target = nullptr;
-  const password_manager::StoredCredential *sibling = nullptr;
+  const PasswordStoreBackendCredential *target = nullptr;
+  const PasswordStoreBackendCredential *sibling = nullptr;
   for (const auto &candidate : stored) {
     if (candidate.username_value == u"second@example.test") {
       target = &candidate;
@@ -2372,10 +2700,10 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   ASSERT_NE(nullptr, sibling);
   ASSERT_TRUE(target->primary_key.has_value());
 
-  password_manager::StoredCredential edit =
+  PasswordStoreBackendCredential edit =
       FullyPopulatedCredential(origin, u"second@example.test");
   edit.primary_key = target->primary_key;
-  edit.password_value = u"second-updated-password";
+  SetCredentialPassword(edit, u"second-updated-password");
   ASSERT_TRUE(UpdateAuthorized(backend, std::move(edit)).has_value());
 
   password_manager::BackendLoginsResult after =
@@ -2409,19 +2737,19 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
       initial[0].primary_key;
   ASSERT_TRUE(stale_primary_key.has_value());
 
-  password_manager::StoredCredential fresh =
+  PasswordStoreBackendCredential fresh =
       FullyPopulatedCredential(origin, u"stale@example.test");
   fresh.primary_key = stale_primary_key;
-  fresh.password_value = u"fresh-password";
+  SetCredentialPassword(fresh, u"fresh-password");
   ASSERT_TRUE(UpdateAuthorized(backend, std::move(fresh)).has_value());
 
-  password_manager::StoredCredential stale_update =
+  PasswordStoreBackendCredential stale_update =
       FullyPopulatedCredential(origin, u"stale@example.test");
   stale_update.primary_key = stale_primary_key;
-  stale_update.password_value = u"stale-password";
+  SetCredentialPassword(stale_update, u"stale-password");
   EXPECT_FALSE(UpdateAuthorized(backend, std::move(stale_update)).has_value());
 
-  password_manager::StoredCredential stale_remove =
+  PasswordStoreBackendCredential stale_remove =
       FullyPopulatedCredential(origin, u"stale@example.test");
   stale_remove.primary_key = stale_primary_key;
   EXPECT_FALSE(RemoveAuthorized(backend, std::move(stale_remove)).has_value());
@@ -2448,16 +2776,21 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   ASSERT_EQ(1u, add_changes->size());
   EXPECT_EQ(password_manager::PasswordStoreChange::ADD,
             (*add_changes)[0].type());
-  EXPECT_EQ(origin, (*add_changes)[0].form().signon_realm);
+  EXPECT_EQ(origin, GetChangeCredential((*add_changes)[0]).signon_realm);
   EXPECT_EQ(u"changelist@example.test",
-            (*add_changes)[0].form().username_value);
-  EXPECT_EQ(GURL(origin + "/login/page"), (*add_changes)[0].form().url);
-  EXPECT_EQ(GURL(origin + "/login/submit"), (*add_changes)[0].form().action);
-  EXPECT_EQ(u"Round Trip Account", (*add_changes)[0].form().display_name);
-  ASSERT_EQ(1u, (*add_changes)[0].form().notes.size());
-  EXPECT_EQ(u"note-value", (*add_changes)[0].form().notes[0].value);
-  ASSERT_TRUE((*add_changes)[0].form().primary_key.has_value());
-  const int add_primary_key = (*add_changes)[0].form().primary_key->value();
+            GetChangeCredential((*add_changes)[0]).username_value);
+  EXPECT_EQ(GURL(origin + "/login/page"),
+            GetChangeCredential((*add_changes)[0]).url);
+  EXPECT_EQ(GURL(origin + "/login/submit"),
+            GetChangeCredential((*add_changes)[0]).action);
+  EXPECT_EQ(u"Round Trip Account",
+            GetChangeCredential((*add_changes)[0]).display_name);
+  ASSERT_EQ(1u, GetChangeCredential((*add_changes)[0]).notes.size());
+  EXPECT_EQ(u"note-value",
+            GetChangeCredential((*add_changes)[0]).notes[0].value);
+  ASSERT_TRUE(GetChangeCredential((*add_changes)[0]).primary_key.has_value());
+  const int add_primary_key =
+      GetChangeCredential((*add_changes)[0]).primary_key->value();
 
   password_manager::BackendLoginsResult stored =
       FillPasswordStoreForms(backend, origin);
@@ -2465,32 +2798,39 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   ASSERT_TRUE(stored[0].primary_key.has_value());
   EXPECT_EQ(add_primary_key, stored[0].primary_key->value());
 
-  password_manager::StoredCredential edit =
+  PasswordStoreBackendCredential edit =
       FullyPopulatedCredential(origin, u"changelist@example.test");
   edit.primary_key = stored[0].primary_key;
-  edit.password_value = u"changelist-updated";
+  SetCredentialPassword(edit, u"changelist-updated");
   std::optional<password_manager::PasswordStoreChangeList> update_changes =
       UpdateAuthorized(backend, std::move(edit));
   ASSERT_TRUE(update_changes.has_value());
   ASSERT_EQ(1u, update_changes->size());
   EXPECT_EQ(password_manager::PasswordStoreChange::UPDATE,
             (*update_changes)[0].type());
-  EXPECT_EQ(u"changelist-updated", (*update_changes)[0].form().password_value);
-  EXPECT_EQ(GURL(origin + "/login/page"), (*update_changes)[0].form().url);
-  EXPECT_EQ(GURL(origin + "/login/submit"), (*update_changes)[0].form().action);
-  ASSERT_EQ(1u, (*update_changes)[0].form().notes.size());
-  EXPECT_EQ(u"note-value", (*update_changes)[0].form().notes[0].value);
+  EXPECT_EQ(u"changelist-updated",
+            GetCredentialPassword(GetChangeCredential((*update_changes)[0])));
+  EXPECT_EQ(GURL(origin + "/login/page"),
+            GetChangeCredential((*update_changes)[0]).url);
+  EXPECT_EQ(GURL(origin + "/login/submit"),
+            GetChangeCredential((*update_changes)[0]).action);
+  ASSERT_EQ(1u, GetChangeCredential((*update_changes)[0]).notes.size());
+  EXPECT_EQ(u"note-value",
+            GetChangeCredential((*update_changes)[0]).notes[0].value);
   EXPECT_TRUE((*update_changes)[0].password_changed());
-  ASSERT_TRUE((*update_changes)[0].form().primary_key.has_value());
-  EXPECT_NE(add_primary_key, (*update_changes)[0].form().primary_key->value());
+  ASSERT_TRUE(
+      GetChangeCredential((*update_changes)[0]).primary_key.has_value());
+  EXPECT_NE(
+      add_primary_key,
+      GetChangeCredential((*update_changes)[0]).primary_key->value());
 
   password_manager::BackendLoginsResult after_password_update =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, after_password_update.size());
-  EXPECT_EQ((*update_changes)[0].form().primary_key,
+  EXPECT_EQ(GetChangeCredential((*update_changes)[0]).primary_key,
             after_password_update[0].primary_key);
 
-  password_manager::StoredCredential metadata_edit =
+  PasswordStoreBackendCredential metadata_edit =
       FullyPopulatedCredential(origin, u"changelist@example.test");
   metadata_edit.primary_key = after_password_update[0].primary_key;
   metadata_edit.password_value.clear();
@@ -2503,14 +2843,15 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   EXPECT_EQ(password_manager::PasswordStoreChange::UPDATE,
             (*metadata_update_changes)[0].type());
   EXPECT_FALSE((*metadata_update_changes)[0].password_changed());
-  ASSERT_TRUE((*metadata_update_changes)[0].form().primary_key.has_value());
+  ASSERT_TRUE(
+      GetChangeCredential((*metadata_update_changes)[0]).primary_key.has_value());
   EXPECT_NE(after_password_update[0].primary_key,
-            (*metadata_update_changes)[0].form().primary_key);
+            GetChangeCredential((*metadata_update_changes)[0]).primary_key);
 
   password_manager::BackendLoginsResult before_remove =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, before_remove.size());
-  password_manager::StoredCredential to_remove =
+  PasswordStoreBackendCredential to_remove =
       FullyPopulatedCredential(origin, u"changelist@example.test");
   to_remove.primary_key = before_remove[0].primary_key;
   std::optional<password_manager::PasswordStoreChangeList> remove_changes =
@@ -2520,8 +2861,9 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   EXPECT_EQ(password_manager::PasswordStoreChange::REMOVE,
             (*remove_changes)[0].type());
   EXPECT_EQ(before_remove[0].primary_key,
-            (*remove_changes)[0].form().primary_key);
-  EXPECT_TRUE((*remove_changes)[0].form().password_value.empty());
+            GetChangeCredential((*remove_changes)[0]).primary_key);
+  EXPECT_TRUE(
+      GetChangeCredential((*remove_changes)[0]).password_value.empty());
 
   EXPECT_TRUE(FillPasswordStoreForms(backend, origin).empty());
 }
@@ -2546,12 +2888,9 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   ASSERT_TRUE(stored[0].primary_key.has_value());
 
   base::RunLoop loop;
-  bool sync_success = false;
   std::optional<password_manager::PasswordStoreChangeList> changes;
   backend.RemoveLoginsCreatedBetweenAsync(
       FROM_HERE, base::Time(), base::Time(),
-      base::BindOnce([](bool *out, bool success) { *out = success; },
-                     &sync_success),
       base::BindOnce(
           [](base::RunLoop *loop,
              std::optional<password_manager::PasswordStoreChangeList> *out,
@@ -2568,13 +2907,13 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
           &loop, &changes));
   loop.Run();
 
-  EXPECT_TRUE(sync_success);
   ASSERT_TRUE(changes.has_value());
   ASSERT_EQ(1u, changes->size());
   EXPECT_EQ(password_manager::PasswordStoreChange::REMOVE,
             (*changes)[0].type());
-  EXPECT_EQ(stored[0].primary_key, (*changes)[0].form().primary_key);
-  EXPECT_TRUE((*changes)[0].form().password_value.empty());
+  EXPECT_EQ(stored[0].primary_key,
+            GetChangeCredential((*changes)[0]).primary_key);
+  EXPECT_TRUE(GetChangeCredential((*changes)[0]).password_value.empty());
   EXPECT_TRUE(FillPasswordStoreForms(backend, origin).empty());
 }
 
@@ -2584,7 +2923,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   SetUpNativeBackend(backend);
 
   const std::string android_realm = "android://aGFzaA==@com.example.android";
-  password_manager::StoredCredential credential =
+  PasswordStoreBackendCredential credential =
       FullyPopulatedCredential(android_realm, u"android@example.test");
   credential.signon_realm = android_realm;
   credential.url = GURL(android_realm);
@@ -2597,7 +2936,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   EXPECT_EQ(android_realm, read_back[0].signon_realm);
   EXPECT_EQ(GURL(android_realm), read_back[0].url);
 
-  password_manager::StoredCredential malformed =
+  PasswordStoreBackendCredential malformed =
       FullyPopulatedCredential(android_realm, u"bad@example.test");
   malformed.signon_realm = android_realm;
   malformed.url = GURL("android://");
@@ -2738,7 +3077,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, before.size());
 
-  password_manager::StoredCredential edit =
+  PasswordStoreBackendCredential edit =
       FullyPopulatedCredential(origin, u"after@example.test");
   edit.primary_key = before[0].primary_key;
   ASSERT_TRUE(UpdateAuthorized(backend, std::move(edit)).has_value());
@@ -2761,19 +3100,21 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   MahoPasswordStoreBackend backend = CreateBackend();
   SetUpNativeBackend(backend);
   const std::string origin = "https://duplicate-username.example";
-  password_manager::StoredCredential first =
+  PasswordStoreBackendCredential first =
       FullyPopulatedCredential(origin, u"same@example.test");
-  password_manager::StoredCredential second =
+  first.scheme = password_manager::PasswordForm::Scheme::kHtml;
+  PasswordStoreBackendCredential second =
       FullyPopulatedCredential(origin, u"same@example.test");
+  second.scheme = password_manager::PasswordForm::Scheme::kHtml;
   second.username_element = u"different-user-field";
   ASSERT_TRUE(AddAuthorized(backend, std::move(first)).has_value());
   ASSERT_TRUE(AddAuthorized(backend, std::move(second)).has_value());
 
-  password_manager::StoredCredential ambiguous =
+  PasswordStoreBackendCredential ambiguous =
       FullyPopulatedCredential(origin, u"same@example.test");
   ambiguous.username_element.clear();
   ambiguous.primary_key.reset();
-  ambiguous.password_value = u"must-not-update";
+  SetCredentialPassword(ambiguous, u"must-not-update");
   EXPECT_FALSE(UpdateAuthorized(backend, std::move(ambiguous)).has_value());
 
   password_manager::BackendLoginsResult after =
@@ -2789,8 +3130,9 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   MahoPasswordStoreBackend backend = CreateBackend();
   SetUpNativeBackend(backend);
   const std::string origin = "https://blocklist-generated.example";
-  password_manager::StoredCredential credential =
+  PasswordStoreBackendCredential credential =
       FullyPopulatedCredential(origin, u"generated@example.test");
+  credential.scheme = password_manager::PasswordForm::Scheme::kHtml;
   credential.blocked_by_user = true;
   credential.type = password_manager::PasswordForm::Type::kGenerated;
   ASSERT_TRUE(AddAuthorized(backend, std::move(credential)).has_value());
@@ -2801,8 +3143,9 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   EXPECT_TRUE(stored[0].blocked_by_user);
   EXPECT_EQ(password_manager::PasswordForm::Type::kGenerated, stored[0].type);
 
-  password_manager::StoredCredential remove =
+  PasswordStoreBackendCredential remove =
       FullyPopulatedCredential(origin, u"generated@example.test");
+  remove.scheme = password_manager::PasswordForm::Scheme::kHtml;
   remove.primary_key = stored[0].primary_key;
   ASSERT_TRUE(RemoveAuthorized(backend, std::move(remove)).has_value());
   EXPECT_TRUE(FillPasswordStoreForms(backend, origin).empty());

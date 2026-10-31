@@ -72,7 +72,11 @@ def _load_bundle_info(app_path: Path) -> dict:
     return info
 
 
-def _verify_bundle_metadata(app_path: Path, expected_arch: str) -> Path:
+def _verify_bundle_metadata(
+    app_path: Path,
+    expected_arch: str,
+    expected_version: str | None = None,
+) -> Path:
     info = _load_bundle_info(app_path)
     bundle_id = info.get("CFBundleIdentifier")
     if bundle_id != EXPECTED_BUNDLE_ID:
@@ -84,6 +88,17 @@ def _verify_bundle_metadata(app_path: Path, expected_arch: str) -> Path:
         raise VerificationError(
             f"unexpected CFBundlePackageType: {package_type!r}; expected {EXPECTED_PACKAGE_TYPE!r}"
         )
+    if expected_version is not None:
+        short_version = info.get("CFBundleShortVersionString")
+        if short_version != expected_version:
+            raise VerificationError(
+                f"unexpected CFBundleShortVersionString: {short_version!r}; expected {expected_version!r}"
+            )
+        bundle_version = info.get("CFBundleVersion")
+        if bundle_version != expected_version:
+            raise VerificationError(
+                f"unexpected CFBundleVersion: {bundle_version!r}; expected {expected_version!r}"
+            )
     executable_name = info.get("CFBundleExecutable")
     if not isinstance(executable_name, str) or not executable_name:
         raise VerificationError("CFBundleExecutable is missing or empty")
@@ -245,11 +260,12 @@ def verify_app_bundle(
     expected_arch: str = "arm64",
     require_gatekeeper: bool = True,
     require_stapled: bool = False,
+    expected_version: str | None = None,
 ) -> None:
     app = Path(app_path)
     if not app.is_dir():
         raise VerificationError(f"Maho.app is missing: {app}")
-    executable = _verify_bundle_metadata(app, expected_arch)
+    executable = _verify_bundle_metadata(app, expected_arch, expected_version)
     _verify_code_signature(app)
     _verify_runtime_dependencies(app, executable)
     _verify_xattrs(app)

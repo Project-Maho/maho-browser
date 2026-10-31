@@ -10,11 +10,14 @@
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/models/image_model.h"
+#include "ui/gfx/render_text.h"
+#include "ui/gfx/render_text_test_api.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/controls/textfield/textfield_test_api.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/view.h"
@@ -77,10 +80,8 @@ class MahoSidebarDownloadsViewTest : public views::ViewsTestBase {
 };
 
 TEST_F(MahoSidebarDownloadsViewTest, SearchUsesSidebarPaletteColors) {
-  // views::Textfield::GetTextColor() uses std::optional::value_or, which
-  // eagerly evaluates GetColorProvider()->GetColor(...) even when an explicit
-  // text color is set. The view must live inside a widget so the search
-  // field's color provider is non-null when GetTextColor() is queried below.
+  // Keep the field attached so theme and enabled-state refreshes exercise
+  // the same color resolution path as a live search field.
   auto widget = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET,
                                  views::Widget::InitParams::TYPE_POPUP);
   auto* view = widget->SetContentsView(
@@ -101,12 +102,35 @@ TEST_F(MahoSidebarDownloadsViewTest, SearchUsesSidebarPaletteColors) {
                 .ResolveToSkColor(/*color_provider=*/nullptr));
   EXPECT_EQ(palette.primary_text,
             view->search_field_for_testing()->GetTextColor());
+  auto* field = view->search_field_for_testing();
+  gfx::test::RenderTextTestApi render_text_api(
+      views::TextfieldTestApi(field).GetRenderText());
+  EXPECT_EQ(palette.secondary_text, field->GetPlaceholderTextColor());
+  field->SetText(u"typed after palette assignment");
+  EXPECT_EQ(palette.primary_text, render_text_api.colors().GetBreak(0)->second);
+  field->OnThemeChanged();
+  field->SetEnabled(false);
+  field->SetEnabled(true);
+  EXPECT_EQ(palette.primary_text, field->GetTextColor());
+  EXPECT_EQ(palette.primary_text, render_text_api.colors().GetBreak(0)->second);
+  EXPECT_EQ(palette.secondary_text, field->GetPlaceholderTextColor());
   const ui::ImageModel search_image =
       view->search_icon_for_testing()->GetImageModel();
   ASSERT_TRUE(search_image.IsVectorIcon());
   EXPECT_EQ(palette.secondary_text,
             search_image.GetVectorIcon().color().ResolveToSkColor(
                 /*color_provider=*/nullptr));
+
+  palette.forced_colors = true;
+  palette.primary_text = SK_ColorWHITE;
+  palette.secondary_text = SK_ColorYELLOW;
+  view->SetSidebarPalette(palette);
+  field->SetText(u"");
+  field->OnThemeChanged();
+  EXPECT_EQ(palette.primary_text, field->GetTextColor());
+  EXPECT_EQ(palette.secondary_text, field->GetPlaceholderTextColor());
+  field->SetText(u"typed after forced palette assignment");
+  EXPECT_EQ(palette.primary_text, render_text_api.colors().GetBreak(0)->second);
 }
 
 TEST_F(MahoSidebarDownloadsViewTest, ContentLabelsUseSidebarPaletteColors) {

@@ -97,7 +97,7 @@ export function ViewSettingsMenu(props: ViewSettingsMenuProps) {
           aria-label="View settings"
           aria-haspopup="dialog"
           aria-expanded={open}
-          className="relative flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+          className="mail-pressable relative flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Eye size={12} />
           View

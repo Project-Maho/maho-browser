@@ -11,7 +11,7 @@ vi.mock("../../ui/Toast", () => ({
 describe("SchedulePicker", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    vi.setSystemTime(new Date(2026, 0, 1));
   });
 
   afterEach(() => {
@@ -80,7 +80,7 @@ describe("SchedulePicker", () => {
     render(<SchedulePicker isOpen={true} onClose={vi.fn()} onSchedule={onSchedule} />);
 
     const [dateInput, timeInput] = Array.from(document.querySelectorAll('input[type="date"], input[type="time"]')) as HTMLInputElement[];
-    fireEvent.change(dateInput, { target: { value: "2025-01-01" } });
+    fireEvent.change(dateInput, { target: { value: "2026-01-01" } });
     fireEvent.change(timeInput, { target: { value: "00:00" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
 

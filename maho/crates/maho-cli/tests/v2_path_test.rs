@@ -148,6 +148,10 @@ struct MockBrowserServer {
 
 impl MockBrowserServer {
     fn spawn(is_v2: bool) -> Self {
+        Self::spawn_with_match_count(is_v2, 1)
+    }
+
+    fn spawn_with_match_count(is_v2: bool, match_count: i64) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket_path = dir.path().join("mock-browser.sock");
         let listener = UnixListener::bind(&socket_path).expect("bind mock UDS");
@@ -241,7 +245,8 @@ impl MockBrowserServer {
                                 }),
                                 "page_query_selector" => serde_json::json!({
                                     "ref_id": "dom_node_1",
-                                    "tag": "button"
+                                    "tag": "button",
+                                    "match_count": match_count
                                 }),
                                 "page_get_text" => serde_json::json!({
                                     "text": "Submit"
@@ -536,4 +541,15 @@ fn test_legacy_fallback_executes_full_fan_out() {
         "Legacy path should have fan-out RPCs (> 4), observed: {}",
         perf_traces.len()
     );
+}
+
+#[test]
+fn test_legacy_selector_rejects_multiple_dom_matches_before_dispatch() {
+    let mock = MockBrowserServer::spawn_with_match_count(false, 2);
+    let output = run_cli_with_env(&["click", "button"], mock.socket(), &[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("multiple DOM elements"));
+    let names: Vec<_> = mock.calls().into_iter().filter_map(|call| call.tool_name).collect();
+    assert!(names.contains(&"page_query_selector".to_string()));
+    assert!(!names.contains(&"browser_click".to_string()));
 }

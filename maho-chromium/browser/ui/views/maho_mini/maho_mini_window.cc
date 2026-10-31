@@ -2,7 +2,10 @@
 
 #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
 
+#include <utility>
+
 #include <map>
+#include <string>
 
 #include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
@@ -13,6 +16,9 @@
 #include <Carbon/Carbon.h>
 
 #include "chrome/browser/ui/browser_window.h"
+#else
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener.h"
 #endif
 
 #include "base/functional/callback.h"
@@ -22,8 +28,10 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -75,8 +83,8 @@ namespace maho {
 
 namespace {
 
-std::map<Profile*, base::WeakPtr<Browser>>& GetActiveMahoMiniWindows() {
-  static base::NoDestructor<std::map<Profile*, base::WeakPtr<Browser>>>
+std::map<Profile*, base::WeakPtr<BrowserWindowInterface>>& GetActiveMahoMiniWindows() {
+  static base::NoDestructor<std::map<Profile*, base::WeakPtr<BrowserWindowInterface>>>
       active_windows;
   return *active_windows;
 }
@@ -97,7 +105,7 @@ class MahoMiniBrowserDestructionObserver : public BrowserCollectionObserver {
     if (!browser) {
       return;
     }
-    Browser* browser_ptr = browser->GetBrowserForMigrationOnly();
+    Browser* browser_ptr = static_cast<Browser*>(browser);
     if (browser_ptr) {
       GetOriginatingSpaceIds().erase(browser_ptr);
     }
@@ -154,12 +162,10 @@ void LaunchMahoMini(content::BrowserContext* context, MahoMiniRequest request) {
   if (context) {
     profile = Profile::FromBrowserContext(context);
   } else {
-    BrowserWindowInterface* active_interface = chrome::FindLastActive();
-    Browser* active_browser =
-        active_interface ? active_interface->GetBrowserForMigrationOnly()
-                         : nullptr;
-    if (active_browser) {
-      profile = active_browser->profile();
+    BrowserWindowInterface* active_interface =
+        GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+    if (active_interface) {
+      profile = active_interface->GetProfile();
     }
   }
   if (!profile) {
@@ -169,16 +175,16 @@ void LaunchMahoMini(content::BrowserContext* context, MahoMiniRequest request) {
     return;
   }
 
-  BrowserWindowInterface* active_interface = chrome::FindLastActive();
-  Browser* active_browser = active_interface
-                                ? active_interface->GetBrowserForMigrationOnly()
-                                : nullptr;
+  BrowserWindowInterface* active_interface =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+  Browser* active_browser = static_cast<Browser*>(active_interface);
 
   auto& active_windows = GetActiveMahoMiniWindows();
   auto active_window_it = active_windows.find(profile);
   if (active_window_it != active_windows.end() && active_window_it->second) {
     GURL target = request.url.is_empty() ? GURL("about:blank") : request.url;
-    Browser* maho_mini_browser = active_window_it->second.get();
+    Browser* maho_mini_browser =
+        static_cast<Browser*>(active_window_it->second.get());
     GetOriginatingSpaceIds()[maho_mini_browser] =
         CaptureOriginatingSpace(active_browser);
     maho_mini_browser->OpenURL(
@@ -186,7 +192,7 @@ void LaunchMahoMini(content::BrowserContext* context, MahoMiniRequest request) {
                                WindowOpenDisposition::CURRENT_TAB,
                                ui::PAGE_TRANSITION_LINK, false),
         base::NullCallback());
-    maho_mini_browser->window()->Activate();
+    maho_mini_browser->GetWindow()->Activate();
     return;
   }
   if (active_window_it != active_windows.end()) {
@@ -195,8 +201,8 @@ void LaunchMahoMini(content::BrowserContext* context, MahoMiniRequest request) {
 
   // Get bounds to center the popup window
   gfx::Rect bounds;
-  if (active_browser && active_browser->window()) {
-    bounds = active_browser->window()->GetBounds();
+  if (active_browser && active_browser->GetWindow()) {
+    bounds = active_browser->GetWindow()->GetBounds();
   } else if (display::Screen::Get()) {
     bounds = display::Screen::Get()->GetPrimaryDisplay().bounds();
   } else {
@@ -222,14 +228,14 @@ void LaunchMahoMini(content::BrowserContext* context, MahoMiniRequest request) {
 
   std::string originating_space = CaptureOriginatingSpace(active_browser);
 
-  Browser::CreateParams params(Browser::TYPE_POPUP, profile,
+  BrowserWindowCreateParams params(Browser::TYPE_POPUP, profile,
                                /*user_gesture=*/true);
   params.is_maho_mini = true;
   params.initial_bounds = gfx::Rect(x, y, window_width, window_height);
   params.omit_from_session_restore = true;
 
-  Browser* popup = Browser::Create(params);
-  active_windows[profile] = popup->AsWeakPtr();
+  Browser* popup = static_cast<Browser*>(CreateBrowserWindow(std::move(params)));
+  active_windows[profile] = popup->GetWeakPtr();
   GetOriginatingSpaceIds()[popup] = originating_space;
 
   GURL target = request.url.is_empty() ? GURL("about:blank") : request.url;
@@ -243,7 +249,7 @@ void LaunchMahoMini(content::BrowserContext* context, MahoMiniRequest request) {
     }
   }
 
-  popup->window()->Show();
+  popup->GetWindow()->Show();
 }
 
 void DecideLinkDestination(
@@ -346,34 +352,30 @@ void RegisterGlobalShortcut(Profile* profile) {
 }
 #else  // !IS_MAC: portable global shortcut via ui::GlobalAcceleratorListener.
 
-#include <string>
-
-#include "ui/base/accelerators/accelerator.h"
-#include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener.h"
-
-namespace maho {
-
 namespace {
 
 // Portable equivalent of the macOS \u2325\u2318N global hotkey.
 class MahoMiniShortcutObserver
     : public ui::GlobalAcceleratorListener::Observer {
  public:
-  void OnKeyPressed(const ui::Accelerator& accelerator) override {
-    Profile* profile = ProfileManager::GetLastUsedProfileIfLoaded();
-    if (!profile) {
-      return;
-    }
-    if (!profile->GetPrefs()->GetBoolean(
-            maho::sidebar_prefs::kMahoMiniGlobalShortcutEnabled)) {
-      return;
-    }
-    maho::LaunchMahoMini(profile, maho::MahoMiniRequest{GURL()});
-  }
+  void OnKeyPressed(const ui::Accelerator& accelerator) override;
 
   void ExecuteCommand(const std::string& accelerator_group_id,
                       const std::string& command_id) override {}
 };
+
+void MahoMiniShortcutObserver::OnKeyPressed(
+    const ui::Accelerator& accelerator) {
+  Profile* profile = ProfileManager::GetLastUsedProfileIfLoaded();
+  if (!profile) {
+    return;
+  }
+  if (!profile->GetPrefs()->GetBoolean(
+          maho::sidebar_prefs::kMahoMiniGlobalShortcutEnabled)) {
+    return;
+  }
+  maho::LaunchMahoMini(profile, maho::MahoMiniRequest{GURL()});
+}
 
 MahoMiniShortcutObserver* ShortcutObserver() {
   static MahoMiniShortcutObserver observer;
@@ -408,7 +410,7 @@ void RegisterGlobalShortcut(Profile* profile) {
 void MahoMiniWindow::Open(Browser* parent_browser, const GURL& url) {
   maho::MahoMiniRequest request;
   request.url = url;
-  maho::LaunchMahoMini(parent_browser ? parent_browser->profile() : nullptr,
+  maho::LaunchMahoMini(parent_browser ? parent_browser->GetProfile() : nullptr,
                        request);
 }
 
@@ -425,31 +427,34 @@ void MahoMiniWindow::PromoteToTab(Browser* popup_browser) {
     return;
   }
 
-  TabStripModel* popup_tab_strip = popup_browser->tab_strip_model();
+  TabStripModel* popup_tab_strip = popup_browser->GetTabStripModel();
   if (!popup_tab_strip || popup_tab_strip->empty()) {
     return;
   }
 
   // Find a tabbed (TYPE_NORMAL) browser with the same profile, skipping
   // popups. This ensures the promoted tab lands in a real browser window.
-  Browser* target_browser =
-      chrome::FindTabbedBrowser(popup_browser->profile(),
-                                /*match_original_profiles=*/false);
+  ProfileBrowserCollection* collection =
+      ProfileBrowserCollection::GetForProfile(popup_browser->GetProfile());
+  BrowserWindowInterface* target_bwi =
+      collection ? collection->FindTabbedBrowser(/*match_original_profiles=*/false)
+                 : nullptr;
+  Browser* target_browser = static_cast<Browser*>(target_bwi);
   if (!target_browser || target_browser == popup_browser) {
     target_browser =
-        Browser::Create(Browser::CreateParams(popup_browser->profile(), true));
+        static_cast<Browser*>(CreateBrowserWindow(BrowserWindowCreateParams(popup_browser->GetProfile(), true)));
   }
 
   int active_index = popup_tab_strip->active_index();
   std::unique_ptr<content::WebContents> contents =
       popup_tab_strip->DetachWebContentsAtForInsertion(active_index);
   if (contents) {
-    target_browser->tab_strip_model()->InsertWebContentsAt(
+    target_browser->GetTabStripModel()->InsertWebContentsAt(
         /*index=*/-1, std::move(contents),
         AddTabTypes::ADD_ACTIVE | AddTabTypes::ADD_INHERIT_OPENER);
-    target_browser->window()->Show();
-    target_browser->window()->Activate();
+    target_browser->GetWindow()->Show();
+    target_browser->GetWindow()->Activate();
   }
 
-  popup_browser->window()->Close();
+  popup_browser->GetWindow()->Close();
 }

@@ -51,6 +51,7 @@ fn test_split_view_persistence_roundtrip() {
             window_id: w.clone(),
             tab_ids: vec![tab1.clone(), tab2.clone()],
             orientation: Orientation::Horizontal,
+            layout: None,
         });
 
         // Trigger manual flush/terminate to persist
@@ -129,6 +130,7 @@ fn test_split_view_persistence_ambiguity() {
             window_id: w.clone(),
             tab_ids: vec![tab1, tab2],
             orientation: Orientation::Horizontal,
+            layout: None,
         });
 
         core.handle_event(ShellEvent::AppWillTerminate);
@@ -220,6 +222,7 @@ fn test_split_view_persistence_no_match() {
             window_id: w.clone(),
             tab_ids: vec![tab1.clone(), tab1],
             orientation: Orientation::Horizontal,
+            layout: None,
         });
 
         core.handle_event(ShellEvent::AppWillTerminate);
@@ -289,6 +292,7 @@ fn test_split_view_persistence_orientation_and_ratio() {
             window_id: w.clone(),
             tab_ids: vec![tab1.clone(), tab2.clone()],
             orientation: Orientation::Vertical,
+            layout: None,
         });
 
         // Set custom ratio

@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
 #include "base/observer_list.h"
@@ -80,16 +81,30 @@ class COMPONENT_EXPORT(MAHO_UPDATES) MahoUpdateManager {
   // restarts the browser. No-op in any other state.
   void ApplyUpdateAndRestart();
 
+  // Injects the handler the platform updater runs when the user asks for the
+  // full release notes / version history. The browser layer owns this because
+  // opening a chrome:// surface needs the browser UI stack, which this
+  // component does not depend on.
+  void SetVersionHistoryHandler(base::RepeatingClosure handler);
+
   // Channel selection is persisted in local prefs and reflected in the
   // appcast / feed URL on the next check.
   void SetChannel(UpdateChannel channel);
   UpdateChannel GetChannel() const;
+
+  // False when the update subsystem is switched off by policy/pref
+  // (maho.update.enabled), in which case no check can ever run. Surfaces use
+  // this to decide whether to offer update controls at all. This is Maho's own
+  // notion of "can update"; Chromium's chrome::GetChannel() is UNKNOWN in an
+  // unbranded build like this one and must not be used for that decision.
+  bool IsEnabled() const;
 
   void AddObserver(MahoUpdateObserver* observer);
   void RemoveObserver(MahoUpdateObserver* observer);
 
   UpdateState GetState() const;
   UpdateError GetLastError() const;
+  std::string GetUpdateGuidance() const;
 
   // Returns the resolved update server base URL with no trailing slash.
   // Cached during Initialize from env var > pref > compile-time default.
@@ -143,6 +158,7 @@ class COMPONENT_EXPORT(MAHO_UPDATES) MahoUpdateManager {
   UpdateChannel channel_ = UpdateChannel::kStable;
   base::TimeTicks check_started_at_;
   std::string server_base_url_;
+  base::RepeatingClosure version_history_handler_;
   base::OneShotTimer auto_check_timer_;
   base::TimeDelta auto_check_interval_for_testing_;
   base::ObserverList<MahoUpdateObserver> observers_;

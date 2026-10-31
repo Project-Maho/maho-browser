@@ -374,6 +374,60 @@ impl SyncEntity {
     }
 }
 
+/// Read canonical versions and reconcile the alternate keys emitted by older
+/// local writers. Never let an older canonical row hide a newer local edit.
+pub(crate) fn load_persisted_entity_version(
+    storage: &maho_storage::sqlite::SqliteStorage,
+    entity_type: &SyncEntityType,
+    entity_id: &str,
+    profile_id: Option<&str>,
+) -> Result<Option<maho_storage::sqlite::EntityVersionRecord>, maho_storage::error::StorageError> {
+    let canonical_id = if entity_type.is_profile_scoped() {
+        let Some(profile_id) = profile_id else {
+            return Ok(None);
+        };
+        format!("{profile_id}:{entity_id}")
+    } else {
+        entity_id.to_string()
+    };
+    let mut profiles: Vec<String> = profile_id.into_iter().map(str::to_string).collect();
+    if !entity_type.is_profile_scoped() {
+        for json in storage.get_all_profiles()? {
+            let profile: maho_types::profile::ProfileConfig = serde_json::from_str(&json)?;
+            profiles.push(profile.id.to_string());
+        }
+    }
+    profiles.sort();
+    profiles.dedup();
+    let mut latest = storage.get_entity_version(entity_type.as_str(), &canonical_id)?;
+    let mut migrated = false;
+    for profile in profiles {
+        let legacy_id = format!("profile:{profile}\u{1f}{entity_id}");
+        if let Some(candidate) = storage.get_entity_version(entity_type.as_str(), &legacy_id)? {
+            if latest
+                .as_ref()
+                .is_none_or(|row| (candidate.0, candidate.1) > (row.0, row.1))
+            {
+                latest = Some(candidate);
+                migrated = true;
+            }
+        }
+    }
+    if migrated {
+        if let Some((version, device, fields, payload)) = &latest {
+            storage.save_entity_version(
+                entity_type.as_str(),
+                &canonical_id,
+                *version,
+                *device,
+                fields.as_deref(),
+                payload.as_deref(),
+            )?;
+        }
+    }
+    Ok(latest)
+}
+
 fn default_schema_version() -> u8 {
     1
 }

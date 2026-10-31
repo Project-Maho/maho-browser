@@ -98,6 +98,35 @@ describe("processLinksForSafety (IDN homograph protection)", () => {
   });
 
   describe("prepareIframeHtml integration", () => {
+    it('keeps a light canvas behind authored black text in dark mode', () => {
+      const result = prepareIframeHtml('<span style="color:#000">Readable text</span>', { blockImages: true, blockTrackers: false, isDark: true });
+      const frame = document.createElement('iframe');
+      document.body.appendChild(frame);
+      try {
+        const doc = frame.contentDocument!;
+        doc.open();
+        doc.write(result.html);
+        doc.close();
+        const styles = frame.contentWindow!.getComputedStyle(doc.documentElement);
+        expect(styles.backgroundColor).toBe('rgb(255, 255, 255)');
+        expect(styles.colorScheme).toBe('light');
+        expect(frame.contentWindow!.getComputedStyle(doc.querySelector('span')!).color).toBe('rgb(0, 0, 0)');
+      } finally {
+        frame.remove();
+      }
+    });
+    it("removes message-controlled refresh and base navigation", () => {
+      const result = prepareIframeHtml(
+        '<html><head><meta http-equiv="ReFrEsH" content="0;url=https://redirect.example.test/"><base href="https://redirect.example.test/"></head><body><p>Original message</p></body></html>',
+        { blockImages: true, blockTrackers: true, isDark: false },
+      );
+      const doc = new DOMParser().parseFromString(result.html, "text/html");
+
+      expect(doc.querySelector('meta[http-equiv="refresh" i]')).toBeNull();
+      expect(doc.querySelector("base")).toBeNull();
+      expect(doc.body.textContent).toContain("Original message");
+    });
+
     it("marks the same homograph cases when going through the full iframe prep", () => {
       const html = `<a href="https://xn--pple-43d.com">\u0430pple.com</a>`;
       const result = prepareIframeHtml(html, {

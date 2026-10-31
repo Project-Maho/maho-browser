@@ -11,6 +11,11 @@ Produces two release assets consumed by the in-app updaters:
                           {"signature": "<128-hex ed25519>", "payload": "<inner JSON>"}
                           Payload carries version, installer_url, installer_sha256,
                           installer_signer_cn, and rollout_bucket.
+  * ``update-linux.json`` — signed envelope of the same shape read by
+                            ``maho_update_delegate_linux.cc`` from the relay
+                            (``GET /updates/linux/check``). Linux never
+                            self-updates, so the payload carries only
+                            version and download_url (banner guidance).
 
 The private key is supplied out-of-band (``--private-key`` file or the
 ``SPARKLE_ED_PRIVATE_KEY`` environment variable, base64-encoded 32-byte seed)
@@ -29,7 +34,7 @@ import tempfile
 from email.utils import formatdate
 from xml.sax.saxutils import escape
 
-RELEASE_BASE = "https://github.com/Project-Maho/release/releases/latest/download"
+RELEASE_BASE = "https://github.com/Project-Maho/maho-browser/releases/latest/download"
 MANIFEST_PUBKEY_HEX = "8b076b75cb7896810997c59b1ec7e184730d714ca0679e0deae22f7aba0d4dbc"
 MANIFEST_PUBKEY_BYTES = bytes.fromhex(MANIFEST_PUBKEY_HEX)
 
@@ -48,14 +53,6 @@ def _load_private_seed(path=None):
             raw = f.read().strip()
     else:
         raw = os.environ.get("SPARKLE_ED_PRIVATE_KEY", "").strip()
-        if not raw:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            default_secrets_path = os.path.normpath(
-                os.path.join(script_dir, "..", "..", "..", ".secrets", "signing", "sparkle_ed_private.pem")
-            )
-            if os.path.isfile(default_secrets_path):
-                with open(default_secrets_path, "r", encoding="utf-8") as f:
-                    raw = f.read().strip()
         if not raw:
             _eprint("error: no private key. Pass --private-key FILE or set "
                     "SPARKLE_ED_PRIVATE_KEY.")
@@ -165,6 +162,17 @@ def build_win_manifest(version, exe_path, seed, base_url,
         "payload": payload_str,
     }
     return json.dumps(envelope, indent=2) + "\n"
+
+
+def build_linux_manifest(version, seed, download_url):
+    payload_obj = {
+        "version": version,
+        "download_url": download_url,
+    }
+    payload_str = json.dumps(payload_obj, separators=(",", ":"))
+    sig_hex = _ed_sign_hex(seed, payload_str.encode("utf-8"))
+    return json.dumps({"signature": sig_hex, "payload": payload_str},
+                      indent=2) + "\n"
 
 
 def run_self_test(args):
@@ -358,6 +366,11 @@ def main(argv):
     p.add_argument("--dmg", help="macOS .dmg path (enables appcast.xml).")
     p.add_argument("--win-exe", help="Windows .exe path (enables "
                                      "update-win.json).")
+    p.add_argument("--linux", action="store_true",
+                   help="Emit update-linux.json (signed version envelope).")
+    p.add_argument("--linux-download-url",
+                   default="https://mahobrowser.com/download/",
+                   help="Download page carried in the Linux payload.")
     p.add_argument("--base-url", default=RELEASE_BASE,
                    help="Base download URL for release assets.")
     p.add_argument("--notes-url",
@@ -376,8 +389,9 @@ def main(argv):
     if args.self_test:
         return run_self_test(args)
 
-    if not args.dmg and not args.win_exe:
-        p.error("provide at least one of --dmg / --win-exe / --self-test")
+    if not args.dmg and not args.win_exe and not args.linux:
+        p.error("provide at least one of --dmg / --win-exe / --linux / "
+                "--self-test")
 
     version = args.version or _version_from_chrome_version(
         args.chrome_version_file)
@@ -385,7 +399,7 @@ def main(argv):
     os.makedirs(args.output_dir, exist_ok=True)
 
     seed = None
-    if args.dmg or args.win_exe:
+    if args.dmg or args.win_exe or args.linux:
         seed = _load_private_seed(args.private_key)
 
     if args.dmg:
@@ -406,6 +420,13 @@ def main(argv):
             rollout_bucket=args.rollout_bucket,
         )
         out = os.path.join(args.output_dir, "update-win.json")
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(manifest)
+        print(f"wrote {out}")
+
+    if args.linux:
+        manifest = build_linux_manifest(version, seed, args.linux_download_url)
+        out = os.path.join(args.output_dir, "update-linux.json")
         with open(out, "w", encoding="utf-8") as f:
             f.write(manifest)
         print(f"wrote {out}")

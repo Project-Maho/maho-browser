@@ -3,7 +3,10 @@
 #include <memory>
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/grit/maho_space_config_resources.h"
 #include "chrome/grit/maho_space_config_resources_map.h"
 #include "content/public/browser/web_contents.h"
@@ -88,11 +91,16 @@ void MahoSpaceConfigUI::BindInterface(
 void MahoSpaceConfigUI::CreatePageHandler(
     mojo::PendingRemote<maho_space_config::mojom::Page> page,
     mojo::PendingReceiver<maho_space_config::mojom::PageHandler> receiver) {
-  Browser* browser = chrome::FindBrowserWithTab(web_ui()->GetWebContents());
+  Browser* browser = static_cast<Browser*>(
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_ui()->GetWebContents()));
   if (!browser) {
     auto* profile = Profile::FromWebUI(web_ui());
     if (profile) {
-      browser = chrome::FindBrowserWithProfile(profile);
+      ProfileBrowserCollection* collection =
+          ProfileBrowserCollection::GetForProfile(profile);
+      browser = static_cast<Browser*>(
+          collection ? collection->GetLastActiveBrowser() : nullptr);
     }
   }
   if (!browser) {

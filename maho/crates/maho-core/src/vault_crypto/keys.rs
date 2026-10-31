@@ -71,6 +71,7 @@ pub enum WrappingDomain {
     User,
     Recovery,
     Device,
+    Account,
 }
 
 #[derive(Zeroize, ZeroizeOnDrop)]

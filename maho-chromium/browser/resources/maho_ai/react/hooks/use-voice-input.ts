@@ -132,6 +132,7 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
   const animationFrameRef = useRef<number|null>(null);
   const workletUrlRef = useRef<string|null>(null);
   const listenerIdsRef = useRef<VoiceMojoListeners|null>(null);
+  const captureGenerationRef = useRef(0);
 
   useEffect(() => {
     storeRef.current = store;
@@ -154,6 +155,7 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
   }, []);
 
   const cleanupCapture = useCallback(async ({resetStatus, stopBackend}: CleanupOptions): Promise<void> => {
+    const generation = ++captureGenerationRef.current;
     if (animationFrameRef.current !== null) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
@@ -172,18 +174,6 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
     });
 
     const audioContext = audioContextRef.current;
-    if (audioContext) {
-      try {
-        await audioContext.close();
-      } catch (error: unknown) {
-        if (error instanceof Error) {
-          console.warn('[maho-ai] Failed to close voice audio context:', error.message);
-        } else {
-          console.warn('[maho-ai] Failed to close voice audio context:', String(error));
-        }
-      }
-    }
-
     if (workletUrlRef.current) {
       URL.revokeObjectURL(workletUrlRef.current);
     }
@@ -197,6 +187,10 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
     workletUrlRef.current = null;
     storeRef.current.setVoiceLevel(0);
 
+    // Detach resources before awaiting so a newer capture cannot be cleared.
+    const closing = audioContext?.close().catch((error: unknown) => {
+      console.warn('[maho-ai] Failed to close voice audio context:', String(error));
+    });
     if (stopBackend) {
       try {
         await voiceMojo.handler.stopVoiceSession();
@@ -209,7 +203,8 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
       }
     }
 
-    if (resetStatus) {
+    await closing;
+    if (resetStatus && generation === captureGenerationRef.current) {
       storeRef.current.setVoiceStatus('idle');
     }
   }, [unbindVoiceListeners]);
@@ -259,7 +254,10 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
       return;
     }
 
-    await cleanupCapture({resetStatus: false, stopBackend: true});
+    const cleanup = cleanupCapture({resetStatus: false, stopBackend: true});
+    const generation = captureGenerationRef.current;
+    await cleanup;
+    if (generation !== captureGenerationRef.current) return;
     storeRef.current.setVoiceError(null);
     storeRef.current.setVoiceTranscript('');
     storeRef.current.setVoiceLevel(0);
@@ -267,6 +265,7 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
 
     try {
       const {accepted} = await voiceMojo.handler.startVoiceSession();
+      if (generation !== captureGenerationRef.current) return;
       if (!accepted) {
         storeRef.current.setVoiceError('Voice input is already listening.');
         await cleanupCapture({resetStatus: false, stopBackend: true});
@@ -274,19 +273,31 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+      if (generation !== captureGenerationRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      streamRef.current = stream;
       const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
       const workletUrl = createWorkletUrl();
+      workletUrlRef.current = workletUrl;
       await audioContext.audioWorklet.addModule(workletUrl);
+      if (generation !== captureGenerationRef.current) return;
 
       const source = audioContext.createMediaStreamSource(stream);
+      sourceRef.current = source;
       const analyser = audioContext.createAnalyser();
+      analyserRef.current = analyser;
       analyser.fftSize = 1024;
       const worklet = new AudioWorkletNode(audioContext, WORKLET_NAME, {
         numberOfInputs: 1,
         numberOfOutputs: 1,
         outputChannelCount: [1],
       });
+      workletRef.current = worklet;
       const mute = audioContext.createGain();
+      muteRef.current = mute;
       mute.gain.value = 0;
 
       worklet.port.onmessage = event => {
@@ -301,16 +312,10 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
       worklet.connect(mute);
       mute.connect(audioContext.destination);
 
-      streamRef.current = stream;
-      audioContextRef.current = audioContext;
-      analyserRef.current = analyser;
-      sourceRef.current = source;
-      workletRef.current = worklet;
-      muteRef.current = mute;
-      workletUrlRef.current = workletUrl;
       storeRef.current.setVoiceStatus('listening');
       animationFrameRef.current = requestAnimationFrame(updateLevel);
     } catch (error: unknown) {
+      if (generation !== captureGenerationRef.current) return;
       storeRef.current.setVoiceError(getVoiceCaptureErrorMessage(error));
       await cleanupCapture({resetStatus: false, stopBackend: true});
     }

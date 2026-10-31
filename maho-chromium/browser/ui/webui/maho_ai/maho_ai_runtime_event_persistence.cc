@@ -2,8 +2,14 @@
 
 #include "maho/browser/ui/webui/maho_ai/maho_ai_runtime_event_persistence.h"
 
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
 #include <utility>
 
+#include "base/check.h"
+#include "base/json/json_reader.h"
 #include "maho/browser/ai/maho_ai_security_utils.h"
 #include "maho/browser/ai/maho_credential_redaction.h"
 
@@ -12,6 +18,105 @@ namespace {
 
 constexpr char kSafeCredentialFailureText[] =
     "Your saved AI credential could not be used.";
+
+constexpr size_t kReplayReserveBytes = 8192;
+constexpr size_t kMergedTextBytes = 64 * 1024;
+constexpr char kReplayCapacityExceeded[] = "replay_capacity_exceeded";
+
+size_t TextBytes(std::string_view text) {
+  size_t bytes = 0;
+  for (size_t i = 0; i < text.size(); ++i) {
+    const auto c = static_cast<unsigned char>(text[i]);
+    if (c == 0xe2 && i + 2 < text.size() &&
+        static_cast<unsigned char>(text[i + 1]) == 0x80 &&
+        (static_cast<unsigned char>(text[i + 2]) == 0xa8 ||
+         static_cast<unsigned char>(text[i + 2]) == 0xa9)) {
+      bytes += 6;
+      i += 2;
+    } else if (c == '"' || c == '\\' || c == '\n' || c == '\r' ||
+               c == '\t' || c == '\b' || c == '\f') {
+      bytes += 2;
+    } else {
+      bytes += c < 0x20 || c == '<' ? 6 : 1;
+    }
+  }
+  return bytes;
+}
+
+size_t OptionalTextBytes(const std::optional<std::string>& text) {
+  return text ? TextBytes(*text) : 0;
+}
+
+size_t ToolBytes(const maho_ai::mojom::ToolCallInfo& tool) {
+  return sizeof(tool) + 128 + TextBytes(tool.call_id) +
+         TextBytes(tool.tool_name) + TextBytes(tool.arguments_json);
+}
+
+size_t EventBytes(const maho_ai::mojom::RuntimeEvent& event) {
+  size_t bytes = sizeof(event) + 128 + TextBytes(event.session_id) +
+                 OptionalTextBytes(event.request_id) +
+                 OptionalTextBytes(event.text);
+  if (event.tool_call) {
+    bytes += ToolBytes(*event.tool_call);
+  }
+  if (event.tool_result) {
+    const auto& result = *event.tool_result;
+    bytes += sizeof(result) + 128 + TextBytes(result.call_id) +
+             TextBytes(result.output) + OptionalTextBytes(result.error_message);
+  }
+  if (event.approval_request) {
+    const auto& approval = *event.approval_request;
+    bytes += sizeof(approval) + 128 + TextBytes(approval.approval_id) +
+             TextBytes(approval.description);
+    if (approval.related_tool_call) {
+      bytes += ToolBytes(*approval.related_tool_call);
+    }
+  }
+  if (event.approval_result) {
+    const auto& approval = *event.approval_result;
+    bytes += sizeof(approval) + 128 + TextBytes(approval.approval_id) +
+             OptionalTextBytes(approval.reason);
+  }
+  if (event.interaction_request) {
+    const auto& request = *event.interaction_request;
+    bytes += sizeof(request) + 128 + TextBytes(request.request_id) +
+             TextBytes(request.question) + OptionalTextBytes(request.artifact_ref) +
+             OptionalTextBytes(request.state);
+    for (const auto& option : request.options) {
+      bytes += sizeof(*option) + 128 + TextBytes(option->id) +
+               TextBytes(option->label) + OptionalTextBytes(option->description);
+    }
+  }
+  if (event.browser_context) {
+    const auto& context = *event.browser_context;
+    bytes += sizeof(context) + 128 + TextBytes(context.url) +
+             TextBytes(context.title) + TextBytes(context.content_snippet) +
+             TextBytes(context.label);
+    for (const auto& warning : context.warnings) {
+      bytes += sizeof(warning) + 16 + TextBytes(warning);
+    }
+  }
+  if (event.artifact) {
+    const auto& artifact = *event.artifact;
+    bytes += sizeof(artifact) + 128 + TextBytes(artifact.artifact_id) +
+             TextBytes(artifact.session_id) + TextBytes(artifact.display_name) +
+             TextBytes(artifact.mime_type);
+  }
+  if (event.replay_window) {
+    bytes += sizeof(*event.replay_window) + 128;
+  }
+  return bytes;
+}
+
+bool IsPlainDelta(const maho_ai::mojom::RuntimeEvent& event) {
+  using Kind = maho_ai::mojom::RuntimeEventKind;
+  return (event.kind == Kind::kAssistantToken ||
+          event.kind == Kind::kAssistantThinking) &&
+         event.text.has_value() && !event.tool_call && !event.tool_result &&
+         !event.approval_request && !event.approval_result &&
+         !event.interaction_request && !event.browser_context &&
+         !event.artifact && !event.credential_error_code.has_value();
+}
 
 const char* CredentialErrorCodeToPersistedSymbol(
     maho_ai::mojom::CredentialErrorCode code) {
@@ -36,6 +141,159 @@ const char* CredentialErrorCodeToPersistedSymbol(
 
 }  // namespace
 
+RuntimeReplayBudget::RuntimeReplayBudget() = default;
+RuntimeReplayBudget::~RuntimeReplayBudget() = default;
+
+void RuntimeReplayBudget::Reset() {
+  bytes = 0;
+  event_bytes.clear();
+  omitted_turns = 0;
+  omitted_through_sequence = 0;
+  exhausted = false;
+}
+
+ReplayAdmission AppendBoundedReplayEvent(
+    std::vector<maho_ai::mojom::RuntimeEventPtr>& events,
+    RuntimeReplayBudget& budget,
+    maho_ai::mojom::RuntimeEventPtr& event) {
+  using Kind = maho_ai::mojom::RuntimeEventKind;
+  CHECK_EQ(events.size(), budget.event_bytes.size());
+  if (event->sequence_start == 0) {
+    event->sequence_start = event->sequence;
+  }
+  if (event->kind == Kind::kUserPrompt) {
+    budget.exhausted = false;
+  } else if (budget.exhausted) {
+    return ReplayAdmission::kIgnored;
+  }
+  const bool merge =
+      !events.empty() && IsPlainDelta(*event) && IsPlainDelta(*events.back()) &&
+      events.back()->kind == event->kind &&
+      events.back()->session_id == event->session_id &&
+      events.back()->request_id == event->request_id &&
+      events.back()->sequence + 1 == event->sequence_start &&
+      events.back()->text->size() <= kMergedTextBytes &&
+      event->text->size() <= kMergedTextBytes - events.back()->text->size();
+  const size_t added_bytes = merge ? TextBytes(*event->text) : EventBytes(*event);
+  while (added_bytes > kReplayBytes - kReplayReserveBytes ||
+         budget.bytes > kReplayBytes - kReplayReserveBytes - added_bytes ||
+         events.size() + (merge ? 0 : 1) > kReplayRecords - 2) {
+    size_t end = 0;
+    std::set<std::string> pending_tools;
+    std::set<std::string> pending_approvals;
+    for (size_t i = budget.omitted_turns ? 1 : 0; i < events.size(); ++i) {
+      const auto& item = *events[i];
+      if (item.tool_call) {
+        pending_tools.insert(item.tool_call->call_id);
+      }
+      if (item.tool_result) {
+        pending_tools.erase(item.tool_result->call_id);
+      }
+      if (item.approval_request) {
+        pending_approvals.insert(item.approval_request->approval_id);
+      }
+      if (item.approval_result) {
+        pending_approvals.erase(item.approval_result->approval_id);
+      }
+      if (item.kind == Kind::kError ||
+          (item.kind == Kind::kTurnComplete && pending_tools.empty() &&
+           pending_approvals.empty())) {
+        end = i + 1;
+        break;
+      }
+    }
+    if (end == 0) {
+      auto failure = maho_ai::mojom::RuntimeEvent::New();
+      failure->kind = Kind::kError;
+      failure->session_id = event->session_id;
+      failure->request_id = event->request_id;
+      failure->sequence = event->sequence;
+      failure->sequence_start = event->sequence;
+      failure->timestamp = event->timestamp;
+      failure->text = kReplayCapacityExceeded;
+      if (budget.omitted_turns) {
+        failure->replay_window = maho_ai::mojom::ReplayWindowInfo::New(
+            budget.omitted_turns, budget.omitted_through_sequence);
+      }
+      const size_t bytes = EventBytes(*failure);
+      CHECK_LE(bytes, kReplayReserveBytes);
+      budget.bytes += bytes;
+      budget.event_bytes.push_back(bytes);
+      events.push_back(failure->Clone());
+      event = std::move(failure);
+      budget.exhausted = true;
+      return ReplayAdmission::kExhausted;
+    }
+    const uint64_t removed_sequence = events[end - 1]->sequence;
+    for (size_t i = 0; i < end; ++i) {
+      budget.bytes -= budget.event_bytes.front();
+      budget.event_bytes.pop_front();
+    }
+    events.erase(events.begin(), events.begin() + end);
+    ++budget.omitted_turns;
+    budget.omitted_through_sequence = removed_sequence;
+    auto window = maho_ai::mojom::RuntimeEvent::New();
+    window->kind = Kind::kSessionStatus;
+    window->session_id = event->session_id;
+    window->sequence = removed_sequence;
+    window->sequence_start = removed_sequence;
+    window->timestamp = event->timestamp;
+    window->replay_window = maho_ai::mojom::ReplayWindowInfo::New(
+        budget.omitted_turns, removed_sequence);
+    window->text =
+        "{\"history_window\":{\"omitted_turns\":" +
+        std::to_string(budget.omitted_turns) + ",\"omitted_through_sequence\":" +
+        std::to_string(removed_sequence) + "}}";
+    const size_t bytes = EventBytes(*window);
+    budget.bytes += bytes;
+    budget.event_bytes.push_front(bytes);
+    events.insert(events.begin(), std::move(window));
+  }
+  budget.bytes += added_bytes;
+  if (merge) {
+    events.back()->text->append(*event->text);
+    events.back()->sequence = event->sequence;
+    events.back()->timestamp = event->timestamp;
+    budget.event_bytes.back() += added_bytes;
+  } else {
+    budget.event_bytes.push_back(added_bytes);
+    events.push_back(event->Clone());
+  }
+  if (event->kind == Kind::kError &&
+      event->text == kReplayCapacityExceeded) {
+    budget.exhausted = true;
+  }
+  if (budget.omitted_turns) {
+    event->replay_window = maho_ai::mojom::ReplayWindowInfo::New(
+        budget.omitted_turns, budget.omitted_through_sequence);
+  }
+  return ReplayAdmission::kAccepted;
+}
+
+void NormalizeReplayWindow(
+    std::vector<maho_ai::mojom::RuntimeEventPtr>& events,
+    RuntimeReplayBudget& budget) {
+  auto previous = std::move(events);
+  events.clear();
+  budget.Reset();
+  for (auto& event : previous) {
+    AppendBoundedReplayEvent(events, budget, event);
+    if (events.size() == 1 &&
+        event->kind == maho_ai::mojom::RuntimeEventKind::kSessionStatus &&
+        event->text) {
+      const auto metadata =
+          base::JSONReader::ReadDict(*event->text, base::JSON_PARSE_RFC);
+      const auto* window = metadata ? metadata->FindDict("history_window") : nullptr;
+      const int omitted =
+          window ? window->FindInt("omitted_turns").value_or(0) : 0;
+      if (omitted > 0) {
+        budget.omitted_turns = omitted;
+        budget.omitted_through_sequence = event->sequence;
+      }
+    }
+  }
+}
+
 base::DictValue SerializeRuntimeEventForPersistence(
     const maho_ai::mojom::RuntimeEvent& event) {
   base::DictValue dict;
@@ -45,7 +303,18 @@ base::DictValue SerializeRuntimeEventForPersistence(
     dict.Set("request_id", *event.request_id);
   }
   dict.Set("sequence", static_cast<double>(event.sequence));
+  dict.Set("sequence_start",
+           static_cast<double>(event.sequence_start ? event.sequence_start
+                                                    : event.sequence));
   dict.Set("timestamp", event.timestamp);
+  if (event.replay_window) {
+    base::DictValue window;
+    window.Set("omitted_turns",
+               static_cast<double>(event.replay_window->omitted_turns));
+    window.Set("omitted_through_sequence", static_cast<double>(
+        event.replay_window->omitted_through_sequence));
+    dict.Set("replay_window", std::move(window));
+  }
   if (event.credential_error_code.has_value()) {
     dict.Set("credential_error_code",
              CredentialErrorCodeToPersistedSymbol(

@@ -7,12 +7,13 @@ import type { AgentInteractionRequestOption } from '../../bridge/types';
 export type AgentInteractionAnswer =
   | { readonly kind: 'confirmed' }
   | { readonly kind: 'denied' }
+  | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'option'; readonly optionId: string; readonly label: string };
 
 /**
  * Canonical kernel answer JSON — the exact serde tagged shapes that
  * maho-agent `parse_interaction_answer` (maho-ffi events.rs) maps back to
- * InteractionAnswer::Confirmed / Denied / SelectedOption.
+ * InteractionAnswer::Confirmed / Denied / SelectedOption / Text.
  */
 export function agentInteractionAnswerJson(answer: AgentInteractionAnswer): string {
   switch (answer.kind) {
@@ -20,6 +21,8 @@ export function agentInteractionAnswerJson(answer: AgentInteractionAnswer): stri
       return '{"answer_kind":"confirmed"}';
     case 'denied':
       return '{"answer_kind":"denied"}';
+    case 'text':
+      return '{"answer_kind":"text","0":' + JSON.stringify(answer.text) + '}';
     case 'option':
       // Built manually: JS JSON.stringify hoists integer-like keys ("0") to
       // the front, and the kernel's documented shape lists answer_kind first.
@@ -36,6 +39,8 @@ export function agentInteractionAnswerLabel(answer: AgentInteractionAnswer): str
       return 'Denied';
     case 'option':
       return answer.label;
+    case 'text':
+      return answer.text;
   }
 }
 
@@ -71,6 +76,7 @@ interface ApprovalCardProps {
 
 export function ApprovalCard({ request, onAnswer }: ApprovalCardProps) {
   const [sending, setSending] = useState(false);
+  const [text, setText] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
 
   const terminal = isTerminalInteractionState(request.initialState);
@@ -125,6 +131,22 @@ export function ApprovalCard({ request, onAnswer }: ApprovalCardProps) {
             </button>
           ))}
         </div>
+      )}
+      {request.interactionKind === 'question' && request.options.length === 0 && (
+        <form class="agent-approval-actions" onSubmit={(event) => {
+          event.preventDefault();
+          if (text.trim()) answer({ kind: 'text', text: text.trim() });
+        }}>
+          <input
+            aria-label="Answer"
+            value={text}
+            disabled={disabled}
+            onInput={(event) => setText(event.currentTarget.value)}
+          />
+          <button type="submit" class="agent-approval-confirm" disabled={disabled || !text.trim()}>
+            Submit answer
+          </button>
+        </form>
       )}
       {request.interactionKind === 'confirmation' && (
         <div class="agent-approval-actions">

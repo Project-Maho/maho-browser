@@ -240,7 +240,8 @@ fn test_not_modified_304_apply_returns_no_rebuild() {
     unsafe {
         let core = maho_ffi::maho_core_new();
         assert!(!core.is_null());
-        // A 304 is a successful poll with nothing to recompile: no rebuild.
+        // A fresh core holds no list content, so a 304 cannot confirm anything:
+        // it is recorded as a failed update and never triggers a rebuild.
         assert!(!apply_update(
             core,
             r#"{"listId":"easylist","statusCode":304}"#

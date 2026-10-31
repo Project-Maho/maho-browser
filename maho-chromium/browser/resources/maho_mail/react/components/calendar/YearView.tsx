@@ -101,12 +101,12 @@ export function YearView({ date, onNavigate, onViewChange, events }: YearViewPro
                       onNavigate(d);
                       onViewChange("month");
                     }}
-                    className={`relative flex h-5 w-5 items-center justify-center rounded-full text-[10px] transition-all mx-auto ${
+                    className={`relative flex h-5 w-5 items-center justify-center rounded-full text-[10px] tabular-nums transition-colors mx-auto ${
                       isT
                         ? "bg-accent text-accent-foreground font-semibold"
                         : dayHasEvent
-                        ? "bg-primary/10 text-foreground font-medium hover:bg-primary/20"
-                        : "text-foreground hover:bg-muted"
+                        ? "bg-primary/10 text-foreground font-medium hover:bg-primary/15"
+                        : "text-foreground hover:bg-surface-hover"
                     }`}
                   >
                     <span>{d.getDate()}</span>
@@ -133,7 +133,7 @@ export function YearView({ date, onNavigate, onViewChange, events }: YearViewPro
           <button
             type="button"
             onClick={handlePrevYear}
-            className="p-1.5 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
+            className="mail-pressable flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Previous year"
           >
             <ChevronLeft size={16} />
@@ -141,7 +141,7 @@ export function YearView({ date, onNavigate, onViewChange, events }: YearViewPro
           <button
             type="button"
             onClick={handleNextYear}
-            className="p-1.5 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
+            className="mail-pressable flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Next year"
           >
             <ChevronRight size={16} />

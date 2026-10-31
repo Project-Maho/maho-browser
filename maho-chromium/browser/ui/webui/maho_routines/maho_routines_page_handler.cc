@@ -19,7 +19,9 @@
 #include "maho/third_party/maho/maho_ffi.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/web_contents.h"
+#include "maho/browser/ui/webui/maho_routines/maho_trace_recorder_client.h"
 
 struct MahoRoutineStatusContext {
   base::WeakPtr<MahoRoutinesPageHandler> handler;
@@ -294,6 +296,7 @@ MahoRoutinesPageHandler::MahoRoutinesPageHandler(
            browser_window->GetTabStripModel()->GetIndexOfWebContents(web_contents) != TabStripModel::kNoTab)
               ? web_contents
               : nullptr),
+      browser_window_(browser_window),
       host_web_contents_(web_contents ? web_contents->GetWeakPtr() : nullptr),
       owning_task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {
   status_callback_context_ = std::make_unique<MahoRoutineStatusContext>(
@@ -602,6 +605,86 @@ void MahoRoutinesPageHandler::GetLatestRun(const std::string& routine_id,
   maho_string_free(json);
 
   std::move(callback).Run(ParseLatestRunJson(json_str));
+}
+
+void MahoRoutinesPageHandler::StartTraceRecording(
+    int64_t tab_id,
+    StartTraceRecordingCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ROUTINES_REVALIDATE_OR_RETURN(false);
+
+  content::WebContents* target_contents = nullptr;
+  if (browser_window_ && browser_window_->GetTabStripModel()) {
+    TabStripModel* tab_strip = browser_window_->GetTabStripModel();
+    if (tab_id <= 0) {
+      target_contents = tab_strip->GetActiveWebContents();
+    } else {
+      for (int i = 0; i < tab_strip->count(); ++i) {
+        content::WebContents* contents = tab_strip->GetWebContentsAt(i);
+        if (contents) {
+          sessions::SessionTabHelper* helper =
+              sessions::SessionTabHelper::FromWebContents(contents);
+          if (helper && helper->session_id().id() == tab_id) {
+            target_contents = contents;
+            break;
+          }
+        }
+      }
+    }
+  }
+  if (!target_contents) {
+    target_contents = host_web_contents_.get();
+  }
+
+  bool ok =
+      maho::MahoTraceRecorderClient::GetInstance()->Start(target_contents, tab_id);
+  std::move(callback).Run(ok);
+}
+
+void MahoRoutinesPageHandler::StopTraceRecording(
+    StopTraceRecordingCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ROUTINES_REVALIDATE_OR_RETURN(false);
+
+  std::string trace_json =
+      maho::MahoTraceRecorderClient::GetInstance()->StopAndExportJson();
+  if (trace_json.empty() || trace_json == "{}") {
+    std::move(callback).Run(std::nullopt, "No active recording or empty trace");
+    return;
+  }
+  std::move(callback).Run(trace_json, std::nullopt);
+}
+
+void MahoRoutinesPageHandler::CreateRoutineFromTrace(
+    const std::string& name,
+    const std::string& description,
+    const std::string& trace_json,
+    const std::optional<std::string>& schedule,
+    const std::optional<std::string>& trigger,
+    CreateRoutineFromTraceCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ROUTINES_REVALIDATE_OR_RETURN(false);
+
+  if (name.empty() || trace_json.empty()) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  std::string prompt = description;
+  if (!prompt.empty()) {
+    prompt += "\n\n";
+  }
+  prompt += "Replay user trace:\n```json\n" + trace_json + "\n```";
+
+  CreateRoutine(name, prompt, schedule, trigger, std::move(callback));
+}
+
+void MahoRoutinesPageHandler::IsTraceRecording(
+    IsTraceRecordingCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::move(callback).Run(
+      maho::MahoTraceRecorderClient::GetInstance()->is_recording(),
+      maho::MahoTraceRecorderClient::GetInstance()->tab_id());
 }
 
 void MahoRoutinesPageHandler::CompleteRoutine(RunRoutineCallback callback, std::string json) {

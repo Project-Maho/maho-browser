@@ -718,8 +718,7 @@ MahoAiLlmClient::MahoAiLlmClient(
     if (g_browser_process && g_browser_process->os_crypt_async()) {
       g_browser_process->os_crypt_async()->GetInstance(
           base::BindOnce(&MahoAiLlmClient::OnOsCryptReady,
-                         oscrypt_weak_factory_.GetWeakPtr()),
-          os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+                         oscrypt_weak_factory_.GetWeakPtr()));
     }
   }
 }
@@ -906,7 +905,8 @@ void MahoAiLlmClient::OnResponseDataReceived(std::string body_chunk) {
   }
 }
 
-void MahoAiLlmClient::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {
+void MahoAiLlmClient::OnOsCryptReady(
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   local_encryptor_ = std::move(encryptor);
   if (pending_request_) {
@@ -970,7 +970,9 @@ void MahoAiLlmClient::OnResponseComplete(bool success) {
     remaining += "\n\n";
   }
   bool overflowed = false;
-  provider_transport_->ProcessResponseBody(std::move(remaining), &sse_buffer_,
+  auto& effective_transport =
+      active_transport_ ? active_transport_ : provider_transport_;
+  effective_transport->ProcessResponseBody(std::move(remaining), &sse_buffer_,
                                            &completion_result_, on_token_,
                                            &overflowed);
   sse_buffer_.clear();
@@ -990,6 +992,15 @@ void MahoAiLlmClient::OnRefreshComplete(
     FinishWithError("Unauthorized: Session expired. Please sign in again.");
     return;
   }
+  // The relay invalidated the refresh token it just consumed; persist the
+  // rotated pair or the retry reuses the stale access token and the profile
+  // keeps a dead refresh token that signs the user out on the next refresh.
+  const os_crypt_async::Encryptor* encryptor = GetEncryptor();
+  if (!encryptor ||
+      !maho::auth::StoreRefreshedRelayTokens(prefs_, *encryptor, *tokens)) {
+    FinishWithError("Unauthorized: Failed to store refreshed session.");
+    return;
+  }
 
   stream_consumer_.reset();
   url_loader_.reset();
@@ -997,6 +1008,7 @@ void MahoAiLlmClient::OnRefreshComplete(
   CompletionRequest request;
   request.endpoint = active_request_.endpoint;
   request.model = active_request_.model;
+  request.provider_id = active_request_.provider_id;
   request.prompt_messages = active_request_.prompt_messages.Clone();
 
   PerformStartCompletion(std::move(request));

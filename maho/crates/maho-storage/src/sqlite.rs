@@ -50,6 +50,7 @@ pub struct VaultDatabaseSnapshot {
     pub kdf_params: Option<Vec<u8>>,
     pub wrapped_user_key: Option<Vec<u8>>,
     pub wrapped_recovery_key: Option<Vec<u8>>,
+    pub wrapped_account_key: Option<Vec<u8>>,
 }
 
 /// Storage-layer evidence returned without creating, migrating, repairing, or
@@ -75,8 +76,8 @@ pub struct SyncQueueLease {
 /// Key loss is intentionally caller-established: SQLCipher gives the same
 /// `not a database` signal for a wrong key and corrupt encrypted pages, so this
 /// function never invents an unsafe oracle. Missing key material is only fatal
-/// when a database exists. With verified key material, unreadable pages, failed
-/// integrity checks, and broken Vault schema are structural corruption.
+/// when a database exists. With verified key material, unreadable Vault pages
+/// and broken Vault schema are structural corruption.
 pub fn inspect_vault_database(path: &Path, key: VaultDatabaseKey<'_>) -> VaultDatabaseInspection {
     if !path.exists() {
         return VaultDatabaseInspection::Absent;
@@ -99,7 +100,6 @@ pub fn inspect_vault_database(path: &Path, key: VaultDatabaseKey<'_>) -> VaultDa
         return VaultDatabaseInspection::StructuralCorruption;
     };
     if apply_key(&conn, cipher_key).is_err()
-        || !database_integrity_is_valid(&conn)
         || !vault_schema_is_valid(&conn)
     {
         return VaultDatabaseInspection::StructuralCorruption;
@@ -112,11 +112,6 @@ pub fn inspect_vault_database(path: &Path, key: VaultDatabaseKey<'_>) -> VaultDa
         Ok(snapshot) => VaultDatabaseInspection::Readable(snapshot),
         Err(_) => VaultDatabaseInspection::StructuralCorruption,
     }
-}
-
-fn database_integrity_is_valid(conn: &Connection) -> bool {
-    conn.query_row("PRAGMA quick_check(1);", [], |row| row.get::<_, String>(0))
-        .is_ok_and(|result| result == "ok")
 }
 
 fn vault_schema_is_valid(conn: &Connection) -> bool {
@@ -181,6 +176,7 @@ fn read_vault_database_snapshot(
         kdf_params: payload(conn, "kdf_params")?,
         wrapped_user_key: payload(conn, "wrapped_user_key")?,
         wrapped_recovery_key: payload(conn, "wrapped_recovery_key")?,
+        wrapped_account_key: payload(conn, "wrapped_account_key")?,
     })
 }
 
@@ -254,6 +250,19 @@ fn configure_connection(conn: &Connection, key: &str) -> Result<(), StorageError
     // the DB header, so re-applying it on every open is a no-op after the first.
     let _: String = conn.query_row("PRAGMA journal_mode = WAL;", [], |row| row.get(0))?;
     conn.execute("PRAGMA synchronous = NORMAL;", [])?;
+
+    // Incremental auto-vacuum: reclaim pages freed by large overwrites
+    // (the 6 MB engine_cache column is the main source) without the cost of
+    // a full VACUUM.  `auto_vacuum` can only change on a fresh database;
+    // for existing DBs this is a no-op that leaves the current mode.
+    let tables: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
+        [],
+        |row| row.get(0),
+    )?;
+    if tables == 0 {
+        conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+    }
     Ok(())
 }
 
@@ -344,21 +353,24 @@ fn migrate_plaintext_to_encrypted_inner(
     let path = Path::new(db_path);
 
     let backup_path = migration_backup_path(path);
-    // Boot cleanup: delete legacy plain backup if encrypted DB is already verified and healthy
-    if backup_path.exists() && path.exists() && verify(path, key) {
-        if let Err(e) = secure_delete_and_remove(&backup_path) {
-            eprintln!(
-                "Warning: Failed to clean up stale plain backup DB at {}: {}",
-                backup_path.display(),
-                e
-            );
-        }
+    // A crash between the two renames leaves the original only at the backup
+    // path. Restore it before a missing canonical path can become a new profile.
+    if backup_path.exists() && !path.exists() {
+        std::fs::rename(&backup_path, path)
+            .map_err(|e| StorageError::Migration(format!("backup recovery failed: {e}")))?;
     }
+    // An existing encrypted database does not prove a leftover backup belongs
+    // to it. Only delete a backup created by the verified swap below.
 
     if !path.exists() || !is_plaintext_database(path) {
         return Ok(());
     }
 
+    if backup_path.exists() {
+        return Err(StorageError::Migration(
+            "unresolved plaintext backup; original recovery copy left intact".to_string(),
+        ));
+    }
     let temp_path = migration_temp_path(path);
     if temp_path.exists() {
         std::fs::remove_file(&temp_path).map_err(|e| {
@@ -483,6 +495,17 @@ pub struct MemoryInsertParams<'a> {
     pub metadata: Option<&'a str>,
 }
 
+/// One persisted agent-session runtime-config row (Wave 1A). Stored verbatim;
+/// consumers (maho-ffi session-open) re-validate the tier against the
+/// canonical tier set so a hand-edited row fails closed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentRuntimeConfigRow {
+    pub session_id: String,
+    pub permission_tier: String,
+    pub final_confirm: bool,
+    pub proactive_mode: bool,
+}
+
 /// SQLite storage for persistent data (history, bookmarks, settings)
 pub struct SqliteStorage {
     pub(crate) conn: Connection,
@@ -532,6 +555,57 @@ impl SqliteStorage {
 
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    /// Compact superseded unsent changes without discarding an unacknowledged
+    /// delivery. Run outside startup: converting legacy databases needs a
+    /// complete rewrite, whereas incremental databases reclaim free pages.
+    pub fn compact(&self) -> Result<(), StorageError> {
+        self.coalesce_legacy_sync_queue()?;
+        self.reclaim_free_pages()
+    }
+
+    pub fn coalesce_legacy_sync_queue(&self) -> Result<(), StorageError> {
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_sync_queue_pending_entity
+             ON sync_queue(entity_type, entity_id, json_extract(payload_json, '$.profileId'), id)
+             WHERE state = 'pending'",
+        )?;
+        self.conn.execute(
+            "DELETE FROM sync_queue WHERE state = 'pending' AND id NOT IN (
+                SELECT MAX(id) FROM sync_queue WHERE state = 'pending'
+                GROUP BY entity_type, entity_id, json_extract(payload_json, '$.profileId')
+            )",
+            [],
+        )?;
+        Ok(())
+    }
+
+    fn reclaim_free_pages(&self) -> Result<(), StorageError> {
+        let mode: i64 = self.conn.query_row("PRAGMA auto_vacuum", [], |row| row.get(0))?;
+        if mode == 0 {
+            self.conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+            self.conn.execute_batch("VACUUM")?;
+        } else {
+            self.conn.execute_batch("PRAGMA incremental_vacuum")?;
+        }
+        Ok(())
+    }
+
+    pub fn compact_after_startup(&self) -> Result<Option<std::thread::JoinHandle<()>>, StorageError> {
+        if self.path == ":memory:" {
+            return Ok(None);
+        }
+        let path = self.path.clone();
+        let key = zeroize::Zeroizing::new(injected_key()?.to_string());
+        let worker = std::thread::Builder::new().name("maho-storage-compaction".to_string()).spawn(move || {
+            let result = Self::open_with_key(&path, &key).and_then(|storage| storage.compact());
+            match result {
+                Ok(()) => eprintln!("[Maho] background storage compaction complete"),
+                Err(error) => eprintln!("[Maho] background storage compaction failed: {error}"),
+            }
+        }).map_err(|error| StorageError::Other(error.to_string()))?;
+        Ok(Some(worker))
     }
 
     fn run_migrations(&self) -> Result<(), StorageError> {
@@ -1017,42 +1091,40 @@ impl SqliteStorage {
             )
             .unwrap_or(false);
         if !has_socket_path_col {
-            let _ = self.conn.execute("PRAGMA foreign_keys=OFF;", []);
-            let _ = self.conn.execute(
-                "CREATE TABLE ai_mcp_servers_dg_tmp AS SELECT * FROM ai_mcp_servers;",
-                [],
-            );
-            let _ = self.conn.execute("DROP TABLE ai_mcp_servers;", []);
-            let _ = self.conn.execute(
-                "
-                CREATE TABLE ai_mcp_servers (
-                    id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL REFERENCES ai_workspaces(id) ON DELETE CASCADE,
-                    name TEXT NOT NULL,
-                    transport TEXT NOT NULL CHECK(transport IN ('stdio', 'http', 'uds')),
-                    command TEXT,
-                    url TEXT,
-                    auth_keychain_id TEXT,
-                    trusted INTEGER NOT NULL DEFAULT 0,
-                    trusted_tools_json TEXT,
-                    timeout_ms INTEGER NOT NULL DEFAULT 60000,
-                    output_cap_bytes INTEGER NOT NULL DEFAULT 10240,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    socket_path TEXT,
-                    UNIQUE(workspace_id, name)
-                );
-            ",
-                [],
-            );
-            let _ = self.conn.execute("
-                INSERT INTO ai_mcp_servers (id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at)
-                SELECT id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at
-                FROM ai_mcp_servers_dg_tmp;
-            ", []);
-            let _ = self.conn.execute("DROP TABLE ai_mcp_servers_dg_tmp;", []);
-            let _ = self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_mcp_servers_workspace ON ai_mcp_servers(workspace_id);", []);
-            let _ = self.conn.execute("PRAGMA foreign_keys=ON;", []);
+            self.conn.execute("PRAGMA foreign_keys=OFF;", [])?;
+            let rebuild = (|| -> Result<(), StorageError> {
+                let tx = self.conn.unchecked_transaction()?;
+                tx.execute_batch(
+                    "CREATE TABLE ai_mcp_servers_dg_tmp AS SELECT * FROM ai_mcp_servers;
+                    DROP TABLE ai_mcp_servers;
+                    CREATE TABLE ai_mcp_servers (
+                        id TEXT PRIMARY KEY,
+                        workspace_id TEXT NOT NULL REFERENCES ai_workspaces(id) ON DELETE CASCADE,
+                        name TEXT NOT NULL,
+                        transport TEXT NOT NULL CHECK(transport IN ('stdio', 'http', 'uds')),
+                        command TEXT,
+                        url TEXT,
+                        auth_keychain_id TEXT,
+                        trusted INTEGER NOT NULL DEFAULT 0,
+                        trusted_tools_json TEXT,
+                        timeout_ms INTEGER NOT NULL DEFAULT 60000,
+                        output_cap_bytes INTEGER NOT NULL DEFAULT 10240,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        socket_path TEXT,
+                        UNIQUE(workspace_id, name)
+                    );
+                    INSERT INTO ai_mcp_servers (id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at)
+                    SELECT id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at
+                    FROM ai_mcp_servers_dg_tmp;
+                    DROP TABLE ai_mcp_servers_dg_tmp;
+                    CREATE INDEX idx_ai_mcp_servers_workspace ON ai_mcp_servers(workspace_id);",
+                )?;
+                tx.commit()?;
+                Ok(())
+            })();
+            self.conn.execute("PRAGMA foreign_keys=ON;", [])?;
+            rebuild?;
         }
 
         let count: i64 = self
@@ -1451,6 +1523,13 @@ impl SqliteStorage {
                 created_at_ms INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_session_artifacts_session ON session_artifacts(session_id, created_at_ms);
+            CREATE TABLE IF NOT EXISTS agent_runtime_config (
+                session_id TEXT PRIMARY KEY,
+                permission_tier TEXT NOT NULL,
+                final_confirm INTEGER NOT NULL,
+                proactive_mode INTEGER NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             CREATE TABLE IF NOT EXISTS memory_facts (
                 id TEXT PRIMARY KEY,
                 fact TEXT NOT NULL,
@@ -1491,6 +1570,14 @@ impl SqliteStorage {
             );
             CREATE INDEX IF NOT EXISTS idx_entity_versions_type ON entity_versions(entity_type);",
         )?;
+
+        let has_artifact_kind: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('session_artifacts') WHERE name='kind')",
+            [], |row| row.get(0),
+        )?;
+        if !has_artifact_kind {
+            self.conn.execute("ALTER TABLE session_artifacts ADD COLUMN kind TEXT", [])?;
+        }
 
         self.initialize_vault_schema()?;
 
@@ -1696,6 +1783,37 @@ impl SqliteStorage {
     pub fn clear_history(&self) -> Result<(), StorageError> {
         self.conn.execute("DELETE FROM history", [])?;
         Ok(())
+    }
+
+    /// Most recently visited distinct URLs, newest first, as
+    /// `(url, title_of_latest_visit, latest_visit_unix_millis)`. Used to
+    /// rehydrate the in-memory command-bar history at startup.
+    pub fn load_recent_history(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, String, u64)>, StorageError> {
+        // SQLite resolves the bare `title` column from the row that supplied
+        // MAX(visited_at), so each URL carries its latest title.
+        let mut stmt = self.conn.prepare(
+            "SELECT url, title, MAX(visited_at) AS last_visit FROM history \
+             GROUP BY url ORDER BY last_visit DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![limit], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            let (url, title, visited_at) = row?;
+            let millis = chrono::NaiveDateTime::parse_from_str(&visited_at, "%Y-%m-%d %H:%M:%S")
+                .map(|dt| dt.and_utc().timestamp_millis().max(0) as u64)
+                .unwrap_or(0);
+            results.push((url, title, millis));
+        }
+        Ok(results)
     }
 
     pub fn delete_history_entry(&self, entry_id: i64) -> Result<bool, StorageError> {
@@ -2044,15 +2162,42 @@ impl SqliteStorage {
             Some(&boost.typography.font_family)
         };
 
+        // Upsert in place: `INSERT OR REPLACE` deletes the old row first, which
+        // fires `domain_boost_state`'s `ON DELETE SET NULL` and silently clears
+        // the domain's active Boost on every edit.
         self.conn.execute(
-            "INSERT OR REPLACE INTO boosts (
+            "INSERT INTO boosts (
                 id, domain, name, enable_color_boost, dot_angle_deg, secondary_dot_angle_deg_delta,
                 brightness, saturation, contrast, auto_theme, smart_invert,
                 font_family, text_case_override, zap_selectors, custom_css,
                 created_at, updated_at,
                 dot_pos_x, dot_pos_y, dot_distance, secondary_dot_pos_x, secondary_dot_pos_y,
                 change_was_made, size_mode
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+            ON CONFLICT(id) DO UPDATE SET
+                domain = excluded.domain,
+                name = excluded.name,
+                enable_color_boost = excluded.enable_color_boost,
+                dot_angle_deg = excluded.dot_angle_deg,
+                secondary_dot_angle_deg_delta = excluded.secondary_dot_angle_deg_delta,
+                brightness = excluded.brightness,
+                saturation = excluded.saturation,
+                contrast = excluded.contrast,
+                auto_theme = excluded.auto_theme,
+                smart_invert = excluded.smart_invert,
+                font_family = excluded.font_family,
+                text_case_override = excluded.text_case_override,
+                zap_selectors = excluded.zap_selectors,
+                custom_css = excluded.custom_css,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                dot_pos_x = excluded.dot_pos_x,
+                dot_pos_y = excluded.dot_pos_y,
+                dot_distance = excluded.dot_distance,
+                secondary_dot_pos_x = excluded.secondary_dot_pos_x,
+                secondary_dot_pos_y = excluded.secondary_dot_pos_y,
+                change_was_made = excluded.change_was_made,
+                size_mode = excluded.size_mode",
             rusqlite::params![
                 boost.id.as_ref(),
                 &boost.domain,
@@ -2978,7 +3123,14 @@ impl SqliteStorage {
 
     // === Sync Queue ===
 
-    /// Enqueue an entity push to the persistent sync queue
+    /// Enqueue an entity push to the persistent sync queue.
+    ///
+    /// Coalesces: if a `pending` row for the same (entity_type, entity_id)
+    /// already exists, it is replaced in-place instead of appending a new row.
+    /// This prevents unbounded growth when the same tab emits dozens of updates
+    /// (title, URL, loading, favicon) before the relay acknowledges any of them.
+    /// Rows already in-flight (`inflight` / `acknowledged`) are left untouched
+    /// so the relay’s ack path stays valid.
     pub fn enqueue_sync_entity(
         &self,
         entity_type: &str,
@@ -2989,6 +3141,39 @@ impl SqliteStorage {
         deleted: bool,
     ) -> Result<i64, StorageError> {
         let now = chrono::Utc::now().timestamp();
+        // Try to coalesce into an existing pending row first.
+        let updated = self.conn.execute(
+            "UPDATE sync_queue
+             SET version = ?1, modified_at = ?2, payload_json = ?3,
+                 deleted = ?4, created_at = ?5, delivery_id = ?8
+             WHERE id = (
+                 SELECT id FROM sync_queue
+                 WHERE entity_type = ?6 AND entity_id = ?7 AND state = 'pending'
+                   AND json_extract(payload_json, '$.profileId') IS json_extract(?3, '$.profileId')
+                 ORDER BY id DESC LIMIT 1
+             )",
+            rusqlite::params![
+                version,
+                modified_at,
+                payload_json,
+                deleted as i32,
+                now,
+                entity_type,
+                entity_id,
+                uuid::Uuid::new_v4().to_string(),
+            ],
+        )?;
+        if updated > 0 {
+            // Return the existing row id so the caller can track it.
+            let id: i64 = self.conn.query_row(
+                "SELECT id FROM sync_queue WHERE entity_type = ?1 AND entity_id = ?2 AND state = 'pending'
+                   AND json_extract(payload_json, '$.profileId') IS json_extract(?3, '$.profileId')
+                 ORDER BY id DESC LIMIT 1",
+                rusqlite::params![entity_type, entity_id, payload_json],
+                |row| row.get(0),
+            )?;
+            return Ok(id);
+        }
         self.conn.execute(
             "INSERT INTO sync_queue (
                 entity_type, entity_id, version, modified_at, payload_json,
@@ -3299,6 +3484,15 @@ impl SqliteStorage {
         }
     }
 
+    pub fn load_local_sync_tombstones(&self) -> Result<Vec<(String, String, u64, u32, String)>, StorageError> {
+        let mut statement = self.conn.prepare(
+            "SELECT entity_type, entity_id, hlc_ts, device_id, payload_json FROM entity_versions
+             WHERE json_extract(payload_json, '$.mahoSyncDeleted') = 1",
+        )?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn save_entity_version(
         &self,
         entity_type: &str,
@@ -3395,6 +3589,30 @@ mod tests {
         SqliteStorage::open_in_memory_with_key(&test_key()).unwrap()
     }
 
+    #[test]
+    fn load_recent_history_groups_by_url_newest_first() {
+        let db = test_store();
+        for (url, title, at) in [
+            ("https://a.test/", "A old", "2026-01-01 00:00:00"),
+            ("https://b.test/", "B", "2026-01-02 00:00:00"),
+            ("https://a.test/", "A new", "2026-01-03 00:00:00"),
+        ] {
+            db.conn
+                .execute(
+                    "INSERT INTO history (url, title, visited_at) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![url, title, at],
+                )
+                .unwrap();
+        }
+        let rows = db.load_recent_history(10).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "https://a.test/");
+        assert_eq!(rows[0].1, "A new");
+        assert_eq!(rows[1].0, "https://b.test/");
+        assert!(rows[0].2 > rows[1].2);
+        assert_eq!(db.load_recent_history(1).unwrap().len(), 1);
+    }
+
     const RECENT_CREATED_AT: &str = "2999-01-01 00:00:00";
     const OLD_CREATED_AT: &str = "2020-01-01 00:00:00";
 
@@ -3436,6 +3654,47 @@ mod tests {
 
     fn note_search_ids(results: &[(String, f64)]) -> Vec<&str> {
         results.iter().map(|(id, _)| id.as_str()).collect()
+    }
+
+    #[test]
+    fn review_interrupted_encryption_swap_preserves_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profile.db");
+        let key = test_key();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('original profile');").unwrap();
+        }
+        export_encrypted(&path, &migration_temp_path(&path), &key).unwrap();
+        std::fs::rename(&path, migration_backup_path(&path)).unwrap();
+        for _ in 0..2 {
+            let db = SqliteStorage::open_with_key(path.to_str().unwrap(), &key).unwrap();
+            let value: String = db.conn.query_row("SELECT value FROM marker", [], |r| r.get(0)).unwrap();
+            assert_eq!(value, "original profile");
+        }
+    }
+
+    #[test]
+    fn review_mcp_restore_failure_preserves_original_rows() {
+        let db = test_store();
+        db.conn.execute_batch("DROP TABLE ai_mcp_servers;
+            CREATE TABLE ai_mcp_servers (
+                id TEXT, workspace_id TEXT, name TEXT, transport TEXT, command TEXT, url TEXT,
+                auth_keychain_id TEXT, trusted INTEGER, trusted_tools_json TEXT,
+                timeout_ms INTEGER, output_cap_bytes INTEGER, created_at TEXT, updated_at TEXT);
+            INSERT INTO ai_mcp_servers VALUES ('server', 'workspace', 'name', 'invalid', 'cmd', NULL,
+                'credential-ref', 1, '[\"tool\"]', 60000, 10240, 'created', 'updated');").unwrap();
+        let result = db.run_ai_extensibility_migrations();
+        let rows: i64 = db.conn.query_row("SELECT count(*) FROM ai_mcp_servers WHERE id='server' AND auth_keychain_id='credential-ref' AND trusted=1", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1, "failed rebuild must preserve server and trust metadata");
+        assert!(result.is_err());
+        assert!(db.conn.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, bool>(0)).unwrap());
+        db.conn.execute("UPDATE ai_mcp_servers SET transport='stdio'", []).unwrap();
+        db.run_ai_extensibility_migrations().unwrap();
+        let restored: (String, bool, Option<String>) = db.conn.query_row(
+            "SELECT auth_keychain_id, trusted, socket_path FROM ai_mcp_servers WHERE id='server'", [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        assert_eq!(restored, ("credential-ref".into(), true, None));
     }
 
     #[test]
@@ -3491,7 +3750,7 @@ mod tests {
     }
 
     #[test]
-    fn plaintext_migration_stale_backup_cleanup() {
+    fn plaintext_migration_preserves_unverified_backup() {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("migration.db");
         let backup_path = migration_backup_path(&db_path);
@@ -3513,11 +3772,11 @@ mod tests {
         std::fs::write(&backup_path, b"stale plaintext backup content").unwrap();
         assert!(backup_path.exists());
 
-        // 3. Call migration again (which should trigger clean-up)
+        // An opening canonical database does not prove this backup was migrated.
         migrate_plaintext_to_encrypted_inner(path_str, &key, verify_encrypted_opens).unwrap();
 
-        // 4. Assert backup is cleaned up
-        assert!(!backup_path.exists());
+        // Preserve recovery evidence rather than deleting an unrelated backup.
+        assert!(backup_path.exists());
         assert!(db_path.exists());
         assert!(verify_encrypted_opens(&db_path, &key));
     }
@@ -3612,8 +3871,19 @@ mod tests {
             size_bytes: 2048,
             storage_rel_path: "sess-1/report.pdf".to_string(),
             created_at_ms: 1_754_000_000_000,
+            kind: Some("pdf".to_string()),
         };
 
+        // Upgrade a database containing the pre-kind artifact schema.
+        {
+            let conn = Connection::open(path_str).unwrap();
+            apply_key(&conn, &key).unwrap();
+            conn.execute_batch("CREATE TABLE session_artifacts (
+                artifact_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+                display_name TEXT NOT NULL, mime_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL, storage_rel_path TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL);").unwrap();
+        }
         {
             let storage = SqliteStorage::open_with_key(path_str, &key).unwrap();
             storage.insert_artifact(&artifact).unwrap();
@@ -3635,6 +3905,64 @@ mod tests {
 
         // Unknown session yields an empty list, not an error.
         assert!(storage.list_artifacts("nope").unwrap().is_empty());
+    }
+
+    #[test]
+    fn agent_runtime_config_persists_across_reopen() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("runtime-config.db");
+        let path_str = db_path.to_str().unwrap();
+        let key = test_key();
+
+        {
+            let storage = SqliteStorage::open_with_key(path_str, &key).unwrap();
+            // No row before the first write.
+            assert!(storage
+                .load_agent_runtime_config("sess-a")
+                .unwrap()
+                .is_none());
+            storage
+                .save_agent_runtime_config("sess-a", "read_only", false, true)
+                .unwrap();
+            storage
+                .save_agent_runtime_config("sess-b", "full_access", true, false)
+                .unwrap();
+        }
+
+        // Reopen the same database (simulates app restart / session reload).
+        let storage = SqliteStorage::open_with_key(path_str, &key).unwrap();
+
+        let row_a = storage
+            .load_agent_runtime_config("sess-a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row_a.session_id, "sess-a");
+        assert_eq!(row_a.permission_tier, "read_only");
+        assert!(!row_a.final_confirm);
+        assert!(row_a.proactive_mode);
+
+        let row_b = storage
+            .load_agent_runtime_config("sess-b")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row_b.permission_tier, "full_access");
+        assert!(row_b.final_confirm);
+        assert!(!row_b.proactive_mode);
+
+        // Unknown session yields None, not an error.
+        assert!(storage.load_agent_runtime_config("nope").unwrap().is_none());
+
+        // Upsert: the most recent write wins.
+        storage
+            .save_agent_runtime_config("sess-a", "guard", true, false)
+            .unwrap();
+        let updated = storage
+            .load_agent_runtime_config("sess-a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.permission_tier, "guard");
+        assert!(updated.final_confirm);
+        assert!(!updated.proactive_mode);
     }
 
     #[test]
@@ -3725,6 +4053,12 @@ mod tests {
         assert!(store.load_css_mods().unwrap().is_empty());
     }
 
+    /// Sync V2 outbox contract (`docs/operations/sync-v2-protocol.md`):
+    /// "Only the exact returned ACK removes the row from the outbox" and an
+    /// interrupted client "resends the same delivery ID after restart". Marking
+    /// an entity sent therefore leases it (`inflight`) and counts the attempt,
+    /// but must keep it deliverable — dropping it at send time would lose the
+    /// entity whenever the process dies before the ACK.
     #[test]
     fn test_mark_sync_entities_sent() {
         let db = test_store();
@@ -3738,8 +4072,30 @@ mod tests {
         db.mark_sync_entities_sent(&[id1]).unwrap();
 
         let pending = db.load_pending_sync_entities().unwrap();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].0, id2);
+        assert_eq!(
+            pending.iter().map(|row| row.0).collect::<Vec<_>>(),
+            vec![id1, id2],
+            "a sent-but-unacked row stays redeliverable"
+        );
+
+        let (state, attempts): (String, i64) = db
+            .conn
+            .query_row(
+                "SELECT state, attempt_count FROM sync_queue WHERE id = ?1",
+                rusqlite::params![id1],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "inflight");
+        assert_eq!(attempts, 1);
+
+        // Only the ACK retires the row.
+        db.ack_sync_entities(&[id1]).unwrap();
+        let pending = db.load_pending_sync_entities().unwrap();
+        assert_eq!(
+            pending.iter().map(|row| row.0).collect::<Vec<_>>(),
+            vec![id2]
+        );
     }
 
     #[test]
@@ -4057,7 +4413,13 @@ mod tests {
             conn,
             path: ":memory:".to_string(),
         };
-        db.run_migrations().unwrap();
+        // Exercise the real upgrade path. `run_migrations` is never called on a
+        // bare database in production: `initialize_schema` first creates every
+        // base table with `IF NOT EXISTS` (so the legacy `boosts` table above
+        // survives untouched) and only then migrates. Calling `run_migrations`
+        // directly leaves the conversation tables absent and the conversation
+        // migration fails hard on `no such table: conversations`.
+        db.initialize_schema().unwrap();
 
         let dot_pos_x: f64 = db
             .conn
@@ -4101,7 +4463,16 @@ mod tests {
             .unwrap();
         assert_eq!(change_was_made, 0);
 
+        // Migrations are re-entrant: a second pass over an already-migrated
+        // database must succeed and must not disturb the migrated values.
         db.run_migrations().unwrap();
+        let size_mode_after_rerun: String = db
+            .conn
+            .query_row("SELECT size_mode FROM boosts WHERE id = 'b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(size_mode_after_rerun, "k125");
     }
 }
 
@@ -4490,8 +4861,8 @@ impl SqliteStorage {
     ) -> Result<(), StorageError> {
         self.conn.execute(
             "INSERT OR REPLACE INTO session_artifacts \
-             (artifact_id, session_id, display_name, mime_type, size_bytes, storage_rel_path, created_at_ms) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (artifact_id, session_id, display_name, mime_type, size_bytes, storage_rel_path, created_at_ms, kind) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 artifact.artifact_id,
                 artifact.session_id,
@@ -4500,6 +4871,7 @@ impl SqliteStorage {
                 artifact.size_bytes as i64,
                 artifact.storage_rel_path,
                 artifact.created_at_ms,
+                artifact.kind,
             ],
         )?;
         Ok(())
@@ -4510,7 +4882,7 @@ impl SqliteStorage {
         session_id: &str,
     ) -> Result<Vec<maho_types::artifact::ArtifactInfo>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT artifact_id, session_id, display_name, mime_type, size_bytes, storage_rel_path, created_at_ms \
+            "SELECT artifact_id, session_id, display_name, mime_type, size_bytes, storage_rel_path, created_at_ms, kind \
              FROM session_artifacts WHERE session_id = ?1 ORDER BY created_at_ms ASC",
         )?;
         let rows = stmt.query_map(rusqlite::params![session_id], |row| {
@@ -4522,6 +4894,7 @@ impl SqliteStorage {
                 size_bytes: row.get::<_, i64>(4)? as u64,
                 storage_rel_path: row.get(5)?,
                 created_at_ms: row.get(6)?,
+                kind: row.get(7)?,
             })
         })?;
         let mut out = Vec::new();
@@ -4529,6 +4902,53 @@ impl SqliteStorage {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    /// Persist the agent session's runtime-config triple (Wave 1A), keyed by
+    /// the FFI session id. Upsert: the most recent write wins.
+    pub fn save_agent_runtime_config(
+        &self,
+        session_id: &str,
+        permission_tier: &str,
+        final_confirm: bool,
+        proactive_mode: bool,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO agent_runtime_config \
+             (session_id, permission_tier, final_confirm, proactive_mode, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+            rusqlite::params![
+                session_id,
+                permission_tier,
+                final_confirm as i64,
+                proactive_mode as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load the persisted agent runtime-config row for a session, if any.
+    /// A missing row means "no persisted config" — the caller applies its own
+    /// defaults (the FFI session falls back to the plumbing defaults).
+    pub fn load_agent_runtime_config(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<AgentRuntimeConfigRow>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id, permission_tier, final_confirm, proactive_mode \
+             FROM agent_runtime_config WHERE session_id = ?1",
+        )?;
+        let row = stmt
+            .query_row(rusqlite::params![session_id], |row| {
+                Ok(AgentRuntimeConfigRow {
+                    session_id: row.get(0)?,
+                    permission_tier: row.get(1)?,
+                    final_confirm: row.get::<_, i64>(2)? != 0,
+                    proactive_mode: row.get::<_, i64>(3)? != 0,
+                })
+            })
+            .optional()?;
+        Ok(row)
     }
 
     pub fn create_conversation(
@@ -4870,6 +5290,23 @@ impl SqliteStorage {
         Ok(affected > 0)
     }
 
+    /// Wave 1C (G10): ensure the conversation row exists, stamping `title`
+    /// only on creation. Idempotent INSERT OR IGNORE: an existing row (e.g. a
+    /// session about to be resumed) keeps its current title — re-titling on
+    /// resume is deliberately out of scope. Returns true when the row was
+    /// created here.
+    pub fn ensure_conversation_with_title(
+        &self,
+        id: &str,
+        title: &str,
+    ) -> Result<bool, StorageError> {
+        let inserted = self.conn.execute(
+            "INSERT OR IGNORE INTO conversations (id, title) VALUES (?1, ?2)",
+            rusqlite::params![id, title],
+        )?;
+        Ok(inserted > 0)
+    }
+
     pub fn rename_conversation(&self, id: &str, title: &str) -> Result<bool, StorageError> {
         let affected = self.conn.execute(
             "UPDATE conversations SET title = ?1, updated_at = datetime('now') WHERE id = ?2",
@@ -5070,14 +5507,76 @@ impl SqliteStorage {
         &self,
         snapshot: &ContentBlockerSnapshot<'_>,
     ) -> Result<(), StorageError> {
+        self.replace_content_blocker_snapshot_inner(snapshot, false)
+    }
+
+    pub fn content_blocker_engine_matches(&self, hash: &str, version: &str) -> Result<bool, StorageError> {
+        Ok(self.conn.query_row(
+            "SELECT engine_hash = ?1 AND engine_version = ?2 AND engine_cache IS NOT NULL
+             FROM content_blocker_state WHERE id = 1",
+            rusqlite::params![hash, version],
+            |row| row.get(0),
+        ).optional()?.unwrap_or(false))
+    }
+
+    pub fn replace_content_blocker_metadata_snapshot(
+        &self,
+        snapshot: &ContentBlockerSnapshot<'_>,
+    ) -> Result<(), StorageError> {
+        self.replace_content_blocker_snapshot_inner(snapshot, true)
+    }
+
+    fn replace_content_blocker_snapshot_inner(
+        &self,
+        snapshot: &ContentBlockerSnapshot<'_>,
+        preserve_engine: bool,
+    ) -> Result<(), StorageError> {
         self.content_blocker_transaction(|tx| {
-            tx.clear_lists()?;
-            tx.clear_exceptions()?;
+            let existing = {
+                let mut statement = tx.conn.prepare("SELECT id FROM content_blocker_lists")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for id in existing {
+                if !snapshot.lists.iter().any(|(list, _)| list.id == id) {
+                    tx.delete_list(&id)?;
+                }
+            }
+            let existing = {
+                let mut statement = tx.conn.prepare("SELECT key FROM content_blocker_exceptions")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for key in existing {
+                if !snapshot.exceptions.iter().any(|exception| exception.key == key) {
+                    tx.delete_exception(&key)?;
+                }
+            }
             for (list, raw_content) in snapshot.lists {
-                tx.save_list(list, Some(raw_content.as_str()))?;
+                let unchanged = tx.conn.query_row(
+                    "SELECT raw_content = ?2 FROM content_blocker_lists WHERE id = ?1",
+                    rusqlite::params![list.id, raw_content],
+                    |row| row.get::<_, bool>(0),
+                ).optional()?.unwrap_or(false);
+                tx.save_list(list, if unchanged { None } else { Some(raw_content.as_str()) })?;
             }
             for exception in snapshot.exceptions {
                 tx.save_exception(&exception.key, exception.created_at)?;
+            }
+            if preserve_engine {
+                use maho_types::content_blocking::ContentBlockingMode;
+                let mode = match snapshot.mode {
+                    ContentBlockingMode::Native => "native",
+                    ContentBlockingMode::Extension => "extension",
+                    ContentBlockingMode::Disabled => "disabled",
+                    ContentBlockingMode::Unknown => "unknown",
+                };
+                tx.conn.execute(
+                    "UPDATE content_blocker_state SET mode = ?1, generation = ?2, updated_at = ?3
+                     WHERE id = 1 AND (mode IS NOT ?1 OR generation IS NOT ?2)",
+                    rusqlite::params![mode, snapshot.generation as i64, chrono::Utc::now().timestamp()],
+                )?;
+                return Ok(());
             }
             tx.save_state(
                 snapshot.mode,
@@ -5191,7 +5690,17 @@ fn upsert_content_blocker_list(
             last_success_timestamp = excluded.last_success_timestamp,
             failure_count = excluded.failure_count,
             last_status = excluded.last_status,
-            last_error = excluded.last_error",
+            last_error = excluded.last_error
+        WHERE name IS NOT excluded.name OR url IS NOT excluded.url
+            OR enabled IS NOT excluded.enabled
+            OR (?15 AND raw_content IS NOT excluded.raw_content)
+            OR rule_count IS NOT excluded.rule_count
+            OR etag IS NOT excluded.etag OR last_modified IS NOT excluded.last_modified
+            OR sha256 IS NOT excluded.sha256
+            OR last_attempt_timestamp IS NOT excluded.last_attempt_timestamp
+            OR last_success_timestamp IS NOT excluded.last_success_timestamp
+            OR failure_count IS NOT excluded.failure_count
+            OR last_status IS NOT excluded.last_status OR last_error IS NOT excluded.last_error",
         rusqlite::params![
             list.id,
             list.name,
@@ -5220,7 +5729,8 @@ fn upsert_site_exception(
 ) -> Result<(), StorageError> {
     conn.execute(
         "INSERT INTO content_blocker_exceptions (key, created_at) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET created_at = excluded.created_at",
+         ON CONFLICT(key) DO UPDATE SET created_at = excluded.created_at
+         WHERE created_at IS NOT excluded.created_at",
         rusqlite::params![key, created_at],
     )?;
     Ok(())
@@ -5250,7 +5760,11 @@ fn upsert_content_blocker_state(
             engine_cache = excluded.engine_cache,
             engine_version = excluded.engine_version,
             engine_hash = excluded.engine_hash,
-            updated_at = excluded.updated_at",
+            updated_at = excluded.updated_at
+         WHERE mode IS NOT excluded.mode OR generation IS NOT excluded.generation
+            OR engine_cache IS NOT excluded.engine_cache
+            OR engine_version IS NOT excluded.engine_version
+            OR engine_hash IS NOT excluded.engine_hash",
         rusqlite::params![mode_str, generation as i64, engine_cache, engine_version, engine_hash, now],
     )?;
     Ok(())

@@ -112,6 +112,13 @@ interface PageHandler {
   // The single most recent recorded run for `routine_id`, or null if the
   // routine has never run.
   GetLatestRun(string routine_id) => (RoutineRunRecord? record);
+
+  // Trace v3 Recording & Creation APIs
+  StartTraceRecording(int64 tab_id) => (bool ok);
+  StopTraceRecording() => (string? trace_json, string? error);
+  CreateRoutineFromTrace(string name, string description, string trace_json,
+                         string? schedule, string? trigger) => (bool ok);
+  IsTraceRecording() => (bool is_recording, int64 active_tab_id);
 };
 
 interface Page {

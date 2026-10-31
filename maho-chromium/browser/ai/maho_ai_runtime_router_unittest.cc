@@ -378,7 +378,7 @@ TEST_F(MahoAiRuntimeRouterTest, Migration_CustomPlaintextKeyEncryptedAndCleared)
   prefs_.SetString(maho::ai_prefs::kApiKey, "secret-test-key");
 
   auto encryptor = os_crypt_async::GetTestEncryptorForTesting();
-  EXPECT_TRUE(maho::MigrateModelsSettingsV1ForTesting(&prefs_, &encryptor));
+  EXPECT_TRUE(maho::MigrateModelsSettingsV1ForTesting(&prefs_, encryptor.get()));
 
   EXPECT_TRUE(prefs_.GetBoolean(maho::ai_prefs::kModelsSettingsMigratedV1));
   std::string encrypted_b64 =
@@ -390,7 +390,7 @@ TEST_F(MahoAiRuntimeRouterTest, Migration_CustomPlaintextKeyEncryptedAndCleared)
   std::string encrypted_bytes;
   EXPECT_TRUE(base::Base64Decode(encrypted_b64, &encrypted_bytes));
   std::string decrypted;
-  EXPECT_TRUE(encryptor.DecryptString(encrypted_bytes, &decrypted));
+  EXPECT_TRUE(encryptor->DecryptString(encrypted_bytes, &decrypted));
   EXPECT_EQ(decrypted, "secret-test-key");
 }
 

@@ -48,8 +48,10 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/maho_tab_registry.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
@@ -165,6 +167,28 @@ ui::DropTargetEvent MakeDropEvent(const ui::OSExchangeData& data,
 
 std::optional<base::Value> ParseJson(const std::string& json) {
   return base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+}
+
+std::string CreateSpaceForCoreTesting(::MahoCore* core,
+                                      std::string_view name,
+                                      std::string_view profile_id = "default") {
+  constexpr char kColorJson[] =
+      R"({"hue":16.0,"saturation":0.8,"brightness":1.0,"grain":0.0})";
+  const std::string name_string(name);
+  const std::string profile_id_string(profile_id);
+  char* raw = maho_core_create_space(core, name_string.c_str(), kColorJson,
+                                     profile_id_string.c_str());
+  if (!raw) {
+    return std::string();
+  }
+  const std::string json(raw);
+  maho_string_free(raw);
+  std::optional<base::Value> parsed = ParseJson(json);
+  if (!parsed || !parsed->is_dict()) {
+    return std::string();
+  }
+  const std::string* id = parsed->GetDict().FindString("id");
+  return id ? *id : std::string();
 }
 
 std::string ActiveSpaceIdForCore(::MahoCore* core) {
@@ -322,6 +346,58 @@ TEST_F(MahoNewTabPositionCoreTest, TopBottomAndEmptyInsertion) {
             std::vector<std::string>({kTabTwo, kTabOne, kTabThree}));
 }
 
+using MahoSpaceIconCoreTest = MahoNewTabPositionCoreTest;
+
+std::string SpaceIconForCore(::MahoCore* core, const std::string& space_id) {
+  char* raw = maho_core_get_space_view_models(core);
+  if (!raw) {
+    return std::string();
+  }
+  const std::string json(raw);
+  maho_string_free(raw);
+  std::optional<base::Value> parsed = ParseJson(json);
+  if (!parsed || !parsed->is_list()) {
+    return std::string();
+  }
+  for (const base::Value& space : parsed->GetList()) {
+    if (!space.is_dict()) {
+      continue;
+    }
+    const std::string* id = space.GetDict().FindString("id");
+    if (id && *id == space_id) {
+      const std::string* icon = space.GetDict().FindString("icon");
+      return icon ? *icon : std::string();
+    }
+  }
+  return std::string();
+}
+
+// The context menu's "Change Icon" used to send `set_space_icon`, a kind the
+// core has no handler for, so the pick was silently dropped. The icon seam is
+// `update_space_config`, and the core canonicalizes importer-style icon names
+// ("bulb") to the emoji every shell renders as text.
+TEST_F(MahoSpaceIconCoreTest, UpdateSpaceConfigIconIsAppliedAndCanonicalized) {
+  auto dispatch_icon = [&](const std::string& icon) {
+    base::DictValue changes;
+    changes.Set("spaceId", space_id_);
+    changes.Set("icon", icon);
+    base::DictValue event;
+    event.Set("kind", "update_space_config");
+    event.Set("changes", std::move(changes));
+    std::string event_json;
+    ASSERT_TRUE(base::JSONWriter::Write(event, &event_json));
+    DispatchSpaceContextMenuCoreEventForTesting(core_, event_json);
+  };
+
+  const std::string kRocket = "\xF0\x9F\x9A\x80";  // U+1F680
+  const std::string kBulb = "\xF0\x9F\x92\xA1";    // U+1F4A1
+  dispatch_icon(kRocket);
+  EXPECT_EQ(SpaceIconForCore(core_, space_id_), kRocket);
+  dispatch_icon("bulb");
+  EXPECT_EQ(SpaceIconForCore(core_, space_id_), kBulb)
+      << "icon names must be canonicalized to emoji, never stored as text";
+}
+
 TEST_F(MahoNewTabPositionCoreTest, InvalidValueFallsBackToTop) {
   SetNewTabPosition(core_, "bottom");
   SetNewTabPosition(core_, "diagonal");
@@ -425,14 +501,17 @@ class MahoNativeTabStripNewTabPositionTest
     maho::SetCore(core_);
     space_id_ = ActiveSpaceIdForCore(core_);
     ASSERT_FALSE(space_id_.empty());
-    MahoSpaceProfileBridge::GetInstance()->SetActiveSpaceId(browser(),
-                                                            space_id_);
+    MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+    bridge->RegisterSpace(space_id_, profile()->GetPath().BaseName());
+    bridge->SetActiveSpaceId(browser(), space_id_);
     MahoTabRegistry::Get()->OnBrowserCreated(browser());
   }
 
   void TearDown() override {
     MahoTabRegistry::Get()->OnBrowserClosed(browser());
-    MahoSpaceProfileBridge::GetInstance()->ClearBrowserActiveSpace(browser());
+    MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+    bridge->ClearBrowserActiveSpace(browser());
+    bridge->UnregisterSpace(space_id_);
     maho::SetCore(saved_core_);
     maho_core_free(core_);
     core_ = nullptr;
@@ -462,13 +541,283 @@ TEST_F(MahoNativeTabStripNewTabPositionTest,
 }
 
 TEST_F(MahoNativeTabStripNewTabPositionTest,
+       ReannouncesTabInsertedBeforeObserverRegistration) {
+  MahoTabRegistry* registry = MahoTabRegistry::Get();
+  ASSERT_TRUE(registry);
+  RecordingShellEventObserver observer;
+  SetTabRegistryShellEventObserverForTesting(&observer);
+  base::ScopedClosureRunner clear_observer(base::BindOnce([] {
+    SetTabRegistryShellEventObserverForTesting(nullptr);
+  }));
+  registry->OnBrowserClosed(browser());
+
+  AddTab(browser(), GURL("https://reannounce.example/"));
+  content::WebContents* contents =
+      browser()->GetTabStripModel()->GetWebContentsAt(0);
+  ASSERT_TRUE(contents);
+  MahoTabIdHelper::CreateForWebContents(contents);
+  MahoTabIdHelper* helper = MahoTabIdHelper::FromWebContents(contents);
+  ASSERT_TRUE(helper);
+  ASSERT_FALSE(helper->has_been_announced());
+
+  MahoSpaceProfileBridge::GetInstance()->SetActiveSpaceId(browser(),
+                                                          space_id_);
+
+  EXPECT_TRUE(helper->has_been_announced());
+  EXPECT_EQ(RootNodeIds(SidebarTreeForCore(core_, space_id_)),
+            std::vector<std::string>({helper->stable_tab_id()}));
+
+  size_t create_tab_events = 0;
+  for (const auto& event : observer.events) {
+    if (event.kind == "create_tab") {
+      ++create_tab_events;
+    }
+  }
+  EXPECT_EQ(create_tab_events, 1u);
+
+  registry->ReannounceUnannouncedTabs();
+  registry->ReannounceUnannouncedTabs();
+  EXPECT_EQ(observer.events.size(), create_tab_events);
+}
+
+TEST_F(MahoNativeTabStripNewTabPositionTest,
+       HydrationReconcilesMatchingBrowserAndReannouncesOnlyOnce) {
+  const std::string hydrated_space_id =
+      CreateSpaceForCoreTesting(core_, "Hydrated Default");
+  ASSERT_FALSE(hydrated_space_id.empty());
+  const std::string spaces_json =
+      R"([{"id":)" + base::GetQuotedJSONString(hydrated_space_id) +
+      R"(,"profileId":"default"}])";
+  const std::string active_space_id_json =
+      base::GetQuotedJSONString(hydrated_space_id);
+  TestingProfile* matching_profile = CreateProfile("Default");
+  ASSERT_TRUE(matching_profile);
+  BrowserWindowCreateParams params(matching_profile, true);
+  params.window = new TestBrowserWindow();
+  std::unique_ptr<Browser> matching_browser =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+  ASSERT_TRUE(matching_browser);
+
+  MahoTabRegistry* registry = MahoTabRegistry::Get();
+  ASSERT_TRUE(registry);
+  registry->OnBrowserClosed(matching_browser.get());
+  AddTab(matching_browser.get(), GURL("https://hydration.example/"));
+  content::WebContents* contents =
+      matching_browser->GetTabStripModel()->GetWebContentsAt(0);
+  ASSERT_TRUE(contents);
+  MahoTabIdHelper::CreateForWebContents(contents);
+  MahoTabIdHelper* helper = MahoTabIdHelper::FromWebContents(contents);
+  ASSERT_TRUE(helper);
+  ASSERT_FALSE(helper->has_been_announced());
+
+  RecordingShellEventObserver observer;
+  SetTabRegistryShellEventObserverForTesting(&observer);
+  base::ScopedClosureRunner clear_observer(base::BindOnce([] {
+    SetTabRegistryShellEventObserverForTesting(nullptr);
+  }));
+  auto count_matching_create_events = [&] {
+    size_t count = 0;
+    for (const auto& event : observer.events) {
+      if (event.kind == "create_tab" &&
+          event.json.find(helper->stable_tab_id()) != std::string::npos) {
+        ++count;
+      }
+    }
+    return count;
+  };
+
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+  ASSERT_TRUE(bridge->HydrateFromSerializedStateForTesting(
+      spaces_json, active_space_id_json));
+  EXPECT_EQ(bridge->GetActiveSpaceId(matching_browser.get()),
+            hydrated_space_id);
+  EXPECT_TRUE(helper->has_been_announced());
+  EXPECT_EQ(count_matching_create_events(), 1u);
+  EXPECT_EQ(RootNodeIds(SidebarTreeForCore(core_, hydrated_space_id)),
+            std::vector<std::string>({helper->stable_tab_id()}));
+
+  ASSERT_TRUE(bridge->HydrateFromSerializedStateForTesting(
+      spaces_json, active_space_id_json));
+  EXPECT_EQ(count_matching_create_events(), 1u);
+
+  registry->OnBrowserClosed(matching_browser.get());
+  bridge->ClearBrowserActiveSpace(matching_browser.get());
+  bridge->UnregisterSpace(hydrated_space_id);
+  matching_browser.reset();
+  bridge->SetActiveSpaceId(browser(), space_id_);
+}
+
+TEST_F(MahoNativeTabStripNewTabPositionTest,
+       ForeignProfileSpaceDoesNotReannounceUnmappedTab) {
+  const std::string foreign_space =
+      CreateSpaceForCoreTesting(core_, "Foreign Profile");
+  ASSERT_FALSE(foreign_space.empty());
+
+  TestingProfile foreign_profile(
+      base::FilePath(FILE_PATH_LITERAL("foreign_profile_dir")));
+  BrowserWindowCreateParams params(&foreign_profile, true);
+  params.window = new TestBrowserWindow();
+  std::unique_ptr<Browser> foreign_browser =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+  ASSERT_TRUE(foreign_browser);
+
+  MahoTabRegistry* registry = MahoTabRegistry::Get();
+  ASSERT_TRUE(registry);
+  registry->OnBrowserClosed(foreign_browser.get());
+  AddTab(foreign_browser.get(), GURL("https://foreign.example/"));
+  content::WebContents* contents =
+      foreign_browser->GetTabStripModel()->GetWebContentsAt(0);
+  ASSERT_TRUE(contents);
+  MahoTabIdHelper::CreateForWebContents(contents);
+  MahoTabIdHelper* helper = MahoTabIdHelper::FromWebContents(contents);
+  ASSERT_TRUE(helper);
+  ASSERT_FALSE(helper->has_been_announced());
+
+  RecordingShellEventObserver observer;
+  SetTabRegistryShellEventObserverForTesting(&observer);
+  base::ScopedClosureRunner clear_observer(base::BindOnce([] {
+    SetTabRegistryShellEventObserverForTesting(nullptr);
+  }));
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+  bridge->RegisterSpace(foreign_space, profile()->GetPath().BaseName());
+  bridge->SetActiveSpaceId(foreign_browser.get(), foreign_space);
+
+  EXPECT_TRUE(bridge->GetActiveSpaceId(foreign_browser.get()).empty());
+  EXPECT_FALSE(helper->has_been_announced());
+  EXPECT_TRUE(observer.events.empty());
+
+  registry->OnBrowserClosed(foreign_browser.get());
+  bridge->ClearBrowserActiveSpace(foreign_browser.get());
+  bridge->UnregisterSpace(foreign_space);
+}
+
+TEST_F(MahoNativeTabStripNewTabPositionTest,
+       CoreRecoveryReannouncesUnannouncedTabs) {
+  MahoTabRegistry* registry = MahoTabRegistry::Get();
+  ASSERT_TRUE(registry);
+  registry->OnBrowserClosed(browser());
+  AddTab(browser(), GURL("https://core-unavailable.example/"));
+  content::WebContents* contents =
+      browser()->GetTabStripModel()->GetWebContentsAt(0);
+  ASSERT_TRUE(contents);
+  MahoTabIdHelper::CreateForWebContents(contents);
+  MahoTabIdHelper* helper = MahoTabIdHelper::FromWebContents(contents);
+  ASSERT_TRUE(helper);
+  ASSERT_FALSE(helper->has_been_announced());
+
+  RecordingShellEventObserver observer;
+  SetTabRegistryShellEventObserverForTesting(&observer);
+  base::ScopedClosureRunner clear_observer(base::BindOnce([] {
+    SetTabRegistryShellEventObserverForTesting(nullptr);
+  }));
+  maho::SetCore(nullptr);
+  registry->ReannounceUnannouncedTabs();
+
+  EXPECT_FALSE(helper->has_been_announced());
+  EXPECT_TRUE(observer.events.empty());
+
+  maho::SetCore(core_);
+
+  EXPECT_TRUE(helper->has_been_announced());
+  ASSERT_EQ(observer.events.size(), 1u);
+  EXPECT_EQ(observer.events[0].kind, "create_tab");
+  EXPECT_EQ(RootNodeIds(SidebarTreeForCore(core_, space_id_)),
+            std::vector<std::string>({helper->stable_tab_id()}));
+}
+
+TEST_F(MahoNativeTabStripNewTabPositionTest,
+       BrowserCloseDropsDispatchCacheEntriesForItsTabs) {
+  AddTab(browser(), GURL("https://close-cache.example/"));
+  content::WebContents* contents =
+      browser()->GetTabStripModel()->GetWebContentsAt(0);
+  ASSERT_TRUE(contents);
+  auto* helper = MahoTabIdHelper::FromWebContents(contents);
+  ASSERT_TRUE(helper);
+  ASSERT_FALSE(helper->stable_tab_id().empty());
+
+  MahoTabRegistry* registry = MahoTabRegistry::Get();
+  ASSERT_TRUE(registry);
+  registry->GetOrCreateDispatchCache(helper->stable_tab_id()).url =
+      "https://cached.example/";
+
+  registry->OnBrowserClosed(browser());
+
+  EXPECT_TRUE(
+      registry->GetOrCreateDispatchCache(helper->stable_tab_id()).url.empty());
+}
+
+TEST_F(MahoNativeTabStripNewTabPositionTest,
+       UnregisterSpaceClearsBrowserMappingBeforeReannouncement) {
+  MahoTabRegistry* registry = MahoTabRegistry::Get();
+  ASSERT_TRUE(registry);
+  registry->OnBrowserClosed(browser());
+  AddTab(browser(), GURL("https://unregistered-space.example/"));
+  content::WebContents* contents =
+      browser()->GetTabStripModel()->GetWebContentsAt(0);
+  ASSERT_TRUE(contents);
+  MahoTabIdHelper::CreateForWebContents(contents);
+  auto* helper = MahoTabIdHelper::FromWebContents(contents);
+  ASSERT_TRUE(helper);
+  ASSERT_FALSE(helper->has_been_announced());
+
+  RecordingShellEventObserver observer;
+  SetTabRegistryShellEventObserverForTesting(&observer);
+  base::ScopedClosureRunner clear_observer(base::BindOnce([] {
+    SetTabRegistryShellEventObserverForTesting(nullptr);
+  }));
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+  bridge->RegisterSpace(space_id_, profile()->GetPath().BaseName());
+
+  bridge->UnregisterSpace(space_id_);
+  registry->ReannounceUnannouncedTabs();
+
+  EXPECT_TRUE(bridge->GetActiveSpaceId(browser()).empty());
+  EXPECT_FALSE(helper->has_been_announced());
+  EXPECT_TRUE(observer.events.empty());
+}
+
+TEST_F(MahoNativeTabStripNewTabPositionTest,
+       UnknownSpaceCannotBeAssignedOrReannounced) {
+  MahoTabRegistry* registry = MahoTabRegistry::Get();
+  ASSERT_TRUE(registry);
+  registry->OnBrowserClosed(browser());
+  AddTab(browser(), GURL("https://unknown-space.example/"));
+  content::WebContents* contents =
+      browser()->GetTabStripModel()->GetWebContentsAt(0);
+  ASSERT_TRUE(contents);
+  MahoTabIdHelper::CreateForWebContents(contents);
+  auto* helper = MahoTabIdHelper::FromWebContents(contents);
+  ASSERT_TRUE(helper);
+  ASSERT_FALSE(helper->has_been_announced());
+
+  RecordingShellEventObserver observer;
+  SetTabRegistryShellEventObserverForTesting(&observer);
+  base::ScopedClosureRunner clear_observer(base::BindOnce([] {
+    SetTabRegistryShellEventObserverForTesting(nullptr);
+  }));
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+  bridge->SetActiveSpaceId(browser(), "unknown-space");
+  registry->ReannounceUnannouncedTabs();
+
+  EXPECT_TRUE(bridge->GetActiveSpaceId(browser()).empty());
+  EXPECT_FALSE(helper->has_been_announced());
+  EXPECT_TRUE(observer.events.empty());
+}
+
+TEST_F(MahoNativeTabStripNewTabPositionTest,
        PrimaryOtrSidebarRefreshDoesNotTouchCoreCache) {
   Profile* otr_profile = profile()->GetPrimaryOTRProfile(true);
   ASSERT_TRUE(otr_profile);
   TestBrowserWindow* window = new TestBrowserWindow();
-  Browser::CreateParams params(otr_profile, true);
+  BrowserWindowCreateParams params(otr_profile, true);
   params.window = window;
-  Browser* otr_browser = Browser::Create(params);
+  auto otr_browser_owner =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+  Browser* otr_browser = otr_browser_owner.get();
   ASSERT_TRUE(otr_browser);
 
   ResetSidebarCoreCacheForTesting();
@@ -480,6 +829,96 @@ TEST_F(MahoNativeTabStripNewTabPositionTest,
   EXPECT_EQ(counters.tree_bundle_hits + counters.tree_bundle_misses, 0u);
   EXPECT_EQ(counters.favorites_hits + counters.favorites_misses, 0u);
   ResetSidebarCoreCacheForTesting();
+}
+
+TEST_F(MahoNativeTabStripNewTabPositionTest,
+       BuildTabListModelCrossSpaceIsolationAndAdapterFallback) {
+  AddTab(browser(), GURL("https://space1-tab.example/"));
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 1);
+
+  content::WebContents* wc = browser()->GetTabStripModel()->GetWebContentsAt(0);
+  ASSERT_TRUE(wc);
+  auto* helper = MahoTabIdHelper::FromWebContents(wc);
+  ASSERT_TRUE(helper);
+  const std::string space_1_tab_id = helper->stable_tab_id();
+  ASSERT_FALSE(space_1_tab_id.empty());
+
+  const std::string space_2 = CreateSpaceForCoreTesting(core_, "Space Two");
+  ASSERT_FALSE(space_2.empty());
+
+  const std::string space_2_tab_id = "55555555-5555-4000-8000-000000000001";
+  DispatchCreateTabToCore(core_, space_2, space_2_tab_id);
+
+  // 1. In Space 1: BuildTabListModel must ONLY render space 1 tabs, never space 2 tabs.
+  MahoSidebarStateAdapter adapter;
+  MahoSidebarTabListModel model_space_1 = adapter.BuildTabListModel(browser());
+  EXPECT_EQ(model_space_1.active_space_id, space_id_);
+
+  bool found_tab1 = false;
+  bool found_tab2 = false;
+  for (const auto& node : model_space_1.normal_tree) {
+    if (node.tab_id == space_1_tab_id) found_tab1 = true;
+    if (node.tab_id == space_2_tab_id) found_tab2 = true;
+  }
+  EXPECT_TRUE(found_tab1);
+  EXPECT_FALSE(found_tab2);
+
+  // 2. Switch browser to Space 2: BuildTabListModel must ONLY render space 2 tabs.
+  MahoSpaceProfileBridge::GetInstance()->SetActiveSpaceId(browser(), space_2);
+  MahoSidebarTabListModel model_space_2 = adapter.BuildTabListModel(browser());
+  EXPECT_EQ(model_space_2.active_space_id, space_2);
+
+  found_tab1 = false;
+  found_tab2 = false;
+  for (const auto& node : model_space_2.normal_tree) {
+    if (node.tab_id == space_1_tab_id) found_tab1 = true;
+    if (node.tab_id == space_2_tab_id) found_tab2 = true;
+  }
+  EXPECT_FALSE(found_tab1);
+  EXPECT_TRUE(found_tab2);
+
+  // 3. Adapter Fallback: When safe mode / no core, BuildTabListModel falls back to tab strip.
+  maho::SetCore(nullptr);
+  MahoSidebarTabListModel fallback_model = adapter.BuildTabListModel(browser());
+  EXPECT_FALSE(fallback_model.normal_tree.empty());
+  EXPECT_EQ(fallback_model.normal_tree[0].tab_id, space_1_tab_id);
+  maho::SetCore(core_);
+}
+
+TEST_F(MahoNativeTabStripNewTabPositionTest,
+       BrowserProfileSpaceMatchingAndForeignProfileIsolation) {
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  const std::string original_active_space = bridge->GetActiveSpaceId();
+  bridge->ClearBrowserActiveSpacesForTesting();
+
+  const std::string registered_space = "space-registered";
+  const std::string same_profile_secondary = "space-secondary";
+  const base::FilePath matching_basename = profile()->GetPath().BaseName();
+  bridge->RegisterSpace(registered_space, matching_basename);
+  bridge->RegisterSpace(same_profile_secondary, matching_basename);
+  bridge->SetActiveSpaceId(registered_space);
+  bridge->ClearBrowserActiveSpacesForTesting();
+
+  bridge->ReconcileExistingBrowsersActiveSpace();
+  EXPECT_EQ(bridge->GetActiveSpaceId(browser()), registered_space);
+
+  TestingProfile foreign_profile(base::FilePath(FILE_PATH_LITERAL("foreign_profile_dir")));
+  BrowserWindowCreateParams foreign_params(&foreign_profile, true);
+  foreign_params.window = new TestBrowserWindow();
+  std::unique_ptr<Browser> foreign_browser =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(foreign_params));
+
+  EXPECT_TRUE(bridge->GetActiveSpaceId(foreign_browser.get()).empty());
+
+  bridge->SetActiveSpaceId(foreign_browser.get(), registered_space);
+  bridge->ReconcileExistingBrowsersActiveSpace();
+  EXPECT_TRUE(bridge->GetActiveSpaceId(foreign_browser.get()).empty());
+
+  foreign_browser.reset();
+  bridge->UnregisterSpace(same_profile_secondary);
+  bridge->UnregisterSpace(registered_space);
+  bridge->SetActiveSpaceId(original_active_space);
+  bridge->SetActiveSpaceId(browser(), original_active_space);
 }
 
 class MahoSidebarCoreCacheTest : public testing::Test {
@@ -621,6 +1060,61 @@ TEST_F(MahoSidebarCoreCacheTest, ConsecutiveBuildsFetchEachFragmentOnce) {
   EXPECT_EQ(counters.tree_bundle_hits, 1u);
   EXPECT_EQ(counters.favorites_misses, 1u);
   EXPECT_EQ(counters.favorites_hits, 1u);
+}
+
+// A tree fetch that yields NO tree means the fetch could not produce one (core
+// handle swapped, import gate raised, unparsable space id) — not that the space
+// is empty. Publishing that as a valid cache entry would serve the empty tree
+// back from cache on every later build, turning a momentary failure into a
+// persistently empty sidebar. The entry must stay invalid so the next build
+// re-fetches.
+TEST_F(MahoSidebarCoreCacheTest, FailedTreeFetchIsNotCachedAsValid) {
+  // A local counter: the fetchers run outside this TEST_F's own class, so
+  // they cannot reach the fixture's protected counters through a base pointer.
+  int tree_fetches = 0;
+  SidebarCoreCacheFetchersForTesting fetchers;
+  fetchers.footer = base::BindRepeating([](::MahoCore*) {
+    FooterSpaceState state;
+    state.has_core_state = true;
+    state.space_count = 1;
+    return state;
+  });
+  // Fails (no parsed_tree) on the first call, succeeds afterwards.
+  fetchers.tree_bundle = base::BindRepeating(
+      [](int* fetches, ::MahoCore*, const std::string&) {
+        ++*fetches;
+        SidebarStateBackgroundResult result;
+        if (*fetches > 1) {
+          base::ListValue tree;
+          tree.Append(base::Value(base::DictValue()));
+          result.parsed_tree = base::Value(std::move(tree));
+        }
+        return result;
+      },
+      base::Unretained(&tree_fetches));
+  fetchers.favorites =
+      base::BindRepeating([](::MahoCore*, const std::string&) {
+        return MakeFavoritesModelForTesting(1);
+      });
+  SetSidebarCoreCacheFetchersForTesting(std::move(fetchers));
+
+  SidebarStateBackgroundResult first = Build("a");
+  EXPECT_EQ(tree_fetches, 1);
+  EXPECT_FALSE(first.parsed_tree.has_value())
+      << "the failing fetch must surface as an absent tree, not an empty one";
+
+  SidebarStateBackgroundResult second = Build("a");
+  EXPECT_EQ(tree_fetches, 2)
+      << "a failed tree fetch must NOT be published as a valid cache entry; "
+         "the next build has to re-fetch instead of serving an empty tree";
+  ASSERT_TRUE(second.parsed_tree.has_value());
+  EXPECT_EQ(second.parsed_tree->GetList().size(), 1u);
+
+  SidebarStateBackgroundResult third = Build("a");
+  EXPECT_EQ(tree_fetches, 2)
+      << "a successful tree must still be cached exactly once";
+  ASSERT_TRUE(third.parsed_tree.has_value());
+  EXPECT_EQ(third.parsed_tree->GetList().size(), 1u);
 }
 
 TEST_F(MahoSidebarCoreCacheTest, FooterInvalidationIsFragmentIsolated) {
@@ -909,7 +1403,10 @@ TEST_F(SidebarDnDDispatchTest,
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
-  ASSERT_EQ(observer_.events.size(), 1u);
+  // The folder child escapes to root first, then a root reorder places it
+  // before the target (60a07f00 split the old combined before_tab_id form so
+  // later pin/unpin transitions cannot clobber the position).
+  ASSERT_EQ(observer_.events.size(), 2u);
   EXPECT_EQ(observer_.events[0].kind, "move_tab_to_root");
   EXPECT_NE(observer_.events[0].json.find("\"space_id\":\"space-1\""),
             std::string::npos);
@@ -917,7 +1414,10 @@ TEST_F(SidebarDnDDispatchTest,
             std::string::npos);
   EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"source-tab\""),
             std::string::npos);
-  EXPECT_NE(observer_.events[0].json.find("\"before_tab_id\":\"target-tab\""),
+  EXPECT_EQ(observer_.events[0].json.find("\"before_tab_id\":"),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[1].kind, "reorder_root_item");
+  EXPECT_NE(observer_.events[1].json.find("\"target-tab\""),
             std::string::npos);
 }
 
@@ -2088,7 +2588,7 @@ TEST_F(SidebarDnDDispatchTest,
 }
 
 TEST_F(SidebarDnDDispatchTest,
-       TopBarNoNavigationKeepsChromeVisibleAndNavDisabled) {
+       TopBarHasNoNavigationControlsAndStaysVisibleWithoutBrowser) {
   MahoSidebarTopBarView top_bar(/*browser=*/nullptr);
 
   EXPECT_TRUE(top_bar.leading_cluster_for_testing()->GetVisible());
@@ -2096,35 +2596,27 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_TRUE(top_bar.flex_spacer_for_testing()->GetVisible());
   EXPECT_TRUE(top_bar.sidebar_toggle_button_for_testing()->GetVisible());
   EXPECT_TRUE(top_bar.ai_button_for_testing()->GetVisible());
-  EXPECT_FALSE(top_bar.back_button_for_testing()->GetEnabled());
-  EXPECT_FALSE(top_bar.forward_button_for_testing()->GetEnabled());
-  EXPECT_FALSE(top_bar.reload_button_for_testing()->GetEnabled());
 
-  MahoSidebarTopBarModel navigation_enabled;
-  navigation_enabled.navigation_enabled = true;
-  navigation_enabled.can_go_back = true;
-  navigation_enabled.can_go_forward = true;
-  navigation_enabled.can_reload = true;
-  top_bar.Update(navigation_enabled);
+  // Back/forward/reload moved to MahoContentsHeaderView; the sidebar top bar
+  // no longer hosts navigation controls.
+  EXPECT_EQ(top_bar.nav_cluster_for_testing()->children().size(), 2u);
 
-  MahoSidebarTopBarModel no_navigation;
-  top_bar.Update(no_navigation);
+  top_bar.Update(MahoSidebarTopBarModel());
 
   EXPECT_TRUE(top_bar.leading_cluster_for_testing()->GetVisible());
   EXPECT_TRUE(top_bar.nav_cluster_for_testing()->GetVisible());
   EXPECT_TRUE(top_bar.flex_spacer_for_testing()->GetVisible());
   EXPECT_TRUE(top_bar.sidebar_toggle_button_for_testing()->GetEnabled());
   EXPECT_TRUE(top_bar.ai_button_for_testing()->GetEnabled());
-  EXPECT_FALSE(top_bar.back_button_for_testing()->GetEnabled());
-  EXPECT_FALSE(top_bar.forward_button_for_testing()->GetEnabled());
-  EXPECT_FALSE(top_bar.reload_button_for_testing()->GetEnabled());
 }
 TEST_F(SidebarDnDDispatchTest, TopBarMailVisibilityTracksEnabledPrefLive) {
   TestingProfile profile;
   TestBrowserWindow* window = new TestBrowserWindow();
-  Browser::CreateParams params(&profile, true);
+  BrowserWindowCreateParams params(&profile, true);
   params.window = window;
-  Browser* browser = Browser::Create(params);
+  auto browser_owner =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+  Browser* browser = browser_owner.get();
 
   PrefService* prefs = profile.GetPrefs();
   prefs->SetBoolean(sidebar_prefs::kMahoMailEnabled, false);
@@ -3546,7 +4038,16 @@ TEST_F(SidebarDnDDispatchTest,
 
 // SidebarStateModelContractTest — a separate fixture so the Wave 0 contract
 // tests stay clearly delineated from the DnD dispatch tests above.
-class SidebarStateModelContractTest : public views::ViewsTestBase {};
+// Some contract cases build a TestingProfile + Browser, whose keyed services
+// (extensions::StateStore) post to the UI thread; that requires a
+// BrowserTaskEnvironment rather than the plain ViewsTestBase task environment.
+class SidebarStateModelContractTest : public views::ViewsTestBase {
+ public:
+  SidebarStateModelContractTest()
+      : views::ViewsTestBase(
+            std::unique_ptr<base::test::TaskEnvironment>(
+                std::make_unique<content::BrowserTaskEnvironment>())) {}
+};
 
 // --- SidebarTreeNode field-kind invariants -----------------------------------
 
@@ -3688,7 +4189,7 @@ TEST_F(SidebarStateModelContractTest,
 // --- MahoSidebarViewStateModel structural shape ----------------------------
 
 // BuildViewStateModel with a null browser must not crash and must return a
-// model with all five sub-model fields default-initialized.  This documents
+// model with all four sub-model fields default-initialized.  This documents
 // the defensive null-browser contract that Wave 0 stabilizes.
 TEST_F(SidebarStateModelContractTest,
        BuildViewStateModelWithNullBrowserReturnsDefaultShape) {
@@ -3697,22 +4198,9 @@ TEST_F(SidebarStateModelContractTest,
   // It must not crash, and the returned model must be structurally valid.
   MahoSidebarViewStateModel model = adapter.BuildViewStateModel(nullptr);
 
-  // top_bar: navigation disabled when no browser.
-  EXPECT_FALSE(model.top_bar.navigation_enabled)
-      << "top_bar.navigation_enabled must be false for null browser";
-  EXPECT_FALSE(model.top_bar.can_go_back);
-  EXPECT_FALSE(model.top_bar.can_go_forward);
-  EXPECT_FALSE(model.top_bar.can_reload);
-  EXPECT_FALSE(model.top_bar.is_loading);
-
-  // search: must have a non-empty idle_text placeholder even with no browser.
-  EXPECT_FALSE(model.search.idle_text.empty())
-      << "search.idle_text must be non-empty for null browser";
-  EXPECT_EQ(model.search.display_mode,
-            MahoSidebarAddressDisplayMode::kSearchPlaceholder)
-      << "search.display_mode must be kSearchPlaceholder for null browser";
-  EXPECT_FALSE(model.search.has_active_tab)
-      << "search.has_active_tab must be false for null browser";
+  // top_bar: navigation controls (back/forward/reload) moved to
+  // MahoContentsHeaderView; the sidebar top_bar sub-model no longer carries
+  // navigation state, so there is nothing left to assert here.
 
   // favorites: slot_count must be the layout constant.
   EXPECT_EQ(model.favorites.slot_count,
@@ -3741,10 +4229,6 @@ TEST_F(SidebarStateModelContractTest,
   MahoSidebarViewStateModel first  = adapter.BuildViewStateModel(nullptr);
   MahoSidebarViewStateModel second = adapter.BuildViewStateModel(nullptr);
 
-  EXPECT_EQ(first.top_bar.navigation_enabled,
-            second.top_bar.navigation_enabled);
-  EXPECT_EQ(first.search.idle_text, second.search.idle_text);
-  EXPECT_EQ(first.search.display_mode, second.search.display_mode);
   EXPECT_EQ(first.favorites.slot_count, second.favorites.slot_count);
   EXPECT_EQ(first.tab_list.active_tab.index, second.tab_list.active_tab.index);
   EXPECT_EQ(first.footer.can_create_space, second.footer.can_create_space);
@@ -3852,14 +4336,88 @@ TEST_F(SidebarStateModelContractTest,
          "child count as the first";
 }
 
+// A transient empty core push must never clear the RENDERED rows. Update()'s
+// adoption guard already refuses to store such a model in last_model_, but the
+// rejected model used to be handed to RebuildRows() anyway, wiping every row —
+// the "sidebar tab list vanishes" regression. The rows must survive until a
+// real model arrives.
+TEST_F(SidebarStateModelContractTest,
+       TransientEmptyPushDoesNotClearRenderedRows) {
+  // No Browser: the unavailable-tree guard runs before any tab-strip based
+  // adoption logic, and a TestingProfile inside ViewsTestBase crashes in the
+  // extensions StateStore on Linux.
+  Browser* browser = nullptr;
+  auto* list = new MahoSidebarTabListView(browser);
+  std::unique_ptr<views::Widget> widget =
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  widget->SetContentsView(list);
+
+  MahoSidebarTabListModel populated;
+  populated.active_space_id = "space-wave0";
+  populated.normal_tree.push_back(MakeTabNode("tab-a", 0));
+  populated.normal_tree.push_back(MakeTabNode("tab-b", 1));
+  list->Update(populated, browser);
+  ASSERT_NE(list->FindTabRowByIdForTesting("tab-a"), nullptr);
+  ASSERT_NE(list->FindTabRowByIdForTesting("tab-b"), nullptr);
+  const int rebuilds_after_populated = list->rebuild_rows_count_for_testing();
+
+  // No widget capture here: this is the plain push path, not the drag path.
+  // The core could not produce a tree (null v2 payload) for the space on
+  // screen: that is not data and must not be rendered.
+  MahoSidebarTabListModel transient_empty;
+  transient_empty.active_space_id = "space-wave0";
+  transient_empty.tree_unavailable = true;
+  list->Update(std::move(transient_empty), browser);
+
+  EXPECT_NE(list->FindTabRowByIdForTesting("tab-a"), nullptr)
+      << "a transient empty push must not clear already-rendered rows";
+  EXPECT_NE(list->FindTabRowByIdForTesting("tab-b"), nullptr)
+      << "a transient empty push must not clear already-rendered rows";
+  EXPECT_EQ(list->rebuild_rows_count_for_testing(), rebuilds_after_populated)
+      << "a rejected empty push must not trigger a rebuild at all";
+
+  // A genuinely new model must still be applied.
+  MahoSidebarTabListModel next;
+  next.active_space_id = "space-wave0";
+  next.normal_tree.push_back(MakeTabNode("tab-c", 0));
+  list->Update(std::move(next), browser);
+  EXPECT_NE(list->FindTabRowByIdForTesting("tab-c"), nullptr)
+      << "rejecting empty pushes must not block later real updates";
+
+  // Switching to a genuinely EMPTY space must still render empty: the guard is
+  // scoped to the space already on screen, so it must not strand the previous
+  // space's rows in the new space.
+  MahoSidebarTabListModel empty_other_space;
+  empty_other_space.active_space_id = "space-empty";
+  list->Update(std::move(empty_other_space), browser);
+  EXPECT_EQ(list->FindTabRowByIdForTesting("tab-c"), nullptr)
+      << "switching to an empty space must clear the previous space's rows";
+
+  // A genuinely EMPTY tree for the space on screen (the core answered with an
+  // empty list, e.g. its last tab closed) is data and must clear the rows;
+  // only an unavailable tree is ignored.
+  MahoSidebarTabListModel populated_empty_space;
+  populated_empty_space.active_space_id = "space-empty";
+  populated_empty_space.normal_tree.push_back(MakeTabNode("tab-d", 0));
+  list->Update(std::move(populated_empty_space), browser);
+  ASSERT_NE(list->FindTabRowByIdForTesting("tab-d"), nullptr);
+  MahoSidebarTabListModel genuinely_empty;
+  genuinely_empty.active_space_id = "space-empty";
+  list->Update(std::move(genuinely_empty), browser);
+  EXPECT_EQ(list->FindTabRowByIdForTesting("tab-d"), nullptr)
+      << "a genuinely empty tree for the rendered space must clear its rows";
+}
+
 TEST_F(SidebarStateModelContractTest,
        CaptureDeferredTransientEmptyModelPreservesRenderedRows) {
   TestingProfile profile;
   TestBrowserWindow* window = new TestBrowserWindow();
-  Browser::CreateParams params(&profile, true);
+  BrowserWindowCreateParams params(&profile, true);
   params.window = window;
-  Browser* browser = Browser::Create(params);
-  browser->tab_strip_model()->AppendWebContents(
+  auto browser_owner =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+  Browser* browser = browser_owner.get();
+  browser->GetTabStripModel()->AppendWebContents(
       content::WebContents::Create(
           content::WebContents::CreateParams(&profile)),
       /*foreground=*/true);
@@ -5707,9 +6265,11 @@ TEST_F(SidebarSplitGroupRenderTest, SplitGroup_HorizontalOrientation_RendersRow)
 TEST_F(SidebarSplitGroupRenderTest, SplitGroup_HorizontalOrientation_WhenPanelCollapsed_RendersColumn) {
   TestingProfile profile;
   TestBrowserWindow* window = new TestBrowserWindow();
-  Browser::CreateParams params(&profile, true);
+  BrowserWindowCreateParams params(&profile, true);
   params.window = window;
-  Browser* browser = Browser::Create(params);
+  auto browser_owner =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+  Browser* browser = browser_owner.get();
 
   // Set pref to collapsed (expanded = false)
   profile.GetPrefs()->SetBoolean(sidebar_prefs::kSidebarPanelExpanded, false);
@@ -5738,7 +6298,7 @@ TEST_F(SidebarSplitGroupRenderTest, SplitGroup_HorizontalOrientation_WhenPanelCo
   EXPECT_EQ(split_container->GetOrientation(), views::LayoutOrientation::kVertical);
 }
 
-TEST_F(SidebarSplitGroupRenderTest, SplitGroup_EqualFlex_IgnoresRatio) {
+TEST_F(SidebarSplitGroupRenderTest, SplitGroup_FlexFollowsSplitRatio) {
   MahoSidebarTabListView list(/*browser=*/nullptr);
   MahoSidebarTabListModel model;
   model.active_space_id = "space-1";
@@ -5747,7 +6307,7 @@ TEST_F(SidebarSplitGroupRenderTest, SplitGroup_EqualFlex_IgnoresRatio) {
   split_group.kind = SidebarNodeKind::kSplitGroup;
   split_group.split_id = "split-1";
   split_group.split_orientation = "vertical";
-  split_group.split_ratio = 0.7; // ratio should be ignored
+  split_group.split_ratio = 0.7;  // pane widths mirror the real split ratio
   split_group.children.push_back(MakeTabNode("tab-1", 0));
   split_group.children.push_back(MakeTabNode("tab-2", 1));
   model.normal_tree.push_back(split_group);
@@ -5767,9 +6327,10 @@ TEST_F(SidebarSplitGroupRenderTest, SplitGroup_EqualFlex_IgnoresRatio) {
   // Children layout: tab1 (lane, row, lane) -> divider -> tab2 (lane, row, lane)
   views::View* tab1 = split_container->children()[1];
   views::View* tab2 = split_container->children()[5];
-  
-  EXPECT_GT(tab1->bounds().width(), 0);
-  EXPECT_LE(std::abs(tab1->bounds().width() - tab2->bounds().width()), 1);
+
+  EXPECT_GT(tab2->bounds().width(), 0);
+  EXPECT_GT(tab1->bounds().width(), tab2->bounds().width())
+      << "The 0.7 leading pane must render wider than the 0.3 trailing pane";
 }
 
 TEST_F(SidebarSplitGroupRenderTest, SplitGroup_DividerInsertedBetweenChildren) {
@@ -6272,6 +6833,138 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_EQ(observer_.events[0].kind, "pin_tab");
   EXPECT_NE(observer_.events[0].kind, "set_folder_pinned");
   EXPECT_EQ(observer_.events[1].kind, "reorder_root_item");
+}
+
+TEST_F(SidebarDnDDispatchTest, CrossSpaceIsolationInTabListModel) {
+  ::MahoCore* core = maho_core_new();
+  ASSERT_TRUE(core);
+
+  std::string space_1 = ActiveSpaceIdForCore(core);
+  ASSERT_FALSE(space_1.empty());
+
+  const std::string space_2 = CreateSpaceForCoreTesting(core, "Space Two");
+  ASSERT_FALSE(space_2.empty());
+
+  const std::string kTabSpace1 = "11111111-1111-4000-8000-000000000001";
+  const std::string kTabSpace2 = "22222222-2222-4000-8000-000000000002";
+
+  DispatchCreateTabToCore(core, space_1, kTabSpace1);
+  DispatchCreateTabToCore(core, space_2, kTabSpace2);
+
+  // Space 1 must only contain kTabSpace1 and never kTabSpace2.
+  SidebarStateBackgroundResult res1 =
+      BuildSidebarStateOnBackgroundForTesting(core, base::GetQuotedJSONString(space_1), true);
+  ASSERT_TRUE(res1.parsed_tree.has_value());
+  ASSERT_TRUE(res1.parsed_tree->is_list());
+  std::vector<std::string> space_1_tabs;
+  for (const auto& item : res1.parsed_tree->GetList()) {
+    if (const auto* dict = item.GetIfDict()) {
+      if (const std::string* id = dict->FindString("id")) {
+        space_1_tabs.push_back(*id);
+      }
+    }
+  }
+  EXPECT_EQ(space_1_tabs, std::vector<std::string>({kTabSpace1}));
+
+  // Space 2 must only contain kTabSpace2 and never kTabSpace1.
+  SidebarStateBackgroundResult res2 =
+      BuildSidebarStateOnBackgroundForTesting(core, base::GetQuotedJSONString(space_2), true);
+  ASSERT_TRUE(res2.parsed_tree.has_value());
+  ASSERT_TRUE(res2.parsed_tree->is_list());
+  std::vector<std::string> space_2_tabs;
+  for (const auto& item : res2.parsed_tree->GetList()) {
+    if (const auto* dict = item.GetIfDict()) {
+      if (const std::string* id = dict->FindString("id")) {
+        space_2_tabs.push_back(*id);
+      }
+    }
+  }
+  EXPECT_EQ(space_2_tabs, std::vector<std::string>({kTabSpace2}));
+
+  maho_core_free(core);
+}
+
+TEST_F(SidebarDnDDispatchTest, CrossSpacePinnedTabsPreservedWithoutLeak) {
+  ::MahoCore* core = maho_core_new();
+  ASSERT_TRUE(core);
+
+  std::string space_1 = ActiveSpaceIdForCore(core);
+  ASSERT_FALSE(space_1.empty());
+
+  const std::string space_2 = CreateSpaceForCoreTesting(core, "Space B");
+  ASSERT_FALSE(space_2.empty());
+
+  const std::string kPinnedTab1 = "33333333-3333-4000-8000-000000000001";
+  const std::string kNormalTab1 = "33333333-3333-4000-8000-000000000002";
+  const std::string kNormalTab2 = "44444444-4444-4000-8000-000000000001";
+
+  DispatchCreateTabToCore(core, space_1, kPinnedTab1);
+  DispatchCreateTabToCore(core, space_1, kNormalTab1);
+  DispatchCreateTabToCore(core, space_2, kNormalTab2);
+  base::DictValue pin_tab;
+  pin_tab.Set("kind", "pin_tab");
+  pin_tab.Set("tab_id", kPinnedTab1);
+  DispatchJsonToCore(core, std::move(pin_tab));
+
+  SidebarStateBackgroundResult res1 =
+      BuildSidebarStateOnBackgroundForTesting(core, base::GetQuotedJSONString(space_1), true);
+  ASSERT_TRUE(res1.parsed_tree.has_value());
+  ASSERT_TRUE(res1.parsed_tree->is_list());
+
+  std::vector<std::string> pinned_ids;
+  std::vector<std::string> normal_ids;
+  for (const auto& item : res1.parsed_tree->GetList()) {
+    if (const auto* dict = item.GetIfDict()) {
+      const std::string* id = dict->FindString("id");
+      std::optional<bool> is_pinned = dict->FindBool("isPinned");
+      if (id && is_pinned && *is_pinned) {
+        pinned_ids.push_back(*id);
+      } else if (id) {
+        normal_ids.push_back(*id);
+      }
+    }
+  }
+
+  EXPECT_EQ(pinned_ids, std::vector<std::string>({kPinnedTab1}));
+  EXPECT_EQ(normal_ids, std::vector<std::string>({kNormalTab1}));
+
+  SidebarStateBackgroundResult res2 =
+      BuildSidebarStateOnBackgroundForTesting(core, base::GetQuotedJSONString(space_2), true);
+  ASSERT_TRUE(res2.parsed_tree.has_value());
+  ASSERT_TRUE(res2.parsed_tree->is_list());
+
+  std::vector<std::string> space_2_all;
+  for (const auto& item : res2.parsed_tree->GetList()) {
+    if (const auto* dict = item.GetIfDict()) {
+      if (const std::string* id = dict->FindString("id")) {
+        space_2_all.push_back(*id);
+      }
+    }
+  }
+  EXPECT_EQ(space_2_all, std::vector<std::string>({kNormalTab2}));
+
+  maho_core_free(core);
+}
+
+TEST_F(SidebarDnDDispatchTest, PinnedUrlDialogDispatchesOnlyPinnedUrl) {
+  MahoSidebarFavoritesGridView grid(/*browser=*/nullptr);
+  observer_.events.clear();
+
+  grid.RunEditDialogAcceptedForTesting("fav-1", "https://papago.naver.com/",
+                                       "https://papago.naver.com/en/");
+
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "set_tab_pinned_url");
+}
+
+TEST_F(SidebarDnDDispatchTest, PinnedUrlDialogIgnoresUnchangedUrl) {
+  MahoSidebarFavoritesGridView grid(/*browser=*/nullptr);
+  observer_.events.clear();
+
+  grid.RunEditDialogAcceptedForTesting("fav-1", "https://papago.naver.com/",
+                                       "https://papago.naver.com/");
+
+  EXPECT_TRUE(observer_.events.empty());
 }
 
 }  // namespace

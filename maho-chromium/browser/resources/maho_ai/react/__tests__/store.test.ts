@@ -1,5 +1,6 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest';
 import {MahoAiStore} from '../../store.js';
+import {ComposerDraftPersistence} from '../features/compact/composer-draft-persistence.js';
 import {
   CredentialErrorCode,
   getCredentialErrorPresentation,
@@ -474,7 +475,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
 
   it('persists AI provider, model, and reasoning selection through the page handler', async () => {
     // Given
-    const setAISelection = vi.fn<(providerId: string, modelId: string,
+    const setDefaultAISelection = vi.fn<(providerId: string, modelId: string,
         reasoningEffort: number) => Promise<{accepted: boolean}>>()
         .mockResolvedValue({accepted: true});
     const refreshedInfo = {
@@ -490,7 +491,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     };
     const getAISettings = vi.fn<() => Promise<{info: typeof refreshedInfo}>>()
         .mockResolvedValue({info: refreshedInfo});
-    Object.assign(mockHandler, {getAISettings, setAISelection});
+    Object.assign(mockHandler, {getAISettings, setDefaultAISelection});
     const selection: AISelectionRequest = {
       modelId: 'gpt-4.1',
       providerId: 'openai',
@@ -498,11 +499,11 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     };
 
     // When
-    const accepted = await store.setAISelection(selection);
+    const accepted = await store.setDefaultAISelection(selection);
 
     // Then
     expect(accepted).toBe(true);
-    expect(setAISelection).toHaveBeenCalledWith(
+    expect(setDefaultAISelection).toHaveBeenCalledWith(
         'openai', 'gpt-4.1', AI_REASONING_EFFORT.kHigh);
     expect(getAISettings).toHaveBeenCalledOnce();
     expect(store.getSnapshot().aiSettings).toMatchObject({
@@ -512,6 +513,75 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     });
     expect(store.getSnapshot().aiSettings.providerOptions[0]?.modelOptions[0]?.label)
         .toBe('GPT-4.1');
+  });
+
+  it('preserves Low reasoning across a settings refresh', async () => {
+    const info = {
+      activeModelId: 'model', activeProviderId: 'provider',
+      activeReasoningEffort: AI_REASONING_EFFORT.kLow,
+      providerOptions: [], reasoningOptions: [],
+    };
+    vi.spyOn(mockHandler, 'getAISettings').mockResolvedValue({info});
+    await store.refreshAISettings();
+    expect(store.getSnapshot().aiSettings.activeReasoningEffort).toBe(AI_REASONING_EFFORT.kLow);
+  });
+
+  it.each(['clear', 'newer', 'stale error'] as const)('ignores superseded history responses after %s', async action => {
+    const response = createDeferred<{items: []}>();
+    vi.spyOn(mockHandler, 'searchHistory').mockReturnValueOnce(response.promise);
+    const searching = store.searchHistory('old query');
+    if (action === 'clear') store.resetHistorySearch();
+    else {
+      vi.mocked(mockHandler.searchHistory).mockResolvedValueOnce({items: []});
+      await store.searchHistory('new query');
+    }
+    if (action === 'stale error') response.reject(new Error('Obsolete failure'));
+    else response.resolve({items: []});
+    await searching;
+    expect(store.getSnapshot().historySearch).toEqual({
+      query: action === 'clear' ? '' : 'new query', items: [], loading: false, error: null,
+    });
+  });
+
+  it.each([false, true])('keeps a newer persisted draft after acceptance (switch=%s)', async switchSession => {
+    const drafts = new Map<string, string>();
+    const persistence = new ComposerDraftPersistence({
+      composerDraftGet: async scope => ({draftJson: drafts.has(scope) ? JSON.stringify({version: 1, text: drafts.get(scope)}) : null}),
+      composerDraftSet: async (scope, text) => { drafts.set(scope, text); return {ok: true}; },
+      composerDraftDelete: async scope => { drafts.delete(scope); return {ok: true}; },
+    });
+    store.setComposerDraftPersistenceForTesting(persistence);
+    await store.resumeSession('test-session-123', false);
+    const submission = createDeferred<{accepted: boolean}>();
+    vi.spyOn(mockHandler, 'submitPrompt').mockReturnValue(submission.promise);
+    store.setComposerPrompt('submitted prompt');
+    const sending = store.submitPrompt();
+    if (switchSession) {
+      vi.mocked(mockHandler.resumeSession).mockResolvedValueOnce({session: createSession('session-b'), replayEvents: []});
+      await store.resumeSession('session-b', false);
+    }
+    store.setComposerPrompt('next unsent message');
+    await persistence.flush();
+    submission.resolve({accepted: true});
+    await sending;
+    const scope = {kind: 'conversation' as const, conversationId: switchSession ? 'session-b' : 'test-session-123'};
+    expect(await persistence.load(scope)).toBe('next unsent message');
+  });
+
+  it('restores destination text and preserves outgoing text when switching conversations', async () => {
+    const drafts = new Map<string, string>([['session-b', 'saved B draft']]);
+    store.setComposerDraftPersistenceForTesting(draftPersistenceWithClear(async () => {}, {
+      load: async scope => drafts.get(scope.conversationId!) ?? null,
+      schedule: (scope, text) => { drafts.set(scope.conversationId!, text); },
+    }));
+    await store.resumeSession('test-session-123', false);
+    store.setComposerPrompt('A draft');
+    vi.mocked(mockHandler.resumeSession).mockResolvedValueOnce({session: createSession('session-b'), replayEvents: []});
+    await store.resumeSession('session-b', false);
+    expect.soft(store.getSnapshot().composer.prompt).toBe('saved B draft');
+    store.setComposerPrompt(store.getSnapshot().composer.prompt + ' edited');
+    expect.soft(drafts.get('session-b')).toBe('saved B draft edited');
+    expect.soft(drafts.get('test-session-123')).toBe('A draft');
   });
 
   it('clears the persisted draft only after Mojo accepts the submission', async () => {

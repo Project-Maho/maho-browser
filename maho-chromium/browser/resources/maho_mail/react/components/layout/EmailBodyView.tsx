@@ -174,11 +174,11 @@ export function EmailBodyView({
   return (
     <div className="flex-1 overflow-y-auto px-6 py-4">
       {pgpDecryptedText ? (
-        <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+        <div className="max-w-[72ch] whitespace-pre-wrap text-[15px] leading-7 text-foreground">
           {pgpDecryptedText}
         </div>
       ) : smimeDecryptedText ? (
-        <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+        <div className="max-w-[72ch] whitespace-pre-wrap text-[15px] leading-7 text-foreground">
           {smimeDecryptedText}
         </div>
       ) : translatedHtml && !showOriginalBody ? (
@@ -262,7 +262,7 @@ export function EmailBodyView({
             {attachments.map((att) => (
               <div
                 key={att.id}
-                className="flex min-w-[14rem] max-w-sm flex-1 flex-col rounded-lg border border-border bg-card/50 text-sm animate-scale-in"
+                className="flex min-w-[14rem] max-w-sm flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card/50 text-sm transition-colors hover:border-foreground/20 animate-scale-in"
               >
                 <AttachmentPreview attachment={att} email={email} />
                 <div className="flex items-center gap-2 px-3 py-2">
@@ -305,7 +305,7 @@ export function EmailBodyView({
                         toast("error", err instanceof Error ? err.message : "Failed to open attachment");
                       }
                     }}
-                    className="flex flex-1 items-center justify-center gap-1 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground border-r border-border"
+                    className="flex h-9 flex-1 items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring border-r border-border"
                     title={t("email.openAttachment")}
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
@@ -328,7 +328,7 @@ export function EmailBodyView({
                         toast("error", err instanceof Error ? err.message : "Failed to download attachment");
                       }
                     }}
-                    className="flex flex-1 items-center justify-center gap-1 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    className="flex h-9 flex-1 items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     title={t("email.downloadAttachment")}
                   >
                     <Download className="h-3.5 w-3.5" />

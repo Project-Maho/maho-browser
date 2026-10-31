@@ -1,5 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 //
+#include <utility>
+
 #include <optional>
 
 #include "base/command_line.h"
@@ -138,9 +140,9 @@ class MahoCommandIncognitoInteractiveUiTest : public InProcessBrowserTest {
 
  protected:
   Browser* OpenIncognitoWithPage() {
-    Browser* incognito = CreateIncognitoBrowser();
+    Browser* incognito = static_cast<Browser*>(CreateIncognitoBrowser());
     EXPECT_TRUE(incognito);
-    EXPECT_TRUE(incognito->profile()->IsIncognitoProfile());
+    EXPECT_TRUE(incognito->GetProfile()->IsIncognitoProfile());
     EXPECT_TRUE(ui_test_utils::NavigateToURL(
         incognito, embedded_test_server()->GetURL("/title1.html")));
     return incognito;
@@ -284,14 +286,14 @@ IN_PROC_BROWSER_TEST_F(MahoCommandIncognitoInteractiveUiTest,
   })) << "Escape must dismiss the private command overlay";
 
   content::WebContents* active =
-      incognito->tab_strip_model()->GetActiveWebContents();
+      incognito->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(active);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoCommandColdStartInteractiveUiTest,
                        AutoPresentsVisiblePaletteWithActionResults) {
   ASSERT_TRUE(browser());
-  EXPECT_EQ(0, browser()->tab_strip_model()->count())
+  EXPECT_EQ(0, browser()->GetTabStripModel()->count())
       << "the regression must exercise the Maho zero-tab startup path";
 
   ASSERT_TRUE(base::test::RunUntil([&]() {

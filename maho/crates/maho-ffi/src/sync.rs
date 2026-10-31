@@ -236,6 +236,54 @@ pub unsafe extern "C" fn maho_core_handle_incoming_sync_envelope(
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
+pub unsafe extern "C" fn maho_core_export_sync_snapshot(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            match core.export_sync_snapshot() {
+                Ok(json) => CString::new(json)
+                    .map(CString::into_raw)
+                    .unwrap_or(ptr::null_mut()),
+                Err(_) => ptr::null_mut(),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `snapshot_json` must be a valid C string containing snapshot JSON.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_apply_sync_snapshot(
+    ptr: *mut MahoCore,
+    snapshot_json: *const c_char,
+) -> i32 {
+    ffi_safe!(
+        {
+            if ptr.is_null() || snapshot_json.is_null() || import_gate::is_active() {
+                return -1;
+            }
+            let snapshot_json = match CStr::from_ptr(snapshot_json).to_str() {
+                Ok(value) => value,
+                Err(_) => return -1,
+            };
+            match (&mut *ptr).apply_sync_snapshot(snapshot_json) {
+                Ok(count) => count as i32,
+                Err(_) => -1,
+            }
+        },
+        -1
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
 pub unsafe extern "C" fn maho_core_get_connected_devices(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!(
         {
@@ -458,12 +506,122 @@ pub unsafe extern "C" fn maho_core_configure_sync_bootstrap(
                 Ok(room_id) => serde_json::json!({
                     "success": true,
                     "roomId": room_id,
-                    "deviceId": core.sync_device_id()
+                    "deviceId": core.sync_device_id(),
+                    "vault": core.last_vault_account_outcome_code().unwrap_or("none")
                 }),
                 Err(error) => serde_json::json!({
                     "success": false,
                     "error": error
                 }),
+            };
+            CString::new(json.to_string())
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `server_url` and `bootstrap_seed` must be valid null-terminated C strings.
+/// `escrow_kdf_params_b64` and `escrow_wrapped_key_b64` may be null (no account
+/// escrow record) or valid null-terminated base64 strings.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_configure_sync_bootstrap_with_escrow(
+    ptr: *mut MahoCore,
+    server_url: *const c_char,
+    bootstrap_seed: *const c_char,
+    escrow_kdf_params_b64: *const c_char,
+    escrow_wrapped_key_b64: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || server_url.is_null() || bootstrap_seed.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &mut *ptr;
+            let url = match CStr::from_ptr(server_url).to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            let seed = match CStr::from_ptr(bootstrap_seed).to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            let escrow_kdf = if escrow_kdf_params_b64.is_null() {
+                None
+            } else {
+                match CStr::from_ptr(escrow_kdf_params_b64).to_str() {
+                    Ok(value) => Some(value),
+                    Err(_) => return ptr::null_mut(),
+                }
+            };
+            let escrow_wrapped = if escrow_wrapped_key_b64.is_null() {
+                None
+            } else {
+                match CStr::from_ptr(escrow_wrapped_key_b64).to_str() {
+                    Ok(value) => Some(value),
+                    Err(_) => return ptr::null_mut(),
+                }
+            };
+            let json = match core.configure_sync_encryption_from_bootstrap_with_escrow(
+                url,
+                seed,
+                escrow_kdf,
+                escrow_wrapped,
+            ) {
+                Ok(room_id) => serde_json::json!({
+                    "success": true,
+                    "roomId": room_id,
+                    "deviceId": core.sync_device_id(),
+                    "vault": core.last_vault_account_outcome_code().unwrap_or("none")
+                }),
+                Err(error) => serde_json::json!({
+                    "success": false,
+                    "error": error
+                }),
+            };
+            CString::new(json.to_string())
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Exports the account-escrow vault key slots (base64) for publication to the
+/// account bootstrap record. `success: true` without the slots means the vault
+/// currently has no account wrap.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_export_vault_account_escrow(
+    ptr: *mut MahoCore,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &mut *ptr;
+            let escrow = core.export_vault_account_escrow_b64().unwrap_or(None);
+            let json = match escrow {
+                Some((kdf_params, wrapped_account_key)) => serde_json::json!({
+                    "success": true,
+                    "kdfParams": kdf_params,
+                    "wrappedAccountKey": wrapped_account_key
+                }),
+                None => serde_json::json!({"success": true}),
             };
             CString::new(json.to_string())
                 .map(CString::into_raw)

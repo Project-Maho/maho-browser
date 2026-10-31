@@ -420,10 +420,58 @@ export interface VaultItem {
   lastUsedAt: string | null;
   hasTotp: boolean;
   hasPasskey: boolean;
+  favorite: boolean;
+  trashedAt: string | null;
+  hasNotes: boolean;
 }
 
 export enum SecretAction {
   kCopy = 0,
+  kReveal = 1,
+}
+
+export interface VaultTotpCodeResult {
+  success: boolean;
+  code: string | null;
+  secondsRemaining: number;
+  period: number;
+  errorCode: string | null;
+}
+
+export interface PasswordGeneratorOptions {
+  mode?: string;
+  length?: number;
+  includeLowercase?: boolean;
+  includeUppercase?: boolean;
+  includeDigits?: boolean;
+  includeSymbols?: boolean;
+  useLowercase?: boolean;
+  useUppercase?: boolean;
+  useDigits?: boolean;
+  useSymbols?: boolean;
+  avoidAmbiguous?: boolean;
+  passphraseMode?: boolean;
+  wordCount?: number;
+  separator?: string;
+  capitalize?: boolean;
+  includeNumber?: boolean;
+}
+
+export interface GeneratedPasswordResult {
+  success: boolean;
+  password: string | null;
+  strengthScore: number;
+  entropyBits: number;
+}
+
+export interface VaultHealthReport {
+  success: boolean;
+  weakItemIds?: string[];
+  weak?: string[];
+  reusedGroups?: string[][];
+  reused?: string[][];
+  totalLogins: number;
+  errorCode: string | null;
 }
 
 export interface VaultOperationResult {
@@ -642,6 +690,7 @@ export interface BrowserVersionInfo {
   channel: string;
   updateState: BrowserUpdateState;
   updateSupported: boolean;
+  updateGuidance: string;
 }
 
 export class PageCallbackRouter {
@@ -820,11 +869,14 @@ export class PageHandlerRemote {
     result: VaultOperationResult;
   }>;
   lockVault(): Promise<{result: VaultOperationResult}>;
+  lockNow(): Promise<{result: VaultOperationResult}>;
   listVaultItems(
       provider: PasswordProviderKind | null,
       kinds: VaultItemKind[],
       cursor: string | null,
-      limit: number): Promise<{result: VaultItemListResult}>;
+      limit: number,
+      trashOnly?: boolean,
+      favoritesOnly?: boolean): Promise<{result: VaultItemListResult}>;
   searchVaultItems(
       origin: string,
       provider: PasswordProviderKind | null,
@@ -833,17 +885,56 @@ export class PageHandlerRemote {
       title: string,
       origins: string[],
       username: string,
-      password: string): Promise<{result: VaultOperationResult}>;
+      password: string,
+      notes?: string | null): Promise<{result: VaultOperationResult}>;
   updateVaultLogin(
       itemId: string,
       expectedRevision: bigint,
       title: string,
       origins: string[],
       username: string,
-      password: string | null): Promise<{result: VaultOperationResult}>;
+      password: string | null,
+      notes?: string | null): Promise<{result: VaultOperationResult}>;
   deleteVaultItem(
       itemId: string,
       expectedRevision: bigint): Promise<{result: VaultOperationResult}>;
+  trashVaultItem(
+      itemId: string,
+      expectedRevision: bigint): Promise<{result: VaultOperationResult}>;
+  restoreVaultItem(
+      itemId: string,
+      expectedRevision: bigint): Promise<{result: VaultOperationResult}>;
+  emptyVaultTrash(): Promise<{result: VaultOperationResult}>;
+  setVaultItemFavorite(
+      itemId: string,
+      expectedRevision: bigint,
+      favorite: boolean): Promise<{result: VaultOperationResult}>;
+  getVaultItemNotes(
+      itemId: string): Promise<{
+        success: boolean;
+        notes: string | null;
+        errorCode: string | null;
+        username: string | null;
+      }>;
+  addVaultSecureNote(
+      title: string,
+      notes: string): Promise<{result: VaultOperationResult}>;
+  updateVaultSecureNote(
+      itemId: string,
+      expectedRevision: bigint,
+      title: string,
+      notes: string): Promise<{result: VaultOperationResult}>;
+  setVaultLoginTotp(
+      itemId: string,
+      expectedRevision: bigint,
+      secret: string): Promise<{result: VaultOperationResult}>;
+  getVaultTotpCode(
+      itemId: string): Promise<{result: VaultTotpCodeResult}>;
+  generatePassword(
+      options: PasswordGeneratorOptions): Promise<{result: GeneratedPasswordResult}>;
+  estimatePasswordStrength(
+      password: string): Promise<{score: number; entropyBits: number}>;
+  getVaultHealthReport(): Promise<{report: VaultHealthReport}>;
   useVaultSecret(
       itemId: string,
       expectedRevision: bigint,

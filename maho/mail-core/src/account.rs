@@ -108,6 +108,71 @@ pub fn connect_imap(resolved: &AccountAuth) -> Result<ImapClient> {
     Ok(client)
 }
 
+/// Check if an error represents an authentication failure from an IMAP/SMTP server
+/// or credential resolution.
+pub fn is_auth_error(err: &MailFfiError) -> bool {
+    match err {
+        MailFfiError::MissingCredentials(_) | MailFfiError::OAuth2Refresh(_) => true,
+        MailFfiError::Core(maho_core::error::AppError::Auth(_)) => true,
+        MailFfiError::Core(ref app_err) => {
+            let msg = app_err.to_string().to_uppercase();
+            msg.contains("AUTHENTICATIONFAILED")
+                || msg.contains("UNAUTHORIZED")
+                || msg.contains("INVALID CREDENTIALS")
+                || msg.contains("535")
+        }
+        _ => false,
+    }
+}
+
+/// Invalidate cached OAuth2 access token in the database so the next
+/// `resolve_account_auth` forces a fresh token exchange via the provider.
+pub fn invalidate_oauth2_token(conn: &Connection, account_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
+        [account_id],
+    )
+    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+    Ok(())
+}
+
+/// Establish an authenticated IMAP connection for the resolved account, with
+/// one-shot token refresh and retry on OAuth2 authentication failure.
+pub fn connect_imap_with_retry(
+    conn: &Connection,
+    credential_key: &[u8; 32],
+    resolved: &mut AccountAuth,
+) -> Result<ImapClient> {
+    connect_imap_with_retry_fn(conn, credential_key, resolved, connect_imap)
+}
+
+/// Parameterized connection helper accepting a custom connector for testing.
+pub fn connect_imap_with_retry_fn<F>(
+    conn: &Connection,
+    credential_key: &[u8; 32],
+    resolved: &mut AccountAuth,
+    connect: F,
+) -> Result<ImapClient>
+where
+    F: Fn(&AccountAuth) -> Result<ImapClient>,
+{
+    match connect(resolved) {
+        Ok(client) => Ok(client),
+        Err(err) if resolved.account.auth_type.starts_with("oauth2") && is_auth_error(&err) => {
+            log::warn!(
+                "[mail-ffi] IMAP authentication failed for oauth2 account {}; forcing token refresh and retrying once: {err}",
+                resolved.account.id
+            );
+            invalidate_oauth2_token(conn, &resolved.account.id)?;
+            let refreshed = resolve_account_auth(conn, credential_key, &resolved.account.id)?;
+            *resolved = refreshed;
+            connect(resolved)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+
 fn column_or_encrypted(
     column: Option<String>,
     conn: &Connection,
@@ -238,8 +303,9 @@ fn persist_refreshed_oauth2_credentials(
     refresh_token: Option<&str>,
     expires_at: Option<&str>,
 ) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
     store_encrypted_credential(
-        conn,
+        &tx,
         credential_key,
         account_id,
         "oauth2_access_token",
@@ -247,7 +313,7 @@ fn persist_refreshed_oauth2_credentials(
     )?;
     if let Some(refresh_token) = refresh_token.filter(|value| !value.is_empty()) {
         store_encrypted_credential(
-            conn,
+            &tx,
             credential_key,
             account_id,
             "oauth2_refresh_token",
@@ -255,7 +321,7 @@ fn persist_refreshed_oauth2_credentials(
         )?;
     }
 
-    conn.execute(
+    tx.execute(
         "UPDATE accounts SET oauth2_access_token = NULL, oauth2_expires_at = ?1,
              oauth2_refresh_token = NULL,
              updated_at = datetime('now')
@@ -263,6 +329,7 @@ fn persist_refreshed_oauth2_credentials(
         rusqlite::params![expires_at, account_id],
     )
     .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -274,6 +341,13 @@ fn refresh_oauth2_token(
     let token_url = token_endpoint(&account.auth_type).ok_or_else(|| {
         MailFfiError::OAuth2Refresh(format!("unknown provider {}", account.auth_type))
     })?;
+
+    #[cfg(test)]
+    let token_url = if account.oauth2_client_id.as_deref() == Some("review-loopback") {
+        account.smtp_host.as_str()
+    } else {
+        token_url
+    };
 
     let client_id = account
         .oauth2_client_id
@@ -314,13 +388,14 @@ fn refresh_oauth2_token(
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let body = match resp.text() {
-            Ok(text) => text,
-            Err(err) => format!("<failed to read error body: {err}>"),
+        let body = resp.text().unwrap_or_default();
+        let sanitized = sanitize_oauth_error_body(&body);
+        let error_msg = if sanitized.is_empty() {
+            format!("token endpoint returned {status}")
+        } else {
+            format!("token endpoint returned {status}: {sanitized}")
         };
-        return Err(MailFfiError::OAuth2Refresh(format!(
-            "token endpoint returned {status}: {body}"
-        )));
+        return Err(MailFfiError::OAuth2Refresh(error_msg));
     }
 
     let token: TokenResponse = resp
@@ -343,6 +418,38 @@ fn refresh_oauth2_token(
     )?;
 
     Ok(new_access_token)
+}
+
+#[derive(serde::Deserialize)]
+struct OAuthErrorPayload {
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+pub(crate) fn sanitize_oauth_error_body(body: &str) -> String {
+    let mut msg = String::new();
+    if let Ok(payload) = serde_json::from_str::<OAuthErrorPayload>(body) {
+        if let Some(err) = payload.error {
+            let trimmed = err.trim();
+            if !trimmed.is_empty() {
+                msg.push_str(trimmed);
+            }
+        }
+        if let Some(desc) = payload.error_description {
+            let trimmed = desc.trim();
+            if !trimmed.is_empty() {
+                if !msg.is_empty() {
+                    msg.push_str(": ");
+                }
+                msg.push_str(trimmed);
+            }
+        }
+    }
+    if msg.chars().count() > 200 {
+        msg.chars().take(200).collect()
+    } else {
+        msg
+    }
 }
 
 pub(crate) fn token_endpoint(auth_type: &str) -> Option<&'static str> {
@@ -445,9 +552,12 @@ pub fn create_account(
 
 pub fn oauth_reauthorization_email(conn: &Connection, account_id: &str) -> Result<String> {
     let account = load_account(conn, account_id)?;
-    if account.auth_type != "oauth2_gmail" {
+    if !matches!(
+        account.auth_type.as_str(),
+        "oauth2_gmail" | "oauth2_outlook"
+    ) {
         return Err(MailFfiError::InvalidRequest(format!(
-            "account {account_id} is not a Gmail OAuth account"
+            "account {account_id} is not a supported OAuth account"
         )));
     }
     Ok(account.email)
@@ -460,9 +570,13 @@ pub fn replace_oauth_credentials(
     request: CreateAccountRequest,
 ) -> Result<AccountResponse> {
     let account = load_account(conn, account_id)?;
-    if account.auth_type != "oauth2_gmail" || request.auth_type.as_deref() != Some("oauth2_gmail") {
+    if !matches!(
+        account.auth_type.as_str(),
+        "oauth2_gmail" | "oauth2_outlook"
+    ) || request.auth_type.as_deref() != Some(account.auth_type.as_str())
+    {
         return Err(MailFfiError::InvalidRequest(format!(
-            "account {account_id} is not a Gmail OAuth account"
+            "account {account_id} OAuth provider does not match"
         )));
     }
     if !account
@@ -471,7 +585,7 @@ pub fn replace_oauth_credentials(
         .eq_ignore_ascii_case(request.email.trim())
     {
         return Err(MailFfiError::InvalidRequest(format!(
-            "Google account mismatch: expected {}, got {}",
+            "OAuth account mismatch: expected {}, got {}",
             account.email, request.email
         )));
     }
@@ -684,9 +798,56 @@ fn connect_probe(params: &ProbeParams, auth: &ImapAuth) -> Result<ImapClient> {
 }
 
 #[cfg(test)]
+#[path = "account_review_tests.rs"]
+mod account_review_tests;
+
+#[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_oauth_error_body_does_not_leak_secrets_in_raw_body() {
+        let raw_body =
+            "refresh_token=secret_refresh_token_12345&client_secret=secret_xyz".repeat(50);
+        assert!(raw_body.len() > 2000);
+        let sanitized = sanitize_oauth_error_body(&raw_body);
+        assert!(
+            !sanitized.contains("refresh_token=secret_refresh_token"),
+            "sanitized error must not contain secret tokens from raw response body"
+        );
+        assert!(
+            !sanitized.contains("client_secret=secret_xyz"),
+            "sanitized error must not contain client secrets"
+        );
+        assert!(
+            sanitized.len() <= 200,
+            "sanitized error must be <= 200 chars"
+        );
+    }
+
+    #[test]
+    fn sanitize_oauth_error_body_parses_standard_oauth_fields() {
+        let json_body = r#"{"error":"invalid_grant","error_description":"Token has been expired or revoked.","sensitive_data":"super_secret_leak"}"#;
+        let sanitized = sanitize_oauth_error_body(json_body);
+        assert!(sanitized.contains("invalid_grant"));
+        assert!(sanitized.contains("Token has been expired or revoked."));
+        assert!(
+            !sanitized.contains("super_secret_leak"),
+            "non-standard fields must not be leaked"
+        );
+        assert!(sanitized.len() <= 200);
+    }
+
+    #[test]
+    fn sanitize_oauth_error_body_truncates_long_description() {
+        let long_desc = "A".repeat(500);
+        let json_body =
+            format!(r#"{{"error":"invalid_request","error_description":"{long_desc}"}}"#);
+        let sanitized = sanitize_oauth_error_body(&json_body);
+        assert!(sanitized.starts_with("invalid_request"));
+        assert!(sanitized.len() <= 200);
+    }
 
     #[test]
     fn token_endpoint_detection() {
@@ -1138,3 +1299,7 @@ mod tests {
         crate::state::registry().stop_account(&response.id);
     }
 }
+
+#[cfg(test)]
+#[path = "account_auth_retry_review_tests.rs"]
+mod auth_retry_review_tests;

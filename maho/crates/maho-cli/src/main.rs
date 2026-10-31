@@ -10,8 +10,8 @@ use maho_cli::browser_pipe;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use maho_agent::{AgentRuntime, AgentStreamEvent};
-use maho_types::chat::{ChatContent, ChatMessage};
 use maho_cli::vault::{self, RecoveryUnlockResult};
+use maho_types::chat::{ChatContent, ChatMessage};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -60,6 +60,13 @@ pub enum Commands {
     Tab {
         #[command(subcommand)]
         command: TabCommands,
+    },
+
+    Upload {
+        #[arg(long)]
+        tab: i64,
+        selector: String,
+        path: String,
     },
 
     /// Browsing history queries
@@ -114,7 +121,7 @@ pub enum Commands {
         command: RoutineCommands,
     },
 
-    /// Run agent tasks against the shared workspace store
+    /// Delegate browser goals to Maho's built-in agent; task runs a separate CLI agent
     Agent {
         #[command(subcommand)]
         command: AgentCommands,
@@ -316,7 +323,13 @@ pub enum RoutineCommands {
 /// removed `maho run` path used — no new transport).
 #[derive(Subcommand, Debug, Clone)]
 pub enum AgentCommands {
-    /// Run one agent task in a session bound to the shared workspace store
+    /// Queue a goal in the running browser's AI panel
+    Ask {
+        /// Goal for the built-in Maho agent
+        goal: String,
+    },
+
+    /// Hand off one browser goal. Headless: pass --approve-all or sensitive calls are denied
     Task {
         /// Task goal for the agent to execute
         goal: String,
@@ -614,6 +627,8 @@ pub enum TabCommands {
         selection: bool,
         #[arg(long)]
         tab: Option<String>,
+        #[arg(long, value_name = "SECS")]
+        timeout: Option<u64>,
     },
     /// Annotate a tab (reads stdin)
     Annotate {
@@ -915,7 +930,10 @@ pub enum BrowserCommands {
         eval: Option<String>,
     },
 
-    /// Machine-readable persistent automation pipe over stdin/stdout NDJSON
+    /// NDJSON pipe. op=observe|click|type|navigate|wait|act
+    #[command(
+        long_about = "One JSON object per line on stdin. Required field: op.\nOps: act, native, grant, observe, click, type, navigate, wait, upload.\nobserve: id, op, tab_id, mode=interactive\nclick: id, op, tab_id, locator.css\ntype: id, op, tab_id, locator.css, text\nupload: id, op, tab_id, path, selector (optional)\nMutating ops (act, click, type, navigate, upload) require tab_id: they never fall back to the focused tab."
+    )]
     Pipe,
 }
 
@@ -1149,6 +1167,32 @@ async fn main() -> Result<()> {
         // ─── Tab group ──────────────────────────────────────────────────────
         Commands::Tab { command } => cmd_tab(command, socket_path.as_deref(), json_output).await,
 
+        Commands::Upload {
+            tab,
+            selector,
+            path,
+        } => {
+            let client = browser::connect(socket_path.as_deref()).await?;
+            browser::send_control_call(
+                &client,
+                "browser_acquire_lease",
+                serde_json::json!({"tab_id": tab, "ttl_seconds": 60}),
+            )
+            .await?;
+            let result = browser::send_tool_call_no_replay(
+                &client,
+                "browser_file_upload_select",
+                serde_json::json!({"tab_id": tab, "path": path, "selector": selector}),
+            )
+            .await?;
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}", result);
+            }
+            Ok(())
+        }
+
         // ─── History group ────────────────────────────────────────────────────
         Commands::History { command } => {
             cmd_history(command, socket_path.as_deref(), json_output).await
@@ -1172,7 +1216,9 @@ async fn main() -> Result<()> {
         Commands::Browser { command, timeout } => {
             browser::set_timeout_override(timeout)?;
             match command {
-                BrowserCommands::Repl { eval } => cmd_repl(eval, socket_path.as_deref(), json_output).await,
+                BrowserCommands::Repl { eval } => {
+                    cmd_repl(eval, socket_path.as_deref(), json_output).await
+                }
                 BrowserCommands::Pipe => browser_pipe::run_pipe(socket_path.as_deref()).await,
             }
         }
@@ -1192,6 +1238,9 @@ async fn main() -> Result<()> {
 
         // ─── Agent group ──────────────────────────────────────────────
         Commands::Agent { command } => match command {
+            AgentCommands::Ask { goal } => {
+                cmd_agent_ask(&goal, socket_path.as_deref(), json_output).await
+            }
             AgentCommands::Task {
                 goal,
                 tier,
@@ -1605,7 +1654,9 @@ async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: b
             format,
             selection,
             tab,
+            timeout,
         } => {
+            browser::set_timeout_override(timeout)?;
             let client = browser::connect(socket_path).await?;
             let tool = if selection {
                 "browser_page_text"
@@ -2308,10 +2359,25 @@ async fn cmd_page(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_ask_parses_browser_goal_without_cli_runtime_options() {
+        use clap::Parser as _;
+        let parsed = Cli::try_parse_from(["maho", "agent", "ask", "Summarize open tabs"])
+            .expect("valid browser agent goal");
+        let Commands::Agent {
+            command: AgentCommands::Ask { goal },
+        } = parsed.command
+        else {
+            panic!("expected browser agent delegation");
+        };
+        assert_eq!(goal, "Summarize open tabs");
+        assert!(Cli::try_parse_from(["maho", "agent", "ask", "goal", "--approve-all"]).is_err());
+    }
+
     use super::{
-        decode_browser_descriptors, decode_browser_execution, format_agent_stream_event,
+        browser, decode_browser_descriptors, decode_browser_execution, format_agent_stream_event,
         mail_tool_request, AgentCommands, AgentStreamEvent, AgentTaskOutput,
-        AgentTaskRuntimeConfig, Cli, Commands, MailCommands, TierArg,
+        AgentTaskRuntimeConfig, Cli, Commands, MailCommands, TabCommands, TierArg,
     };
 
     #[test]
@@ -2404,7 +2470,10 @@ mod tests {
         });
 
         let result = decode_browser_execution("browser_click", malformed_structured);
-        assert!(result.is_err(), "must fail closed on malformed structured receipt");
+        assert!(
+            result.is_err(),
+            "must fail closed on malformed structured receipt"
+        );
         assert!(result
             .unwrap_err()
             .to_string()
@@ -2419,7 +2488,10 @@ mod tests {
         });
 
         let result = decode_browser_execution("browser_click", typed_without_receipt);
-        assert!(result.is_err(), "must fail closed when typed execution lacks receipt");
+        assert!(
+            result.is_err(),
+            "must fail closed when typed execution lacks receipt"
+        );
         assert!(result
             .unwrap_err()
             .to_string()
@@ -2434,7 +2506,10 @@ mod tests {
         });
 
         let result = decode_browser_execution("browser_click", malformed_direct);
-        assert!(result.is_err(), "must fail closed on malformed direct receipt");
+        assert!(
+            result.is_err(),
+            "must fail closed on malformed direct receipt"
+        );
         assert!(result
             .unwrap_err()
             .to_string()
@@ -2453,7 +2528,10 @@ mod tests {
         });
 
         let result = decode_browser_execution("browser_click", malformed_typed);
-        assert!(result.is_err(), "must fail closed on malformed typed execution");
+        assert!(
+            result.is_err(),
+            "must fail closed on malformed typed execution"
+        );
         assert!(result
             .unwrap_err()
             .to_string()
@@ -2472,7 +2550,10 @@ mod tests {
         });
 
         let result = decode_browser_execution("browser_click", projection_without_result);
-        assert!(result.is_err(), "must fail closed when projection envelope has no result");
+        assert!(
+            result.is_err(),
+            "must fail closed when projection envelope has no result"
+        );
         assert!(result
             .unwrap_err()
             .to_string()
@@ -2491,7 +2572,10 @@ mod tests {
         });
 
         let result = decode_browser_execution("browser_click", mismatched_direct);
-        assert!(result.is_err(), "must fail closed on direct capability mismatch");
+        assert!(
+            result.is_err(),
+            "must fail closed on direct capability mismatch"
+        );
         assert!(result
             .unwrap_err()
             .to_string()
@@ -2505,7 +2589,8 @@ mod tests {
             "count": 42
         });
 
-        let exec = decode_browser_execution("legacy_tool", legacy).expect("must wrap legacy output");
+        let exec =
+            decode_browser_execution("legacy_tool", legacy).expect("must wrap legacy output");
         assert_eq!(exec.receipt.capability_id, "legacy_tool");
         assert!(exec.output_json.contains("arbitraryKey"));
         assert!(exec.output_json.contains("data:image/png;base64,abc"));
@@ -2520,7 +2605,10 @@ mod tests {
 
         let result = decode_browser_execution("browser_click", error_payload);
         assert!(result.is_err(), "must return Err when isError is true");
-        assert!(result.unwrap_err().to_string().contains("permission denied by policy"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("permission denied by policy"));
     }
 
     #[test]
@@ -2536,7 +2624,8 @@ mod tests {
             }
         });
 
-        let exec = decode_browser_execution("browser_click", structured_payload).expect("must decode structured receipt");
+        let exec = decode_browser_execution("browser_click", structured_payload)
+            .expect("must decode structured receipt");
         assert_eq!(exec.receipt.capability_id, "browser_click");
         assert_eq!(exec.receipt.execution_id, "authoritative-exec-id-1234");
     }
@@ -2936,9 +3025,27 @@ mod tests {
         assert!(help.contains("--tier"), "help must list --tier\n{help}");
     }
 
+    /// `maho browser pipe --help | head -25` must still show legal ops. The
+    /// protocol belongs above Options, not in after_help.
+    #[test]
+    fn pipe_help_lists_ops_above_options() {
+        use clap::Parser as _;
+        let error = Cli::try_parse_from(["maho", "browser", "pipe", "--help"])
+            .err()
+            .expect("--help exits through DisplayHelp");
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+        let help = error.to_string();
+        let ops = help.find("Ops:").expect("ops must be in pipe help\n{help}");
+        let options = help.find("Options:").expect("options heading\n{help}");
+        assert!(ops < options, "head -25 must still see ops\n{help}");
+        assert!(help.contains("observe"), "{help}");
+        assert!(help.contains("click"), "{help}");
+    }
+
     /// Plan row 13: dry session creation through the shared-workspace store
     /// path — no LLM call, no browser; the session must construct and report
     /// its platform tool surface, and the runtime_config payload round-trips.
+    #[cfg(unix)]
     #[tokio::test]
     async fn agent_task_creates_session_dry_with_runtime_config() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -2982,6 +3089,7 @@ mod tests {
     /// defaults under the workspace so fs_write's fs_path resolves inside the
     /// whitelist. Roots must come from the shared provisioning function
     /// (R-N2), never an ad-hoc list.
+    #[cfg(unix)]
     #[tokio::test]
     async fn agent_task_session_binds_tier_and_workspace_fs_roots() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -3031,6 +3139,7 @@ mod tests {
     /// runtime-config payload. `--composite` arms the batch runner with the
     /// shared step cap; the default (no flag) stays fail-closed — the bound
     /// gate refuses every batch before any executor is touched.
+    #[cfg(unix)]
     #[tokio::test]
     async fn agent_task_session_binds_composite_gate_fail_closed() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -3123,6 +3232,7 @@ mod tests {
     /// Wave 1C (G10): a fresh task session's conversation row is titled from
     /// the goal up front, so the row is titled even before the first turn
     /// persists (pre-existing untitled rows are NOT migrated — no backfill).
+    #[cfg(unix)]
     #[tokio::test]
     async fn agent_task_new_session_is_titled_from_goal() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -3162,6 +3272,7 @@ mod tests {
     /// Wave 1C (G10): `--resume <session-id>` rebinds to the existing
     /// conversation — same id, stored turns and title reused, and an unknown
     /// id fails closed instead of silently forking a fresh session.
+    #[cfg(unix)]
     #[tokio::test]
     async fn agent_task_resume_reuses_existing_session() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -3696,6 +3807,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tab_read_accepts_positive_timeout_and_rejects_zero() {
+        use clap::Parser as _;
+        let parsed = Cli::try_parse_from(["maho", "tab", "read", "--timeout", "60", "--tab", "7"])
+        .expect("explicit page-read timeout should parse");
+        let Commands::Tab {
+            command: TabCommands::Read { timeout, tab, .. },
+        } = parsed.command
+        else {
+            panic!("expected tab read");
+        };
+        assert_eq!(timeout, Some(60));
+        assert_eq!(tab.as_deref(), Some("7"));
+        assert!(Cli::try_parse_from(["maho", "tab", "read", "--timeout", "not-a-number"]).is_err());
+        assert!(browser::set_timeout_override(Some(0)).is_err());
+    }
+
+    #[test]
+    fn direct_upload_requires_explicit_tab_selector_and_path() {
+        use clap::Parser as _;
+        let parsed = Cli::try_parse_from([
+            "maho", "upload", "--tab", "7", "#image-upload-input", "/tmp/image.png",
+        ])
+        .expect("direct upload should parse");
+        let Commands::Upload {
+            tab,
+            selector,
+            path,
+        } = parsed.command
+        else {
+            panic!("expected upload command");
+        };
+        assert_eq!(tab, 7);
+        assert_eq!(selector, "#image-upload-input");
+        assert_eq!(path, "/tmp/image.png");
+        assert!(Cli::try_parse_from(["maho", "upload", "--tab", "7", "/tmp/image.png"])
+            .is_err());
+    }
+
     /// P1-4: `routine run --provider/--model/--workspace` were registered
     /// then rejected with exit 2. Clap's own unknown-argument error keeps
     /// the exit code while removing them from help.
@@ -3806,7 +3956,20 @@ fn validate_tool_discovery(result: &serde_json::Value) -> Result<()> {
         .pointer("/surfaces/publicMcp/count")
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| anyhow::anyhow!("browser diagnostics omitted public MCP count"))?;
-    if expected != tools.len() as u64 {
+    // A trusted Maho CLI session also receives session-scoped tools (for
+    // example `maho_agent_delegate`) that are not catalog capabilities and so
+    // carry no `capabilityId`. The diagnostics count covers catalog
+    // capabilities only; counting the extras made every trusted `tool
+    // list/describe/run` fail against a live browser.
+    let catalog_tools = tools
+        .iter()
+        .filter(|tool| {
+            tool.get("capabilityId")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+        })
+        .count();
+    if expected != catalog_tools as u64 {
         bail!("browser catalog diagnostics do not match tools/list");
     }
     Ok(())
@@ -3881,12 +4044,38 @@ async fn discover_tool_catalog(
     Ok((discovery, "live_browser", true))
 }
 
-async fn cmd_doctor(
-    fix: bool,
-    socket_path: Option<&str>,
-    json_output: bool,
-) -> Result<()> {
+async fn cmd_doctor(fix: bool, socket_path: Option<&str>, json_output: bool) -> Result<()> {
     doctor::run(fix, socket_path, json_output).await
+}
+
+async fn cmd_agent_ask(goal: &str, socket_path: Option<&str>, json_output: bool) -> Result<()> {
+    if goal.trim().is_empty() {
+        bail!("Agent goal must not be empty");
+    }
+    let client = browser::connect(socket_path).await?;
+    // A one-shot goal must not be replayed on a reconnect: it may already
+    // have been queued before the connection went away.
+    let result = browser::send_raw_tool_call_no_replay(
+        &client,
+        "maho_agent_delegate",
+        serde_json::json!({"goal": goal}),
+    )
+    .await?;
+    if result.get("isError").and_then(serde_json::Value::as_bool) == Some(true) {
+        bail!("Browser agent rejected goal: {result}");
+    }
+    let response = browser::project_cli_result(result);
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+    } else {
+        match response.get("status").and_then(serde_json::Value::as_str) {
+            Some("queued_pending_panel") => println!(
+                "Goal received, but the built-in agent has not started. Open Maho's AI panel (or wait for it to load) to run it: {response}"
+            ),
+            _ => println!("Goal queued in Maho's built-in agent: {response}"),
+        }
+    }
+    Ok(())
 }
 
 async fn cmd_tool(
@@ -4216,6 +4405,22 @@ struct AgentTaskSessionInputs<'a> {
     socket_path: Option<&'a str>,
 }
 
+#[cfg(not(unix))]
+async fn cmd_agent_task(
+    goal: &str,
+    config: &AgentTaskRuntimeConfig,
+    session: AgentTaskSessionInputs<'_>,
+    json_output: bool,
+    stream: bool,
+) -> Result<()> {
+    let _ = (goal, config, session, json_output, stream);
+    anyhow::bail!(
+        "`maho agent task` requires a Unix host: the Omo runtime launches a \
+         Unix-domain-socket RPC process that has no Windows implementation yet."
+    )
+}
+
+#[cfg(unix)]
 async fn cmd_agent_task(
     goal: &str,
     config: &AgentTaskRuntimeConfig,
@@ -4242,8 +4447,16 @@ async fn cmd_agent_task(
             title: agent_task_title(goal),
         },
     };
-    let (session_id, backend) =
-        build_agent_task_session(&db_path, workspace, socket_path, config, approve_all, target, dirs).await?;
+    let (session_id, backend) = build_agent_task_session(
+        &db_path,
+        workspace,
+        socket_path,
+        config,
+        approve_all,
+        target,
+        dirs,
+    )
+    .await?;
 
     if !json_output {
         let tier = &config.permission_tier;
@@ -4285,9 +4498,10 @@ async fn cmd_agent_task(
     };
 
     let chat_msg = ChatMessage::user(ChatContent::text(goal.to_string()));
-    let response_msg = maho_agent::AgentRuntime::run_turn(&backend, &session_id, chat_msg, None, on_event)
-        .await
-        .map_err(|e| anyhow::anyhow!("Agent task failed: {e:?}"))?;
+    let response_msg =
+        maho_agent::AgentRuntime::run_turn(&backend, &session_id, chat_msg, None, on_event)
+            .await
+            .map_err(|e| anyhow::anyhow!("Agent task failed: {e:?}"))?;
 
     let response = match response_msg.content {
         ChatContent::Text(text) => text,
@@ -4415,7 +4629,9 @@ fn agent_task_title(goal: &str) -> String {
 /// the first turn persists), `Resume` targets verify the session exists and
 /// fail closed otherwise.
 /// Resolve the profile's openai-compatible provider into an LLM client override.
-fn profile_custom_provider(user_data_dir: &std::path::Path) -> Option<maho_agent::omo::config::CustomProvider> {
+fn profile_custom_provider(
+    user_data_dir: &std::path::Path,
+) -> Option<maho_agent::omo::config::CustomProvider> {
     let prefs_path = user_data_dir.join("Default").join("Preferences");
     let raw = std::fs::read_to_string(prefs_path).ok()?;
     let prefs: serde_json::Value = serde_json::from_str(&raw).ok()?;
@@ -4446,6 +4662,7 @@ fn profile_custom_provider(user_data_dir: &std::path::Path) -> Option<maho_agent
     })
 }
 
+#[cfg(unix)]
 async fn build_agent_task_session(
     db_path: &std::path::Path,
     workspace: Option<&str>,
@@ -4524,7 +4741,11 @@ async fn build_agent_task_session(
 
     let user_data_dir = maho_browser_mcp::paths::resolve_user_data_dir(socket_path);
     if let Some(cp) = profile_custom_provider(&user_data_dir) {
-        let model_id = cp.models.first().cloned().unwrap_or_else(|| "gpt-5.6-luna".to_string());
+        let model_id = cp
+            .models
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "gpt-5.6-luna".to_string());
         config_builder = config_builder.custom_provider(cp);
         config_builder = config_builder.provider("openai-compatible");
         config_builder = config_builder.model_id(model_id);
@@ -4546,13 +4767,17 @@ async fn build_agent_task_session(
 
     // Ensure MAHO_MCP_SOCKET_PATH points to the resolved browser socket
     if let Some(sp) = socket_path {
-        unsafe { std::env::set_var("MAHO_MCP_SOCKET_PATH", sp); }
+        unsafe {
+            std::env::set_var("MAHO_MCP_SOCKET_PATH", sp);
+        }
     } else if let Some(resolved_sock) = maho_browser_mcp::paths::resolve_user_data_dir(None)
         .join("maho.sock")
         .into_os_string()
         .to_str()
     {
-        unsafe { std::env::set_var("MAHO_MCP_SOCKET_PATH", resolved_sock); }
+        unsafe {
+            std::env::set_var("MAHO_MCP_SOCKET_PATH", resolved_sock);
+        }
     }
 
     let backend = maho_agent::omo::backend::OmoBackend::new(
@@ -4684,19 +4909,30 @@ fn decode_browser_descriptors(
 
     let mut descriptors = Vec::new();
     for tool in tools {
-        if let Ok(desc) = serde_json::from_value::<maho_agent::BrowserToolDescriptor>(tool.clone()) {
+        if let Ok(desc) = serde_json::from_value::<maho_agent::BrowserToolDescriptor>(tool.clone())
+        {
             descriptors.push(desc);
             continue;
         }
-        let name = tool.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let name = tool
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
         if name.is_empty() {
             continue;
         }
-        let description = tool.get("description").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-        let input_schema = tool.get("inputSchema").cloned().unwrap_or_else(|| serde_json::json!({
-            "type": "object",
-            "properties": {}
-        }));
+        let description = tool
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let input_schema = tool.get("inputSchema").cloned().unwrap_or_else(|| {
+            serde_json::json!({
+                "type": "object",
+                "properties": {}
+            })
+        });
         let capability_id = tool
             .get("capabilityId")
             .and_then(|v| v.as_str())
@@ -4763,7 +4999,11 @@ fn decode_browser_execution(
     capability_id: &str,
     result: serde_json::Value,
 ) -> Result<maho_agent::BrowserToolExecution> {
-    if result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if result
+        .get("isError")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         let err_msg = result
             .get("content")
             .and_then(|c| c.as_array())
@@ -4776,8 +5016,11 @@ fn decode_browser_execution(
 
     // 1. Check for structuredContent envelope
     if let Some(structured) = result.get("structuredContent") {
-        let execution = serde_json::from_value::<maho_agent::BrowserToolExecution>(structured.clone())
-            .map_err(|e| anyhow::anyhow!("malformed structuredContent in tool execution response: {e}"))?;
+        let execution =
+            serde_json::from_value::<maho_agent::BrowserToolExecution>(structured.clone())
+                .map_err(|e| {
+                    anyhow::anyhow!("malformed structuredContent in tool execution response: {e}")
+                })?;
         if execution.receipt.capability_id != capability_id {
             anyhow::bail!(
                 "structured receipt capability mismatch: expected {capability_id}, got {}",
@@ -4793,10 +5036,14 @@ fn decode_browser_execution(
     // and must NOT fall through to projection or legacy branches.
     if result.get("outputJson").is_some() || result.get("output_json").is_some() {
         if result.get("receipt").is_none() {
-            anyhow::bail!("malformed typed execution: missing receipt field in tool execution response");
+            anyhow::bail!(
+                "malformed typed execution: missing receipt field in tool execution response"
+            );
         }
         let execution = serde_json::from_value::<maho_agent::BrowserToolExecution>(result.clone())
-            .map_err(|e| anyhow::anyhow!("malformed typed execution in tool execution response: {e}"))?;
+            .map_err(|e| {
+                anyhow::anyhow!("malformed typed execution in tool execution response: {e}")
+            })?;
         if execution.receipt.capability_id != capability_id {
             anyhow::bail!(
                 "typed execution capability mismatch: expected {capability_id}, got {}",
@@ -4811,13 +5058,19 @@ fn decode_browser_execution(
         let output_val = result
             .get("result")
             .or_else(|| result.get("content"))
-            .ok_or_else(|| anyhow::anyhow!("missing result or content field in receipt projection envelope"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("missing result or content field in receipt projection envelope")
+            })?;
 
         let cap_id = receipt_val
             .get("capabilityId")
             .or_else(|| receipt_val.get("capability_id"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("malformed direct receipt in tool execution response: missing capabilityId"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "malformed direct receipt in tool execution response: missing capabilityId"
+                )
+            })?;
 
         let matches = if cap_id == capability_id {
             true
@@ -4953,7 +5206,8 @@ impl maho_agent::BrowserToolBridge for CliBrowserToolBridge {
         &self,
         capability_id: &str,
         args_json: &str,
-    ) -> std::result::Result<maho_agent::BrowserToolExecution, maho_agent::BrowserToolBridgeError> {
+    ) -> std::result::Result<maho_agent::BrowserToolExecution, maho_agent::BrowserToolBridgeError>
+    {
         let capability_id = capability_id.to_string();
         let socket_path = self.socket_path.clone();
         let args = serde_json::from_str(args_json).map_err(|error| {
@@ -4975,7 +5229,9 @@ impl maho_agent::BrowserToolBridge for CliBrowserToolBridge {
 
         let dispatch_name = {
             let map = self.canonical_map.read().await;
-            map.get(&capability_id).cloned().unwrap_or_else(|| capability_id.clone())
+            map.get(&capability_id)
+                .cloned()
+                .unwrap_or_else(|| capability_id.clone())
         };
 
         let result = {
@@ -5687,21 +5943,30 @@ Commands:
   click <ref>|@<name>   Click by ref, or by name (re-resolved live)
   type <ref> <text>     Type text into element (also: type @<name>=<text>)
   upload <path>         Select a local file for the active pending chooser
-  select <ref> <value>  Choose an option by value (also: select @<name>=<value>)
+  select <ref|@eN|css> <value>  Choose an option by value (also: select @<name>=<value>)
   refs [filter]         List interactive elements: <ref> <role> <name>[=<value>]
   key <name> [mods]     Press a key (e.g. Enter, ArrowDown; mods: shift,ctrl,alt,meta)
-  target [tab_id|none]  Pin this session's default tab (none: follow the active tab)
-  lease [tab_id]        Lease a tab and pin it as this session's default target
+                        BrowserBack navigates tab history rather than injecting a key
+  target [tab_id|active|none]  Pin this session's default tab ('active': pin
+                        the currently focused tab once; 'none': unpin)
+  lease [tab_id|active] Lease a tab and pin it as this session's default target
   grant <origin>        Grant exact origin to this session's sandbox
   help                  Show this help
   .quit / .exit         Exit REPL
 
 Tab scoping: a pinned target makes every tab-scoped command carry that tab_id
-explicitly; with no target, commands follow the active tab. Scripted automation
+explicitly; without one, mutating commands (click, type, key, select, upload,
+navigate) are denied - this repl never guesses the focused tab, so two
+concurrent sessions cannot click into each other's pages. Read-only commands
+(tabs, text, observe, refs) still follow the active tab. Scripted automation
 should prefer `maho tab <command> --tab <id>` or `maho browser pipe`.
 ";
 
-async fn cmd_repl(eval: Option<String>, socket_path: Option<&str>, _json_output: bool) -> Result<()> {
+async fn cmd_repl(
+    eval: Option<String>,
+    socket_path: Option<&str>,
+    _json_output: bool,
+) -> Result<()> {
     let client = browser::connect_repl(socket_path).await?;
     let mut state = ReplState::default();
 
@@ -5775,56 +6040,53 @@ fn with_target(args: &mut serde_json::Value, state: &ReplState) {
     }
 }
 
-/// Acquire an (auto-stealing) lease on the session's pinned target tab, or on
-/// the active tab when nothing is pinned, so subsequent mutations pass the
-/// active-tab lease gate. Stateful transport failures are propagated because
-/// their outcome may be ambiguous and must never be replayed.
-async fn ensure_active_lease(
+/// Fail closed before dispatch: a mutating repl command without a pinned
+/// target is refused here, with guidance, instead of being sent to the browser
+/// (which rejects it with -32013) or, before that contract existed, following
+/// whatever tab happened to be focused.
+fn require_pinned_target(state: &ReplState) -> Result<i64> {
+    state.target_tab.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No pinned target: run `target <tab_id>`, `target active`, or `lease <tab_id>` first \
+             (mutating commands never follow the active tab; `tabs` lists open tabs)"
+        )
+    })
+}
+
+/// Acquire a lease on the session's pinned target tab so subsequent mutations
+/// pass the lease gate. The pinned target must be set first (`target <id>` /
+/// `lease <id>`): this repl never guesses the browser's active tab, because a
+/// concurrent controller could have focused a different tab between here and
+/// dispatch. Stateful transport failures are propagated because their outcome
+/// may be ambiguous and must never be replayed.
+async fn ensure_pinned_lease(
     client: &maho_browser_mcp::client::BrowserClient,
     state: &ReplState,
 ) -> Result<()> {
-    if let Some(id) = state.target_tab {
-        browser::send_control_call(
-            client,
-            "browser_acquire_lease",
-            serde_json::json!({ "tab_id": id, "ttl_seconds": 300 }),
-        )
-        .await?;
-        return Ok(());
-    }
-    let result = browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
-    if let Some(tabs) = tool_payload(&result).get("tabs").and_then(|t| t.as_array()) {
-        if let Some(active) = tabs
-            .iter()
-            .find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true)))
-        {
-            if let Some(id) = active.get("id").and_then(|v| v.as_i64()) {
-                browser::send_control_call(
-                    client,
-                    "browser_acquire_lease",
-                    serde_json::json!({ "tab_id": id, "ttl_seconds": 300 }),
-                )
-                .await?;
-            }
-        }
-    }
+    let id = require_pinned_target(state)?;
+    browser::send_control_call(
+        client,
+        "browser_acquire_lease",
+        serde_json::json!({ "tab_id": id, "ttl_seconds": 300 }),
+    )
+    .await?;
     Ok(())
 }
 
-/// Dispatch a mutating tool call, auto-acquiring the active-tab lease and
-/// retrying once when the browser reports the active-tab lease is required
-/// (e.g. after lease expiry). Acquisition auto-steals, so no user action is
-/// needed and "lease required" never surfaces during a session.
+/// Dispatch a mutating tool call, acquiring the pinned tab's lease and
+/// retrying once when the browser reports the lease is required (e.g. after
+/// lease expiry). Never dispatches without a pinned target.
 async fn mutate(
     client: &maho_browser_mcp::client::BrowserClient,
     state: &ReplState,
     tool: &str,
     args: serde_json::Value,
 ) -> Result<serde_json::Value> {
+    require_pinned_target(state)?;
     match browser::send_tool_call(client, tool, args.clone()).await {
         Ok(v) => Ok(v),
         Err(e) if format!("{e}").contains("lease required") => {
-            ensure_active_lease(client, state).await?;
+            ensure_pinned_lease(client, state).await?;
             browser::send_tool_call(client, tool, args).await
         }
         Err(e) => Err(e),
@@ -5832,17 +6094,18 @@ async fn mutate(
 }
 
 /// Dispatch a mutating tool call without reconnect-and-replay transport,
-/// while still auto-acquiring the active-tab lease on pre-dispatch lease rejection.
+/// acquiring the pinned tab's lease on pre-dispatch lease rejection.
 async fn mutate_no_replay(
     client: &maho_browser_mcp::client::BrowserClient,
     state: &ReplState,
     tool: &str,
     args: serde_json::Value,
 ) -> Result<serde_json::Value> {
+    require_pinned_target(state)?;
     match browser::send_tool_call_no_replay(client, tool, args.clone()).await {
         Ok(v) => Ok(v),
         Err(e) if format!("{e}").contains("lease required") => {
-            ensure_active_lease(client, state).await?;
+            ensure_pinned_lease(client, state).await?;
             browser::send_tool_call_no_replay(client, tool, args).await
         }
         Err(e) => Err(e),
@@ -6002,8 +6265,7 @@ async fn handle_repl_line(
             let rest = line[cmd.len()..].trim();
             let mut args = serde_json::json!({});
             with_target(&mut args, state);
-            let result =
-                browser::send_tool_call(client, "browser_screenshot_full", args).await?;
+            let result = browser::send_tool_call(client, "browser_screenshot_full", args).await?;
             let payload = tool_payload(&result);
             let data = payload.get("data").and_then(|v| v.as_str()).unwrap_or("");
             if data.is_empty() {
@@ -6030,12 +6292,8 @@ async fn handle_repl_line(
         "snapshot" => {
             let mut args = serde_json::json!({});
             with_target(&mut args, state);
-            let result = browser::send_tool_call(
-                client,
-                "browser_accessibility_snapshot",
-                args,
-            )
-            .await?;
+            let result =
+                browser::send_tool_call(client, "browser_accessibility_snapshot", args).await?;
             println!("{}", serde_json::to_string_pretty(tool_payload(&result))?);
         }
         "observe" => {
@@ -6059,9 +6317,14 @@ async fn handle_repl_line(
             if let Some(sel) = selector {
                 args["scope"] = serde_json::json!({ "selector": sel });
             }
+            with_target(&mut args, state);
 
             let result = client
-                .call_capability("page.accessibility_snapshot_v2", args)
+                .call_capability_with_timeout(
+                    "page.accessibility_snapshot_v2",
+                    args,
+                    browser::tool_timeout("page.accessibility_snapshot_v2"),
+                )
                 .await?;
             let projected = browser::project_cli_result(result);
             if let Some(tree) = projected.get("tree").and_then(|v| v.as_str()) {
@@ -6089,8 +6352,7 @@ async fn handle_repl_line(
                         println!("Usage: wait selector <css>");
                         return Ok(());
                     }
-                    let mut args =
-                        serde_json::json!({ "selector": target, "timeout_ms": 10000 });
+                    let mut args = serde_json::json!({ "selector": target, "timeout_ms": 10000 });
                     with_target(&mut args, state);
                     let result =
                         browser::send_tool_call(client, "page_wait_for_selector", args).await?;
@@ -6284,6 +6546,13 @@ async fn handle_repl_line(
                 println!("Usage: key <name> [modifiers]");
                 return Ok(());
             }
+            if key_name == "BrowserBack" {
+                let mut args = serde_json::json!({});
+                with_target(&mut args, state);
+                mutate_no_replay(client, state, "browser_history_back", args).await?;
+                println!("ok");
+                return Ok(());
+            }
             let mut args = serde_json::json!({ "key": key_name });
             if let Some(mods) = parts.get(2).map(|s| s.trim()).filter(|s| !s.is_empty()) {
                 let list: Vec<String> = mods
@@ -6301,35 +6570,46 @@ async fn handle_repl_line(
         }
         "select" => {
             let rest = line[cmd.len()..].trim_start();
-            let (target, value): (Option<i64>, String) = if let Some(sel) = rest.strip_prefix('@') {
-                match sel.split_once('=') {
-                    Some((name, val)) => match resolve_ref_by_name(client, state, name).await? {
-                        Some(r) => (Some(r), val.to_string()),
+            let (selector, value) = rest
+                .split_once(' ')
+                .map(|(selector, value)| (selector.trim(), value.trim()))
+                .unwrap_or(("", ""));
+            let target = if rest.starts_with('@') && rest.contains('=') {
+                let (name, option) = rest.split_once('=').unwrap();
+                if name.strip_prefix("@e").and_then(|n| n.parse::<i64>().ok()).is_some() {
+                    Some((
+                        browser::refactor::resolve_selector_ref(client, name, state.target_tab)
+                            .await?,
+                        option.to_string(),
+                    ))
+                } else {
+                    match resolve_ref_by_name(client, state, name.trim_start_matches('@')).await? {
+                        Some(reference) => Some((reference, option.to_string())),
                         None => {
                             println!("no element matching: {}", name.trim());
                             return Ok(());
                         }
-                    },
-                    None => {
-                        println!("Usage: select @<name>=<value>");
-                        return Ok(());
                     }
                 }
+            } else if !selector.is_empty() && !value.is_empty() {
+                let reference = if let Ok(reference) = selector.parse::<i64>() {
+                    reference
+                } else {
+                    browser::refactor::resolve_selector_ref(client, selector, state.target_tab)
+                        .await?
+                };
+                Some((reference, value.to_string()))
             } else {
-                let ref_num = parts
-                    .get(1)
-                    .and_then(|s| s.parse::<i64>().ok())
-                    .filter(|n| *n >= 0);
-                (ref_num, parts.get(2).unwrap_or(&"").to_string())
+                None
             };
             match target {
-                Some(n) if !value.is_empty() => {
+                Some((n, value)) if n >= 0 && !value.is_empty() => {
                     let mut args = serde_json::json!({ "ref": n, "value": value });
                     with_target(&mut args, state);
                     mutate(client, state, "browser_select", args).await?;
                     println!("ok");
                 }
-                _ => println!("Usage: select <ref> <value> | select @<name>=<value>"),
+                _ => println!("Usage: select <ref|@eN|css> <value> | select @<name>=<value>"),
             }
         }
         "grant" => {
@@ -6339,7 +6619,8 @@ async fn handle_repl_line(
             // before dispatching actions on that origin.
             match parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty()) {
                 Some(origin) => {
-                    browser::send_tool_call(
+                    // Control-plane only: a public tools/call is rejected.
+                    browser::send_control_call(
                         client,
                         "browser_grant_exact_origin",
                         serde_json::json!({ "origin": origin }),
@@ -6359,47 +6640,71 @@ async fn handle_repl_line(
             match parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty()) {
                 None => match state.target_tab {
                     Some(id) => println!("Pinned target: tab {id}"),
-                    None => println!("Pinned target: none (commands follow the active tab)"),
+                    None => println!(
+                        "Pinned target: none (mutations are denied until you pin one)"
+                    ),
                 },
                 Some(arg) if arg == "none" || arg == "clear" => {
                     state.target_tab = None;
-                    println!("Pinned target cleared; commands follow the active tab.");
+                    println!("Pinned target cleared; pin a tab before mutating again.");
+                }
+                Some(arg) if arg == "active" => {
+                    // Deliberate convenience: resolve the CURRENTLY active tab
+                    // once and pin it. Everything after this still carries an
+                    // explicit tab_id, so a later focus change cannot redirect
+                    // this session's mutations.
+                    let result = browser::send_tool_call(
+                        client,
+                        "browser_tab_list",
+                        serde_json::json!({}),
+                    )
+                    .await?;
+                    let active = tool_payload(&result)
+                        .get("tabs")
+                        .and_then(|t| t.as_array())
+                        .and_then(|arr| {
+                            arr.iter().find(|t| {
+                                t.get("is_active") == Some(&serde_json::Value::Bool(true))
+                            })
+                        })
+                        .and_then(|t| t.get("id"))
+                        .and_then(|v| v.as_i64());
+                    match active {
+                        Some(id) => {
+                            state.target_tab = Some(id);
+                            println!(
+                                "Pinned target: tab {id} (currently active; mutations now bind to it)"
+                            );
+                        }
+                        None => println!("No active tab to pin."),
+                    }
                 }
                 Some(arg) => match arg.parse::<i64>() {
                     Ok(id) => {
                         state.target_tab = Some(id);
                         println!("Pinned target: tab {id}");
                     }
-                    Err(_) => println!("Usage: target <tab_id>|none"),
+                    Err(_) => println!("Usage: target <tab_id>|active|none"),
                 },
             }
         }
         "lease" => {
-            // Resolve the target tab: an explicit `lease <tab_id>`, else the
-            // session's pinned target, else the active tab. Acquisition
-            // auto-steals any existing lease, so no user confirmation is
-            // needed; the lease is held on this REPL session's connection and
-            // gates subsequent click/type mutations. Acquiring also pins the
+            // Resolve the target tab: an explicit `lease <tab_id>`, `lease
+            // active` (currently focused tab, pinned once), or the session's
+            // pinned target. Acquisition auto-steals any existing lease (ADR
+            // 0016 user-driven path); stealing is announced so a concurrent
+            // session losing its lease is visible. Acquiring also pins the
             // tab so later commands address it explicitly.
             let tab_id = match parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                Some(explicit) => match explicit.parse::<i64>() {
-                    Ok(id) => id,
-                    Err(_) => {
-                        println!("Usage: lease [tab_id]");
-                        return Ok(());
-                    }
-                },
-                None => {
-                    if let Some(id) = state.target_tab {
-                        id
-                    } else {
+                Some(explicit) => {
+                    if explicit == "active" {
                         let result = browser::send_tool_call(
                             client,
                             "browser_tab_list",
                             serde_json::json!({}),
                         )
                         .await?;
-                        let active = tool_payload(&result)
+                        match tool_payload(&result)
                             .get("tabs")
                             .and_then(|t| t.as_array())
                             .and_then(|arr| {
@@ -6408,23 +6713,50 @@ async fn handle_repl_line(
                                 })
                             })
                             .and_then(|t| t.get("id"))
-                            .and_then(|v| v.as_i64());
-                        match active {
+                            .and_then(|v| v.as_i64())
+                        {
                             Some(id) => id,
                             None => {
                                 println!("No active tab to lease.");
                                 return Ok(());
                             }
                         }
+                    } else {
+                        match explicit.parse::<i64>() {
+                            Ok(id) => id,
+                            Err(_) => {
+                                println!("Usage: lease [tab_id|active]");
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+                None => {
+                    if let Some(id) = state.target_tab {
+                        id
+                    } else {
+                        println!(
+                            "No pinned target: run `target <tab_id>`, `target active`, or `lease <tab_id>`."
+                        );
+                        return Ok(());
                     }
                 }
             };
-            browser::send_control_call(
+            let result = browser::send_control_call(
                 client,
                 "browser_acquire_lease",
                 serde_json::json!({ "tab_id": tab_id, "ttl_seconds": 300 }),
             )
             .await?;
+            if let Some(previous) = tool_payload(&result)
+                .get("previous_holder")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                println!(
+                    "WARNING: stole lease on tab {tab_id} from session '{previous}'."
+                );
+            }
             state.target_tab = Some(tab_id);
             println!("Lease acquired. This session now targets tab {tab_id}.");
         }

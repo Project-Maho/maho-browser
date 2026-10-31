@@ -27,7 +27,9 @@ import {
 } from './saved_passwords_model.js';
 import type {
   AddSavedPasswordInput,
+  AddSecureNoteInput,
   EditSavedPasswordInput,
+  EditSecureNoteInput,
   LoadSavedPasswords,
   SavedPasswordActionStatus,
   SavedPasswordDrawerState,
@@ -49,9 +51,6 @@ export function SavedPasswordsPane(
       createSavedPasswordLoadingState());
   const [searchInputValue, setSearchInputValue] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  // Bumped on every transient-state reset so child-owned confirmation UI
-  // (e.g. the delete dialog) is discarded in the same render, not one commit
-  // later; a stale confirmation must never survive a Vault lock.
   const [transientResetToken, setTransientResetToken] = useState(0);
   const hasLoadedOnceRef = useRef(false);
   const requestIdRef = useRef(0);
@@ -85,19 +84,28 @@ export function SavedPasswordsPane(
       const vaultPreflightState = vaultPreflightResult.state;
       const isUnlocked = vaultStatus.status?.lockState === VaultLockState.kUnlocked;
       let items: VaultItem[] = [];
+      let trashItems: VaultItem[] = [];
       if (passwordsEnabled && isMahoNativeProvider(providerStatus.provider) && isUnlocked) {
-        const {result} = await handler.listVaultItems(
-            PasswordProviderKind.kMahoNative, [VaultItemKind.kLogin], null, 0);
+        // The core excludes trashed items unless trash_only is set, so the
+        // library and the Trash view need one list request each.
+        const kinds = [VaultItemKind.kLogin, VaultItemKind.kSecureItem];
+        const [normalResult, trashResult] = await Promise.all([
+          handler.listVaultItems(PasswordProviderKind.kMahoNative, kinds, null, 0, false, false),
+          handler.listVaultItems(PasswordProviderKind.kMahoNative, kinds, null, 0, true, false),
+        ]);
         if (requestId !== requestIdRef.current) {
           return;
         }
-        if (!result.success) {
+        const failed = !normalResult.result.success ? normalResult.result :
+            !trashResult.result.success ? trashResult.result : null;
+        if (failed) {
           hasLoadedOnceRef.current = true;
           setLoadState(createSavedPasswordErrorState(
-              vaultOperationMessage(listFailureAsOperation(result), 'Failed to load saved passwords.')));
+              vaultOperationMessage(listFailureAsOperation(failed), 'Failed to load saved passwords.')));
           return;
         }
-        items = result.items;
+        items = normalResult.result.items.filter(i => !i.trashedAt);
+        trashItems = trashResult.result.items.filter(i => Boolean(i.trashedAt));
       } else {
         clearTransientState();
       }
@@ -105,6 +113,7 @@ export function SavedPasswordsPane(
       hasLoadedOnceRef.current = true;
       setLoadState(createSavedPasswordLoadedState({
         items,
+        trashItems,
         providerStatus,
         vaultPreflightState,
         vaultStatus,
@@ -150,15 +159,19 @@ export function SavedPasswordsPane(
   }, [clearTransientState]);
 
   const handleAddPassword = async (input: AddSavedPasswordInput): Promise<string | null> => {
-    const normalizedOrigin = normalizeCredentialOrigin(input.origin);
-    if (!normalizedOrigin) {
+    const primaryOrigin = normalizeCredentialOrigin(input.origin);
+    if (!primaryOrigin) {
       return 'Enter a valid site origin.';
     }
     if (!input.password) {
       return 'Enter a password to save.';
     }
+    const origins = input.origins && input.origins.length > 0
+        ? input.origins.map(o => normalizeCredentialOrigin(o) || o).filter(Boolean)
+        : [primaryOrigin];
+    const title = input.title?.trim() || primaryOrigin;
     const {result} = await handler.addVaultLogin(
-        normalizedOrigin, [normalizedOrigin], input.username.trim(), input.password);
+        title, origins, input.username.trim(), input.password, input.notes || null);
     if (operationResetsTransientState(result)) {
       clearTransientState();
       await loadSavedPasswords(true);
@@ -167,20 +180,45 @@ export function SavedPasswordsPane(
     if (!result.success) {
       return vaultOperationMessage(result, 'Failed to save password.');
     }
+    if (input.totpSecret && result.item) {
+      try {
+        await handler.setVaultLoginTotp(result.item.id, result.item.revision, input.totpSecret.trim());
+      } catch {
+      }
+    }
+    await loadSavedPasswords(false);
+    return null;
+  };
+
+  const handleAddSecureNote = async (input: AddSecureNoteInput): Promise<string | null> => {
+    if (!input.title.trim()) {
+      return 'Enter a title for the secure note.';
+    }
+    const {result} = await handler.addVaultSecureNote(input.title.trim(), input.notes);
+    if (operationResetsTransientState(result)) {
+      clearTransientState();
+      await loadSavedPasswords(true);
+      return vaultOperationMessage(result, 'Vault locked before the note could be saved.');
+    }
+    if (!result.success) {
+      return vaultOperationMessage(result, 'Failed to save secure note.');
+    }
     await loadSavedPasswords(false);
     return null;
   };
 
   const handleEditPassword = async (
       item: VaultItem, input: EditSavedPasswordInput): Promise<string | null> => {
-    const normalizedOrigin = normalizeCredentialOrigin(input.origin);
-    if (!normalizedOrigin) {
+    const primaryOrigin = normalizeCredentialOrigin(input.origin);
+    if (!primaryOrigin) {
       return 'Enter a valid site origin.';
     }
-    const primaryOrigin = getPrimaryOrigin(item);
-    const title = item.title && item.title !== primaryOrigin ? item.title : normalizedOrigin;
+    const origins = input.origins && input.origins.length > 0
+        ? input.origins.map(o => normalizeCredentialOrigin(o) || o).filter(Boolean)
+        : [primaryOrigin];
+    const title = input.title?.trim() || item.title || primaryOrigin;
     const {result} = await handler.updateVaultLogin(
-        item.id, item.revision, title, [normalizedOrigin], input.username.trim(), input.password);
+        item.id, item.revision, title, origins, input.username.trim(), input.password, input.notes ?? null);
     if (operationResetsTransientState(result)) {
       clearTransientState();
       await loadSavedPasswords(true);
@@ -189,18 +227,125 @@ export function SavedPasswordsPane(
     if (!result.success) {
       return vaultOperationMessage(result, 'Failed to update saved password.');
     }
+    if (input.totpSecret) {
+      const nextRev = result.item?.revision ?? item.revision;
+      try {
+        await handler.setVaultLoginTotp(item.id, nextRev, input.totpSecret.trim());
+      } catch {
+      }
+    }
     await loadSavedPasswords(false);
     return null;
   };
 
+  const handleEditSecureNote = async (
+      item: VaultItem, input: EditSecureNoteInput): Promise<string | null> => {
+    if (!input.title.trim()) {
+      return 'Enter a title for the secure note.';
+    }
+    const {result} = await handler.updateVaultSecureNote(
+        item.id, item.revision, input.title.trim(), input.notes);
+    if (operationResetsTransientState(result)) {
+      clearTransientState();
+      await loadSavedPasswords(true);
+      return vaultOperationMessage(result, 'Vault locked before changes could be saved.');
+    }
+    if (!result.success) {
+      return vaultOperationMessage(result, 'Failed to update secure note.');
+    }
+    await loadSavedPasswords(false);
+    return null;
+  };
+
+  // Item-state mutations (trash, restore, favorite, delete) do not carry
+  // content, so a revision_conflict only means the row's revision went stale
+  // (e.g. a secret use bumped it). Re-resolve the current revision and retry
+  // once. Content edits deliberately do NOT go through this path: they must
+  // surface the conflict instead of overwriting a newer version.
+  const withCurrentRevision = async (
+      item: VaultItem,
+      mutate: (revision: bigint) => Promise<{result: VaultOperationResult}>):
+      Promise<VaultOperationResult> => {
+    const first = (await mutate(item.revision)).result;
+    if (first.success || first.errorCode !== 'revision_conflict') {
+      return first;
+    }
+    const kinds = [VaultItemKind.kLogin, VaultItemKind.kSecureItem];
+    const lists = await Promise.all([
+      handler.listVaultItems(PasswordProviderKind.kMahoNative, kinds, null, 0, false, false),
+      handler.listVaultItems(PasswordProviderKind.kMahoNative, kinds, null, 0, true, false),
+    ]);
+    const current = lists.flatMap(l => (l.result.success ? l.result.items : []))
+        .find(candidate => candidate.id === item.id);
+    if (!current || current.revision === item.revision) {
+      return first;
+    }
+    return (await mutate(current.revision)).result;
+  };
+
   const handleDeletePassword = async (item: VaultItem) => {
-    const {result} = await handler.deleteVaultItem(item.id, item.revision);
+    const result = await withCurrentRevision(
+        item, revision => handler.deleteVaultItem(item.id, revision));
     clearTransientState();
     if (!result.success && !operationResetsTransientState(result)) {
       setActionStatus({itemId: item.id, message: vaultOperationMessage(result, 'Failed to delete saved password.'), status: 'failed'});
       return;
     }
     await loadSavedPasswords(operationResetsTransientState(result));
+  };
+
+  const handleTrash = async (item: VaultItem) => {
+    const result = await withCurrentRevision(
+        item, revision => handler.trashVaultItem(item.id, revision));
+    clearTransientState();
+    if (!result.success && !operationResetsTransientState(result)) {
+      setActionStatus({itemId: item.id, message: vaultOperationMessage(result, 'Failed to move to trash.'), status: 'failed'});
+      return;
+    }
+    await loadSavedPasswords(operationResetsTransientState(result));
+  };
+
+  const handleRestore = async (item: VaultItem) => {
+    const result = await withCurrentRevision(
+        item, revision => handler.restoreVaultItem(item.id, revision));
+    clearTransientState();
+    if (!result.success && !operationResetsTransientState(result)) {
+      setActionStatus({itemId: item.id, message: vaultOperationMessage(result, 'Failed to restore item.'), status: 'failed'});
+      return;
+    }
+    await loadSavedPasswords(operationResetsTransientState(result));
+  };
+
+  const handleEmptyTrash = async () => {
+    const {result} = await handler.emptyVaultTrash();
+    clearTransientState();
+    if (!result.success && !operationResetsTransientState(result)) {
+      setActionStatus({itemId: '', message: vaultOperationMessage(result, 'Failed to empty trash.'), status: 'failed'});
+      return;
+    }
+    await loadSavedPasswords(operationResetsTransientState(result));
+  };
+
+  const handleToggleFavorite = async (item: VaultItem) => {
+    const nextFav = !item.favorite;
+    const result = await withCurrentRevision(
+        item, revision => handler.setVaultItemFavorite(item.id, revision, nextFav));
+    if (operationResetsTransientState(result)) {
+      clearTransientState();
+      await loadSavedPasswords(true);
+      return;
+    }
+    if (!result.success) {
+      setActionStatus({itemId: item.id, message: vaultOperationMessage(result, 'Failed to update favorite status.'), status: 'failed'});
+      return;
+    }
+    await loadSavedPasswords(false);
+  };
+
+  const handleLock = async () => {
+    clearTransientState();
+    await handler.lockVault();
+    await loadSavedPasswords(true);
   };
 
   const handleSecretAction = async (item: VaultItem, action: SecretAction) => {
@@ -216,12 +361,19 @@ export function SavedPasswordsPane(
       setActionStatus({itemId: item.id, message: vaultOperationMessage(result, 'Secret action failed.'), status: 'failed'});
       return;
     }
-    setActionStatus({
-      itemId: item.id,
-      message:
-          'Copied by the browser process. No password was returned to this page.',
-      status: 'success',
-    });
+    if (action === SecretAction.kCopy) {
+      setActionStatus({
+        itemId: item.id,
+        message: 'Copied by the browser process. No password was returned to this page.',
+        status: 'success',
+      });
+    } else if (action === SecretAction.kReveal) {
+      setActionStatus({
+        itemId: item.id,
+        message: 'Password revealed in native dialog. No password was returned to this page.',
+        status: 'success',
+      });
+    }
     await loadSavedPasswords(false);
   };
 
@@ -237,13 +389,20 @@ export function SavedPasswordsPane(
           data={loadState.data}
           drawer={drawer}
           onAdd={handleAddPassword}
+          onAddSecureNote={handleAddSecureNote}
           onCloseDrawer={() => setDrawer(null)}
           onDelete={handleDeletePassword}
           onEdit={handleEditPassword}
-          onOpenAdd={() => setDrawer({kind: 'add'})}
+          onEditSecureNote={handleEditSecureNote}
+          onEmptyTrash={handleEmptyTrash}
+          onLock={handleLock}
+          onOpenAdd={kind => setDrawer({kind: 'add', initialKind: kind})}
           onOpenEdit={item => setDrawer({item, kind: 'edit'})}
+          onRestore={handleRestore}
           onSecretAction={handleSecretAction}
           onSearchChange={setSearchInputValue}
+          onToggleFavorite={handleToggleFavorite}
+          onTrash={handleTrash}
           passwordsEnabled={passwordsEnabled}
           searchInputValue={searchInputValue}
           searchQuery={searchQuery}

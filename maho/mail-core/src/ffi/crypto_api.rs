@@ -1441,8 +1441,14 @@ pub extern "C" fn MahoMailSignEmailSmime(
 #[derive(Deserialize)]
 struct EncryptEmailSmimeRequest {
     account_id: String,
+    recipient_emails: Vec<String>,
     recipient_certs_pem: Vec<String>,
     body: String,
+    body_html: Option<String>,
+    #[serde(default)]
+    attachments: Vec<maho_core::smtp_client::ComposeAttachment>,
+    #[serde(default)]
+    sign: bool,
 }
 
 #[derive(Serialize)]
@@ -1469,13 +1475,49 @@ pub extern "C" fn MahoMailEncryptEmailSmime(
                     .pool
                     .get()
                     .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let sender_cert_pem = get_default_smime_identity(&conn, &req.account_id)
-                    .ok()
-                    .map(|(_, pem, _)| pem);
+                if req.recipient_emails.is_empty()
+                    || req.recipient_emails.iter().any(|email| !smime::recipient::mailbox(email))
+                {
+                    return Err(validation_err("A complete list of recipient mailboxes is required"));
+                }
+                let mut candidates = Vec::new();
+                for pem in req.recipient_certs_pem {
+                    let emails = smime::recipient::emails(&pem)?;
+                    candidates.push((pem, emails));
+                }
+                let mut statement = conn.prepare(
+                    "SELECT cert_pem FROM smime_identities WHERE account_id = ?1",
+                )?;
+                let stored = statement.query_map(params![req.account_id], |row| row.get::<_, String>(0))?;
+                for pem in stored {
+                    let pem = pem?;
+                    match smime::recipient::emails(&pem) {
+                        Ok(emails) => candidates.push((pem, emails)),
+                        Err(error) => {
+                            // An expired/unusable imported identity is not a recipient candidate.
+                            log::debug!("S/MIME recipient candidate excluded: {error}");
+                        }
+                    }
+                }
+                let mut recipients = Vec::new();
+                for email in &req.recipient_emails {
+                    let (pem, _) = candidates.iter().find(|(_, names)| names.iter().any(|name| name == email))
+                        .ok_or_else(|| validation_err(format!("No usable S/MIME certificate for {email}")))?;
+                    if !recipients.contains(pem) { recipients.push(pem.clone()); }
+                }
+                let mut entity = String::from_utf8(maho_core::smtp_client::build_mime_entity(
+                    Some(&req.body), req.body_html.as_deref(), &req.attachments,
+                )?).map_err(|error| internal_err(error.to_string()))?;
+                if req.sign {
+                    let (id, cert, _) = get_default_smime_identity(&conn, &req.account_id)?;
+                    let key = get_private_key(&conn, &ctx.credential_key, &id, false)?
+                        .ok_or_else(|| not_found_err("S/MIME private key not found in credential store"))?;
+                    entity = smime::backend().sign(&cert, &key, &entity, smime_key_scope(&ctx, &req.account_id)?)?;
+                }
                 let smime = smime::backend().encrypt(
-                    &req.recipient_certs_pem,
-                    sender_cert_pem.as_deref(),
-                    &req.body,
+                    &recipients,
+                    None,
+                    &entity,
                 )?;
 
                 Ok(EncryptEmailSmimeResponse { smime })

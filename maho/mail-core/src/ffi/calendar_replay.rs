@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 type AccountLocks = HashMap<(PathBuf, String), Weak<tokio::sync::Mutex<()>>>;
 static LOCKS: OnceLock<Mutex<AccountLocks>> = OnceLock::new();
 
-pub(super) async fn lock(ctx: &AppCtx, account: &str) -> Result<tokio::sync::OwnedMutexGuard<()>> {
+pub(crate) async fn lock(ctx: &AppCtx, account: &str) -> Result<tokio::sync::OwnedMutexGuard<()>> {
     let lock = {
         let mut locks = LOCKS.get_or_init(Mutex::default).lock()
             .map_err(|_| MailFfiError::Internal("calendar replay lock poisoned".into()))?;
@@ -64,7 +64,7 @@ pub(crate) async fn flush(ctx: &AppCtx, account: &str) -> Result<usize> {
     let _guard = lock(ctx, account).await?;
     let rows = {
         let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
-        let mut stmt = db.prepare(&format!("SELECT {COLUMNS} FROM pending_mutations WHERE account_id=?1 ORDER BY created_at, id LIMIT 50"))?;
+        let mut stmt = db.prepare(&format!("SELECT {COLUMNS} FROM pending_mutations WHERE account_id=?1 AND mutation_type LIKE 'calendar_%' ORDER BY created_at, id LIMIT 50"))?;
         let rows = stmt.query_map([account], map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     };

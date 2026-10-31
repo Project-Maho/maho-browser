@@ -20,6 +20,8 @@ i18next.use(initReactI18next).init({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  // The mail client persists a list snapshot; one test must not seed the next.
+  localStorage.clear();
 });
 
 // jsdom implements neither of these, and the mail tree calls both during

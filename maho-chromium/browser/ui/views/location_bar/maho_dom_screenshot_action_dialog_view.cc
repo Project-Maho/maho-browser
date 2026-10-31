@@ -15,6 +15,7 @@
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/base/class_property.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/color/color_id.h"
 #include "ui/display/screen.h"
@@ -60,6 +61,9 @@ MahoDomScreenshotActionMenu& MahoDomScreenshotActionMenu::operator=(MahoDomScree
 MahoDomScreenshotActionMenu::~MahoDomScreenshotActionMenu() = default;
 
 namespace {
+
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(views::BubbleDialogDelegate,
+                                 kScreenshotDialogDelegateKey)
 
 constexpr int kDialogWidth = 248;
 constexpr int kDialogCornerRadius = 16;
@@ -341,9 +345,11 @@ views::Widget* MahoDomScreenshotActionDialogView::Show(
   delegate->set_margins(gfx::Insets());
   delegate->set_fixed_width(kDialogWidth);
   delegate->SetContentsView(std::move(bubble));
-  views::Widget* widget =
-      views::BubbleDialogDelegate::CreateBubble(std::move(delegate));
+  views::Widget* widget = views::BubbleDialogDelegate::CreateBubbleDeprecated(
+      delegate.get(), views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   if (widget) {
+    // The owned property releases the delegate only after Widget teardown.
+    widget->SetProperty(kScreenshotDialogDelegateKey, std::move(delegate));
     widget->Show();
     widget->widget_delegate()->GetContentsView()->RequestFocus();
   }

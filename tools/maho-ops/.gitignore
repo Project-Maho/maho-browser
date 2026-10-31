@@ -1,8 +1,0 @@
-.env
-*.db
-*.db-journal
-__pycache__/
-.venv/
-venv/
-*.log
-.DS_Store

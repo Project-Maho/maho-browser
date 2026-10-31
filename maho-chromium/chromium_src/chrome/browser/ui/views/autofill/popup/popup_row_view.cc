@@ -18,7 +18,7 @@
 // these hooks stay synchronized with hover/selection state automatically.
 #define SetProperty(...) SetMahoMargins()
 #define SetBackground(...) SetMahoBackground(__VA_ARGS__)
-#include "src/chrome/browser/ui/views/autofill/popup/popup_row_view.cc"
+#include "../src/chrome/browser/ui/views/autofill/popup/popup_row_view.cc"
 #undef SetBackground
 #undef SetProperty
 

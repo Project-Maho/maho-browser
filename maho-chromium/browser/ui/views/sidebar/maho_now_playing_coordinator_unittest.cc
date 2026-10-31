@@ -172,8 +172,8 @@ TEST_F(MahoNowPlayingCoordinatorTest, DelegateLifecycle) {
 
   // First host registers -> coordinator registers as manager delegate.
   std::unique_ptr<BrowserWindow> window2 = CreateBrowserWindow();
-  std::unique_ptr<Browser> browser2 = CreateBrowser(profile(), Browser::Type::TYPE_NORMAL, false, window2.get());
-  std::ignore = window2.release();
+  std::unique_ptr<Browser> browser2 = CreateBrowser(
+      profile(), Browser::Type::TYPE_NORMAL, false, window2.release());
 
   FakeMahoNowPlayingCardHost host1(browser());
   coordinator_->RegisterHost(&host1);

@@ -1767,6 +1767,186 @@ SPLIT_REPLACEMENTS["chrome/browser/ui/tabs/tab_strip_model.cc"].append((
     "                     split_pinned, source_was_active);\n",
 ))
 
+# contents_container_view.{h,cc} are pinned-incompatible, so these hunks are
+# the only ones applied at the pinned revision. They reproduce the Maho hunks
+# from REPLACEMENTS (flush corners, no split padding, hidden outline and mini
+# toolbar, AI-panel adjacency) and add the per-pane Maho contents header slot.
+SPLIT_REPLACEMENTS["chrome/browser/ui/views/frame/contents_container_view.h"] = [
+    (
+        "namespace glic {\n"
+        "class ContextSharingBorderView;\n"
+        "}  // namespace glic\n",
+        "namespace glic {\n"
+        "class ContextSharingBorderView;\n"
+        "}  // namespace glic\n"
+        "\n"
+        "namespace maho {\n"
+        "class MahoContentsHeaderView;\n"
+        "}  // namespace maho\n",
+    ),
+    (
+        "  MultiContentsViewMiniToolbar* mini_toolbar() { return mini_toolbar_; }\n",
+        "  MultiContentsViewMiniToolbar* mini_toolbar() { return mini_toolbar_; }\n"
+        "  maho::MahoContentsHeaderView* maho_contents_header() {\n"
+        "    return maho_contents_header_;\n"
+        "  }\n",
+    ),
+    (
+        "  void UpdateBorderAndOverlay(bool is_in_split,\n"
+        "                              bool is_active,\n"
+        "                              bool is_highlighted);\n",
+        "  void UpdateBorderAndOverlay(bool is_in_split,\n"
+        "                              bool is_active,\n"
+        "                              bool is_highlighted);\n"
+        "\n"
+        "  void SetMahoAiPanelAdjacent(bool adjacent);\n",
+    ),
+    (
+        "  bool is_in_split_ = false;\n",
+        "  bool is_in_split_ = false;\n"
+        "  bool maho_ai_panel_adjacent_ = false;\n",
+    ),
+    (
+        "  raw_ptr<MultiContentsViewMiniToolbar> mini_toolbar_ = nullptr;\n",
+        "  raw_ptr<MultiContentsViewMiniToolbar> mini_toolbar_ = nullptr;\n"
+        "\n"
+        "  // Maho per-pane header (origin, navigation and page utilities) laid out\n"
+        "  // as the top strip of this container.\n"
+        "  raw_ptr<maho::MahoContentsHeaderView> maho_contents_header_ = nullptr;\n",
+    ),
+]
+
+SPLIT_REPLACEMENTS["chrome/browser/ui/views/frame/contents_container_view.cc"] = [
+    (
+        '#include "content/public/browser/web_contents.h"\n',
+        '#include "content/public/browser/web_contents.h"\n'
+        '#include "maho/browser/ui/views/frame/maho_contents_header_view.h"\n',
+    ),
+    (
+        "constexpr float kContentCornerRadius = 6;\n",
+        "constexpr float kContentCornerRadius = 0;\n",
+    ),
+    (
+        "constexpr int kSplitViewContentPadding = 4;\n",
+        "constexpr int kSplitViewContentPadding = 0;\n",
+    ),
+    (
+        "    container_outline_->UpdateState(is_active, is_highlighted);\n"
+        "    // Mini toolbar should only be visible for the inactive contents\n"
+        "    // container view or both depending on configuration.\n"
+        "    mini_toolbar_->UpdateState(is_active, is_highlighted);\n",
+        "    container_outline_->SetVisible(false);\n"
+        "    // Mini toolbar should only be visible for the inactive contents\n"
+        "    // container view or both depending on configuration.\n"
+        "    mini_toolbar_->SetVisible(false);\n",
+    ),
+    (
+        "  if (!is_in_split) {\n"
+        "    if (split_changed) {\n",
+        "  if (!is_in_split) {\n"
+        "    if (maho_contents_header_) {\n"
+        "      maho_contents_header_->SetActive(!is_in_split || is_active);\n"
+        "    }\n"
+        "    if (split_changed) {\n",
+    ),
+    (
+        "    // container view or both depending on configuration.\n"
+        "    mini_toolbar_->SetVisible(false);\n",
+        "    // container view or both depending on configuration.\n"
+        "    mini_toolbar_->SetVisible(false);\n"
+        "    if (maho_contents_header_) {\n"
+        "      maho_contents_header_->SetActive(!is_in_split || is_active);\n"
+        "    }\n",
+    ),
+    (
+        "void ContentsContainerView::ClearBorderRoundedCorners() {\n",
+        "void ContentsContainerView::SetMahoAiPanelAdjacent(bool adjacent) {\n"
+        "  if (maho_ai_panel_adjacent_ == adjacent) {\n"
+        "    return;\n"
+        "  }\n"
+        "  maho_ai_panel_adjacent_ = adjacent;\n"
+        "  if (adjacent) {\n"
+        "    ClearBorderRoundedCorners();\n"
+        "  } else if (!is_in_split_) {\n"
+        "    UpdateBorderRoundedCorners();\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "void ContentsContainerView::ClearBorderRoundedCorners() {\n",
+    ),
+    (
+        "  mini_toolbar_ = AddChildView(std::make_unique<MultiContentsViewMiniToolbar>(\n"
+        "      browser_view, contents_view_));\n",
+        "  mini_toolbar_ = AddChildView(std::make_unique<MultiContentsViewMiniToolbar>(\n"
+        "      browser_view, contents_view_));\n"
+        "\n"
+        "  maho_contents_header_ = AddChildView(\n"
+        "      std::make_unique<maho::MahoContentsHeaderView>(browser_view,\n"
+        "                                                     contents_view_));\n",
+    ),
+    (
+        "  gfx::Rect full_contents_bounds = GetContentsBounds();\n",
+        "  gfx::Rect full_contents_bounds = GetContentsBounds();\n"
+        "  // Maho: the per-pane contents header is the top strip of the container;\n"
+        "  // devtools, scrims and overlays are laid out below it.\n"
+        "  if (maho_contents_header_) {\n"
+        "    const bool header_visible = maho_contents_header_->GetVisible();\n"
+        "    gfx::Rect header_bounds;\n"
+        "    if (header_visible) {\n"
+        "      const int header_height = maho::kMahoContentsHeaderHeightDp;\n"
+        "      header_bounds =\n"
+        "          gfx::Rect(full_contents_bounds.x(), full_contents_bounds.y(),\n"
+        "                    full_contents_bounds.width(), header_height);\n"
+        "      full_contents_bounds.Inset(gfx::Insets().set_top(header_height));\n"
+        "    }\n"
+        "    layouts.child_layouts.emplace_back(maho_contents_header_.get(),\n"
+        "                                       header_visible,\n"
+        "                                       GetMirroredRect(header_bounds));\n"
+        "  }\n",
+    ),
+    (
+        "std::vector<views::View*> ContentsContainerView::GetAccessiblePanes() {\n"
+        "  std::vector<views::View*> accessible_panes;\n",
+        "std::vector<views::View*> ContentsContainerView::GetAccessiblePanes() {\n"
+        "  std::vector<views::View*> accessible_panes;\n"
+        "  // The per-pane Maho header is a keyboard pane (AccessiblePaneView) ahead\n"
+        "  // of the WebContents pane, so F6 reaches back/forward/reload, security,\n"
+        "  // host, translate, page tools and copy URL before the page itself.\n"
+        "  if (maho_contents_header_ && maho_contents_header_->GetVisible()) {\n"
+        "    accessible_panes.push_back(maho_contents_header_);\n"
+        "  }\n",
+    ),
+]
+
+# Arc layout: BrowserView's MahoToolbarButtonProvider owns the browser's
+# ToolbarButtonProvider user-data slot (72f18f12). The anchors exist on both
+# pins; the slot release is compiled only where ToolbarView registers
+# (CHROME_VERSION_BUILD > 7795, matching maho_toolbar_button_provider.h).
+SPLIT_REPLACEMENTS["chrome/browser/ui/views/toolbar/toolbar_view.cc"] = [
+    (
+        '#include "chrome/browser/ui/web_applications/app_browser_controller.h"\n',
+        '#include "chrome/browser/ui/web_applications/app_browser_controller.h"\n'
+        '#include "chrome/common/chrome_version.h"\n'
+        '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n',
+    ),
+    (
+        "  SetID(VIEW_ID_TOOLBAR);\n",
+        "#if CHROME_VERSION_BUILD > 7795\n"
+        "  // Maho: in the Arc layout BrowserView's MahoToolbarButtonProvider takes\n"
+        "  // the browser's ToolbarButtonProvider slot (same predicate as\n"
+        "  // BrowserView::IsMahoArcLayoutActive()). Like upstream, the choice is\n"
+        "  // made once per window; a later sidebar-layout pref flip only changes\n"
+        "  // header visibility, never the registered provider.\n"
+        "  if (browser_->is_type_normal() &&\n"
+        "      maho::sidebar_prefs::IsSidebarLayoutEnabled(\n"
+        "          browser_->profile()->GetPrefs())) {\n"
+        "    scoped_unowned_user_data_.reset();\n"
+        "  }\n"
+        "#endif\n"
+        "  SetID(VIEW_ID_TOOLBAR);\n",
+    ),
+]
+
 SPLIT_REPLACEMENTS["chrome/browser/ui/views/tabs/tab/tab_accessibility.cc"] = [
     (
         "    const split_tabs::SplitTabData* split_data =\n",

@@ -16,6 +16,7 @@ import {ShortcutActionId} from './types.js';
 export const ACTION_ICONS: Record<ShortcutActionId, React.ComponentType<any>> = {
   // Navigation
   "command_bar": Search,
+  "command_bar_alt": Search,
   "focus_url_bar": Search,
   "copy_url": Copy,
   "open_history": History,

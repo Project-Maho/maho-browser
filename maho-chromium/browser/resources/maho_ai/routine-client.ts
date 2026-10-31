@@ -72,6 +72,12 @@ export interface RoutinePageHandler {
       approved: boolean): Promise<{ok: boolean}>;
   listRunHistory(routineId: string|null, limit: number):
       Promise<{records: RoutineRunRecord[]}>;
+  startTraceRecording(tabId: bigint): Promise<{ok: boolean}>;
+  stopTraceRecording(): Promise<{traceJson: string|null; error: string|null}>;
+  createRoutineFromTrace(
+      name: string, description: string, traceJson: string,
+      schedule: string|null, trigger: string|null): Promise<{ok: boolean}>;
+  isTraceRecording(): Promise<{isRecording: boolean; activeTabId: bigint}>;
 }
 
 interface RoutineStatusCallbackRouter {
@@ -222,5 +228,38 @@ export class RoutineOperationsClient {
       routineId: string|null, limit: number): Promise<RoutineRunRecord[]> {
     return (await this.handler.listRunHistory(routineId, limit))
         .records as RoutineRunRecord[];
+  }
+
+  async startTraceRecording(tabId: bigint = 0n): Promise<boolean> {
+    if (!this.handler.startTraceRecording) {
+      return false;
+    }
+    const res = await this.handler.startTraceRecording(tabId);
+    return res.ok;
+  }
+
+  async stopTraceRecording(): Promise<{traceJson: string|null; error: string|null}> {
+    if (!this.handler.stopTraceRecording) {
+      return {traceJson: null, error: 'Not supported'};
+    }
+    return this.handler.stopTraceRecording();
+  }
+
+  async createRoutineFromTrace(
+      name: string, description: string, traceJson: string,
+      schedule: string|null = null, trigger: string|null = null): Promise<boolean> {
+    if (!this.handler.createRoutineFromTrace) {
+      return false;
+    }
+    const res = await this.handler.createRoutineFromTrace(
+        name, description, traceJson, schedule, trigger);
+    return res.ok;
+  }
+
+  async isTraceRecording(): Promise<{isRecording: boolean; activeTabId: bigint}> {
+    if (!this.handler.isTraceRecording) {
+      return {isRecording: false, activeTabId: 0n};
+    }
+    return this.handler.isTraceRecording();
   }
 }

@@ -321,13 +321,8 @@ impl SyncManager {
         };
         entity.profile_id = Some(profile_id.to_string());
         entity.payload_json = payload_json;
-        if !entity.deleted {
-            entity.fields_hlc_json = crate::sync_models::build_fields_hlc(
-                &entity.payload_json,
-                entity.version,
-                entity.device_id,
-            );
-        }
+        // Preserve the author's per-field clocks. Fields without a supplied
+        // clock (including an injected profileId) use the entity clock at merge.
         true
     }
 
@@ -339,14 +334,9 @@ impl SyncManager {
         if !entity.entity_type.is_profile_scoped() {
             return true;
         }
-        let explicit_profile = entity
-            .profile_id
-            .clone()
-            .filter(|value| !value.is_empty());
-        let payload_profile = SyncEntity::profile_id_from_payload(
-            &entity.entity_type,
-            &entity.payload_json,
-        );
+        let explicit_profile = entity.profile_id.clone().filter(|value| !value.is_empty());
+        let payload_profile =
+            SyncEntity::profile_id_from_payload(&entity.entity_type, &entity.payload_json);
         if matches!(
             (explicit_profile.as_deref(), payload_profile.as_deref()),
             (Some(explicit), Some(payload)) if explicit != payload
@@ -379,14 +369,9 @@ impl SyncManager {
         if !entity.entity_type.is_profile_scoped() {
             return true;
         }
-        let explicit_profile = entity
-            .profile_id
-            .clone()
-            .filter(|value| !value.is_empty());
-        let payload_profile = SyncEntity::profile_id_from_payload(
-            &entity.entity_type,
-            &entity.payload_json,
-        );
+        let explicit_profile = entity.profile_id.clone().filter(|value| !value.is_empty());
+        let payload_profile =
+            SyncEntity::profile_id_from_payload(&entity.entity_type, &entity.payload_json);
         if matches!(
             (explicit_profile.as_deref(), payload_profile.as_deref()),
             (Some(explicit), Some(payload)) if explicit != payload
@@ -513,6 +498,10 @@ impl SyncManager {
             let message = SyncMessage::EntityPush { entity };
             match self.encrypt_message(&message, SyncTransportOp::Push) {
                 Ok(data) => {
+                    if let Some(row_id) = queue_row_id {
+                        self.outgoing_messages.retain(|message| message.queue_row_id != Some(row_id));
+                        self.sent_entities.retain(|id| *id != row_id);
+                    }
                     self.outgoing_messages.push(QueuedSyncMessage {
                         message: SyncMessage::Encrypted { data },
                         queue_row_id,
@@ -524,6 +513,8 @@ impl SyncManager {
                 Err(error) => self.record_transport_error(error),
             }
         } else {
+            let cache_key = entity.cache_key();
+            self.pending_pushes.retain(|pending| pending.cache_key() != cache_key);
             self.pending_pushes.push(entity);
         }
     }
@@ -537,9 +528,10 @@ impl SyncManager {
             .encryption_key
             .as_ref()
             .ok_or(SyncTransportError::KeylessTransportDenied { operation })?;
-        let plaintext = serde_json::to_vec(message).map_err(|error| SyncTransportError::Serialize {
-            detail: error.to_string(),
-        })?;
+        let plaintext =
+            serde_json::to_vec(message).map_err(|error| SyncTransportError::Serialize {
+                detail: error.to_string(),
+            })?;
         crate::sync_crypto::encrypt_update(&plaintext, key)
             .map_err(|detail| SyncTransportError::Encrypt { detail })
     }
@@ -616,7 +608,12 @@ impl SyncManager {
         let local_version = if let Some(version) = self.entity_versions.get(&cache_key) {
             Some(version.clone())
         } else if let Some(storage) = storage {
-            match storage.get_entity_version(entity_type_str, &storage_entity_id) {
+            match crate::sync_models::load_persisted_entity_version(
+                storage,
+                &entity.entity_type,
+                &entity.entity_id,
+                entity.profile_id.as_deref(),
+            ) {
                 Ok(Some((hlc_ts, device_id, fields_hlc_json, payload_json))) => {
                     let value = (hlc_ts, device_id, fields_hlc_json, payload_json);
                     self.entity_versions.put(cache_key.clone(), value.clone());
@@ -686,7 +683,8 @@ impl SyncManager {
         let mut final_payload = entity.payload_json.clone();
         let mut final_fields_hlc = entity.fields_hlc_json.clone();
 
-        if let Some((local_hlc, local_device, local_fields_json, local_payload_json)) = local_version
+        if let Some((local_hlc, local_device, local_fields_json, local_payload_json)) =
+            local_version
         {
             type FieldsHlc = HashMap<String, (u64, u32)>;
             let local_fields: FieldsHlc = local_fields_json
@@ -766,8 +764,7 @@ impl SyncManager {
                     }
                 }
             } else {
-                should_apply =
-                    (entity.version, entity.device_id) > (local_hlc, local_device);
+                should_apply = (entity.version, entity.device_id) > (local_hlc, local_device);
             }
 
             if should_apply {
@@ -1182,8 +1179,14 @@ mod tests {
         let mut b = tab("same", "b", 1);
         assert!(manager.apply_remote_entity(&mut a, &None));
         assert!(manager.apply_remote_entity(&mut b, &None));
-        assert!(manager.entity_versions.peek(&a.cache_key().unwrap()).is_some());
-        assert!(manager.entity_versions.peek(&b.cache_key().unwrap()).is_some());
+        assert!(manager
+            .entity_versions
+            .peek(&a.cache_key().unwrap())
+            .is_some());
+        assert!(manager
+            .entity_versions
+            .peek(&b.cache_key().unwrap())
+            .is_some());
     }
 
     #[test]
@@ -1219,7 +1222,8 @@ mod tests {
         let SyncMessage::Encrypted { data } = manager.drain_outgoing_messages().remove(0) else {
             panic!("expected encrypted push");
         };
-        let plaintext = sync_crypto::decrypt_update(&data, manager.encryption_key.as_ref().unwrap()).unwrap();
+        let plaintext =
+            sync_crypto::decrypt_update(&data, manager.encryption_key.as_ref().unwrap()).unwrap();
         let SyncMessage::EntityPush { entity } = serde_json::from_slice(&plaintext).unwrap() else {
             panic!("expected entity push");
         };
@@ -1239,7 +1243,8 @@ mod tests {
         let SyncMessage::Encrypted { data } = manager.drain_outgoing_messages().remove(0) else {
             panic!("expected encrypted push");
         };
-        let plaintext = sync_crypto::decrypt_update(&data, manager.encryption_key.as_ref().unwrap()).unwrap();
+        let plaintext =
+            sync_crypto::decrypt_update(&data, manager.encryption_key.as_ref().unwrap()).unwrap();
         let SyncMessage::EntityPush { entity } = serde_json::from_slice(&plaintext).unwrap() else {
             panic!("expected entity push");
         };
@@ -1257,7 +1262,10 @@ mod tests {
         tombstone.payload_json = "{}".to_string();
         manager.push_entity(tombstone);
         let pending = manager.get_pending_pushes();
-        assert_eq!(pending.last().unwrap().profile_scope().as_deref(), Some("work"));
+        assert_eq!(
+            pending.last().unwrap().profile_scope().as_deref(),
+            Some("work")
+        );
     }
 
     #[test]
@@ -1270,9 +1278,13 @@ mod tests {
         let SyncMessage::Encrypted { data } = manager.drain_outgoing_messages().remove(0) else {
             panic!("expected encrypted pull");
         };
-        let plaintext = sync_crypto::decrypt_update(&data, manager.encryption_key.as_ref().unwrap()).unwrap();
+        let plaintext =
+            sync_crypto::decrypt_update(&data, manager.encryption_key.as_ref().unwrap()).unwrap();
         match serde_json::from_slice::<SyncMessage>(&plaintext).unwrap() {
-            SyncMessage::EntityPull { entity_type, since_version } => {
+            SyncMessage::EntityPull {
+                entity_type,
+                since_version,
+            } => {
                 assert_eq!(entity_type, Some(SyncEntityType::Tab));
                 assert_eq!(since_version, 42);
             }
@@ -1347,7 +1359,9 @@ mod tests {
             target_device: "test-device-1".to_string(),
         };
         let plaintext = serde_json::to_vec(&inner).unwrap();
-        let data = sync_crypto::encrypt_update(&plaintext, manager.encryption_key.as_ref().unwrap()).unwrap();
+        let data =
+            sync_crypto::encrypt_update(&plaintext, manager.encryption_key.as_ref().unwrap())
+                .unwrap();
         manager.handle_incoming_message(SyncMessage::Encrypted { data });
         assert_eq!(manager.drain_received_tabs().len(), 1);
     }

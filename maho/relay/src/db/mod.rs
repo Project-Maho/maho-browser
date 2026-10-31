@@ -9,7 +9,8 @@ pub mod jobs;
 
 mod release_updates;
 pub use release_updates::{
-    find_latest_macos_release, find_latest_windows_release, upsert_release_update, ReleaseUpdate,
+    find_latest_linux_release, find_latest_macos_release, find_latest_windows_release,
+    upsert_release_update, ReleaseUpdate,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -625,6 +626,10 @@ pub struct SyncBootstrapRecord {
     pub ciphertext: Vec<u8>,
     pub nonce: Vec<u8>,
     pub created_at: i64,
+    #[serde(default)]
+    pub vault_escrow_ciphertext: Option<Vec<u8>>,
+    #[serde(default)]
+    pub vault_escrow_nonce: Option<Vec<u8>>,
 }
 
 pub async fn get_sync_bootstrap(
@@ -633,7 +638,8 @@ pub async fn get_sync_bootstrap(
 ) -> Result<Option<SyncBootstrapRecord>> {
     let row = db
         .prepare(
-            "SELECT room_id, version, ciphertext, nonce, created_at
+            "SELECT room_id, version, ciphertext, nonce, created_at,
+                    vault_escrow_ciphertext, vault_escrow_nonce
              FROM user_sync_bootstrap
              WHERE user_id = ?1",
         )
@@ -641,6 +647,40 @@ pub async fn get_sync_bootstrap(
         .first::<SyncBootstrapRecord>(None)
         .await?;
     Ok(row)
+}
+
+/// Publishes (or replaces) the account-escrow vault key slots for an existing
+/// bootstrap row. A single conditional UPDATE judged by the returned row keeps
+/// the read-then-write race out of the escrow path.
+pub async fn set_sync_bootstrap_vault_escrow(
+    db: &D1Database,
+    user_id: i32,
+    vault_escrow_ciphertext: Vec<u8>,
+    vault_escrow_nonce: Vec<u8>,
+) -> Result<bool> {
+    let row = db
+        .prepare(
+            "UPDATE user_sync_bootstrap
+             SET vault_escrow_ciphertext = ?2, vault_escrow_nonce = ?3
+             WHERE user_id = ?1
+             RETURNING user_id",
+        )
+        .bind(&[
+            js(&user_id)?,
+            serde_wasm_bindgen::to_value(&vault_escrow_ciphertext)
+                .map_err(|error| AppError::Internal(error.to_string()))?,
+            serde_wasm_bindgen::to_value(&vault_escrow_nonce)
+                .map_err(|error| AppError::Internal(error.to_string()))?,
+        ])?
+        .first::<SyncBootstrapEscrowUserId>(None)
+        .await?;
+    Ok(row.is_some())
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncBootstrapEscrowUserId {
+    #[allow(dead_code)]
+    user_id: i32,
 }
 
 pub async fn create_sync_bootstrap(
@@ -911,48 +951,42 @@ pub fn refund_delta_cents(prior_cents: i64, new_cents: i64) -> Option<i64> {
     }
 }
 
-/// Advance the recorded cumulative refund for `order_id` to `new_cents` and
-/// return the incremental cents to charge back (None if not newer). The
-/// conditional upsert only advances on a strictly larger cumulative, so a
-/// concurrent event that already advanced past `new_cents` makes this a no-op.
-/// Refund events are low-frequency and each is processed once via the webhook
-/// claim key, so the pre-read delta is correct in practice; truly concurrent
-/// distinct refunds on one order (very rare) could over-deduct.
-pub async fn record_refund_delta(
+const ADVANCE_REFUND_SQL: &str =
+    "INSERT INTO order_refunds (order_id, refunded_cents, updated_at) VALUES (?1, ?2, ?3)
+     ON CONFLICT(order_id) DO UPDATE SET refunded_cents = ?2, updated_at = ?3
+       WHERE excluded.refunded_cents > order_refunds.refunded_cents
+     RETURNING order_id";
+
+const APPLY_REFUND_SQL: &str =
+    "UPDATE credits SET balance_usd = MAX(0, balance_usd -
+        (?2 - COALESCE((SELECT refunded_cents FROM order_refunds WHERE order_id = ?1), 0)) / 100.0),
+        updated_at = ?3
+     WHERE user_id = ?4 AND ?2 > COALESCE((SELECT refunded_cents FROM order_refunds WHERE order_id = ?1), 0)
+     RETURNING balance_usd,
+        ?2 - COALESCE((SELECT refunded_cents FROM order_refunds WHERE order_id = ?1), 0) AS delta_cents";
+
+#[derive(Deserialize)]
+pub struct RefundEffect {
+    pub balance_usd: f64,
+    pub delta_cents: i64,
+}
+
+/// Deduct the incremental refund and advance its cumulative watermark in one
+/// transaction. No request can calculate a delta from a stale pre-read.
+pub async fn apply_refund(
     db: &D1Database,
+    user_id: i32,
     order_id: &str,
     new_cents: i64,
     now: i64,
-) -> Result<Option<i64>> {
-    #[derive(Deserialize)]
-    struct RefundRow {
-        refunded_cents: i64,
-    }
-    let prior = db
-        .prepare("SELECT refunded_cents FROM order_refunds WHERE order_id = ?1")
-        .bind(&[js(&order_id)?])?
-        .first::<RefundRow>(None)
-        .await?
-        .map(|r| r.refunded_cents)
-        .unwrap_or(0);
-
-    let Some(delta) = refund_delta_cents(prior, new_cents) else {
-        return Ok(None);
-    };
-
-    let applied = db
-        .prepare(
-            "INSERT INTO order_refunds (order_id, refunded_cents, updated_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(order_id) DO UPDATE SET refunded_cents = ?2, updated_at = ?3
-               WHERE excluded.refunded_cents > order_refunds.refunded_cents
-             RETURNING order_id",
-        )
-        .bind(&[js(&order_id)?, js(&new_cents)?, js(&now)?])?
-        .first::<serde_json::Value>(None)
-        .await?
-        .is_some();
-
-    Ok(if applied { Some(delta) } else { None })
+) -> Result<Option<RefundEffect>> {
+    let deduct = db.prepare(APPLY_REFUND_SQL)
+        .bind(&[js(&order_id)?, js(&new_cents)?, js(&now)?, js(&user_id)?])?;
+    let advance = db.prepare(ADVANCE_REFUND_SQL)
+        .bind(&[js(&order_id)?, js(&new_cents)?, js(&now)?])?;
+    let results = db.batch(vec![deduct, advance]).await?;
+    let effects: Vec<RefundEffect> = results[0].results()?;
+    Ok(effects.into_iter().next())
 }
 
 pub async fn get_credit_balance_usd(db: &D1Database, user_id: i32) -> Result<f64> {
@@ -1032,10 +1066,10 @@ pub struct StoredMessage {
     pub delivery_id: Option<String>,
 }
 
-/// SQL mirrored by [`store_message_sqlite`] for host-side coverage: allocate the
-/// next room sequence atomically in one upsert.
+/// Advance metadata only after a newly inserted delivery, in the same batch.
+/// Retries and quota rejections must not consume sequence numbers or bytes.
 const ALLOCATE_ROOM_SEQ_SQL: &str = "INSERT INTO room_meta (room_id, next_seq, last_activity, total_bytes)
-     VALUES (?1, 1, ?2, ?3)
+     SELECT ?1, 1, ?2, ?3 WHERE changes() > 0
      ON CONFLICT(room_id) DO UPDATE SET
         next_seq = room_meta.next_seq + 1,
         last_activity = ?2,
@@ -1046,7 +1080,9 @@ const ALLOCATE_ROOM_SEQ_SQL: &str = "INSERT INTO room_meta (room_id, next_seq, l
 /// `(room_id, delivery_id)` makes a retried delivery a no-op insert, so the
 /// duplicate is detected by the absence of a returned row rather than by a read.
 const INSERT_V2_MESSAGE_SQL: &str =
-    "INSERT INTO messages (room_id, seq, blob, created_at, delivery_id) VALUES (?1, ?2, ?3, ?4, ?5)
+    "INSERT INTO messages (room_id, seq, blob, created_at, delivery_id)
+     SELECT ?1, COALESCE((SELECT next_seq FROM room_meta WHERE room_id = ?1), 0), ?2, ?3, ?4
+     WHERE ?6 <= ?5 - COALESCE((SELECT total_bytes FROM room_meta WHERE room_id = ?1), 0)
      ON CONFLICT(room_id, delivery_id) WHERE delivery_id IS NOT NULL DO NOTHING
      RETURNING seq";
 
@@ -1058,8 +1094,8 @@ struct SeqRow {
     seq: i64,
 }
 
-pub async fn store_message(db: &D1Database, room_id: &str, blob: Vec<u8>) -> Result<i64> {
-    store_message_inner(db, room_id, None, blob).await
+pub async fn store_message(db: &D1Database, room_id: &str, blob: Vec<u8>, max_room_bytes: i64) -> Result<i64> {
+    store_message_inner(db, room_id, None, blob, max_room_bytes).await
 }
 
 /// Idempotent V2 store: the same `(room_id, delivery_id)` always resolves to the
@@ -1070,8 +1106,9 @@ pub async fn store_message_with_delivery_id(
     room_id: &str,
     delivery_id: &str,
     blob: Vec<u8>,
+    max_room_bytes: i64,
 ) -> Result<i64> {
-    store_message_inner(db, room_id, Some(delivery_id), blob).await
+    store_message_inner(db, room_id, Some(delivery_id), blob, max_room_bytes).await
 }
 
 async fn store_message_inner(
@@ -1079,10 +1116,11 @@ async fn store_message_inner(
     room_id: &str,
     delivery_id: Option<&str>,
     blob: Vec<u8>,
+    max_room_bytes: i64,
 ) -> Result<i64> {
     // Fast path: a retry of an already stored delivery must not consume another
     // room sequence. Correctness does not depend on this read - the unique index
-    // below is the authority - it only avoids burning a sequence per retry.
+    // below is the authority - it only avoids a write batch per retry.
     if let Some(delivery_id) = delivery_id {
         if let Some(seq) = find_seq_by_delivery_id(db, room_id, delivery_id).await? {
             return Ok(seq);
@@ -1092,56 +1130,25 @@ async fn store_message_inner(
     let now = chrono::Utc::now().timestamp();
     let blob_len = blob.len() as i64;
 
-    #[derive(Deserialize)]
-    struct NextSeqRow {
-        next_seq: i64,
-    }
-
-    // Atomic seq allocation: one upsert increments next_seq and RETURNs it, so
-    // concurrent messages to a room cannot read the same seq and collide on the
-    // idx_messages_room_seq unique index.
-    let row = db
-        .prepare(ALLOCATE_ROOM_SEQ_SQL)
-        .bind(&[js(&room_id)?, js(&now)?, js(&blob_len)?])?
-        .first::<NextSeqRow>(None)
-        .await?
-        .ok_or_else(|| AppError::Internal("room_meta upsert returned no row".to_string()))?;
-
-    let seq = assigned_seq(row.next_seq);
-
+    // D1 batches are transactions: allocation and append become visible together.
+    // Derive the assigned sequence inside the batch, never across an await.
+    let allocate = db.prepare(ALLOCATE_ROOM_SEQ_SQL)
+        .bind(&[js(&room_id)?, js(&now)?, js(&blob_len)?])?;
     let blob_js =
         serde_wasm_bindgen::to_value(&blob).map_err(|e| AppError::Internal(e.to_string()))?;
-
-    let Some(delivery_id) = delivery_id else {
-        db.prepare("INSERT INTO messages (room_id, seq, blob, created_at) VALUES (?1, ?2, ?3, ?4)")
-            .bind(&[js(&room_id)?, js(&seq)?, blob_js, js(&now)?])?
-            .run()
-            .await?;
-        return Ok(seq);
-    };
-
-    let inserted = db
-        .prepare(INSERT_V2_MESSAGE_SQL)
-        .bind(&[
-            js(&room_id)?,
-            js(&seq)?,
-            blob_js,
-            js(&now)?,
-            js(&delivery_id)?,
-        ])?
-        .first::<SeqRow>(None)
-        .await?;
-
-    match inserted {
-        Some(row) => Ok(row.seq),
-        // A concurrent send of the same delivery id won the unique index; the
-        // stored sequence is authoritative and this attempt's seq is skipped.
-        None => find_seq_by_delivery_id(db, room_id, delivery_id)
-            .await?
-            .ok_or_else(|| {
-                AppError::Internal("delivery row vanished after conflict".to_string())
-            }),
+    let insert = db.prepare(INSERT_V2_MESSAGE_SQL)
+        .bind(&[js(&room_id)?, blob_js, js(&now)?, js(&delivery_id)?, js(&max_room_bytes)?, js(&blob_len)?])?;
+    let results = db.batch(vec![insert, allocate]).await?;
+    let inserted: Vec<SeqRow> = results[0].results()?;
+    if let Some(row) = inserted.first() {
+        return Ok(row.seq);
     }
+    if let Some(delivery_id) = delivery_id {
+        if let Some(seq) = find_seq_by_delivery_id(db, room_id, delivery_id).await? {
+            return Ok(seq);
+        }
+    }
+    Err(AppError::BadRequest("room_size_limit_exceeded".to_string()))
 }
 
 async fn find_seq_by_delivery_id(
@@ -1168,6 +1175,19 @@ fn store_message_sqlite(
     blob: &[u8],
     now: i64,
 ) -> rusqlite::Result<i64> {
+    store_message_sqlite_interleaved(db, room_id, delivery_id, blob, now, i64::MAX, || {})
+}
+
+#[cfg(test)]
+fn store_message_sqlite_interleaved(
+    db: &rusqlite::Connection,
+    room_id: &str,
+    delivery_id: &str,
+    blob: &[u8],
+    now: i64,
+    max_room_bytes: i64,
+    after_allocate: impl FnOnce(),
+) -> rusqlite::Result<i64> {
     use rusqlite::{params, OptionalExtension};
 
     let existing: Option<i64> = db
@@ -1179,21 +1199,21 @@ fn store_message_sqlite(
         return Ok(seq);
     }
 
-    let next_seq: i64 = db.query_row(
-        ALLOCATE_ROOM_SEQ_SQL,
-        params![room_id, now, blob.len() as i64],
-        |row| row.get(0),
-    )?;
-    let seq = assigned_seq(next_seq);
-
-    let inserted: Option<i64> = db
+    let transaction = db.unchecked_transaction()?;
+    let inserted: Option<i64> = transaction
         .query_row(
             INSERT_V2_MESSAGE_SQL,
-            params![room_id, seq, blob, now, delivery_id],
+            params![room_id, blob, now, delivery_id, max_room_bytes, blob.len() as i64],
             |row| row.get(0),
         )
         .optional()?;
-
+    after_allocate();
+    let _: Option<i64> = transaction.query_row(
+        ALLOCATE_ROOM_SEQ_SQL,
+        params![room_id, now, blob.len() as i64],
+        |row| row.get(0),
+    ).optional()?;
+    transaction.commit()?;
     match inserted {
         Some(seq) => Ok(seq),
         None => db.query_row(SELECT_SEQ_BY_DELIVERY_SQL, params![room_id, delivery_id], |row| {
@@ -1202,12 +1222,8 @@ fn store_message_sqlite(
     }
 }
 
-/// Assigned seq given the post-increment `next_seq` the room_meta upsert
-/// returned (first message -> 0). A gap appears if the message INSERT later
-/// fails; that is safe because catchup queries `seq > since_seq` tolerate gaps.
-/// A failed insert also over-counts `room_meta.total_bytes` (the upsert already
-/// added the size); the scheduled retention job recomputes total_bytes from the
-/// actual messages, so any drift self-corrects on the next run.
+/// Assigned seq given the post-increment `next_seq` (first message -> 0).
+/// Allocation and message insertion commit together.
 pub fn assigned_seq(returned_next_seq: i64) -> i64 {
     returned_next_seq - 1
 }
@@ -1263,6 +1279,73 @@ pub async fn get_room_size(db: &D1Database, room_id: &str) -> Result<i64> {
 mod tests {
     use super::*;
 
+    fn refund_sqlite(db: &rusqlite::Connection, cents: i64, after_read: impl FnOnce()) {
+        use rusqlite::{params, OptionalExtension};
+        after_read();
+        let tx = db.unchecked_transaction().unwrap();
+        let _: Option<f64> = tx.query_row(APPLY_REFUND_SQL, params!["order", cents, 1, 1], |r| r.get(0)).optional().unwrap();
+        let _: Option<String> = tx.query_row(ADVANCE_REFUND_SQL, params!["order", cents, 1], |r| r.get(0)).optional().unwrap();
+        tx.commit().unwrap();
+    }
+
+    #[test]
+    fn concurrent_cumulative_refunds_deduct_only_the_total_refunded() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("../../migrations/0002_create_auth_tables.sql")).unwrap();
+        db.execute("INSERT INTO users (id, email, password_hash, display_name, created_at) VALUES (1, 'owner@example.com', 'hash', 'Owner', 1)", []).unwrap();
+        db.execute_batch(include_str!("../../migrations/0006_add_payg_credits.sql")).unwrap();
+        db.execute_batch(include_str!("../../migrations/0020_create_order_refunds.sql")).unwrap();
+        db.execute("INSERT INTO credits (user_id, balance_usd, lifetime_purchased_usd, created_at, updated_at) VALUES (1, 10, 10, 1, 1)", []).unwrap();
+        refund_sqlite(&db, 500, || refund_sqlite(&db, 200, || {}));
+        let balance: f64 = db.query_row("SELECT balance_usd FROM credits WHERE user_id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(balance, 5.0);
+        refund_sqlite(&db, 500, || {});
+        refund_sqlite(&db, 200, || {});
+        let balance: f64 = db.query_row("SELECT balance_usd FROM credits WHERE user_id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(balance, 5.0);
+    }
+
+    #[test]
+    fn shared_store_enforces_room_quota_without_charging_retries() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("../../migrations/0001_create_tables.sql")).unwrap();
+        db.execute_batch(include_str!("../../migrations/0022_sync_v2_delivery_ids.sql")).unwrap();
+        assert_eq!(store_message_sqlite_interleaved(&db, "room", "a", b"123456", 1, 6, || {}).unwrap(), 0);
+        assert_eq!(store_message_sqlite_interleaved(&db, "room", "a", b"123456", 1, 6, || {}).unwrap(), 0);
+        assert!(matches!(store_message_sqlite_interleaved(&db, "room", "b", b"7", 1, 6, || {}),
+            Err(rusqlite::Error::QueryReturnedNoRows)));
+        let (count, bytes): (i64, i64) = db.query_row("SELECT COUNT(*), SUM(length(blob)) FROM messages", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((count, bytes), (1, 6));
+    }
+
+    #[test]
+    fn concurrent_append_cannot_publish_a_later_sequence_before_an_earlier_delivery() {
+        use rusqlite::Connection;
+        let uri = "file:relay-sequence-interleave?mode=memory&cache=shared";
+        let a = Connection::open(uri).unwrap();
+        let b = Connection::open(uri).unwrap();
+        a.execute_batch(include_str!("../../migrations/0001_create_tables.sql")).unwrap();
+        a.execute_batch(include_str!("../../migrations/0022_sync_v2_delivery_ids.sql")).unwrap();
+        let mut observed = -1;
+        let cursor = std::cell::Cell::new(-1);
+        store_message_sqlite_interleaved(&a, "room", "a", b"A", 1, i64::MAX, || {
+            match store_message_sqlite(&b, "room", "b", b"B", 1) {
+                Ok(seq) => cursor.set(seq),
+                Err(rusqlite::Error::SqliteFailure(error, _)) => {
+                    assert_eq!(error.code, rusqlite::ErrorCode::DatabaseLocked);
+                }
+                Err(error) => panic!("unexpected competing append failure: {error}"),
+            }
+        }).unwrap();
+        observed = observed.max(cursor.get());
+        // A reader that saw B must still be able to discover A, or A had to be
+        // visible before B. With split commits it is permanently behind cursor.
+        let visible: i64 = a.query_row("SELECT COUNT(*) FROM messages WHERE delivery_id = 'a' AND seq > ?1", [observed], |r| r.get(0)).unwrap();
+        assert_eq!(visible, 1, "accepted A was hidden behind the reader cursor");
+        let b_seq = store_message_sqlite(&b, "room", "b", b"B", 1).unwrap();
+        assert_eq!(b_seq, 1);
+    }
+
     #[test]
     fn sync_v2_migration_enforces_room_scoped_delivery_id_idempotency() {
         use rusqlite::Connection;
@@ -1272,10 +1355,6 @@ mod tests {
             .unwrap();
         db.execute_batch(include_str!(
             "../../migrations/0022_sync_v2_delivery_ids.sql"
-        ))
-        .unwrap();
-        db.execute_batch(include_str!(
-            "../../migrations/0023_create_user_sync_bootstrap.sql"
         ))
         .unwrap();
         db.execute_batch(include_str!(
@@ -1333,6 +1412,97 @@ mod tests {
             )
             .unwrap(),
             b"opaque"
+        );
+    }
+
+    #[test]
+    fn sync_bootstrap_vault_escrow_columns_hold_ciphertext_and_replace_in_place() {
+        use rusqlite::{params, Connection, OptionalExtension};
+
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("../../migrations/0001_create_tables.sql"))
+            .unwrap();
+        db.execute_batch(include_str!("../../migrations/0002_create_auth_tables.sql"))
+            .unwrap();
+        db.execute_batch(include_str!(
+            "../../migrations/0023_create_user_sync_bootstrap.sql"
+        ))
+        .unwrap();
+        db.execute_batch(include_str!(
+            "../../migrations/0025_sync_bootstrap_vault_escrow.sql"
+        ))
+        .unwrap();
+
+        db.execute(
+            "INSERT INTO users (id, email, password_hash, display_name, created_at)
+             VALUES (1, 'first@example.com', 'hash', 'First', 1),
+                    (2, 'second@example.com', 'hash', 'Second', 1)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO user_sync_bootstrap
+                (user_id, room_id, version, ciphertext, nonce, created_at)
+             VALUES (1, '0123456789abcdef0123456789abcdef', 1, x'01', x'02', 10),
+                    (2, 'fedcba9876543210fedcba9876543210', 1, x'03', x'04', 10)",
+            [],
+        )
+        .unwrap();
+
+        let set_escrow = |user_id: i64, payload: &[u8], nonce: &[u8]| {
+            db.query_row(
+                "UPDATE user_sync_bootstrap
+                 SET vault_escrow_ciphertext = ?2, vault_escrow_nonce = ?3
+                 WHERE user_id = ?1
+                 RETURNING user_id",
+                params![user_id, payload, nonce],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+        };
+
+        assert_eq!(
+            set_escrow(1, b"escrow-ciphertext", b"nonce-12byte").unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            set_escrow(3, b"escrow-ciphertext", b"nonce-12byte").unwrap(),
+            None,
+            "an escrow update must never invent a bootstrap row"
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT vault_escrow_ciphertext FROM user_sync_bootstrap WHERE user_id = 1",
+                [],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .unwrap(),
+            b"escrow-ciphertext",
+            "the escrow column contract must store opaque ciphertext bytes"
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT vault_escrow_ciphertext FROM user_sync_bootstrap WHERE user_id = 2",
+                [],
+                |row| row.get::<_, Option<Vec<u8>>>(0),
+            )
+            .unwrap(),
+            None,
+            "a pre-escrow bootstrap row reads back NULL, not an empty payload"
+        );
+        assert_eq!(
+            set_escrow(1, b"escrow-replaced", b"nonce-2-0000").unwrap(),
+            Some(1),
+            "the owning device may replace the escrow record in place"
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT vault_escrow_ciphertext FROM user_sync_bootstrap WHERE user_id = 1",
+                [],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .unwrap(),
+            b"escrow-replaced"
         );
     }
 
@@ -1741,6 +1911,7 @@ mod tests {
             include_str!("../../migrations/0021_add_oauth_identities.sql"),
             include_str!("../../migrations/0022_sync_v2_delivery_ids.sql"),
             include_str!("../../migrations/0023_create_user_sync_bootstrap.sql"),
+            include_str!("../../migrations/0025_sync_bootstrap_vault_escrow.sql"),
         ] {
             db.execute_batch(migration).unwrap();
         }
@@ -1761,6 +1932,13 @@ mod tests {
         .unwrap();
         db.execute(
             "INSERT INTO snapshots VALUES ('delete-room',1,1,10,x'01'),('keep-room',1,1,20,x'02')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO user_sync_bootstrap (user_id,room_id,version,ciphertext,nonce,created_at)
+             VALUES (1,'00000000000000000000000000000001',1,x'01',x'02',1),
+                    (2,'00000000000000000000000000000002',1,x'03',x'04',1)",
             [],
         )
         .unwrap();
@@ -1825,6 +2003,26 @@ mod tests {
                 "{table} should retain only the other user's row"
             );
         }
+        // Counting alone would also pass if the wrong tenant's seed survived,
+        // so pin the surviving encrypted bootstrap to the retained account.
+        assert_eq!(
+            db.query_row(
+                "SELECT user_id, room_id, ciphertext FROM user_sync_bootstrap",
+                [],
+                |row| Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?
+                )),
+            )
+            .unwrap(),
+            (
+                2,
+                "00000000000000000000000000000002".to_string(),
+                vec![0x03]
+            ),
+            "deleting one account must leave the other account's encrypted sync seed untouched"
+        );
         assert_eq!(db.query_row("SELECT COUNT(*) FROM waitlist_signups WHERE lower(email)=lower('delete@example.com')", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
         assert_eq!(
             db.query_row(

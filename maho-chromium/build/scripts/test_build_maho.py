@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -65,6 +66,32 @@ codesign_app = _bm.codesign_app
 launch_app = _bm.launch_app
 normalize_autoninja_args = _bm.normalize_autoninja_args
 ensure_args_gn = _bm.ensure_args_gn
+ensure_macos_sdk_path = _bm.ensure_macos_sdk_path
+
+
+class TestSetAppProductVersion(unittest.TestCase):
+
+    def test_updates_cfbundle_versions_to_product_version(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = os.path.join(temp_dir, 'Maho.app')
+            contents_dir = os.path.join(app_path, 'Contents')
+            os.makedirs(contents_dir)
+            plist_path = os.path.join(contents_dir, 'Info.plist')
+            initial_plist = {
+                'CFBundleExecutable': 'Maho',
+                'CFBundleShortVersionString': '149.0.7795.0',
+                'CFBundleVersion': '7795.0',
+            }
+            with open(plist_path, 'wb') as fp:
+                plistlib.dump(initial_plist, fp)
+
+            _bm.set_bundle_product_version(app_path, '2026.9.27')
+
+            with open(plist_path, 'rb') as fp:
+                updated = plistlib.load(fp)
+
+            self.assertEqual(updated.get('CFBundleShortVersionString'), '2026.9.27')
+            self.assertEqual(updated.get('CFBundleVersion'), '2026.9.27')
 
 
 class TestFindCodesignIdentity(unittest.TestCase):
@@ -176,12 +203,19 @@ class TestCodesignApp(unittest.TestCase):
         app_path = '/fake/Maho.app'
         framework_path = f'{app_path}/Contents/Frameworks/Maho Framework.framework'
         sparkle_path = f'{app_path}/Contents/Frameworks/Sparkle.framework'
+        helpers_dir = f'{framework_path}/Versions/Current/Helpers'
         with patch(
             'os.path.isdir',
             side_effect=lambda path: path != (
                 f'{framework_path}/Versions/Current/Libraries'
             ),
         ), \
+             patch('os.listdir', return_value=[
+                 'Maho Helper.app',
+                 'Maho Helper (Alerts).app',
+                 'Maho Helper (GPU).app',
+                 'Maho Helper (Renderer).app',
+             ]), \
              patch('os.path.isfile', return_value=True), \
              patch('subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
@@ -193,6 +227,7 @@ class TestCodesignApp(unittest.TestCase):
         framework_path = (
             '/fake/Maho.app/Contents/Frameworks/Maho Framework.framework'
         )
+        helpers_dir = f'{framework_path}/Versions/Current/Helpers'
         helper_path = (
             f'{framework_path}/Versions/Current/Helpers/Maho Helper.app'
         )
@@ -202,9 +237,11 @@ class TestCodesignApp(unittest.TestCase):
             side_effect=lambda path: path in {
                 '/fake/Maho.app',
                 framework_path,
+                helpers_dir,
                 helper_path,
             },
         ), \
+             patch('os.listdir', return_value=['Maho Helper.app']), \
              patch('os.path.isfile', return_value=False), \
              patch('subprocess.run') as mock_run:
             result = codesign_app('DEADBEEF', '/fake/Maho.app')
@@ -222,19 +259,24 @@ class TestCodesignApp(unittest.TestCase):
         )
 
     def test_uses_separate_app_and_helper_entitlements(self):
-        with patch(
-            'os.path.isdir',
-            side_effect=lambda path: path == '/fake/Maho.app',
-        ), \
+        # Without a provisioning profile the app is signed with a stripped
+        # temp copy of branding/mac/entitlements.plist (see
+        # unrestricted_entitlements_path), so accept that temp path too.
+        with patch.dict(os.environ, {}, clear=False), \
+             patch(
+                 'os.path.isdir',
+                 side_effect=lambda path: path == '/fake/Maho.app',
+             ), \
              patch(
                  'os.path.isfile',
                  side_effect=lambda path: path.endswith((
                      'maho_mail_helper',
                      'helper-entitlements.plist',
                      'entitlements.plist',
-                 )),
+                 )) or os.path.basename(path).startswith('maho-entitlements-'),
              ), \
              patch('subprocess.run') as mock_run:
+            os.environ.pop('MAHO_MAC_PROVISIONING_PROFILE', None)
             result = codesign_app('DEADBEEF', '/fake/Maho.app')
 
         self.assertTrue(result)
@@ -244,11 +286,19 @@ class TestCodesignApp(unittest.TestCase):
                 'branding/mac/helper-entitlements.plist'
             )
         )
-        self.assertTrue(
-            app_call[app_call.index('--entitlements') + 1].endswith(
-                'branding/mac/entitlements.plist'
-            )
-        )
+        app_entitlements = app_call[app_call.index('--entitlements') + 1]
+        self.assertFalse(app_entitlements.endswith('helper-entitlements.plist'))
+        if os.path.basename(app_entitlements).startswith('maho-entitlements-'):
+            try:
+                with open(app_entitlements, 'rb') as handle:
+                    stripped = plistlib.load(handle)
+            finally:
+                os.remove(app_entitlements)
+            self.assertNotIn('com.apple.application-identifier', stripped)
+            self.assertNotIn('keychain-access-groups', stripped)
+        else:
+            self.assertTrue(
+                app_entitlements.endswith('branding/mac/entitlements.plist'))
 
     def test_embeds_explicit_macos_provisioning_profile(self):
         with patch.dict(
@@ -354,6 +404,79 @@ class TestEmbedMahoCli(unittest.TestCase):
             ))
 
 
+class TestVerifyOmoRuntime(unittest.TestCase):
+    """The gate runs the real entry with Maho's RPC argv (python stands in for bun)."""
+
+    def _entry(self, temp_dir: str, body: str) -> str:
+        path = os.path.join(temp_dir, 'rpc-entry.py')
+        with open(path, 'w') as f:
+            f.write('import sys\n' + body)
+        return path
+
+    def test_accepts_runtime_that_reports_readiness(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = self._entry(temp_dir, (
+                "assert sys.argv[1] == '--listen'\n"
+                "assert sys.argv[2].startswith('unix://')\n"
+                "assert sys.argv[3] == '--no-builtin-tools'\n"
+                "sys.stderr.write('senpi rpc listening on ' + sys.argv[2] + '\\n')\n"
+                "sys.stderr.flush()\n"
+                "sys.stdin.read()\n"))
+            self.assertIsNone(_bm.verify_omo_runtime(sys.executable, entry))
+
+    def test_rejects_runtime_that_exits_on_listen(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            entry = self._entry(temp_dir, (
+                "sys.stderr.write('Error: Unknown option: --listen\\n')\n"
+                "sys.exit(1)\n"))
+            failure = _bm.verify_omo_runtime(sys.executable, entry)
+            self.assertIsNotNone(failure)
+            self.assertIn('status 1', failure)
+            self.assertIn('Unknown option: --listen', failure)
+
+    def test_embed_fails_closed_on_incompatible_package(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(_bm.shutil, 'which', return_value='/usr/bin/bun'), \
+                 patch.object(_bm, 'omo_runtime_source', return_value=temp_dir), \
+                 patch.object(_bm.os.path, 'isfile', return_value=True), \
+                 patch.object(_bm.os.path, 'getmtime', return_value=0), \
+                 patch.object(_bm, 'verify_omo_runtime',
+                              return_value='exited with status 1: x'), \
+                 patch.object(_bm.shutil, 'copy2') as copy2:
+                with self.assertRaises(RuntimeError):
+                    _bm.embed_omo_runtime(
+                        os.path.join(temp_dir, 'Maho.app'), 'out/Release')
+                copy2.assert_not_called()
+
+    def test_embed_stages_bridge_built_with_explicit_target_triple(self):
+        # build_maho_cli() uses --target, so the only bridge on a release
+        # builder lives under target/<triple>/release.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            triple_dir = os.path.join(
+                temp_dir, 'maho', 'target', 'aarch64-apple-darwin', 'release')
+            os.makedirs(triple_dir)
+            with open(os.path.join(triple_dir, 'maho-browser-mcp'), 'wb') as f:
+                f.write(b'mcp')
+            package = os.path.join(temp_dir, 'omo')
+            os.makedirs(os.path.join(package, 'dist'))
+            with open(os.path.join(package, 'dist', 'rpc-entry.js'), 'w') as f:
+                f.write('')
+            bun = os.path.join(temp_dir, 'bun')
+            with open(bun, 'wb') as f:
+                f.write(b'bun')
+            app_path = os.path.join(temp_dir, 'Maho.app')
+            with patch.object(_bm, '_WORKSPACE_ROOT', temp_dir), \
+                 patch.object(_bm.shutil, 'which', return_value=bun), \
+                 patch.object(_bm, 'omo_runtime_source', return_value=package), \
+                 patch.object(_bm, 'verify_omo_runtime', return_value=None):
+                self.assertTrue(_bm.embed_omo_runtime(app_path, 'out/Release'))
+            with open(os.path.join(
+                    app_path, 'Contents', 'MacOS', 'maho-browser-mcp'), 'rb') as f:
+                self.assertEqual(f.read(), b'mcp')
+            self.assertTrue(os.path.isfile(os.path.join(
+                app_path, 'Contents', 'Resources', 'omo', 'dist', 'rpc-entry.js')))
+
+
 class TestMahoCliBinaryName(unittest.TestCase):
 
     def test_windows_triple_gets_exe_suffix(self):
@@ -415,6 +538,24 @@ class TestStageMahoCliNextToBrowser(unittest.TestCase):
                 self.assertIsNone(
                     _bm.stage_maho_cli_next_to_browser('out/Default',
                                                        os.path.join(temp_dir, 'missing')))
+
+
+class TestMacBrowserResourceEntitlements(unittest.TestCase):
+
+    def test_app_has_chromium_browser_resource_entitlements(self):
+        maho_chromium_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '..', '..')
+        )
+        with open(os.path.join(maho_chromium_dir, 'branding', 'mac',
+                               'entitlements.plist'), 'rb') as entitlements_file:
+            app_entitlements = plistlib.load(entitlements_file)
+        for resource in (
+            'device.audio-input', 'device.bluetooth', 'device.camera',
+            'device.print', 'device.usb', 'personal-information.location',
+            'personal-information.photos-library',
+        ):
+            with self.subTest(resource=resource):
+                self.assertIs(app_entitlements[f'com.apple.security.{resource}'], True)
 
 
 class TestMacPasskeySigningContract(unittest.TestCase):
@@ -559,7 +700,7 @@ class TestArgsTemplateSelection(unittest.TestCase):
         )
         self.assertNotIn('google_default_client_secret', args)
 
-    def test_non_release_does_not_sync_local_google_api_key(self):
+    def test_non_release_syncs_local_google_api_key_when_present(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = os.path.join(temp_dir, 'workspace')
             args_path = os.path.join(workspace, 'chromium', 'src', 'out', 'Default', 'args.gn')
@@ -578,7 +719,22 @@ class TestArgsTemplateSelection(unittest.TestCase):
                     'GOOGLE_API_KEY=AIza12345678901234567890123456789012345\n'
                 )
 
-            _bm.sync_local_google_api_key(workspace, args_path, release=False)
+            updated = _bm.sync_local_google_api_key(workspace, args_path, release=False)
+            self.assertTrue(updated)
+
+            with open(args_path, encoding='utf-8') as args_file:
+                args = args_file.read()
+        self.assertIn('google_api_key = "AIza12345678901234567890123456789012345"', args)
+
+    def test_non_release_without_local_google_api_key_does_not_fail(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args_path = os.path.join(temp_dir, 'out', 'Default', 'args.gn')
+            os.makedirs(os.path.dirname(args_path))
+            with open(args_path, 'w', encoding='utf-8') as args_file:
+                args_file.write('is_official_build = false\n')
+
+            updated = _bm.sync_local_google_api_key(temp_dir, args_path, release=False)
+            self.assertFalse(updated)
 
             with open(args_path, encoding='utf-8') as args_file:
                 args = args_file.read()
@@ -667,6 +823,200 @@ class TestArgsTemplateSelection(unittest.TestCase):
                 result = f.read()
         # untouched -> local sentinel (e.g. synced google key) preserved
         self.assertIn('LOCAL_SENTINEL', result)
+
+
+def _make_fake_staged_sdk(directory: str, name: str = 'MacOSX.sdk') -> str:
+    sdk_path = os.path.join(directory, name)
+    math_h = os.path.join(sdk_path, 'usr', 'include', 'math.h')
+    os.makedirs(os.path.dirname(math_h), exist_ok=True)
+    with open(math_h, 'w', encoding='utf-8') as f:
+        f.write(
+            '#   if 0 // disabled: prevents partial float.h inclusion from poisoning libc++ float.h\n'
+            '#       define    NAN          __builtin_nanf("0x7fc00000")\n'
+            '#       define    INFINITY     __builtin_inff()\n'
+        )
+    return sdk_path
+
+
+class TestEnsureMacOsSdkPath(unittest.TestCase):
+
+    def setUp(self):
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = self._temp_dir.name
+        self.staged_sdk = _make_fake_staged_sdk(self.temp_dir, 'MacOSX.sdk')
+
+        # Set up a fake Chromium source tree: <temp_dir>/chromium/src/.gn
+        self.chromium_src = os.path.join(self.temp_dir, 'chromium', 'src')
+        os.makedirs(self.chromium_src, exist_ok=True)
+        with open(os.path.join(self.chromium_src, '.gn'), 'w', encoding='utf-8') as f:
+            f.write('buildconfig = "//BUILDCONFIG.gn"\n')
+        self.out_dir = os.path.join(self.chromium_src, 'out', 'Release')
+        os.makedirs(self.out_dir, exist_ok=True)
+        self.args_path = os.path.join(self.out_dir, 'args.gn')
+        with open(self.args_path, 'w', encoding='utf-8') as f:
+            f.write('is_official_build = true\n')
+
+        # Mock stage_macos_sdk module
+        self.mock_stage_mod: Any = types.ModuleType('maho_stage_macos_sdk')
+        self.mock_stage_mod.DEFAULT_DEST = self.staged_sdk
+        self.mock_stage_mod.find_source_sdk = MagicMock(return_value='/System/Library/SDKs/MacOSX.sdk')
+        self.mock_stage_mod.stage = MagicMock(return_value=self.staged_sdk)
+
+        def _check(sdk):
+            math_path = os.path.join(sdk, 'usr', 'include', 'math.h')
+            if not os.path.isfile(math_path):
+                return 1
+            with open(math_path, encoding='utf-8', errors='replace') as h:
+                text = h.read()
+            if 'INFINITY' in text and 'NAN' in text:
+                return 0
+            return 1
+
+        self.mock_stage_mod.check = _check
+
+        self._orig_load_module = _bm.load_module
+
+        def _fake_load_module(name, path):
+            if 'stage_macos_sdk' in name:
+                return self.mock_stage_mod
+            return self._orig_load_module(name, path)
+
+        self._patcher = patch.object(_bm, 'load_module', side_effect=_fake_load_module)
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+        self._temp_dir.cleanup()
+
+    def test_creates_build_output_symlink_and_uses_gn_relative_path(self):
+        result = ensure_macos_sdk_path(self.args_path)
+        self.assertTrue(result)
+        with open(self.args_path, encoding='utf-8') as f:
+            content = f.read()
+
+        # Must configure mac_sdk_path relative to GN build root, NOT raw external path
+        self.assertIn('mac_sdk_path = "//out/Release/sdk/xcode_links/MacOSX.sdk"', content)
+        self.assertNotIn(self.staged_sdk, content)
+
+        # Build output symlink must exist and point to the staged SDK
+        symlink_path = os.path.join(self.out_dir, 'sdk', 'xcode_links', 'MacOSX.sdk')
+        self.assertTrue(os.path.islink(symlink_path))
+        self.assertEqual(
+            os.path.realpath(symlink_path),
+            os.path.realpath(self.staged_sdk),
+        )
+        self.assertEqual(self.mock_stage_mod.check(symlink_path), 0)
+
+    def test_migrates_existing_external_absolute_path_to_symlink(self):
+        # Existing pre-154 args.gn has the external absolute path
+        with open(self.args_path, 'w', encoding='utf-8') as f:
+            f.write(f'is_official_build = true\nmac_sdk_path = "{self.staged_sdk}"\n')
+
+        result = ensure_macos_sdk_path(self.args_path)
+        self.assertTrue(result)
+        with open(self.args_path, encoding='utf-8') as f:
+            content = f.read()
+
+        # The external absolute path must be replaced with the build-output symlink path
+        self.assertNotIn(f'mac_sdk_path = "{self.staged_sdk}"', content)
+        self.assertIn('mac_sdk_path = "//out/Release/sdk/xcode_links/MacOSX.sdk"', content)
+
+        symlink_path = os.path.join(self.out_dir, 'sdk', 'xcode_links', 'MacOSX.sdk')
+        self.assertTrue(os.path.islink(symlink_path))
+        self.assertEqual(
+            os.path.realpath(symlink_path),
+            os.path.realpath(self.staged_sdk),
+        )
+
+    def test_idempotent_when_valid_symlink_already_configured(self):
+        # Configure valid state
+        symlink_dir = os.path.join(self.out_dir, 'sdk', 'xcode_links')
+        os.makedirs(symlink_dir, exist_ok=True)
+        symlink_path = os.path.join(symlink_dir, 'MacOSX.sdk')
+        os.symlink(self.staged_sdk, symlink_path)
+
+        with open(self.args_path, 'w', encoding='utf-8') as f:
+            f.write('is_official_build = true\nmac_sdk_path = "//out/Release/sdk/xcode_links/MacOSX.sdk"\n')
+
+        mtime_before = os.path.getmtime(self.args_path)
+        result = ensure_macos_sdk_path(self.args_path)
+        self.assertTrue(result)
+
+        with open(self.args_path, encoding='utf-8') as f:
+            content = f.read()
+
+        self.assertIn('mac_sdk_path = "//out/Release/sdk/xcode_links/MacOSX.sdk"', content)
+        # Content unchanged
+        self.assertEqual(os.path.getmtime(self.args_path), mtime_before)
+        # Symlink untouched and healthy
+        self.assertTrue(os.path.islink(symlink_path))
+        self.assertEqual(os.path.realpath(symlink_path), os.path.realpath(self.staged_sdk))
+
+    def test_repairs_missing_or_broken_symlink_when_args_has_symlink_path(self):
+        # args.gn specifies the symlink path, but symlink is missing
+        with open(self.args_path, 'w', encoding='utf-8') as f:
+            f.write('is_official_build = true\nmac_sdk_path = "//out/Release/sdk/xcode_links/MacOSX.sdk"\n')
+
+        result = ensure_macos_sdk_path(self.args_path)
+        self.assertTrue(result)
+
+        symlink_path = os.path.join(self.out_dir, 'sdk', 'xcode_links', 'MacOSX.sdk')
+        self.assertTrue(os.path.islink(symlink_path))
+        self.assertEqual(os.path.realpath(symlink_path), os.path.realpath(self.staged_sdk))
+
+    def test_preserves_existing_non_symlink_directory(self):
+        sdk_path = os.path.join(self.out_dir, 'sdk', 'xcode_links', 'MacOSX.sdk')
+        os.makedirs(sdk_path)
+        sentinel = os.path.join(sdk_path, 'preserve.txt')
+        with open(sentinel, 'w', encoding='utf-8') as f:
+            f.write('existing data')
+        with self.assertRaises(RuntimeError):
+            ensure_macos_sdk_path(self.args_path)
+        with open(sentinel, encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'existing data')
+
+    def test_preserves_custom_valid_staged_sdk_when_migrating(self):
+        custom_sdk = _make_fake_staged_sdk(self.temp_dir, 'CustomMacOSX.sdk')
+        with open(self.args_path, 'w', encoding='utf-8') as f:
+            f.write(f'is_official_build = true\nmac_sdk_path = "{custom_sdk}"\n')
+
+        result = ensure_macos_sdk_path(self.args_path)
+        self.assertTrue(result)
+
+        with open(self.args_path, encoding='utf-8') as f:
+            content = f.read()
+
+        self.assertIn('mac_sdk_path = "//out/Release/sdk/xcode_links/CustomMacOSX.sdk"', content)
+        symlink_path = os.path.join(self.out_dir, 'sdk', 'xcode_links', 'CustomMacOSX.sdk')
+        self.assertTrue(os.path.islink(symlink_path))
+        self.assertEqual(os.path.realpath(symlink_path), os.path.realpath(custom_sdk))
+
+    def test_sdk_inputs_gn_action_accepts_configured_sdk_path(self):
+        # Verify that Chromium 154's sdk_inputs outputs are accepted by GN
+        # when configured by ensure_macos_sdk_path.
+        result = ensure_macos_sdk_path(self.args_path)
+        self.assertTrue(result)
+        with open(self.args_path, encoding='utf-8') as f:
+            content = f.read()
+
+        match = re.search(r'^\s*mac_sdk_path\s*=\s*"([^"]+)"', content, re.MULTILINE)
+        self.assertIsNotNone(match)
+        assert match is not None
+        configured_path = match.group(1)
+
+        # 154 build/config/mac/BUILD.gn:114 action("sdk_inputs") outputs:
+        # "$mac_sdk_path/usr/include/mach/exc.defs"
+        # GN rule: action outputs must reside within root_build_dir.
+        # Paths starting with '//' and rooted at the output directory satisfy this invariant.
+        self.assertTrue(configured_path.startswith('//'), f'mac_sdk_path must start with //: {configured_path}')
+        self.assertIn('/sdk/xcode_links/', configured_path)
+
+        # Rebase to root_build_dir should be relative to output dir
+        rel_to_build = os.path.relpath(
+            os.path.join(self.chromium_src, configured_path[2:]),
+            self.out_dir,
+        )
+        self.assertEqual(rel_to_build, 'sdk/xcode_links/MacOSX.sdk')
 
 
 class TestChromiumSourceRoot(unittest.TestCase):
@@ -854,6 +1204,7 @@ class TestMainFlags(unittest.TestCase):
             'run_gn_gen',
             'embed_sparkle_framework',
             'embed_mail_helper',
+            'embed_omo_runtime',
             'require_windows_mail_helper',
             'build_windows_installer',
             'sign_windows_installer',
@@ -881,6 +1232,8 @@ class TestMainFlags(unittest.TestCase):
                          'apply_branding', 'run_lucide_icon_check', 'verify_remote_sccache',
                          'run_gn_gen', 'embed_sparkle_framework', 'embed_mail_helper'):
                 stack.enter_context(patch.object(_bm, name))
+            stack.enter_context(
+                patch.object(_bm, 'embed_omo_runtime', return_value=True))
             mock_build_chromium = stack.enter_context(
                 patch.object(_bm, 'build_chromium_app'))
             mock_build_cli = stack.enter_context(
@@ -1143,21 +1496,65 @@ class TestMainFlags(unittest.TestCase):
 
 class TestCreateDmgImage(unittest.TestCase):
 
-    def test_uses_hdiutil_create_srcfolder_udzo_not_makehybrid(self):
-        with patch('subprocess.run') as mock_run:
+    def test_synthesizes_udrw_attach_layout_convert_udzo_not_makehybrid(self):
+        with patch('subprocess.run') as mock_run, \
+             patch('tempfile.mkdtemp', return_value='/tmp/maho-dmg-layout-x'), \
+             patch('os.path.exists', return_value=False), \
+             patch('shutil.rmtree') as mock_rmtree, \
+             patch.object(_bm, '_write_dmg_layout') as mock_layout:
             mock_run.return_value = MagicMock(returncode=0)
             _bm._create_dmg_image('/stage', '/out/Maho-1.0.0.dmg', 'Maho 1.0.0')
-        argv = mock_run.call_args_list[0].args[0]
-        self.assertEqual(argv[0], 'hdiutil')
-        self.assertEqual(argv[1], 'create')
-        self.assertIn('-srcfolder', argv)
-        self.assertEqual(argv[argv.index('-srcfolder') + 1], '/stage')
-        self.assertIn('-format', argv)
-        self.assertEqual(argv[argv.index('-format') + 1], 'UDZO')
-        self.assertIn('-volname', argv)
-        self.assertEqual(argv[argv.index('-volname') + 1], 'Maho 1.0.0')
-        self.assertEqual(argv[-1], '/out/Maho-1.0.0.dmg')
-        self.assertNotIn('makehybrid', argv)
+        commands = [c.args[0] for c in mock_run.call_args_list]
+        create = commands[0]
+        self.assertEqual(create[0:2], ['hdiutil', 'create'])
+        self.assertIn('-srcfolder', create)
+        self.assertEqual(create[create.index('-srcfolder') + 1], '/stage')
+        self.assertIn('-volname', create)
+        self.assertEqual(create[create.index('-volname') + 1], 'Maho 1.0.0')
+        self.assertIn('-format', create)
+        self.assertEqual(create[create.index('-format') + 1], 'UDRW')
+        self.assertEqual(commands[1][0:2], ['hdiutil', 'attach'])
+        self.assertIn('/tmp/maho-dmg-layout-x', commands[1])
+        mock_layout.assert_called_once_with('/tmp/maho-dmg-layout-x')
+        self.assertEqual(commands[2][0:2], ['hdiutil', 'detach'])
+        convert = commands[3]
+        self.assertEqual(convert[0:2], ['hdiutil', 'convert'])
+        self.assertEqual(convert[convert.index('-format') + 1], 'UDZO')
+        self.assertEqual(convert[-1], '/out/Maho-1.0.0.dmg')
+        self.assertFalse(any('makehybrid' in str(command) for command in commands),
+                         'must not use pkg-dmg/makehybrid')
+        mock_rmtree.assert_called_once_with('/tmp/maho-dmg-layout-x', ignore_errors=True)
+
+
+class TestWriteDmgLayout(unittest.TestCase):
+
+    def test_writes_background_alias_window_bounds_and_icon_locations(self):
+        """Alias.for_file is mocked because mac_alias cannot serialize APFS
+        64-bit file IDs; the real pipeline only ever aliases the background
+        inside the HFS+ image volume, where 32-bit CNIDs guarantee it works
+        (covered by the integration run of build_dmg)."""
+        from ds_store import DSStore
+
+        stub_alias = MagicMock()
+        stub_alias.to_bytes.return_value = b'maho-test-background-alias'
+        with tempfile.TemporaryDirectory(prefix='maho-dmg-layout-test-') as staging:
+            os.makedirs(os.path.join(staging, 'Maho.app'))
+            os.symlink('/Applications', os.path.join(staging, 'Applications'))
+            with patch('mac_alias.Alias.for_file', return_value=stub_alias):
+                _bm._write_dmg_layout(staging)
+            with DSStore.open(os.path.join(staging, '.DS_Store'), 'r') as store:
+                s: Any = store
+                bwsp = s['.']['bwsp']
+                self.assertEqual(bwsp['WindowBounds'], '{{100, 100}, {664, 428}}')
+                self.assertFalse(bwsp['ShowToolbar'])
+                icvp = s['.']['icvp']
+                self.assertEqual(icvp['backgroundType'], 2)
+                self.assertEqual(icvp['iconSize'], 68.0)
+                self.assertEqual(icvp['backgroundImageAlias'], b'maho-test-background-alias')
+                self.assertEqual(s['Maho.app']['Iloc'], (181, 284))
+                self.assertEqual(s['Applications']['Iloc'], (416, 284))
+                self.assertEqual(s['.']['vSrn'], (b'long', 1))
+            self.assertTrue(os.path.isfile(os.path.join(staging, '.background.png')))
 
 
 class TestVerifyDmgAppSignature(unittest.TestCase):
@@ -1241,6 +1638,7 @@ class TestBuildDmg(unittest.TestCase):
             patch('shutil.rmtree'),
             patch('subprocess.run', side_effect=run_side_effect),
             patch.object(_bm, 'verify_dmg_app_signature', return_value=gate),
+            patch.object(_bm, '_write_dmg_layout'),
         ]
 
     def test_synthesizes_via_hdiutil_create_not_pkgdmg(self):
@@ -1281,6 +1679,7 @@ class TestBuildDmg(unittest.TestCase):
             patch('shutil.rmtree'),
             patch('subprocess.run', side_effect=_run),
             patch.object(_bm, 'verify_dmg_app_signature', return_value=False),
+            patch.object(_bm, '_write_dmg_layout'),
         ]
         for p in ctx:
             p.start()
@@ -1330,6 +1729,10 @@ class TestNotarizeDirectExecution(unittest.TestCase):
 
         def fake_run(cmd, *args, **kwargs):
             calls.append(cmd)
+            if cmd[:3] == ['xcrun', 'stapler', 'validate']:
+                # Not yet stapled, so notarize_app must not take its
+                # already-notarized fast path.
+                return subprocess.CompletedProcess(cmd, 65, stdout='', stderr='')
             return subprocess.CompletedProcess(cmd, 0, stdout='id: 1234\nstatus: Accepted\n', stderr='')
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1349,6 +1752,8 @@ class TestNotarizeDirectExecution(unittest.TestCase):
 
         def fake_run(cmd, *args, **kwargs):
             nonlocal submit_count
+            if cmd[:3] == ['xcrun', 'stapler', 'validate']:
+                return subprocess.CompletedProcess(cmd, 65, stdout='', stderr='')
             if cmd[:3] == ['xcrun', 'notarytool', 'submit']:
                 submit_count += 1
                 if submit_count == 1:
@@ -1419,10 +1824,16 @@ class TestMainDmgFatalPaths(unittest.TestCase):
                 'embed_sparkle_framework',
                 'embed_mail_helper',
                 'ensure_args_gn',
+                'sync_cc_wrapper',
+                'sync_media_codec_flags',
+                'ensure_macos_sdk_path',
+                'set_bundle_product_version',
                 'sync_local_google_api_key',
                 'run_gn_gen',
             ):
                 stack.enter_context(patch.object(_bm, name))
+            stack.enter_context(
+                patch.object(_bm, 'embed_omo_runtime', return_value=True))
             stack.enter_context(
                 patch.object(_bm, 'build_maho_cli', return_value='/fake/maho'))
             stack.enter_context(

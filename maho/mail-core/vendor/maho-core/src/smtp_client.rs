@@ -1,7 +1,11 @@
 use lettre::{
     message::{header::ContentType, Attachment, Mailbox, MultiPart, SinglePart},
-    transport::smtp::authentication::{Credentials, Mechanism},
-    Message, SmtpTransport, Transport,
+    transport::smtp::{
+        authentication::{Credentials, Mechanism},
+        client::{SmtpConnection, TlsParameters},
+        extension::ClientId,
+    },
+    Message, SmtpTransport,
 };
 use regex::Regex;
 use std::time::Duration;
@@ -242,20 +246,69 @@ pub fn send_email(
         calendar_alternative,
     )?;
 
-    let transport = build_transport(
-        smtp_host,
-        smtp_port,
-        encryption,
-        username,
-        password,
-        use_xoauth2,
-    )?;
+    if matches!(encryption, Encryption::None) {
+        return Err(AppError::Validation(
+            "Plaintext SMTP (no encryption) is not allowed. Use TLS or STARTTLS.".into(),
+        ));
+    }
+    let tls = TlsParameters::new(smtp_host.to_string())
+        .map_err(|error| AppError::Network(error.to_string()))?;
+    let hello = ClientId::default();
+    let connection = SmtpConnection::connect(
+        (smtp_host, smtp_port),
+        Some(Duration::from_secs(10)),
+        &hello,
+        match encryption {
+            Encryption::Tls => Some(&tls),
+            Encryption::StartTls | Encryption::None => None,
+        },
+        None,
+    ).map_err(smtp_presend_error)?;
+    let mut connection = SmtpSession(connection);
+    if matches!(encryption, Encryption::StartTls) {
+        connection.0.starttls(&tls, &hello)
+            .map_err(smtp_presend_error)?;
+    }
+    let mechanisms = if use_xoauth2 {
+        &[Mechanism::Xoauth2][..]
+    } else {
+        &[Mechanism::Plain, Mechanism::Login][..]
+    };
+    connection.0.auth(mechanisms, &Credentials::new(username.into(), password.into()))
+        .map_err(|error| {
+            if error.is_transient() {
+                AppError::Network(error.to_string())
+            } else {
+                AppError::Auth(error.to_string())
+            }
+        })?;
+    connection.0.send(message.envelope(), &message.formatted())
+        .map(|_| ())
+        .map_err(|error| {
+            if error.is_permanent() || error.is_client() {
+                AppError::Validation(error.to_string())
+            } else if error.is_transient() {
+                AppError::Network(error.to_string())
+            } else {
+                AppError::DeliveryUncertain(error.to_string())
+            }
+        })
+}
 
-    transport
-        .send(&message)
-        .map_err(|e| AppError::Network(e.to_string()))?;
+struct SmtpSession(SmtpConnection);
 
-    Ok(())
+fn smtp_presend_error(error: lettre::transport::smtp::Error) -> AppError {
+    if error.is_permanent() || error.is_client() {
+        AppError::Validation(error.to_string())
+    } else {
+        AppError::Network(error.to_string())
+    }
+}
+
+impl Drop for SmtpSession {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 enum TextBody {
@@ -340,6 +393,31 @@ pub fn build_mime_message(
     attachments: &[ComposeAttachment],
     calendar_alternative: Option<&CalendarAlternativePart>,
 ) -> Result<Message, AppError> {
+    match build_mime_body(body_text, body_html, inline_images, attachments, calendar_alternative)? {
+        TextBody::Alternative(body) => builder.multipart(body),
+        TextBody::Single(body) => builder.singlepart(body),
+    }
+    .map_err(|e| AppError::Validation(e.to_string()))
+}
+
+pub fn build_mime_entity(
+    body_text: Option<&str>,
+    body_html: Option<&str>,
+    attachments: &[ComposeAttachment],
+) -> Result<Vec<u8>, AppError> {
+    Ok(match build_mime_body(body_text, body_html, &[], attachments, None)? {
+        TextBody::Alternative(body) => body.formatted(),
+        TextBody::Single(body) => body.formatted(),
+    })
+}
+
+fn build_mime_body(
+    body_text: Option<&str>,
+    body_html: Option<&str>,
+    inline_images: &[InlineImage],
+    attachments: &[ComposeAttachment],
+    calendar_alternative: Option<&CalendarAlternativePart>,
+) -> Result<TextBody, AppError> {
     let (final_html, final_images) = match body_html {
         Some(html) => {
             let (new_html, images) = extract_inline_images(html);
@@ -356,14 +434,7 @@ pub fn build_mime_message(
     let text_body = build_text_body(body_text, final_html.as_deref(), inline_images_ref);
 
     let message = match (attachments.is_empty(), calendar_alternative) {
-        (true, None) => match text_body {
-            TextBody::Alternative(mp) => builder
-                .multipart(mp)
-                .map_err(|e| AppError::Validation(e.to_string()))?,
-            TextBody::Single(sp) => builder
-                .singlepart(sp)
-                .map_err(|e| AppError::Validation(e.to_string()))?,
-        },
+        (true, None) => text_body,
         (true, Some(cal)) => {
             let cal_part = build_calendar_singlepart(cal)?;
             let plain_part = SinglePart::builder()
@@ -372,9 +443,7 @@ pub fn build_mime_message(
             let mp = MultiPart::alternative()
                 .singlepart(plain_part)
                 .singlepart(cal_part);
-            builder
-                .multipart(mp)
-                .map_err(|e| AppError::Validation(e.to_string()))?
+            TextBody::Alternative(mp)
         }
         (false, None) => {
             let mut mixed = match text_body {
@@ -393,9 +462,7 @@ pub fn build_mime_message(
                     Attachment::new(att.filename.clone()).body(decoded, content_type);
                 mixed = mixed.singlepart(file_attachment);
             }
-            builder
-                .multipart(mixed)
-                .map_err(|e| AppError::Validation(e.to_string()))?
+            TextBody::Alternative(mixed)
         }
         (false, Some(cal)) => {
             let cal_part = build_calendar_singlepart(cal)?;
@@ -418,9 +485,7 @@ pub fn build_mime_message(
                     Attachment::new(att.filename.clone()).body(decoded, content_type);
                 mixed = mixed.singlepart(file_attachment);
             }
-            builder
-                .multipart(mixed)
-                .map_err(|e| AppError::Validation(e.to_string()))?
+            TextBody::Alternative(mixed)
         }
     };
 

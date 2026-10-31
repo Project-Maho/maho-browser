@@ -19,6 +19,7 @@ fn test_multi_window_split_view_isolation() {
         window_id: w1.clone(),
         tab_ids: vec![t1, t2],
         orientation: Orientation::Horizontal,
+        layout: None,
     });
 
     // Create split in window-2
@@ -26,6 +27,7 @@ fn test_multi_window_split_view_isolation() {
         window_id: w2.clone(),
         tab_ids: vec![t3, t4],
         orientation: Orientation::Vertical,
+        layout: None,
     });
 
     let config1 = core.get_split_view_config(&w1).unwrap();
@@ -60,6 +62,7 @@ fn test_split_view_events_emit_changed() {
         window_id: w.clone(),
         tab_ids: vec![t1.clone(), t2.clone(), t3.clone()],
         orientation: Orientation::Horizontal,
+        layout: None,
     });
 
     assert_eq!(updates.len(), 1);
@@ -73,7 +76,20 @@ fn test_split_view_events_emit_changed() {
         assert_eq!(*schema_version, 1);
         let cfg = config.as_ref().unwrap();
         assert_eq!(cfg.panes.len(), 3);
-        assert_eq!(cfg.ratios, vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]);
+        // Equal thirds. The ratios are derived by walking the binary layout
+        // tree (root 1/3, then 1/2 of the remaining 2/3), so the trailing panes
+        // land one ULP off an exact `1.0 / 3.0` literal. Compare with a
+        // tolerance like the resize assertions below; exact float equality here
+        // asserts an IEEE rounding path, not the contract.
+        assert_eq!(cfg.ratios.len(), 3);
+        for ratio in &cfg.ratios {
+            assert!(
+                (ratio - 1.0 / 3.0).abs() < 1e-9,
+                "expected equal thirds, got {:?}",
+                cfg.ratios
+            );
+        }
+        assert!((cfg.ratios.iter().sum::<f64>() - 1.0).abs() < 1e-9);
     } else {
         panic!("Expected SplitViewChanged");
     }
@@ -134,6 +150,7 @@ fn test_window_closed_removes_config() {
         window_id: w.clone(),
         tab_ids: vec![t1, t2],
         orientation: Orientation::Horizontal,
+        layout: None,
     });
     assert!(core.get_split_view_config(&w).is_some());
 

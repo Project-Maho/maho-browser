@@ -10,7 +10,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "components/prefs/pref_service.h"
-#include "components/version_info/version_info.h"
+#include "maho/browser/updates/maho_product_version.h"
 #include "maho/browser/updates/maho_update_pref_names.h"
 
 namespace maho {
@@ -124,7 +124,11 @@ void MahoSidebarUpdateNotificationController::OnUpdateProgress(
     double /*percent*/) {}
 
 std::string MahoSidebarUpdateNotificationController::CurrentVersion() const {
-  return std::string(version_info::GetVersionNumber());
+  // The "already seen this upgrade" pref must be keyed on the Maho product
+  // version: that is the version users are notified about, and the one that
+  // changes on a Maho release. Chromium's engine version changes independently
+  // of Maho releases, which re-armed the notification spuriously.
+  return std::string(updates::kMahoProductVersion);
 }
 
 }  // namespace maho

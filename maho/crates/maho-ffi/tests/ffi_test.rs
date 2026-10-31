@@ -762,9 +762,9 @@ fn test_agent_unified_event_callback_leased_abi_null_safety() {
 
 #[test]
 fn test_agent_unified_event_callback_leased_receives_event_and_releases() {
+    use std::ffi::{CStr, CString};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::ffi::{CStr, CString};
 
     #[derive(Debug, Clone)]
     struct CapturedEvent {
@@ -790,7 +790,9 @@ fn test_agent_unified_event_callback_leased_receives_event_and_releases() {
         let payload = if ev.payload_json.is_null() {
             String::new()
         } else {
-            CStr::from_ptr(ev.payload_json).to_string_lossy().into_owned()
+            CStr::from_ptr(ev.payload_json)
+                .to_string_lossy()
+                .into_owned()
         };
         list.lock().unwrap().push(CapturedEvent {
             run_id,
@@ -853,7 +855,11 @@ fn test_agent_unified_event_callback_leased_receives_event_and_releases() {
         // Unregister -> release callback must be invoked
         let unreg = maho_ffi::maho_agent_unregister_unified_event_callback(session_ptr);
         assert!(unreg, "Unregister must return true");
-        assert_eq!(release_count.load(Ordering::SeqCst), 1, "Release callback must be called exactly once");
+        assert_eq!(
+            release_count.load(Ordering::SeqCst),
+            1,
+            "Release callback must be called exactly once"
+        );
 
         // Clean up
         drop(Box::from_raw(session_ptr));
@@ -870,13 +876,20 @@ fn test_agent_get_last_compaction_info_after_overflow() {
 
     unsafe {
         // Null checks
-        assert!(!maho_ffi::maho_agent_get_last_compaction_info(std::ptr::null_mut(), std::ptr::null_mut()));
+        assert!(!maho_ffi::maho_agent_get_last_compaction_info(
+            std::ptr::null_mut(),
+            std::ptr::null_mut()
+        ));
         let mut out_null_test: *mut std::ffi::c_char = std::ptr::null_mut();
-        assert!(!maho_ffi::maho_agent_get_last_compaction_info(std::ptr::null_mut(), &mut out_null_test));
+        assert!(!maho_ffi::maho_agent_get_last_compaction_info(
+            std::ptr::null_mut(),
+            &mut out_null_test
+        ));
 
         // When no compaction has occurred yet, returns false
         let mut out_json: *mut std::ffi::c_char = std::ptr::null_mut();
-        let has_compaction = maho_ffi::maho_agent_get_last_compaction_info(session_ptr, &mut out_json);
+        let has_compaction =
+            maho_ffi::maho_agent_get_last_compaction_info(session_ptr, &mut out_json);
         assert!(!has_compaction);
         assert!(out_json.is_null());
 
@@ -908,7 +921,10 @@ fn test_agent_get_last_compaction_info_after_overflow() {
 
         // Query last compaction info via FFI
         let ok = maho_ffi::maho_agent_get_last_compaction_info(session_ptr, &mut out_json);
-        assert!(ok, "maho_agent_get_last_compaction_info must return true after compaction");
+        assert!(
+            ok,
+            "maho_agent_get_last_compaction_info must return true after compaction"
+        );
         assert!(!out_json.is_null());
 
         let json_str = CStr::from_ptr(out_json).to_str().unwrap();
@@ -917,14 +933,18 @@ fn test_agent_get_last_compaction_info_after_overflow() {
         assert_eq!(parsed["session_id"], session_id);
         assert_eq!(parsed["triggered_at"], 1771800000u64);
 
-        let dropped = parsed["dropped_turns"].as_array().expect("dropped_turns array");
+        let dropped = parsed["dropped_turns"]
+            .as_array()
+            .expect("dropped_turns array");
         assert!(!dropped.is_empty(), "dropped_turns must be non-empty");
         assert_eq!(dropped.len(), 3);
         assert_eq!(dropped[0], 1);
         assert_eq!(dropped[1], 2);
         assert_eq!(dropped[2], 3);
 
-        let kept = parsed["kept_markers"].as_array().expect("kept_markers array");
+        let kept = parsed["kept_markers"]
+            .as_array()
+            .expect("kept_markers array");
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[0], "system_contract");
 
@@ -1013,4 +1033,43 @@ fn test_maho_chat_config_abi_layout() {
     );
 }
 
+#[test]
+fn test_trace_recorder_ffi_roundtrip() {
+    let recorder = unsafe { maho_ffi::maho_trace_recorder_create() };
+    assert!(!recorder.is_null());
 
+    let target_ref = CString::new("@e1").unwrap();
+    unsafe {
+        maho_ffi::maho_trace_recorder_record_click(recorder, target_ref.as_ptr(), 120.0, 240.0);
+    }
+
+    let text1 = CString::new("hel").unwrap();
+    let text2 = CString::new("lo").unwrap();
+    let sel = CString::new("#input").unwrap();
+    unsafe {
+        maho_ffi::maho_trace_recorder_record_fill(recorder, text1.as_ptr(), sel.as_ptr());
+        maho_ffi::maho_trace_recorder_record_fill(recorder, text2.as_ptr(), sel.as_ptr());
+    }
+
+    let url = CString::new("https://example.com").unwrap();
+    unsafe {
+        maho_ffi::maho_trace_recorder_record_navigate(recorder, url.as_ptr());
+    }
+
+    let json_ptr = unsafe { maho_ffi::maho_trace_recorder_finish_json(recorder) };
+    assert!(!json_ptr.is_null());
+
+    let json_str = unsafe { CStr::from_ptr(json_ptr) }.to_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+    assert_eq!(parsed["version"], 3);
+    let steps = parsed["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 3);
+    assert_eq!(steps[0]["step"]["kind"], "click");
+    assert_eq!(steps[0]["step"]["target_ref"], "@e1");
+    assert_eq!(steps[1]["step"]["kind"], "fill");
+    assert_eq!(steps[1]["step"]["text"], "hello");
+    assert_eq!(steps[2]["step"]["kind"], "navigate");
+    assert_eq!(steps[2]["step"]["url"], "https://example.com");
+
+    unsafe { maho_ffi::maho_string_free(json_ptr) };
+}

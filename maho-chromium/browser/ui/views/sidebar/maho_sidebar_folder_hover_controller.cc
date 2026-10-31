@@ -85,8 +85,8 @@ void MahoSidebarFolderHoverController::HideImmediately() {
     observed_browser_widget_ = nullptr;
   }
 
-  if (browser_ && browser_->tab_strip_model()) {
-    browser_->tab_strip_model()->RemoveObserver(this);
+  if (browser_ && browser_->GetTabStripModel()) {
+    browser_->GetTabStripModel()->RemoveObserver(this);
   }
 
   if (popup_widget_) {
@@ -106,8 +106,8 @@ void MahoSidebarFolderHoverController::OnWidgetDestroying(views::Widget* widget)
   if (widget == popup_widget_) {
     popup_widget_ = nullptr;
     open_folder_id_.clear();
-    if (browser_ && browser_->tab_strip_model()) {
-      browser_->tab_strip_model()->RemoveObserver(this);
+    if (browser_ && browser_->GetTabStripModel()) {
+      browser_->GetTabStripModel()->RemoveObserver(this);
     }
   }
 }
@@ -168,8 +168,8 @@ void MahoSidebarFolderHoverController::ShowNow() {
     }
   }
 
-  if (browser_ && browser_->tab_strip_model()) {
-    browser_->tab_strip_model()->AddObserver(this);
+  if (browser_ && browser_->GetTabStripModel()) {
+    browser_->GetTabStripModel()->AddObserver(this);
   }
 }
 
@@ -192,7 +192,7 @@ void MahoSidebarFolderHoverController::OnActivateTab(const std::string& tab_id) 
     return;
   }
 
-  TabStripModel* strip = browser_->tab_strip_model();
+  TabStripModel* strip = browser_->GetTabStripModel();
   if (!strip) {
     HideImmediately();
     return;
@@ -226,7 +226,7 @@ void MahoSidebarFolderHoverController::OnActivateTabDelayed(int index) {
   if (!browser_) {
     return;
   }
-  TabStripModel* strip = browser_->tab_strip_model();
+  TabStripModel* strip = browser_->GetTabStripModel();
   if (strip && strip->ContainsIndex(index)) {
     strip->ActivateTabAt(index);
   }

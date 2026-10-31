@@ -11,6 +11,28 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
+#include "base/test/bind.h"
+#include "base/test/test_future.h"
+#include "base/task/thread_pool.h"
+#include "base/test/scoped_run_loop_timeout.h"
+#include "chrome/test/base/browser_with_test_window_test.h"
+#include "chrome/test/base/testing_profile.h"
+#include "maho/browser/ai/maho_browser_tool_executor.h"
+#include "maho/browser/maho_browser_main_extra_parts.h"
+#include "maho/browser/mail_helper/maho_mail_service.h"
+#include "maho/browser/mail_helper/maho_mail_service_factory.h"
+#include "maho/browser/mail_helper/maho_mail_helper_launcher.h"
+#include "maho/browser/mail_helper/maho_mail_helper.mojom-test-utils.h"
+#include "maho/browser/mcp/maho_mcp_session.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#if !BUILDFLAG(IS_WIN)
+#include <unistd.h>
+#endif
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -28,19 +50,305 @@
 
 namespace {
 
+// Only the out-of-process helper is substituted: service, delegate, executor,
+// and MCP request/response paths below are production implementations.
+class MailReviewHelper : public maho::mojom::MahoMailHelperInterceptorForTesting {
+ public:
+  maho::mojom::MahoMailHelper* GetForwardingInterface() override {
+    ADD_FAILURE() << "Unexpected Mail helper operation";
+    return nullptr;
+  }
+  mojo::PendingRemote<maho::mojom::MahoMailHelper> Bind() {
+    return receiver_.BindNewPipeAndPassRemote();
+  }
+  void ListAccounts(ListAccountsCallback callback) override {
+    ++reads;
+    pending_read = std::move(callback);
+    if (on_read)
+      std::move(on_read).Run();
+  }
+  void MarkRead(const std::string& id, MarkReadCallback callback) override {
+    RecordFlag("mark_read", id, std::move(callback));
+  }
+  void MarkUnread(const std::string& id, MarkUnreadCallback callback) override {
+    RecordFlag("mark_unread", id, std::move(callback));
+  }
+  void ToggleStar(const std::string& id, ToggleStarCallback callback) override {
+    RecordFlag("toggle_star", id, std::move(callback));
+  }
+  void PrepareShutdown(PrepareShutdownCallback callback) override {
+    std::move(callback).Run();
+  }
+  void Shutdown(ShutdownCallback callback) override {
+    std::move(callback).Run();
+  }
+  int reads = 0;
+  std::vector<std::pair<std::string, std::string>> flags;
+  ListAccountsCallback pending_read;
+  base::OnceClosure on_read;
+
+ private:
+  void RecordFlag(const std::string& action, const std::string& id,
+                  base::OnceCallback<void(bool, const std::string&)> callback) {
+    flags.emplace_back(action, id);
+    std::move(callback).Run(true, "{}");
+  }
+  mojo::Receiver<maho::mojom::MahoMailHelper> receiver_{this};
+};
+
+class MahoMailProductionBindingTest : public BrowserWithTestWindowTest {
+ protected:
+  void SetUp() override {
+    BrowserWithTestWindowTest::SetUp();
+    second_ = TestingProfile::Builder().Build();
+    Prepare(profile(), &helper_a_);
+    Prepare(second_.get(), &helper_b_);
+    frontmost_ = profile()->GetWeakPtr();
+    delegate_ = maho::CreateMailDelegateForTesting(
+        base::BindLambdaForTesting([this]() { return frontmost_.get(); }),
+        base::BindLambdaForTesting(
+            [this](const std::string&, const std::string& details) {
+              ++approvals_;
+              metadata_ = details;
+              if (on_approval_)
+                std::move(on_approval_).Run();
+              return approve_;
+            }));
+    maho::MahoMcpSession::SetBrowserDelegate(delegate_.get());
+#if BUILDFLAG(IS_WIN)
+    session_ = std::make_unique<maho::MahoMcpSession>(
+        static_cast<maho::MahoMcpSessionToken*>(nullptr));
+#else
+    session_ = std::make_unique<maho::MahoMcpSession>(getuid());
+#endif
+    auto responses = session_->ProcessData(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1,"
+        "\"params\":{\"protocolVersion\":\"2025-03-26\","
+        "\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"}}}\n");
+    ASSERT_EQ(responses.size(), 1u);
+  }
+  void TearDown() override {
+    maho::MahoMcpSession::SetBrowserDelegate(nullptr);
+    session_.reset();
+    delegate_.reset();
+    // Close test pipes before keyed service teardown; no process is launched.
+    maho::MahoMailServiceFactory::GetForProfile(profile())
+        ->SetLauncherForTesting(nullptr);
+    if (second_)
+      maho::MahoMailServiceFactory::GetForProfile(second_.get())
+          ->SetLauncherForTesting(nullptr);
+    second_.reset();
+    BrowserWithTestWindowTest::TearDown();
+  }
+  void Prepare(TestingProfile* profile, MailReviewHelper* helper) {
+    profile->GetPrefs()->SetBoolean(maho::sidebar_prefs::kMahoMailEnabled, true);
+    profile->GetPrefs()->SetBoolean(maho::ai_prefs::kMailReadAllowed, true);
+    auto launcher = std::make_unique<maho::MahoMailHelperLauncher>();
+    launcher->BindHelperForTesting(helper->Bind(), true);
+    maho::MahoMailServiceFactory::GetForProfile(profile)
+        ->SetLauncherForTesting(std::move(launcher));
+  }
+  std::vector<std::string> Call(const std::string& tool,
+                                base::DictValue arguments = {}) {
+    base::DictValue params;
+    params.Set("name", tool);
+    params.Set("arguments", std::move(arguments));
+    base::DictValue request;
+    request.Set("jsonrpc", "2.0");
+    request.Set("id", ++request_id_);
+    request.Set("method", "tools/call");
+    request.Set("params", std::move(params));
+    std::string json;
+    base::JSONWriter::Write(request, &json);
+    return session_->ProcessData(json + "\n");
+  }
+  void ExpectDenial(const std::string& response, const std::string& code) {
+    auto parsed = base::JSONReader::ReadDict(response, base::JSON_PARSE_RFC);
+    ASSERT_TRUE(parsed) << response;
+    const auto* error = parsed->FindDict("error");
+    ASSERT_TRUE(error) << response;
+    ASSERT_TRUE(error->FindString("message"));
+    EXPECT_EQ(*error->FindString("message"), code);
+  }
+  base::test::ScopedRunLoopTimeout timeout_{FROM_HERE, base::Seconds(10)};
+  MailReviewHelper helper_a_;
+  MailReviewHelper helper_b_;
+  std::unique_ptr<TestingProfile> second_;
+  base::WeakPtr<Profile> frontmost_;
+  std::unique_ptr<maho::MahoMcpBrowserDelegate> delegate_;
+  std::unique_ptr<maho::MahoMcpSession> session_;
+  base::OnceClosure on_approval_;
+  std::string metadata_;
+  bool approve_ = true;
+  int approvals_ = 0;
+  int request_id_ = 1;
+};
+
+TEST_F(MahoMailProductionBindingTest, MailReviewOriginANeverReadsFrontmostB) {
+  second_->GetPrefs()->SetBoolean(maho::ai_prefs::kMailReadAllowed, false);
+  frontmost_ = second_->GetWeakPtr();
+  MahoBrowserToolExecutor executor(browser());
+  base::test::TestFuture<base::DictValue> result;
+  base::RunLoop dispatched;
+  helper_a_.on_read = dispatched.QuitClosure();
+  helper_b_.on_read = dispatched.QuitClosure();
+  executor.Execute("mail_list_accounts", {}, result.GetCallback());
+  dispatched.Run();
+  EXPECT_EQ(helper_b_.reads, 0);
+  EXPECT_EQ(helper_a_.reads, 1);
+  if (helper_b_.pending_read)
+    std::move(helper_b_.pending_read).Run(true, "[\"B_PRIVATE_SENTINEL\"]");
+  if (helper_a_.pending_read)
+    std::move(helper_a_.pending_read).Run(true, "[\"A_ACCOUNT\"]");
+  EXPECT_EQ(result.Get().DebugString().find("B_PRIVATE_SENTINEL"),
+            std::string::npos);
+}
+
+TEST_F(MahoMailProductionBindingTest, MailReviewPendingARechecksANotActiveB) {
+  base::test::TestFuture<std::string> response;
+  session_->SetDeferredResponseSender(response.GetRepeatingCallback());
+  base::RunLoop dispatched;
+  helper_a_.on_read = dispatched.QuitClosure();
+  ASSERT_TRUE(Call("mail_list_accounts").empty());
+  dispatched.Run();
+  ASSERT_TRUE(helper_a_.pending_read);
+  profile()->GetPrefs()->SetBoolean(maho::ai_prefs::kMailReadAllowed, false);
+  frontmost_ = second_->GetWeakPtr();
+  std::move(helper_a_.pending_read).Run(true, "[\"A_PRIVATE_SENTINEL\"]");
+  ExpectDenial(response.Get(), "mail_read_consent_required");
+  EXPECT_EQ(response.Get().find("A_PRIVATE_SENTINEL"), std::string::npos);
+  EXPECT_EQ(helper_b_.reads, 0);
+}
+
+TEST_F(MahoMailProductionBindingTest, MailReviewDestroyedProfileRejectsLateReply) {
+  frontmost_ = second_->GetWeakPtr();
+  base::test::TestFuture<std::string> response;
+  session_->SetDeferredResponseSender(response.GetRepeatingCallback());
+  base::RunLoop dispatched;
+  helper_b_.on_read = dispatched.QuitClosure();
+  ASSERT_TRUE(Call("mail_list_accounts").empty());
+  dispatched.Run();
+  ASSERT_TRUE(helper_b_.pending_read);
+  frontmost_ = profile()->GetWeakPtr();
+  second_.reset();
+  std::move(helper_b_.pending_read).Run(true, "[\"DESTROYED_PRIVATE_SENTINEL\"]");
+  const std::string reply = response.Get();
+  auto parsed = base::JSONReader::ReadDict(reply, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->FindDict("error")) << reply;
+  EXPECT_EQ(reply.find("DESTROYED_PRIVATE_SENTINEL"), std::string::npos);
+  EXPECT_EQ(helper_a_.reads, 0);
+}
+
+TEST_F(MahoMailProductionBindingTest, MailReviewFlagUsesRealMutationMethods) {
+  for (const std::string action : {"mark_read", "mark_unread", "toggle_star"}) {
+    base::test::TestFuture<std::string> response;
+    session_->SetDeferredResponseSender(response.GetRepeatingCallback());
+    base::DictValue arguments;
+    arguments.Set("request_json", "{\"action\":\"" + action +
+                                     "\",\"email_id\":\"fixture-email\"}");
+    auto immediate = Call("mail_flag", std::move(arguments));
+    ASSERT_TRUE(immediate.empty());
+    const auto reply = response.Get();
+    ASSERT_FALSE(helper_a_.flags.empty()) << reply;
+    EXPECT_EQ(helper_a_.flags.back(), std::make_pair(action, std::string("fixture-email")));
+  }
+  EXPECT_EQ(helper_a_.flags.size(), 3u);
+  EXPECT_TRUE(helper_b_.flags.empty());
+  EXPECT_EQ(approvals_, 3);
+}
+
+TEST_F(MahoMailProductionBindingTest, MailReviewFlagRejectsInvalidAction) {
+  base::test::TestFuture<std::string> response;
+  session_->SetDeferredResponseSender(response.GetRepeatingCallback());
+  base::DictValue arguments;
+  arguments.Set("request_json", "{\"action\":\"delete_everything\",\"email_id\":\"fixture-email\"}");
+  auto immediate = Call("mail_flag", std::move(arguments));
+  const std::string reply = immediate.empty() ? response.Get() : immediate.front();
+  // The actual delegate must validate rather than use the default unavailable
+  // broker. This is a machine-consumed error classification, not prompt prose.
+  ExpectDenial(reply, "mail_invalid_flag_action");
+  EXPECT_TRUE(helper_a_.flags.empty());
+  EXPECT_TRUE(helper_b_.flags.empty());
+}
+
+TEST_F(MahoMailProductionBindingTest, MailReviewNativeMetadataExcludesSecrets) {
+  approve_ = false;
+  for (const std::string account : {"account-A", "account-B"}) {
+    base::DictValue request;
+    request.Set("account_id", account);
+    base::ListValue recipients;
+    recipients.Append(account + "@example.test");
+    request.Set("to", std::move(recipients));
+    request.Set("subject", "Fixture");
+    for (const char* field : {"body_text", "body_html", "password",
+                              "oauth2_access_token", "oauth2_refresh_token",
+                              "code", "attachment_bytes"}) {
+      request.Set(field, std::string("PRIVATE_SENTINEL_") + field);
+    }
+    base::ListValue attachments;
+    base::DictValue attachment;
+    attachment.Set("filename", "fixture.txt");
+    attachment.Set("data_base64", "PRIVATE_SENTINEL_ATTACHMENT");
+    attachments.Append(std::move(attachment));
+    request.Set("attachments", std::move(attachments));
+    std::string json;
+    base::JSONWriter::Write(request, &json);
+    base::DictValue arguments;
+    arguments.Set("request_json", json);
+    ASSERT_EQ(Call("mail_save_draft", std::move(arguments)).size(), 1u);
+    EXPECT_EQ(metadata_.find("PRIVATE_SENTINEL"), std::string::npos);
+    auto metadata = base::JSONReader::ReadDict(metadata_, base::JSON_PARSE_RFC);
+    ASSERT_TRUE(metadata);
+    ASSERT_TRUE(metadata->FindString("account_id"));
+    EXPECT_EQ(*metadata->FindString("account_id"), account);
+    const auto* to = metadata->FindList("to");
+    ASSERT_TRUE(to);
+    ASSERT_EQ(to->size(), 1u);
+    EXPECT_EQ((*to)[0].GetString(), account + "@example.test");
+    EXPECT_EQ(metadata->FindInt("attachment_count"), 1);
+  }
+  EXPECT_EQ(approvals_, 2);
+  EXPECT_TRUE(helper_a_.flags.empty());
+}
+
+TEST_F(MahoMailProductionBindingTest, MailReviewExplicitRejectionIsCanonical) {
+  approve_ = false;
+  base::DictValue arguments;
+  arguments.Set("request_json", "{\"action\":\"mark_read\",\"email_id\":\"fixture-email\"}");
+  auto response = Call("mail_flag", std::move(arguments));
+  ASSERT_EQ(response.size(), 1u);
+  ExpectDenial(response.front(), "mail_typed_approval_denied");
+  EXPECT_EQ(approvals_, 1);
+  EXPECT_TRUE(helper_a_.flags.empty());
+}
+
+TEST_F(MahoMailProductionBindingTest, MailReviewLiveDisableDuringNativeApproval) {
+  on_approval_ = base::BindLambdaForTesting([&] {
+    profile()->GetPrefs()->SetBoolean(maho::sidebar_prefs::kMahoMailEnabled, false);
+  });
+  base::DictValue arguments;
+  arguments.Set("request_json", "{\"action\":\"mark_read\",\"email_id\":\"fixture-email\"}");
+  auto response = Call("mail_flag", std::move(arguments));
+  ASSERT_EQ(response.size(), 1u);
+  ExpectDenial(response.front(), "mail_feature_disabled");
+  EXPECT_EQ(approvals_, 1);
+  EXPECT_TRUE(helper_a_.flags.empty());
+}
+
 // Records the maho-agent FFI interactions the adapter drives, and lets tests
 // deliver token/complete/error callbacks the way the real Rust runtime would.
 struct FakeAgentState {
   struct Send {
     std::string message;
     uint64_t generation = 0;
-    raw_ptr<void> user_data = nullptr;
+    mutable raw_ptr<void> user_data = nullptr;
 
     void (*token_cb)(void*, const char*) = nullptr;
     void (*complete_cb)(void*, const char*, const char*) = nullptr;
     void (*error_cb)(void*, const char*) = nullptr;
     MahoAgentReleaseCallback release_cb = nullptr;
-    raw_ptr<void> release_user_data = nullptr;
+    mutable raw_ptr<void> release_user_data = nullptr;
     mutable bool released = false;
 
     void DeliverToken(const std::string& token) const {
@@ -66,11 +374,14 @@ struct FakeAgentState {
     void Release() const {
       if (!released && release_cb) {
         released = true;
-        release_cb(release_user_data);
+        user_data = nullptr;
+        void* data = release_user_data.ExtractAsDangling();
+        release_cb(data);
       }
     }
   };
 
+  base::OnceClosure on_send;
   bool created = false;
   bool destroyed = false;
   bool cancel_called = false;
@@ -143,6 +454,9 @@ struct FakeAgentState {
   bool resolve_model_result = true;
 
   std::vector<Send> sends;
+  // Images staged through stage_user_image, in call order.
+  std::vector<std::vector<uint8_t>> staged_images;
+  bool stage_user_image_result = true;
 
   void DeliverUnifiedEvent(const MahoUnifiedAgentEventEnvelope& envelope) {
     if (unified_event_cb) {
@@ -252,6 +566,8 @@ bool FakeSendMessage(MahoAgentSession*,
     send.error_cb = on_error;
     send.release_cb = on_release;
     send.release_user_data = release_user_data;
+    if (g_fake_agent->on_send)
+      std::move(g_fake_agent->on_send).Run();
   }
   return true;
 }
@@ -270,7 +586,12 @@ void FakeSessionFree(MahoAgentSession*) {
     g_fake_agent->lifecycle_calls.push_back("session_free");
     if (!g_fake_agent->session_released && g_fake_agent->session_release_cb) {
       g_fake_agent->session_released = true;
-      g_fake_agent->session_release_cb(g_fake_agent->session_release_user_data);
+      g_fake_agent->secure_storage_user_data = nullptr;
+      g_fake_agent->browser_tool_user_data = nullptr;
+      g_fake_agent->unified_event_user_data = nullptr;
+      g_fake_agent->unified_release_user_data = nullptr;
+      void* data = g_fake_agent->session_release_user_data.ExtractAsDangling();
+      g_fake_agent->session_release_cb(data);
     }
   }
 }
@@ -504,6 +825,23 @@ bool FakeResolveModel(MahoAgentSession*,
   return true;
 }
 
+void FakeFreeString(char* s) {
+  free(s);
+}
+
+bool FakeStageUserImage(MahoAgentSession*,
+                        const char* mime,
+                        const uint8_t* data,
+                        uint32_t len) {
+  if (!g_fake_agent || std::string(mime) != "image/png") {
+    return false;
+  }
+  // SAFETY: the FFI contract guarantees |data| points to |len| bytes.
+  auto bytes = UNSAFE_BUFFERS(base::span<const uint8_t>(data, len));
+  g_fake_agent->staged_images.emplace_back(bytes.begin(), bytes.end());
+  return g_fake_agent->stage_user_image_result;
+}
+
 const MahoAgentFfi kFakeFfi = {
     &FakeCreateSession,
     &FakeSetApprovalPolicy,
@@ -526,11 +864,27 @@ const MahoAgentFfi kFakeFfi = {
     &FakeWaitRegister,
     &FakeWaitWake,
     &FakeResolveModel,
+    &FakeStageUserImage,
+    &FakeFreeString,
 };
 
 }  // namespace
 
 class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
+ public:
+  static void ClearPermissionPromptOverride(MahoUnifiedAgentAdapter* adapter) {
+    adapter->permission_prompt_override_for_testing_.Reset();
+  }
+  static void ConfigureMailIntegrationAdapter(MahoUnifiedAgentAdapter* adapter) {
+    adapter->set_agent_ffi_for_testing(&kFakeFfi);
+  }
+  static MahoAgentToolResult InvokeMailIntegrationTool(void* user_data,
+                                                       const char* tool) {
+    return MahoUnifiedAgentAdapter::OnAgentBrowserTool(
+        user_data, tool, "{\"account_id\":\"fixture-account\","
+                         "\"to\":[\"recipient@example.test\"],"
+                         "\"subject\":\"Fixture\",\"body_text\":\"PRIVATE_BODY\"}");
+  }
  protected:
   void SetUp() override {
     fake_agent_ = std::make_unique<FakeAgentState>();
@@ -557,6 +911,10 @@ class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
   }
 
   void OnEvent(MahoAiRuntimeEvent event) { events_.push_back(std::move(event)); }
+
+  void AttachSessionEventCallback() {
+    adapter_->last_event_callback_ = callback();
+  }
 
   // TEST_F bodies run in a derived class that does not inherit the fixture's
   // friend grant, so private-member access must go through a fixture helper.
@@ -599,7 +957,7 @@ class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
 
   void OnOsCryptReadyForTesting(
       MahoUnifiedAgentAdapter* adapter,
-      os_crypt_async::Encryptor encryptor) {
+      scoped_refptr<os_crypt_async::Encryptor> encryptor) {
     adapter->OnOsCryptReady(std::move(encryptor));
   }
 
@@ -629,9 +987,12 @@ class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
       MahoUnifiedAgentAdapter* adapter,
       void* user_data,
       const std::string& tool,
-      std::shared_ptr<PermissionCallState> state) {
+      std::shared_ptr<PermissionCallState> state,
+      bool page_derived_justification = false,
+      std::string consequence = "unknown") {
     return adapter->CreatePermissionDecisionTaskForTesting(
-        user_data, tool, std::move(state));
+        user_data, tool, std::move(state), page_derived_justification,
+        std::move(consequence));
   }
 
   base::OnceClosure CaptureBrowserToolTask(
@@ -745,6 +1106,86 @@ class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
   std::vector<MahoAiRuntimeEvent> events_;
 };
 
+TEST_F(MahoMailProductionBindingTest, MailReviewSidebarExplicitRejection) {
+  FakeAgentState fake;
+  g_fake_agent = &fake;
+  MahoUnifiedAgentAdapter adapter(
+      profile()->GetPrefs(), nullptr, {},
+      base::BindLambdaForTesting([&] { return browser(); }));
+  MahoUnifiedAgentAdapterLifecycleTest::ConfigureMailIntegrationAdapter(&adapter);
+  maho::SetCore(reinterpret_cast<MahoCore*>(0x1));
+  int cards = 0;
+  base::RunLoop turn_ready;
+  fake.on_send = turn_ready.QuitClosure();
+  adapter.SubmitMessage(
+      "Fixture", maho_ai::mojom::ChatIntent::kFreeform, false,
+      maho_ai::mojom::InteractionMode::kDeveloper,
+      base::BindLambdaForTesting([&](MahoAiRuntimeEvent event) {
+        if (event.type == MahoAiRuntimeEventType::kApprovalRequest) {
+          ++cards;
+          const auto* id = event.payload.FindString("approval_id");
+          ASSERT_TRUE(id);
+          adapter.RespondToApproval(*id, false);
+        }
+      }));
+  turn_ready.Run();
+  maho::SetCore(nullptr);
+  ASSERT_EQ(fake.sends.size(), 1u);
+  base::test::TestFuture<MahoAgentToolResult> result;
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()},
+      base::BindOnce(
+          &MahoUnifiedAgentAdapterLifecycleTest::InvokeMailIntegrationTool,
+          fake.sends.front().user_data.get(), "mail_save_draft"),
+      result.GetCallback());
+  const auto& reply = result.Get();
+  EXPECT_EQ(cards, 1);
+  ASSERT_NE(reply.error_code_ptr, nullptr);
+  EXPECT_STREQ(reply.error_code_ptr, "mail_typed_approval_denied");
+  EXPECT_TRUE(helper_a_.flags.empty());
+  reply.free_fn(reply.error_code_ptr);
+  reply.free_fn(reply.error_ptr);
+  fake.sends.front().Release();
+  adapter.Reset();
+  g_fake_agent = nullptr;
+}
+
+TEST_F(MahoMailProductionBindingTest, MailReviewSidebarLiveToggle) {
+  FakeAgentState fake;
+  g_fake_agent = &fake;
+  MahoUnifiedAgentAdapter adapter(
+      profile()->GetPrefs(), nullptr, {},
+      base::BindLambdaForTesting([&] { return browser(); }));
+  MahoUnifiedAgentAdapterLifecycleTest::ConfigureMailIntegrationAdapter(&adapter);
+  maho::SetCore(reinterpret_cast<MahoCore*>(0x1));
+  base::RunLoop turn_ready;
+  fake.on_send = turn_ready.QuitClosure();
+  adapter.SubmitMessage(
+      "Fixture", maho_ai::mojom::ChatIntent::kFreeform, false,
+      maho_ai::mojom::InteractionMode::kDeveloper,
+      base::BindRepeating([](MahoAiRuntimeEvent) {}));
+  turn_ready.Run();
+  maho::SetCore(nullptr);
+  ASSERT_EQ(fake.sends.size(), 1u);
+  profile()->GetPrefs()->SetBoolean(maho::sidebar_prefs::kMahoMailEnabled, false);
+  base::test::TestFuture<MahoAgentToolResult> result;
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()},
+      base::BindOnce(
+          &MahoUnifiedAgentAdapterLifecycleTest::InvokeMailIntegrationTool,
+          fake.sends.front().user_data.get(), "mail_list_accounts"),
+      result.GetCallback());
+  ASSERT_NE(result.Get().error_code_ptr, nullptr);
+  EXPECT_STREQ(result.Get().error_code_ptr, "mail_feature_disabled");
+  EXPECT_EQ(helper_a_.reads, 0);
+  EXPECT_EQ(helper_b_.reads, 0);
+  result.Get().free_fn(result.Get().error_code_ptr);
+  result.Get().free_fn(result.Get().error_ptr);
+  fake.sends.front().Release();
+  adapter.Reset();
+  g_fake_agent = nullptr;
+}
+
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
        ArtifactRootFailureStopsBeforeSessionAndSend) {
   adapter_.reset();
@@ -794,6 +1235,83 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
   ASSERT_EQ(fake_agent_->artifact_roots.size(), 1u);
   EXPECT_EQ(fake_agent_->artifact_roots[0], root.AsUTF8Unsafe());
   ASSERT_EQ(fake_agent_->sends.size(), 1u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       HelpRequestFsmActivatesCompletesAndTimesOut) {
+  // RED capture for fsm-p2: kWaitingForHumanHelp was absent before this change.
+  // FSM: activate -> second request rejected -> wrong id rejected -> complete
+  // resumes -> timeout path fails closed.
+  ASSERT_TRUE(adapter_->RequestHumanHelp("help-1", "Solve the CAPTCHA",
+                                         base::Seconds(30)));
+  EXPECT_TRUE(adapter_->IsWaitingForHumanHelp());
+  EXPECT_FALSE(adapter_->RequestHumanHelp("help-2", "second",
+                                          base::Seconds(30)));
+  EXPECT_FALSE(adapter_->CompleteHumanHelp("wrong-id"));
+  EXPECT_TRUE(adapter_->IsWaitingForHumanHelp());
+  ASSERT_TRUE(adapter_->CompleteHumanHelp("help-1"));
+  EXPECT_FALSE(adapter_->IsWaitingForHumanHelp());
+
+  // Timeout expiry fails closed. The fixture's TaskEnvironment is real-time,
+  // so the expiry path is driven through the exact method the timer invokes.
+  ASSERT_TRUE(adapter_->RequestHumanHelp("help-3", "2FA", base::Milliseconds(1)));
+  EXPECT_TRUE(adapter_->CancelHumanHelp("help-3", /*timed_out=*/true));
+  EXPECT_FALSE(adapter_->IsWaitingForHumanHelp());
+
+  // No agent turn is active in this test, so EmitEvent drops status events by
+  // design (fail-closed); the FSM state transitions above carry the contract.
+  EXPECT_TRUE(events_.empty());
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, HelpRequestResetFailsClosed) {
+  ASSERT_TRUE(adapter_->RequestHumanHelp("help-r", "Checkout",
+                                         base::Seconds(60)));
+  EXPECT_TRUE(adapter_->IsWaitingForHumanHelp());
+  adapter_->Reset();
+  EXPECT_FALSE(adapter_->IsWaitingForHumanHelp());
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       StagedImageIsHandedToTheNextTurnOnly) {
+  const std::vector<uint8_t> png = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a,
+                                    '\n', 1, 2, 3};
+  ASSERT_TRUE(adapter_->StageUserImage(png));
+  adapter_->SubmitMessage("What is in this capture?",
+                          maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kAssistant,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_EQ(fake_agent_->staged_images.size(), 1u);
+  EXPECT_EQ(fake_agent_->staged_images[0], png);
+  ASSERT_EQ(fake_agent_->sends.size(), 1u);
+
+  // A running turn refuses a new image rather than turning it into a
+  // text-only follow-up.
+  EXPECT_FALSE(adapter_->StageUserImage(png));
+  fake_agent_->DeliverComplete("A chart.");
+  task_environment_.RunUntilIdle();
+
+  adapter_->SubmitMessage("And now?", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kAssistant,
+                          callback());
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(fake_agent_->staged_images.size(), 1u);
+  EXPECT_EQ(fake_agent_->sends.size(), 2u);
+  fake_agent_->DeliverComplete("Still a chart.");
+  task_environment_.RunUntilIdle();
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       RejectedImageFailsTheTurnInsteadOfSendingText) {
+  fake_agent_->stage_user_image_result = false;
+  ASSERT_TRUE(adapter_->StageUserImage({0x89, 'P', 'N', 'G', '\r', '\n',
+                                        0x1a, '\n', 1}));
+  adapter_->SubmitMessage("Describe it", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kAssistant,
+                          callback());
+  task_environment_.RunUntilIdle();
+  EXPECT_TRUE(fake_agent_->sends.empty());
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kError), 1u);
 }
 
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest, FullTurnFlow) {
@@ -935,7 +1453,7 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
 
   auto encryptor = os_crypt_async::GetTestEncryptorForTesting();
   std::string encrypted_test_credential;
-  ASSERT_TRUE(encryptor.EncryptString("test-only-credential",
+  ASSERT_TRUE(encryptor->EncryptString("test-only-credential",
                                       &encrypted_test_credential));
   secure_prefs.SetString(maho::ai_prefs::kByokOpenAIEncryptedB64,
                          base::Base64Encode(encrypted_test_credential));
@@ -1515,6 +2033,74 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest, WebUiApproveResolvesOnce) {
   EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
 }
 
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, BoundaryApprovalWithoutListenerDenies) {
+  base::test::TestFuture<bool> decision;
+  adapter_->RequestBoundaryApproval("mail_send", "Send email", decision.GetCallback());
+  EXPECT_FALSE(decision.Get());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, BoundaryApprovalUsesSessionListener) {
+  AttachSessionEventCallback();
+  base::test::TestFuture<bool> decision;
+  adapter_->RequestBoundaryApproval("artifact.export", "Export artifact", decision.GetCallback());
+  ASSERT_FALSE(decision.IsReady());
+  const std::string id = FirstApprovalId();
+  ASSERT_FALSE(id.empty());
+  adapter_->RespondToApproval(id, true);
+  EXPECT_TRUE(decision.Get());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, BoundaryApprovalResolvesOnce) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                         maho_ai::mojom::InteractionMode::kDeveloper, callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+  base::test::TestFuture<bool> decision;
+  adapter_->RequestBoundaryApproval("mail_send", "Send email", decision.GetCallback());
+  ASSERT_FALSE(decision.IsReady());
+  const std::string id = FirstApprovalId();
+  ASSERT_FALSE(id.empty());
+  adapter_->RespondToApproval(id, true);
+  EXPECT_TRUE(decision.Get());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+  adapter_->RespondToApproval(id, true);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kApprovalResult), 1u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, BoundaryApprovalTimeoutDenies) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                         maho_ai::mojom::InteractionMode::kDeveloper, callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+  SetAgentCallWaitTimeout(base::TimeDelta());
+  base::test::TestFuture<bool> decision;
+  adapter_->RequestBoundaryApproval("mail_send", "Send email", decision.GetCallback());
+  SetAgentCallWaitTimeout(base::Seconds(30));
+  const std::string id = FirstApprovalId();
+  ASSERT_FALSE(id.empty());
+  EXPECT_FALSE(decision.Get());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+  const auto* result = LastEventOfType(MahoAiRuntimeEventType::kApprovalResult);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(*result->payload.FindString("approval_state"), "expired");
+  adapter_->RespondToApproval(id, true);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kApprovalResult), 1u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, BoundaryApprovalCancelDenies) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                         maho_ai::mojom::InteractionMode::kDeveloper, callback());
+  task_environment_.RunUntilIdle();
+  base::test::TestFuture<bool> decision;
+  adapter_->RequestBoundaryApproval("mail_send", "Send email", decision.GetCallback());
+  ASSERT_FALSE(decision.IsReady());
+  adapter_->CancelCurrentTurn();
+  EXPECT_FALSE(decision.Get());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
 // Under the "prompt" (ask) policy, a sensitive desktop-agent tool with an empty
 // extension id (mail_send) must route to the interactive approval broker (chat
 // card) instead of a blanket deny, so the user can approve it from chat.
@@ -1569,21 +2155,154 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
   EXPECT_EQ(PendingApprovalCount(adapter.get()), 0u);
 }
 
+// Plan D4/SC6: shell_exec is no longer hard-denied by the adapter. Under a
+// guard tier (armed here, so the kernel-side tier gate would let the call
+// through to this path) and the "prompt" approval policy, a desktop-agent
+// shell_exec routes to the approval card exactly like any other sensitive
+// tool, and an approved card resolves the blocked permission as allow-once.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       ShellExecRoutesToApprovalCardUnderPromptPolicy) {
+  auto prefs = CreateSecurePrefs();  // kApprovalPolicy defaults to "prompt".
+  auto adapter =
+      std::make_unique<MahoUnifiedAgentAdapter>(prefs.get(), nullptr);
+  SetAgentFfiForTesting(adapter.get(), &kFakeFfi);
+  adapter->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                         maho_ai::mojom::InteractionMode::kDeveloper,
+                         callback());
+  task_environment_.RunUntilIdle();
+
+  // Guard tier forwards verbatim to the kernel session: the kernel gate
+  // permits write-class kernel tools at guard, so the decision lands on the
+  // adapter's approval path instead of being pre-denied.
+  MahoAiRuntimeConfig guard;
+  guard.permission_tier = "guard";
+  EXPECT_TRUE(adapter->SetRuntimeConfig(guard));
+  ASSERT_EQ(fake_agent_->runtime_config_tiers.size(), 1u);
+  EXPECT_EQ(*fake_agent_->runtime_config_tiers.back(), "guard");
+  events_.clear();
+
+  // ClassifyActionConsequence labels shell_exec "unclassified" (it has no
+  // browser-registry descriptor); mirror the real kernel callback payload.
+  auto state = DriveDecision(adapter.get(), "shell_exec", std::string(),
+                             /*page_derived_justification=*/false,
+                             /*consequence=*/"unclassified");
+
+  // Not hard-denied: parked as a pending approval and published as a card.
+  EXPECT_EQ(PendingApprovalCount(adapter.get()), 1u);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kApprovalRequest), 1u);
+  EXPECT_FALSE(state->event.IsSignaled());
+  const MahoAiRuntimeEvent* request = FirstApprovalRequestEvent();
+  ASSERT_TRUE(request);
+  EXPECT_EQ("shell_exec", request->text);
+  EXPECT_EQ("prompt", *request->payload.FindString("approval_policy"));
+  EXPECT_EQ("sensitive", *request->payload.FindString("sensitivity"));
+
+  const std::string approval_id = FirstApprovalId();
+  ASSERT_FALSE(approval_id.empty());
+  adapter->RespondToApproval(approval_id, /*approved=*/true);
+  EXPECT_TRUE(state->event.IsSignaled());
+  EXPECT_EQ(state->decision, PromptDecision::kAllowOnce);
+  EXPECT_EQ(PendingApprovalCount(adapter.get()), 0u);
+}
+
+// Plan D4/SC6: removing the hard-deny opens no bypass. shell_exec is
+// "unclassified", so desktop-agent calls stay fail-closed under every
+// non-prompt policy — "deny" and "allow" (allow-all must never auto-approve a
+// shell) are exercised here; unset behaves like "deny" via the same ladder.
+// The read_only tier refusal stays kernel-side: forwarding the tier arms the
+// kernel's write-class gate (TIER_WRITE_CLASS_KERNEL_TOOLS in maho-agent's
+// permission.rs) to deny shell_exec before the adapter is ever consulted.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       ShellExecStaysDeniedUnderNonPromptPoliciesAndArmsReadOnlyTier) {
+  for (const char* policy : {"deny", "allow"}) {
+    auto prefs = CreateSecurePrefs();
+    prefs->SetString(maho::ai_prefs::kApprovalPolicy, policy);
+    auto adapter =
+        std::make_unique<MahoUnifiedAgentAdapter>(prefs.get(), nullptr);
+    SetAgentFfiForTesting(adapter.get(), &kFakeFfi);
+    adapter->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform,
+                           false, maho_ai::mojom::InteractionMode::kDeveloper,
+                           callback());
+    task_environment_.RunUntilIdle();
+    events_.clear();
+
+    // read_only tier forwards verbatim: the kernel gate denies write-class
+    // kernel tools (shell_exec included) before any C++ approval path runs.
+    MahoAiRuntimeConfig read_only;
+    read_only.permission_tier = "read_only";
+    EXPECT_TRUE(adapter->SetRuntimeConfig(read_only));
+    EXPECT_EQ(*fake_agent_->runtime_config_tiers.back(), "read_only");
+
+    auto state = DriveDecision(adapter.get(), "shell_exec", std::string(),
+                               /*page_derived_justification=*/false,
+                               /*consequence=*/"unclassified");
+    EXPECT_EQ(state->decision, PromptDecision::kDeny);
+    EXPECT_TRUE(state->event.IsSignaled());
+    EXPECT_EQ(PendingApprovalCount(adapter.get()), 0u);
+    EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kApprovalRequest), 0u);
+  }
+}
+
+// Plan D4/SC6: through the exact posted-task path OnAgentPermission uses (the
+// FFI permission callback shape), a desktop-agent shell_exec is not
+// synchronously denied — the posted decision task parks an approval card that
+// resolves the blocked worker.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       ShellExecFfiPermissionCallbackTaskRoutesToCard) {
+  auto prefs = CreateSecurePrefs();  // kApprovalPolicy defaults to "prompt".
+  auto adapter =
+      std::make_unique<MahoUnifiedAgentAdapter>(prefs.get(), nullptr);
+  SetAgentFfiForTesting(adapter.get(), &kFakeFfi);
+  adapter->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                         maho_ai::mojom::InteractionMode::kDeveloper,
+                         callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_EQ(fake_agent_->sends.size(), 1u);
+  events_.clear();
+
+  auto state = std::make_shared<PermissionCallState>();
+  base::OnceClosure queued_task = CapturePermissionDecisionTask(
+      adapter_.get(), fake_agent_->sends[0].user_data, "shell_exec", state,
+      /*page_derived_justification=*/false, /*consequence=*/"unclassified");
+  EXPECT_EQ(state->generation, fake_agent_->sends[0].generation);
+
+  std::move(queued_task).Run();
+
+  EXPECT_FALSE(state->event.IsSignaled());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 1u);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kApprovalRequest), 1u);
+
+  const std::string approval_id = FirstApprovalId();
+  ASSERT_FALSE(approval_id.empty());
+  adapter_->RespondToApproval(approval_id, /*approved=*/true);
+  EXPECT_TRUE(state->event.IsSignaled());
+  EXPECT_EQ(state->decision, PromptDecision::kAllowOnce);
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
        ConsequenceClassificationUsesCanonicalDescriptorAndValidatedContext) {
   EXPECT_EQ(ClassifyActionConsequence("input.hover", R"({"ref":1})"),
             "ordinary");
   EXPECT_EQ(ClassifyActionConsequence("navigation.navigate",
                                       R"({"url":"https://other.example"})"),
-            "new_origin");
+            "ordinary");
   EXPECT_EQ(ClassifyActionConsequence("input.click", R"({"ref":2})"),
-            "unknown");
+            "ordinary");
   EXPECT_EQ(ClassifyActionConsequence(
                 "input.click",
                 R"({"ref":2,"validated_action_context":{"validated":true,"consequence":"submit"}})"),
-            "unknown");
+            "ordinary");
   EXPECT_EQ(ClassifyActionConsequence("not.a.capability", R"({})"),
             "unclassified");
+  EXPECT_EQ(ClassifyActionConsequence("browser_file_upload_select", R"({})"),
+            "boundary");
+  EXPECT_EQ(ClassifyActionConsequence("browser_visual_click", R"({})"),
+            "boundary");
+  EXPECT_EQ(ClassifyActionConsequence("browser_type", R"({"allow_credentials":true})"),
+            "credential_fill");
+  EXPECT_EQ(ClassifyActionConsequence("browser_type", R"({"text":"hello"})"),
+            "ordinary");
 }
 
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
@@ -2003,6 +2722,29 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
   adapter_->Reset();
   task_environment_.RunUntilIdle();
   SetAgentCallWaitTimeout(base::Seconds(30));
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       MailReviewDisabledPreflightReturnsCanonicalCode) {
+  adapter_->SubmitMessage("first", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_EQ(fake_agent_->sends.size(), 1u);
+
+  // No browser/delegate is installed: Mail is disabled. Exercise the actual
+  // FFI entry point, whose preflight runs synchronously on this sequence.
+  // No permission wait or execution timeout is involved in this denial.
+  MahoAgentToolResult result = CallOnAgentBrowserTool(
+      fake_agent_->sends[0].user_data, "mail_list_accounts", "{}");
+  ASSERT_TRUE(result.error_code_ptr);
+  EXPECT_STREQ(result.error_code_ptr, "mail_feature_disabled");
+  EXPECT_FALSE(result.error_retryable);
+  EXPECT_FALSE(result.json_ptr);
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+  ASSERT_TRUE(result.free_fn);
+  result.free_fn(result.error_ptr);
+  result.free_fn(result.error_code_ptr);
 }
 
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
@@ -2449,5 +3191,113 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
   fake_agent_->sends[0].DeliverComplete("late full text");
   task_environment_.RunUntilIdle();
   EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kTurnComplete), 0u);
+}
+
+// A6: Permission timeout removes pending_approvals_ entry so late
+// RespondToApproval finds nothing instead of emitting "approved".
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       PermissionTimeoutCleansUpPendingApproval) {
+  auto prefs = CreateSecurePrefs();
+  prefs->SetString(maho::ai_prefs::kApprovalPolicy, "prompt");
+  adapter_.reset();
+  adapter_ = std::make_unique<MahoUnifiedAgentAdapter>(
+      prefs.get(), nullptr, base::RepeatingCallback<bool()>(),
+      base::RepeatingCallback<Browser*()>());
+  SetAgentFfiForTesting(adapter_.get(), &kFakeFfi);
+  // Use the override so the dialog doesn't try to show native UI.
+  ClearPermissionPromptOverride(adapter_.get());
+
+  adapter_->SubmitMessage("test", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_EQ(fake_agent_->sends.size(), 1u);
+
+  // Drive a permission decision that parks in pending_approvals_.
+  auto state = std::make_shared<PermissionCallState>();
+  auto task = CapturePermissionDecisionTask(
+      adapter_.get(), fake_agent_->sends.front().user_data.get(),
+      "shell_exec", state);
+  std::move(task).Run();
+  task_environment_.RunUntilIdle();
+  EXPECT_GE(PendingApprovalCount(adapter_.get()), 1u);
+
+  std::string approval_id = FirstApprovalId();
+  ASSERT_FALSE(approval_id.empty());
+
+  // Simulate timeout: mark cancelled and signal.
+  state->cancelled.store(true);
+  state->event.Signal();
+  task_environment_.RunUntilIdle();
+
+  // The timeout cleanup task runs and removes cancelled entries.
+  task_environment_.RunUntilIdle();
+
+  // Late RespondToApproval after timeout should find nothing and emit no
+  // "approved" event.
+  events_.clear();
+  adapter_->RespondToApproval(approval_id, true);
+  // A6: If the entry was removed, RespondToApproval is a no-op.
+  // If the entry remains but state->cancelled, RespondToApproval reports
+  // "expired" instead of "approved".
+  for (const auto& ev : events_) {
+    if (ev.type == MahoAiRuntimeEventType::kApprovalResult) {
+      const std::string* as = ev.payload.FindString("approval_state");
+      ASSERT_TRUE(as);
+      EXPECT_NE(*as, "approved")
+          << "Late RespondToApproval after timeout must not report approved";
+    }
+  }
+
+  fake_agent_->sends.front().DeliverComplete("done");
+  task_environment_.RunUntilIdle();
+}
+
+// A3: Events for a stale run_id (from a cancelled turn) are dropped.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       StaleRunIdEventsDroppedAfterTurnCancel) {
+  adapter_->SubmitMessage("turn 1", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(fake_agent_->unified_event_cb);
+  const uint64_t gen1 = ActiveGenerationForTesting(adapter_.get());
+  EXPECT_NE(gen1, 0u);
+
+  // Deliver an event for run "run-stale" during turn 1.
+  MahoUnifiedAgentEventEnvelope envelope;
+  envelope.abi_version = 2;
+  envelope.run_id = "run-stale";
+  envelope.event_seq = 1;
+  envelope.kind = MahoAgentEventKindV2::kToken;
+  envelope.payload_json = "{\"token\":\"hello\"}";
+  fake_agent_->DeliverUnifiedEvent(envelope);
+  task_environment_.RunUntilIdle();
+  size_t token_count_after_first =
+      CountEvents(MahoAiRuntimeEventType::kAssistantToken);
+  EXPECT_GE(token_count_after_first, 1u);
+
+  // Cancel turn 1, start turn 2.
+  adapter_->CancelCurrentTurn();
+  fake_agent_->sends.front().Release();
+  adapter_->SubmitMessage("turn 2", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_GE(fake_agent_->sends.size(), 2u);
+
+  // Deliver another event for "run-stale" (from cancelled turn 1).
+  // A3: This should be dropped because run-stale is associated with gen1
+  // which is no longer active.
+  envelope.event_seq = 2;
+  envelope.payload_json = "{\"token\":\"stale\"}";
+  fake_agent_->DeliverUnifiedEvent(envelope);
+  task_environment_.RunUntilIdle();
+  // Token count should not have increased.
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kAssistantToken),
+            token_count_after_first);
+
+  fake_agent_->sends.back().DeliverComplete("done");
+  task_environment_.RunUntilIdle();
 }
 

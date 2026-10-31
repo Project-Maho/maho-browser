@@ -80,7 +80,7 @@ class MahoModelListFetcher {
   std::optional<std::vector<std::string>> ReadCache(const std::string& provider_id, base::Time* fetched_at);
   void WriteCache(const std::string& provider_id, const std::vector<std::string>& models);
 
-  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+  void OnOsCryptReady(scoped_refptr<os_crypt_async::Encryptor> encryptor);
   std::string DecryptKey(const std::string& encrypted_b64);
   std::vector<std::string> ParseOpenAICompatibleModels(const std::string& response_body);
   std::vector<std::string> ParseOllamaTags(const std::string& response_body);
@@ -90,7 +90,7 @@ class MahoModelListFetcher {
   RefreshedCallback refreshed_callback_;
   base::RepeatingCallback<bool()> ai_gate_;
 
-  std::optional<os_crypt_async::Encryptor> local_encryptor_;
+  scoped_refptr<os_crypt_async::Encryptor> local_encryptor_;
   std::vector<PendingFetch> pending_fetches_;
 
   SEQUENCE_CHECKER(sequence_checker_);

@@ -60,7 +60,7 @@ export function TodayPanel({ events, onNavigateDate }: TodayPanelProps) {
             <button
               key={e.id}
               onClick={() => handleEventClick(e.dtstart)}
-              className="w-full text-left p-2 hover:bg-muted/50 rounded border border-transparent hover:border-border/30 transition-all flex flex-col gap-1"
+              className="w-full text-left px-2.5 py-2 hover:bg-surface-hover rounded-lg border border-transparent hover:border-border/40 transition-colors flex flex-col gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div className="flex items-center justify-between font-medium">
                 <span className="truncate text-foreground font-semibold">{e.summary || "(No Title)"}</span>
@@ -84,7 +84,7 @@ export function TodayPanel({ events, onNavigateDate }: TodayPanelProps) {
             </span>
             <button
               onClick={() => handleEventClick(tomorrowEvent.dtstart)}
-              className="w-full text-left p-2 hover:bg-muted/50 rounded border border-transparent hover:border-border/30 transition-all flex flex-col gap-1"
+              className="w-full text-left px-2.5 py-2 hover:bg-surface-hover rounded-lg border border-transparent hover:border-border/40 transition-colors flex flex-col gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div className="flex items-center justify-between font-medium">
                 <span className="truncate text-foreground font-semibold">{tomorrowEvent.summary || "(No Title)"}</span>

@@ -134,6 +134,19 @@ pub(crate) fn get_smtp_credentials(
     })
 }
 
+pub(crate) async fn smtp_credentials_async(
+    ctx: &crate::state::AppCtx,
+    account_id: &str,
+) -> Result<SmtpCredentials> {
+    let pool = ctx.pool.clone();
+    let key = ctx.credential_key;
+    let account_id = account_id.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        get_smtp_credentials(&conn, &key, &account_id)
+    }).await.map_err(|e| MailFfiError::Internal(format!("SMTP credential task: {e}")))?
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn send_smtp_message(
     creds: SmtpCredentials,
@@ -440,11 +453,10 @@ pub extern "C" fn MahoMailSendEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx
-                    .pool
-                    .get()
-                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let creds = get_smtp_credentials(&conn, &ctx.credential_key, &request.account_id)?;
+                // The connection guard is `!Send`, so every database step below
+                // takes it for the duration of that step only and never holds
+                // it across the SMTP round trips.
+                let creds = smtp_credentials_async(&ctx, &request.account_id).await?;
 
                 let to = request.to.clone();
                 let cc = request.cc.clone().unwrap_or_default();
@@ -484,12 +496,14 @@ pub extern "C" fn MahoMailSendEmail(
                 {
                     Ok(()) => Ok(serde_json::json!({"status": "sent"}).to_string()),
                     Err(err) if use_xoauth2 && is_oauth_auth_error(&err) => {
-                        let _ = conn.execute(
-                            "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
-                            [&request.account_id],
-                        );
+                        let _ = ctx.with_db(|conn| {
+                            Ok(conn.execute(
+                                "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
+                                [&request.account_id],
+                            ))
+                        });
                         if let Ok(refreshed_creds) =
-                            get_smtp_credentials(&conn, &ctx.credential_key, &request.account_id)
+                            smtp_credentials_async(&ctx, &request.account_id).await
                         {
                             match send_smtp_message(
                                 refreshed_creds,
@@ -511,10 +525,10 @@ pub extern "C" fn MahoMailSendEmail(
                             {
                                 Ok(()) => Ok(serde_json::json!({"status": "sent"}).to_string()),
                                 Err(MailFfiError::Core(maho_core::error::AppError::DeliveryUncertain(error))) => {
-                                    queue_uncertain_delivery(&conn, &request, &error)
+                                    ctx.with_db(|conn| queue_uncertain_delivery(conn, &request, &error))
                                 }
                                 Err(retry_err) if is_network_error(&retry_err) => {
-                                    queue_to_outbox(&conn, &request)?;
+                                    ctx.with_db(|conn| queue_to_outbox(conn, &request))?;
                                     Ok(serde_json::json!({"status": "queued"}).to_string())
                                 }
                                 Err(retry_err) => Err(retry_err),
@@ -524,10 +538,10 @@ pub extern "C" fn MahoMailSendEmail(
                         }
                     }
                     Err(MailFfiError::Core(maho_core::error::AppError::DeliveryUncertain(error))) => {
-                        queue_uncertain_delivery(&conn, &request, &error)
+                        ctx.with_db(|conn| queue_uncertain_delivery(conn, &request, &error))
                     }
                     Err(err) if is_network_error(&err) => {
-                        queue_to_outbox(&conn, &request)?;
+                        ctx.with_db(|conn| queue_to_outbox(conn, &request))?;
                         Ok(serde_json::json!({"status": "queued"}).to_string())
                     }
                     Err(err) => Err(err),
@@ -898,12 +912,10 @@ pub extern "C" fn MahoMailFlushOutbox(
     accept_read_call(move || {
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx
-                    .pool
-                    .get()
-                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                recover_interrupted_outbox(&conn)?;
-                let pending = {
+                // The connection guard is `!Send`: each database step takes it
+                // for that step only, so it is never held across an SMTP send.
+                ctx.with_db(recover_interrupted_outbox)?;
+                let pending = ctx.with_db(|conn| {
                     let mut stmt = conn.prepare(
                         "SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_text, in_reply_to, email_references, attachments_json
                          FROM outbox
@@ -940,8 +952,8 @@ pub extern "C" fn MahoMailFlushOutbox(
                         })?
                         .filter_map(|r| r.ok())
                         .collect();
-                    rows
-                };
+                    Ok(rows)
+                })?;
 
                 if pending.is_empty() {
                     return serde_json::to_string(&0u32).map_err(MailFfiError::from);
@@ -992,15 +1004,18 @@ pub extern "C" fn MahoMailFlushOutbox(
                                 .unwrap_or_default();
 
                         let (creds, use_xoauth2, from) = {
-                            let claimed = conn.execute(
-                                "UPDATE outbox SET status = 'sending', updated_at = datetime('now') WHERE id = ?1 AND (status = 'queued' OR (status = 'failed' AND retry_count < max_retries))",
-                                rusqlite::params![id],
-                            )?;
+                            let claimed = ctx.with_db(|conn| {
+                                conn.execute(
+                                    "UPDATE outbox SET status = 'sending', updated_at = datetime('now') WHERE id = ?1 AND (status = 'queued' OR (status = 'failed' AND retry_count < max_retries))",
+                                    rusqlite::params![id],
+                                )
+                                .map_err(MailFfiError::from)
+                            })?;
                             if claimed == 0 {
                                 continue;
                             }
 
-                            match get_smtp_credentials(&conn, &ctx.credential_key, &account_id) {
+                            match smtp_credentials_async(&ctx, &account_id).await {
                                 Ok(c) => {
                                     let xoauth2 = match &c.auth {
                                         ImapAuth::OAuth2 { .. } => true,
@@ -1011,10 +1026,12 @@ pub extern "C" fn MahoMailFlushOutbox(
                                 }
                                 Err(e) => {
                                     let err_msg = e.to_string();
-                                    let _ = conn.execute(
-                                        "UPDATE outbox SET status = 'failed', last_error = ?1, retry_count = retry_count + 1, updated_at = datetime('now') WHERE id = ?2",
-                                        rusqlite::params![err_msg, id],
-                                    );
+                                    let _ = ctx.with_db(|conn| {
+                                        Ok(conn.execute(
+                                            "UPDATE outbox SET status = 'failed', last_error = ?1, retry_count = retry_count + 1, updated_at = datetime('now') WHERE id = ?2",
+                                            rusqlite::params![err_msg, id],
+                                        ))
+                                    });
                                     continue;
                                 }
                             }
@@ -1039,35 +1056,44 @@ pub extern "C" fn MahoMailFlushOutbox(
                         .await
                         {
                             Ok(()) => {
-                                let _ = conn.execute(
-                                    "UPDATE outbox SET status = 'sent', updated_at = datetime('now') WHERE id = ?1",
-                                    rusqlite::params![id],
-                                );
+                                let _ = ctx.with_db(|conn| {
+                                    Ok(conn.execute(
+                                        "UPDATE outbox SET status = 'sent', updated_at = datetime('now') WHERE id = ?1",
+                                        rusqlite::params![id],
+                                    ))
+                                });
                                 total_sent_count += 1;
                                 log::info!("Outbox: sent email {}", id);
                             }
                             Err(MailFfiError::Core(maho_core::error::AppError::DeliveryUncertain(error))) => {
-                                conn.execute(
-                                    "UPDATE outbox SET status='uncertain', last_error=?1, updated_at=datetime('now') WHERE id=?2",
-                                    rusqlite::params![error, id],
-                                )?;
+                                ctx.with_db(|conn| {
+                                    conn.execute(
+                                        "UPDATE outbox SET status='uncertain', last_error=?1, updated_at=datetime('now') WHERE id=?2",
+                                        rusqlite::params![error, id],
+                                    )
+                                    .map_err(MailFfiError::from)
+                                })?;
                             }
                             Err(e) => {
                                 if is_auth_error(&e) {
-                                    let _ = conn.execute(
-                                        "UPDATE outbox SET status = 'failed', last_error = ?1, retry_count = max_retries, updated_at = datetime('now') WHERE id = ?2",
-                                        rusqlite::params![e.to_string(), id],
-                                    );
+                                    let _ = ctx.with_db(|conn| {
+                                        Ok(conn.execute(
+                                            "UPDATE outbox SET status = 'failed', last_error = ?1, retry_count = max_retries, updated_at = datetime('now') WHERE id = ?2",
+                                            rusqlite::params![e.to_string(), id],
+                                        ))
+                                    });
                                     log::warn!(
                                         "Outbox: auth error for email {}, exhausting retries: {}",
                                         id,
                                         e
                                     );
                                 } else {
-                                    let _ = conn.execute(
-                                        "UPDATE outbox SET status = 'failed', last_error = ?1, retry_count = retry_count + 1, updated_at = datetime('now') WHERE id = ?2",
-                                        rusqlite::params![e.to_string(), id],
-                                    );
+                                    let _ = ctx.with_db(|conn| {
+                                        Ok(conn.execute(
+                                            "UPDATE outbox SET status = 'failed', last_error = ?1, retry_count = retry_count + 1, updated_at = datetime('now') WHERE id = ?2",
+                                            rusqlite::params![e.to_string(), id],
+                                        ))
+                                    });
                                     log::error!("Outbox: failed to send email {}: {}", id, e);
                                 }
                             }
@@ -1075,10 +1101,12 @@ pub extern "C" fn MahoMailFlushOutbox(
                     }
                 }
 
-                let _ = conn.execute(
-                    "DELETE FROM outbox WHERE status = 'sent' AND updated_at < datetime('now', '-7 days')",
-                    [],
-                );
+                let _ = ctx.with_db(|conn| {
+                    Ok(conn.execute(
+                        "DELETE FROM outbox WHERE status = 'sent' AND updated_at < datetime('now', '-7 days')",
+                        [],
+                    ))
+                });
 
                 serde_json::to_string(&total_sent_count).map_err(MailFfiError::from)
             })
@@ -1111,20 +1139,20 @@ pub extern "C" fn MahoMailDownloadAttachment(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx
-                    .pool
-                    .get()
-                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-
+                // The connection guard is `!Send`: taken per database step so it
+                // is never held across the IMAP fetch below.
                 let temp_dir = attachment_cache_dir(&ctx)?;
                 std::fs::create_dir_all(&temp_dir)
                     .map_err(|e| MailFfiError::Internal(e.to_string()))?;
 
-                let (folder_path, epoch): (String, i64) = conn.query_row(
-                    "SELECT path, uid_validity FROM folders WHERE id = ?1 AND account_id = ?2",
-                    rusqlite::params![folder_id, account_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )?;
+                let (folder_path, epoch): (String, i64) = ctx.with_db(|conn| {
+                    conn.query_row(
+                        "SELECT path, uid_validity FROM folders WHERE id = ?1 AND account_id = ?2",
+                        rusqlite::params![folder_id, account_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(MailFfiError::from)
+                })?;
                 let uid = u32::try_from(email_uid).ok().filter(|uid| *uid > 0)
                     .ok_or(MailFfiError::InvalidArg("email_uid"))?;
                 let safe_filename =
@@ -1139,7 +1167,9 @@ pub extern "C" fn MahoMailDownloadAttachment(
                         .map_err(MailFfiError::from);
                 }
 
-                let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
+                let resolved = ctx.with_db(|conn| {
+                    resolve_account_auth(conn, &ctx.credential_key, &account_id)
+                })?;
 
                 let part_id_clone = part_id.clone();
                 let folder_path_clone = folder_path.clone();
@@ -1163,12 +1193,15 @@ pub extern "C" fn MahoMailDownloadAttachment(
                         if resolved.account.auth_type.starts_with("oauth2")
                             && is_oauth_auth_error(&err) =>
                     {
-                        let _ = conn.execute(
-                            "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
-                            [&account_id],
-                        );
-                        let refreshed =
-                            resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
+                        let _ = ctx.with_db(|conn| {
+                            Ok(conn.execute(
+                                "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
+                                [&account_id],
+                            ))
+                        });
+                        let refreshed = ctx.with_db(|conn| {
+                            resolve_account_auth(conn, &ctx.credential_key, &account_id)
+                        })?;
                         tokio::task::spawn_blocking(move || {
                             let mut client = crate::account::connect_imap(&refreshed)?;
                             client
@@ -1464,22 +1497,21 @@ pub extern "C" fn MahoMailDelegateEmail(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx
-                    .pool
-                    .get()
-                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-
-                let (subject, from_address, body_text, body_html) = conn.query_row(
-                    "SELECT subject, from_address, COALESCE(body_text, snippet), body_html FROM emails WHERE id = ?1",
-                    [&request.email_id],
-                    |row| Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                    )),
-                )
-                .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                // The connection guard is `!Send`: taken per database step so it
+                // is never held across the SMTP send below.
+                let (subject, from_address, body_text, body_html) = ctx.with_db(|conn| {
+                    conn.query_row(
+                        "SELECT subject, from_address, COALESCE(body_text, snippet), body_html FROM emails WHERE id = ?1",
+                        [&request.email_id],
+                        |row| Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        )),
+                    )
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))
+                })?;
 
                 let fwd_subject = if subject.to_lowercase().starts_with("fwd:") {
                     subject
@@ -1516,7 +1548,7 @@ pub extern "C" fn MahoMailDelegateEmail(
                     )
                 });
 
-                let creds = get_smtp_credentials(&conn, &ctx.credential_key, &request.account_id)?;
+                let creds = smtp_credentials_async(&ctx, &request.account_id).await?;
                 let use_xoauth2 = match &creds.auth {
                     ImapAuth::OAuth2 { .. } => true,
                     _ => false,
@@ -1541,13 +1573,13 @@ pub extern "C" fn MahoMailDelegateEmail(
                 )
                 .await?;
 
-                let info: Option<(String, String)> = conn
-                    .query_row(
-                        "SELECT provider, model FROM ai_configs LIMIT 1",
-                        [],
-                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                    )
-                    .ok();
+                let info: Option<(String, String)> = ctx.with_db(|conn| {
+                    Ok(conn
+                        .query_row("SELECT provider, model FROM ai_configs LIMIT 1", [], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                        })
+                        .ok())
+                })?;
                 let (prov, mdl) = info
                     .as_ref()
                     .map(|(p, m)| (p.as_str(), m.as_str()))
@@ -1559,10 +1591,12 @@ pub extern "C" fn MahoMailDelegateEmail(
                     &fwd_subject
                 };
                 let output_summary = format!("Delegated to {}", request.delegate_to);
-                let _ = conn.execute(
-                    "INSERT INTO ai_action_log (id, account_id, email_id, action_type, provider, model, input_summary, output_summary, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    rusqlite::params![id, request.account_id, request.email_id, "delegation", prov, mdl, input_summary, output_summary, "success"],
-                );
+                let _ = ctx.with_db(|conn| {
+                    Ok(conn.execute(
+                        "INSERT INTO ai_action_log (id, account_id, email_id, action_type, provider, model, input_summary, output_summary, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        rusqlite::params![id, request.account_id, request.email_id, "delegation", prov, mdl, input_summary, output_summary, "success"],
+                    ))
+                });
 
                 Ok("{}".to_string())
             })
@@ -1591,12 +1625,10 @@ pub extern "C" fn MahoMailSendMdnReceipt(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx
-                    .pool
-                    .get()
-                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let (original_message_id, mdn_requested, from_address) = conn
-                    .query_row(
+                // The connection guard is `!Send`: taken for this read only, so
+                // it is never held across the SMTP send below.
+                let (original_message_id, mdn_requested, from_address) = ctx.with_db(|conn| {
+                    conn.query_row(
                         "SELECT message_id, mdn_requested, from_address FROM emails WHERE id = ?1",
                         [&request.email_id],
                         |row| {
@@ -1607,14 +1639,15 @@ pub extern "C" fn MahoMailSendMdnReceipt(
                             ))
                         },
                     )
-                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+                    .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))
+                })?;
 
                 let report_to = match mdn_requested {
                     Some(addr) if !addr.is_empty() => addr,
                     _ => from_address,
                 };
 
-                let creds = get_smtp_credentials(&conn, &ctx.credential_key, &request.account_id)?;
+                let creds = smtp_credentials_async(&ctx, &request.account_id).await?;
                 let recipient_email = creds.email.clone();
                 let use_xoauth2 = match &creds.auth {
                     ImapAuth::OAuth2 { .. } => true,
@@ -1685,11 +1718,9 @@ pub extern "C" fn MahoMailGetForwardedAttachments(
         };
         accept_read(callback, user_data, move |ctx| {
             Box::pin(async move {
-                let conn = ctx
-                    .pool
-                    .get()
-                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let (folder_path, attachment_metas) = {
+                // The connection guard is `!Send`: taken per database step so it
+                // is never held across the IMAP fetches below.
+                let (folder_path, attachment_metas) = ctx.with_db(|conn| {
                     let folder_path: String = conn
                         .query_row(
                             "SELECT path FROM folders WHERE id = ?1",
@@ -1724,15 +1755,16 @@ pub extern "C" fn MahoMailGetForwardedAttachments(
                         .filter_map(|r| r.ok())
                         .collect();
 
-                    (folder_path, metas)
-                };
+                    Ok((folder_path, metas))
+                })?;
 
                 if attachment_metas.is_empty() {
                     return Ok("[]".to_string());
                 }
 
-                let resolved =
-                    resolve_account_auth(&conn, &ctx.credential_key, &request.account_id)?;
+                let resolved = ctx.with_db(|conn| {
+                    resolve_account_auth(conn, &ctx.credential_key, &request.account_id)
+                })?;
                 let uid = request.email_uid as u32;
                 let folder_path_clone = folder_path.clone();
                 let metas_clone = attachment_metas.clone();
@@ -1764,12 +1796,15 @@ pub extern "C" fn MahoMailGetForwardedAttachments(
                         if resolved.account.auth_type.starts_with("oauth2")
                             && is_oauth_auth_error(&err) =>
                     {
-                        let _ = conn.execute(
-                            "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
-                            [&request.account_id],
-                        );
-                        let refreshed =
-                            resolve_account_auth(&conn, &ctx.credential_key, &request.account_id)?;
+                        let _ = ctx.with_db(|conn| {
+                            Ok(conn.execute(
+                                "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
+                                [&request.account_id],
+                            ))
+                        });
+                        let refreshed = ctx.with_db(|conn| {
+                            resolve_account_auth(conn, &ctx.credential_key, &request.account_id)
+                        })?;
                         tokio::task::spawn_blocking(move || {
                             let mut client = crate::account::connect_imap(&refreshed)?;
                             let engine = base64::engine::general_purpose::STANDARD;

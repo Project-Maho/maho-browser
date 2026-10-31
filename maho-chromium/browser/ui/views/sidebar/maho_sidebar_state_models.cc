@@ -18,13 +18,6 @@ namespace {
 
 namespace maho {
 
-MahoSidebarSearchModel::MahoSidebarSearchModel() = default;
-MahoSidebarSearchModel::MahoSidebarSearchModel(
-    const MahoSidebarSearchModel&) = default;
-MahoSidebarSearchModel& MahoSidebarSearchModel::operator=(
-    const MahoSidebarSearchModel&) = default;
-MahoSidebarSearchModel::~MahoSidebarSearchModel() = default;
-
 MahoSidebarFavoriteItemModel::MahoSidebarFavoriteItemModel() = default;
 MahoSidebarFavoriteItemModel::MahoSidebarFavoriteItemModel(
     const MahoSidebarFavoriteItemModel&) = default;

@@ -152,6 +152,11 @@ void MahoSidebarLibraryActionPaneView::UpdateAppearance() {
   for (auto& button : action_buttons_) {
     if (button) {
       button->SetRequestFocusOnPress(false);
+      // Every entry is an MdTextButton (see the constructor).
+      auto* text_button = static_cast<views::MdTextButton*>(button.get());
+      text_button->SetEnabledTextColors(palette_.primary_text);
+      text_button->SetTextColor(views::Button::STATE_DISABLED,
+                                palette_.disabled_text);
     }
   }
 }

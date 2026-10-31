@@ -109,9 +109,9 @@ async function moveToPasswordSetup(store: MahoWelcomeStore): Promise<void> {
   store.setAuthEmail('user@maho.dev');
   store.setAuthPassword('secure-password');
   await store.submitSignIn();
-  while (store.getSnapshot().currentPage < WelcomePage.PasswordSetup) {
-    store.nextPage();
-  }
+  // Account escrow: the default flow skips the vault ceremony, so the
+  // page-level tests enter the page through its dedicated navigation.
+  store.navigateToPasswordSetup();
 }
 
 describe('PasswordSetup store flow', () => {

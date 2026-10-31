@@ -23,8 +23,13 @@ void PaintMahoSidebarThemedBackground(gfx::Canvas* canvas,
                                       const SkVector radii[4],
                                       int gradient_span_dp,
                                       const gfx::Rect* gradient_bounds) {
+  // When no text color is readable on the translucent stops over every
+  // backdrop, the palette resolved its roles against the opaque stops only
+  // (`used_surface_fallback`). Paint those opaque stops so the surface under
+  // the text is the surface the text was resolved for.
+  const bool paint_opaque = opaque || palette.used_surface_fallback;
   const std::vector<SkColor>& colors =
-      opaque ? palette.opaque_contrast_stops : palette.surface_stops;
+      paint_opaque ? palette.opaque_contrast_stops : palette.surface_stops;
   if (bounds.IsEmpty() || colors.empty()) {
     return;
   }

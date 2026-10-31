@@ -128,19 +128,29 @@ void MahoLibraryOverlayView::RequestFocus() {
 
 void MahoLibraryOverlayView::OnThemeChanged() {
   views::View::OnThemeChanged();
+  // This overlay is its own top-level widget, so Chromium delivers its theme
+  // change independently of the docked rail's. Pull the rail's authoritative
+  // snapshot before repainting instead of relying on the frame overlay host's
+  // push landing first, so an OS light/dark flip cannot paint this widget once
+  // from the palette the rail has already replaced.
+  if (palette_refresh_callback_) {
+    palette_refresh_callback_.Run();
+  }
   // The themed gradient is painted in OnPaintBackground(); repaint so it picks
   // up the new space-theme colors.
   SchedulePaint();
 }
 
 void MahoLibraryOverlayView::OnPaintBackground(gfx::Canvas* canvas) {
-  // Paint the same space-theme-tinted gradient as the docked sidebar, forced
-  // opaque, so the fixed-width overlay content column matches the rail across
-  // themes (square corners; the overlay abuts the rail's right edge). Opaque
-  // stops keep the surface a valid occluder and subpixel text legal.
+  // Paint the same space-theme-tinted gradient as the docked sidebar so the
+  // fixed-width overlay content column matches the rail across themes (square
+  // corners; the overlay abuts the rail's right edge). The snapshot carries the
+  // rail's own paint mode and the shared gradient span, so the two surfaces can
+  // never disagree about which stops to use or how densely to lay them out.
   const SkVector radii[4] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
-  PaintMahoSidebarThemedBackground(canvas, palette_, GetLocalBounds(),
-                                   /*opaque=*/true, radii);
+  PaintMahoSidebarThemedBackground(
+      canvas, palette_, GetLocalBounds(), palette_.opaque, radii,
+      sidebar_layout::kThemedBackgroundGradientSpanDp);
 }
 
 bool MahoLibraryOverlayView::AcceleratorPressed(

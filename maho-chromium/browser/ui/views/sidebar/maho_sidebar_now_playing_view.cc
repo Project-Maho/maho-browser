@@ -28,7 +28,7 @@ MahoSidebarNowPlayingView::MahoSidebarNowPlayingView(Browser* browser)
 
   SetLayoutManager(std::make_unique<views::FillLayout>());
 
-  TabStripModel* model = browser_->tab_strip_model();
+  TabStripModel* model = browser_->GetTabStripModel();
   if (model) {
     model->AddObserver(this);
   }
@@ -48,10 +48,10 @@ void MahoSidebarNowPlayingView::SetSidebarPalette(
 MahoSidebarNowPlayingView::~MahoSidebarNowPlayingView() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   SwapCard(nullptr);
-  if (browser_ && browser_->tab_strip_model()) {
-    browser_->tab_strip_model()->RemoveObserver(this);
+  if (browser_ && browser_->GetTabStripModel()) {
+    browser_->GetTabStripModel()->RemoveObserver(this);
   }
-  auto* coordinator = MahoNowPlayingCoordinatorFactory::GetForProfileIfExists(browser_->profile());
+  auto* coordinator = MahoNowPlayingCoordinatorFactory::GetForProfileIfExists(browser_->GetProfile());
   if (coordinator) {
     coordinator->UnregisterHost(this);
   }
@@ -148,7 +148,7 @@ void MahoSidebarNowPlayingView::OnTabStripModelChanged(
   if (selection.active_tab_changed()) {
     UpdateVisibilityState();
   }
-  auto* coordinator = MahoNowPlayingCoordinatorFactory::GetForProfileIfExists(browser_->profile());
+  auto* coordinator = MahoNowPlayingCoordinatorFactory::GetForProfileIfExists(browser_->GetProfile());
   if (coordinator) {
     coordinator->OnTabStripModelChanged(browser_);
   }
@@ -166,7 +166,7 @@ void MahoSidebarNowPlayingView::UpdateVisibilityState() {
   if (auto* container = GetContainer()) {
     expanded = container->IsPanelExpanded();
   } else {
-    expanded = sidebar_prefs::IsSidebarPanelExpanded(browser_->profile()->GetPrefs());
+    expanded = sidebar_prefs::IsSidebarPanelExpanded(browser_->GetProfile()->GetPrefs());
   }
   if (!expanded) {
     show_timer_.Stop();
@@ -182,7 +182,7 @@ void MahoSidebarNowPlayingView::UpdateVisibilityState() {
     return;
   }
 
-  TabStripModel* model = browser_->tab_strip_model();
+  TabStripModel* model = browser_->GetTabStripModel();
   if (model) {
     int index = model->GetIndexOfWebContents(contents);
     if (index == model->active_index()) {

@@ -1,8 +1,14 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#include <utility>
+
 #include "base/run_loop.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -29,24 +35,24 @@ class MahoAiPopupLifetimeTrackerTest : public InProcessBrowserTest {
 
  protected:
   Browser* CreateAiFloatingPopup(Browser* opener) {
-    Browser::CreateParams popup_params(Browser::TYPE_POPUP,
-                                       opener->profile(),
+    BrowserWindowCreateParams popup_params(Browser::TYPE_POPUP,
+                                       opener->GetProfile(),
                                        /*user_gesture=*/true);
-    popup_params.trusted_source = true;
+    popup_params.is_trusted_source = true;
     popup_params.omit_from_session_restore = true;
-    Browser* popup = Browser::Create(popup_params);
+    Browser* popup = static_cast<Browser*>(CreateBrowserWindow(std::move(popup_params)));
     chrome::AddTabAt(popup, GURL("chrome://maho-ai/"),
                      /*index=*/-1, /*foreground=*/true);
     maho::MahoAiPopupLifetimeTracker::Get()->TrackPopup(opener, popup);
-    popup->window()->Show();
+    popup->GetWindow()->Show();
     return popup;
   }
 
   Browser* CreateNormalBrowser() {
-    Browser::CreateParams params(browser()->profile(), /*user_gesture=*/true);
-    Browser* b = Browser::Create(params);
+    BrowserWindowCreateParams params(browser()->GetProfile(), /*user_gesture=*/true);
+    Browser* b = static_cast<Browser*>(CreateBrowserWindow(std::move(params)));
     chrome::AddTabAt(b, GURL("about:blank"), /*index=*/-1, /*foreground=*/true);
-    b->window()->Show();
+    b->GetWindow()->Show();
     return b;
   }
 };
@@ -94,11 +100,11 @@ IN_PROC_BROWSER_TEST_F(MahoAiPopupLifetimeTrackerTest,
       browser(), embedded_test_server()->GetURL("/title1.html")));
   base::RunLoop().RunUntilIdle();
 
-  Browser* popup = CreateAiFloatingPopup(browser());
+  Browser* popup = CreateAiFloatingPopup(static_cast<Browser*>(browser()));
   ASSERT_TRUE(popup);
 
   EXPECT_EQ(
-      maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(browser()),
+      maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(static_cast<Browser*>(browser())),
       popup);
   EXPECT_EQ(
       maho::MahoAiPopupLifetimeTracker::Get()->GetOpenerForPopup(popup),
@@ -110,7 +116,7 @@ IN_PROC_BROWSER_TEST_F(MahoAiPopupLifetimeTrackerTest,
   CloseBrowserSynchronously(popup);
 
   EXPECT_EQ(
-      maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(browser()),
+      maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(static_cast<Browser*>(browser())),
       nullptr);
   EXPECT_EQ(
       maho::MahoAiPopupLifetimeTracker::Get()->GetOpenerForPopup(popup),

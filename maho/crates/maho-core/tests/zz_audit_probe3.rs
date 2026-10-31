@@ -33,6 +33,7 @@ fn e(
         } else {
             build_fields_hlc(payload, version, dev)
         },
+        profile_id: None,
     }
 }
 

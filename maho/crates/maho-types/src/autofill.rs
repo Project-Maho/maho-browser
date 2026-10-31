@@ -40,10 +40,25 @@ pub struct AutofillSettings {
     pub passwords_enabled: bool,
     #[serde(default)]
     pub password_provider: PasswordAutofillProvider,
+    /// Vault inactivity auto-lock timeout in minutes. `0` disables the
+    /// inactivity auto-lock entirely (the Vault stays unlocked until it is
+    /// locked explicitly or the process exits).
+    #[serde(default = "default_vault_auto_lock_minutes")]
+    pub vault_auto_lock_minutes: u32,
+    /// Whether password/Vault operations require a fresh device
+    /// re-authentication (Touch ID / platform authenticator) before each use.
+    #[serde(default = "default_true")]
+    pub vault_require_device_auth: bool,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// Mirrors `DEFAULT_AUTO_LOCK_MINUTES` in `maho-core`'s `VaultManager` so a
+/// profile without persisted settings behaves like a fresh Vault.
+fn default_vault_auto_lock_minutes() -> u32 {
+    15
 }
 
 impl Default for AutofillSettings {
@@ -53,6 +68,8 @@ impl Default for AutofillSettings {
             payments_enabled: true,
             passwords_enabled: true,
             password_provider: PasswordProviderKind::default(),
+            vault_auto_lock_minutes: default_vault_auto_lock_minutes(),
+            vault_require_device_auth: true,
         }
     }
 }
@@ -68,4 +85,8 @@ pub struct AutofillSettingsUpdate {
     pub passwords_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password_provider: Option<PasswordAutofillProvider>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault_auto_lock_minutes: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault_require_device_auth: Option<bool>,
 }

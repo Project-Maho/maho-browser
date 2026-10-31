@@ -289,6 +289,12 @@ impl SettingsManager {
             if let Some(password_provider) = autofill.password_provider {
                 self.settings.autofill.password_provider = password_provider;
             }
+            if let Some(vault_auto_lock_minutes) = autofill.vault_auto_lock_minutes {
+                self.settings.autofill.vault_auto_lock_minutes = vault_auto_lock_minutes;
+            }
+            if let Some(vault_require_device_auth) = autofill.vault_require_device_auth {
+                self.settings.autofill.vault_require_device_auth = vault_require_device_auth;
+            }
         }
         if let Some(advanced) = changes.advanced {
             if let Some(developer_mode) = advanced.developer_mode {

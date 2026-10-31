@@ -46,6 +46,12 @@ class MahoSpacesOverlayController : public views::WidgetObserver,
   void Dismiss(DismissReason reason);
   bool IsVisible() const;
   void SetPalette(const MahoSidebarPalette& palette);
+  // Re-pulls the docked rail's authoritative snapshot and applies it to the
+  // live overlay. Wired as the overlay view's theme-refresh callback: the
+  // overlay is its own top-level widget, so a theme change delivered to that
+  // widget alone must not leave the overlay painted from a snapshot the rail has
+  // already replaced.
+  void RefreshPaletteFromSidebar();
 
   views::Widget* GetOverlayWidgetForTesting() const { return widget_.get(); }
 

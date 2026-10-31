@@ -3,7 +3,9 @@
 #include "maho/browser/passwords/maho_password_authorization_service.h"
 
 #include <memory>
+#include <optional>
 
+#include "base/functional/bind.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "components/device_reauth/mock_device_authenticator.h"
@@ -19,6 +21,9 @@ protected:
     service_ = MahoPasswordAuthorizationService::Get();
     service_->ResetForTesting();
     service_->SetVaultLockedForTesting(false);
+    // Pin the platform-dependent default (not required on Linux) so the
+    // device-auth tests run identically everywhere.
+    service_->SetDeviceReauthRequiredForTesting(true);
   }
 
   void TearDown() override { service_->ResetForTesting(); }
@@ -198,6 +203,73 @@ TEST_F(MahoPasswordAuthorizationServiceTest, LockAndTeardownRevokeGrants) {
                             PasswordAuthorizationAction::kDelete, expiry);
   service_->RevokeProfile("profile-a");
   EXPECT_EQ(0u, service_->grant_count_for_testing());
+}
+
+TEST_F(MahoPasswordAuthorizationServiceTest,
+       DisabledDeviceReauthAuthorizesUnlockedVaultOperations) {
+  service_->SetDeviceReauthRequiredForTesting(false);
+
+  EXPECT_TRUE(service_->ConsumeAuthorization(
+      "profile-a", "https://example.test/login",
+      PasswordAuthorizationAction::kFill));
+  EXPECT_TRUE(service_->ConsumeAuthorization(
+      "profile-a", MahoPasswordAuthorizationService::kAllOriginsScope,
+      PasswordAuthorizationAction::kCopy));
+}
+
+TEST_F(MahoPasswordAuthorizationServiceTest,
+       DisabledDeviceReauthStillFailsClosedWhenVaultIsLocked) {
+  service_->SetDeviceReauthRequiredForTesting(false);
+  service_->SetVaultLockedForTesting(true);
+
+  EXPECT_FALSE(service_->ConsumeAuthorization(
+      "profile-a", "https://example.test/login",
+      PasswordAuthorizationAction::kFill));
+}
+
+TEST_F(MahoPasswordAuthorizationServiceTest,
+       PageFillLookupNeedsOnlyUnlockedVault) {
+  // Device reauth stays required (fixture default), yet no grant exists.
+  EXPECT_TRUE(service_->IsPageFillLookupAllowed("profile-a",
+                                                "https://example.test/login"));
+  EXPECT_FALSE(service_->ConsumeAuthorization(
+      "profile-a", "https://example.test/login",
+      PasswordAuthorizationAction::kFill));
+
+  service_->SetVaultLockedForTesting(true);
+  EXPECT_FALSE(service_->IsPageFillLookupAllowed(
+      "profile-a", "https://example.test/login"));
+  service_->SetVaultLockedForTesting(false);
+  EXPECT_FALSE(service_->IsPageFillLookupAllowed("", "https://example.test"));
+  EXPECT_FALSE(service_->IsPageFillLookupAllowed("profile-a", "not a url"));
+}
+
+TEST_F(MahoPasswordAuthorizationServiceTest,
+       DisabledDeviceReauthAuthorizesWithoutPlatformAuthenticator) {
+  // Linux desktop has no DeviceAuthenticator; Vault writes must still work
+  // on an unlocked Vault when device reauth is not required.
+  service_->SetDeviceReauthRequiredForTesting(false);
+  std::optional<bool> result;
+  service_->Authorize(
+      "profile-a", MahoPasswordAuthorizationService::kAllOriginsScope,
+      PasswordAuthorizationAction::kAdd, nullptr, u"Add",
+      base::BindOnce([](std::optional<bool> *out, bool ok) { *out = ok; },
+                     &result));
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(*result);
+}
+
+TEST_F(MahoPasswordAuthorizationServiceTest,
+       RequiredDeviceReauthFailsClosedWithoutPlatformAuthenticator) {
+  service_->SetDeviceReauthRequiredForTesting(true);
+  std::optional<bool> result;
+  service_->Authorize(
+      "profile-a", MahoPasswordAuthorizationService::kAllOriginsScope,
+      PasswordAuthorizationAction::kAdd, nullptr, u"Add",
+      base::BindOnce([](std::optional<bool> *out, bool ok) { *out = ok; },
+                     &result));
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(*result);
 }
 
 } // namespace

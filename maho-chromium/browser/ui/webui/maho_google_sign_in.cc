@@ -60,7 +60,7 @@ content::WebContents* NavigateToGoogleSignIn(Profile* profile,
   // bypasses Browser::AddNewContents, so route directly through the host's
   // controller and observe the WebContents that ShowUrl creates and owns.
   if (peek_host_browser &&
-      peek_host_browser->profile() == profile &&
+      peek_host_browser->GetProfile() == profile &&
       profile->GetPrefs()->GetBoolean(
           maho::sidebar_prefs::kPeekEnabled) &&
       maho::IsPeekEligible(peek_host_browser)) {
@@ -111,6 +111,12 @@ class GoogleSignInFlow
     if (!parsed || !parsed->is_dict()) {
       Retire("Could not start Google sign-in.");
       return true;
+    }
+    // Keep the CSRF state so an abandoned flow can tear the Rust listener down
+    // instead of leaving it (and its bound loopback port) alive until the
+    // backstop timeout. See RetireForSupersede()/Retire().
+    if (const std::string* state = parsed->GetDict().FindString("state")) {
+      state_ = *state;
     }
     const std::string* auth_url = parsed->GetDict().FindString("authUrl");
     if (!auth_url) {
@@ -183,6 +189,7 @@ class GoogleSignInFlow
     }
     retired_ = true;
     Observe(nullptr);
+    CancelCoreFlow();
     if (callback_) {
       std::move(callback_).Run(false, "Superseded by a newer sign-in.");
     }
@@ -213,6 +220,9 @@ class GoogleSignInFlow
                           std::string nonce,
                           std::string error) {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    // The Rust flow has reported its result, so there is nothing left to
+    // cancel; a later Retire() must not cancel an unrelated newer flow.
+    state_.clear();
     if (retired_) {
       return;
     }
@@ -239,13 +249,12 @@ class GoogleSignInFlow
     g_browser_process->os_crypt_async()->GetInstance(
         base::BindOnce(&GoogleSignInFlow::OnEncryptorReady,
                        scoped_refptr<GoogleSignInFlow>(this),
-                       std::move(id_token), std::move(nonce)),
-        os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+                       std::move(id_token), std::move(nonce)));
   }
 
   void OnEncryptorReady(std::string id_token,
                         std::string nonce,
-                        os_crypt_async::Encryptor encryptor) {
+                        scoped_refptr<os_crypt_async::Encryptor> encryptor) {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
     if (retired_) {
       return;
@@ -256,7 +265,7 @@ class GoogleSignInFlow
       return;
     }
 
-    encryptor_.emplace(std::move(encryptor));
+    encryptor_ = std::move(encryptor);
     auto url_loader_factory = profile->GetDefaultStoragePartition()
                                   ->GetURLLoaderFactoryForBrowserProcess();
     MahoRelayGoogleLogin(
@@ -295,8 +304,23 @@ class GoogleSignInFlow
     }
     retired_ = true;
     Observe(nullptr);
+    CancelCoreFlow();
     CompleteUi(false, error_message);
     ClearActive();
+  }
+
+  // Ends the Rust listener for this flow. Without it an abandoned flow keeps a
+  // thread and a bound loopback port for the whole CALLBACK_TIMEOUT backstop,
+  // and its pending callback overlaps the next sign-in attempt.
+  //
+  // REGRESSION CONTRACT: docs/operations/google-signin-loopback-reliability.md
+  // (invariant 5). Keep this wired from every abandonment path.
+  void CancelCoreFlow() {
+    if (state_.empty()) {
+      return;
+    }
+    maho_google_sign_in_cancel(state_.c_str());
+    state_.clear();
   }
 
   void CompleteUi(bool ok, const std::string& error_message) {
@@ -312,9 +336,12 @@ class GoogleSignInFlow
   }
 
   base::WeakPtr<Profile> profile_;
-  std::optional<os_crypt_async::Encryptor> encryptor_;
+  scoped_refptr<os_crypt_async::Encryptor> encryptor_;
   GoogleSignInCallback callback_;
   const scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
+  // CSRF state of the in-flight Rust flow, cleared once that flow has either
+  // reported its result or been cancelled.
+  std::string state_;
   bool retired_ = false;
 };
 

@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::agent::browser_bridge::MahoAgentToolResult;
-use crate::agent::events::{MahoAgentEventKindV2, MahoUnifiedAgentEventCallback, MahoUnifiedAgentEventEnvelope};
+use crate::agent::events::{
+    MahoAgentEventKindV2, MahoUnifiedAgentEventCallback, MahoUnifiedAgentEventEnvelope,
+};
 use crate::agent::secure_storage::{MahoAgentPermissionCallback, MahoAgentSecureStorageCallback};
 
 // THREAD-SAFETY CONTRACT FOR user_data:
@@ -33,11 +35,21 @@ unsafe impl Send for SendableCallback<MahoUnifiedAgentEventCallback> {}
 unsafe impl Sync for SendableCallback<MahoUnifiedAgentEventCallback> {}
 
 unsafe impl Send
-    for SendableCallback<unsafe extern "C" fn(user_data: *mut c_void, envelope: *const MahoUnifiedAgentEventEnvelope)>
+    for SendableCallback<
+        unsafe extern "C" fn(
+            user_data: *mut c_void,
+            envelope: *const MahoUnifiedAgentEventEnvelope,
+        ),
+    >
 {
 }
 unsafe impl Sync
-    for SendableCallback<unsafe extern "C" fn(user_data: *mut c_void, envelope: *const MahoUnifiedAgentEventEnvelope)>
+    for SendableCallback<
+        unsafe extern "C" fn(
+            user_data: *mut c_void,
+            envelope: *const MahoUnifiedAgentEventEnvelope,
+        ),
+    >
 {
 }
 
@@ -47,30 +59,72 @@ unsafe impl Sync for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *
 unsafe impl Send for SendableCallback<unsafe extern "C" fn(*mut c_void, *const c_char)> {}
 unsafe impl Sync for SendableCallback<unsafe extern "C" fn(*mut c_void, *const c_char)> {}
 
-unsafe impl Send for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char)>> {}
-unsafe impl Sync for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char)>> {}
-
-unsafe impl Send for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char)>> {}
-unsafe impl Sync for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char)>> {}
-
-unsafe impl Send for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char, bool)>> {}
-unsafe impl Sync for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char, bool)>> {}
-
 unsafe impl Send
-    for SendableCallback<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult>
+    for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char)>>
 {
 }
 unsafe impl Sync
-    for SendableCallback<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult>
+    for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char)>>
 {
 }
 
 unsafe impl Send
-    for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult>>
+    for SendableCallback<
+        Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char)>,
+    >
 {
 }
 unsafe impl Sync
-    for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult>>
+    for SendableCallback<
+        Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char)>,
+    >
+{
+}
+
+unsafe impl Send
+    for SendableCallback<
+        Option<
+            unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char, bool),
+        >,
+    >
+{
+}
+unsafe impl Sync
+    for SendableCallback<
+        Option<
+            unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char, bool),
+        >,
+    >
+{
+}
+
+unsafe impl Send
+    for SendableCallback<
+        unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult,
+    >
+{
+}
+unsafe impl Sync
+    for SendableCallback<
+        unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult,
+    >
+{
+}
+
+unsafe impl Send
+    for SendableCallback<
+        Option<
+            unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult,
+        >,
+    >
+{
+}
+unsafe impl Sync
+    for SendableCallback<
+        Option<
+            unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult,
+        >,
+    >
 {
 }
 
@@ -211,7 +265,10 @@ impl Drop for TurnCallbackLease {
     }
 }
 
-pub(crate) fn invoke_with_turn_callback_lease(lease: Option<Arc<TurnCallbackLease>>, callback: impl FnOnce()) {
+pub(crate) fn invoke_with_turn_callback_lease(
+    lease: Option<Arc<TurnCallbackLease>>,
+    callback: impl FnOnce(),
+) {
     callback();
     drop(lease);
 }
@@ -220,7 +277,10 @@ pub(crate) fn invoke_with_turn_callback_lease(lease: Option<Arc<TurnCallbackLeas
 pub(crate) struct SessionCallbackLease(pub(crate) CallbackRelease);
 
 impl SessionCallbackLease {
-    pub(crate) fn new(callback: Option<MahoAgentReleaseCallback>, user_data: *mut c_void) -> Arc<Self> {
+    pub(crate) fn new(
+        callback: Option<MahoAgentReleaseCallback>,
+        user_data: *mut c_void,
+    ) -> Arc<Self> {
         Arc::new(Self(CallbackRelease::new(callback, user_data)))
     }
 

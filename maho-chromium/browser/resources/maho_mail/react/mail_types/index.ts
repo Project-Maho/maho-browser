@@ -52,7 +52,7 @@ export interface AccountSummary {
   id: string;
   email: string;
   display_name: string;
-  auth_type: string;
+  auth_type?: string;
   provider?: string;
 }
 
@@ -290,6 +290,10 @@ export interface ComposeAttachment {
   data: string;
 }
 
+export interface SendEmailResult {
+  status: 'sent' | 'queued' | 'uncertain';
+}
+
 export interface ComposeEmailRequest {
   account_id: string;
   to: string[];
@@ -302,6 +306,30 @@ export interface ComposeEmailRequest {
   attachments?: ComposeAttachment[];
   in_reply_to?: string;
   references?: string;
+}
+
+export interface ComposeStateSnapshot {
+  accountId: string;
+  to?: string;
+  cc?: string;
+  bcc?: string;
+  subject?: string;
+  body?: string;
+  bodyHtml?: string;
+  attachments?: ComposeAttachment[];
+  draftId?: string | null;
+  replyTo?: ReplyContext;
+  forwardFrom?: ReplyContext;
+  forwardEmailUid?: number;
+  forwardFolderId?: string;
+  readReceipt?: boolean;
+  inReplyTo?: string;
+  references?: string;
+}
+
+export interface SendRequestedOptions {
+  draftId?: string | null;
+  composition?: ComposeStateSnapshot;
 }
 
 export interface ReplyContext {
@@ -773,6 +801,23 @@ export interface GoogleCalendarSyncResult {
   events_upserted: number;
   events_deleted: number;
   reauthorize_required: boolean;
+}
+
+export interface FreeBusyItem {
+  start: string;
+  end: string;
+}
+
+export interface FreeBusyCalendar {
+  busy: FreeBusyItem[];
+  errors?: Array<{ domain: string; reason: string }>;
+}
+
+export interface GoogleCalendarFreeBusyResponse {
+  kind?: string;
+  timeMin?: string;
+  timeMax?: string;
+  calendars?: Record<string, FreeBusyCalendar>;
 }
 
 // AI Agent types

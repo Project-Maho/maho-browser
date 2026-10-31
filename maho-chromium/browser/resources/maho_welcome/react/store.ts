@@ -226,7 +226,10 @@ export class MahoWelcomeStore {
         } else if (d.aiSetup.provider === 'maho-managed') {
           d.currentPage = WelcomePage.PlanSelect;
         } else {
-          d.currentPage = WelcomePage.PasswordSetup;
+          // Account escrow: the Vault key follows the signed-in account and is
+          // provisioned by the sign-in Sync bootstrap, so the passphrase /
+          // recovery-kit ceremony is skipped in the default flow.
+          d.currentPage = WelcomePage.Completion;
         }
         d.direction = 'forward';
       });
@@ -333,7 +336,7 @@ export class MahoWelcomeStore {
     if (provider === 'skip') {
       this.patch(draft => {
         draft.aiSetup = { provider: '', status: 'success', errorMessage: '', skipped: true };
-        draft.currentPage = WelcomePage.PasswordSetup;
+        draft.currentPage = WelcomePage.Completion;
         draft.direction = 'forward';
       });
       return;
@@ -533,7 +536,7 @@ export class MahoWelcomeStore {
 
   private continueAfterPlanSelection(): void {
     this.patch(draft => {
-      draft.currentPage = WelcomePage.PasswordSetup;
+      draft.currentPage = WelcomePage.Completion;
       draft.direction = 'forward';
     });
   }

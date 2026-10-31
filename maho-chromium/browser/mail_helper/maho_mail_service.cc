@@ -7,6 +7,9 @@
 
 #include "base/base64.h"
 #include "base/files/file_path.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_split.h"
+#include "base/task/thread_pool.h"
 #include "base/files/file_util.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "base/functional/bind.h"
@@ -22,6 +25,7 @@
 #include "components/os_crypt/async/common/encryptor.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "crypto/hash.h"
 #include "crypto/random.h"
 #include "maho/browser/mail_helper/maho_mail_helper.mojom.h"
 #include "maho/browser/mail_helper/maho_mail_helper_launcher.h"
@@ -158,6 +162,18 @@ std::optional<bool> GetUnreadBadgePreference(
     return std::nullopt;
   }
   return parsed->GetDict().FindBool("unread_badge_enabled");
+}
+
+std::optional<std::string> DecodeAppSettingRead(const std::string& result_json) {
+  if (result_json.empty()) {
+    return std::nullopt;
+  }
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(result_json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_string()) {
+    return std::nullopt;
+  }
+  return parsed->GetString();
 }
 
 std::optional<MailBehaviorSnapshot> ParseMailBehaviorSnapshot(
@@ -461,16 +477,68 @@ MahoMailService::MahoMailService(
   if (profile_ && os_crypt_async) {
     os_crypt_async->GetInstance(
         base::BindOnce(&MahoMailService::OnOsCryptReady,
-                       weak_ptr_factory_.GetWeakPtr()),
-        os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+                       weak_ptr_factory_.GetWeakPtr()));
   }
 }
 
 MahoMailService::~MahoMailService() = default;
 
 // static
+namespace {
+
+// Mail keys normally live in the OS key store. This file is their home only
+// after that store is proven unable to return what it stored.
+// Identifies a key without storing it. The OS key store reports success while
+// returning a different key than it was given, and the only other way to find
+// out is that the mail database no longer opens - by which point the user's
+// mail has already been quarantined.
+std::string MailKeyDigest(const std::string& key) {
+  return base::Base64Encode(crypto::hash::Sha256(key));
+}
+
+base::FilePath MailKeyFileFor(const base::FilePath& profile_path) {
+  return profile_path.Append(FILE_PATH_LITERAL("MahoMail"))
+      .Append(FILE_PATH_LITERAL("db_key"));
+}
+
+std::pair<std::string, std::string> ReadMailKeyFile(const base::FilePath& path) {
+  std::string contents;
+  if (!base::ReadFileToString(path, &contents)) {
+    return {};
+  }
+  const std::vector<std::string> lines = base::SplitString(
+      contents, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+  if (lines.size() < 2) {
+    return {};
+  }
+  return {lines[0], lines[1]};
+}
+
+bool WriteMailKeyFile(const base::FilePath& path,
+                      const std::string& sqlcipher_key,
+                      const std::string& credential_key) {
+  if (!base::CreateDirectory(path.DirName())) {
+    return false;
+  }
+  if (!base::WriteFile(path,
+                       base::StrCat({sqlcipher_key, "\n", credential_key, "\n"}))) {
+    return false;
+  }
+#if BUILDFLAG(IS_POSIX)
+  // The OS key store is unavailable here, so file permissions are the only
+  // protection left for this key.
+  return base::SetPosixFilePermissions(path, 0600);
+#else
+  return true;
+#endif
+}
+
+}  // namespace
+
 void MahoMailService::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref("maho.mail.sqlcipher_key_encrypted", "");
+  registry->RegisterBooleanPref("maho.mail.key_store_is_file", false);
+  registry->RegisterStringPref("maho.mail.sqlcipher_key_digest", std::string());
   registry->RegisterStringPref("maho.mail.credential_key_encrypted", "");
   // Aggregate inbox unread count surfaced on the sidebar Mail icon badge.
   registry->RegisterIntegerPref("maho.mail.unread_count", 0);
@@ -484,7 +552,8 @@ void MahoMailService::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterListPref("maho.mail.notification_muted_threads");
 }
 
-void MahoMailService::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {
+void MahoMailService::OnOsCryptReady(
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   encryptor_ = std::move(encryptor);
   if (pending_launch_.has_value()) {
@@ -526,12 +595,24 @@ void MahoMailService::EnsureHelperLaunched(
     sqlcipher_key = "test-sqlcipher-key";
     credential_key = "dGVzdC1jcmVkZW50aWFsLWtleS1ub3QtZm9yLXByb2Q="; // base64 of "test-credential-key-not-for-prod"
   } else {
-    if (!encryptor_.has_value()) {
+    if (!encryptor_) {
       pending_launch_ = PendingLaunch{expected_version, profile_path, crashpad_database};
       return;
     }
 
     PrefService* prefs = profile_->GetPrefs();
+    // A key store that cannot hand back what it stored gives out a different
+    // key on every launch, and the database created with the previous one can
+    // never be opened again. Once that is proven the keys live in a
+    // profile-local file, which stays authoritative from then on.
+    if (prefs->GetBoolean("maho.mail.key_store_is_file")) {
+      base::ThreadPool::PostTaskAndReplyWithResult(
+          FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+          base::BindOnce(&ReadMailKeyFile, MailKeyFileFor(profile_->GetPath())),
+          base::BindOnce(&MahoMailService::OnMailKeysReadFromFile,
+                         weak_ptr_factory_.GetWeakPtr()));
+      return;
+    }
     std::string sqlcipher_key_enc = prefs->GetString("maho.mail.sqlcipher_key_encrypted");
     std::string credential_key_enc = prefs->GetString("maho.mail.credential_key_encrypted");
 
@@ -550,9 +631,41 @@ void MahoMailService::EnsureHelperLaunched(
 
       prefs->SetString("maho.mail.sqlcipher_key_encrypted", base::Base64Encode(cipher_sqlcipher));
       prefs->SetString("maho.mail.credential_key_encrypted", base::Base64Encode(cipher_credential));
+      prefs->SetString("maho.mail.sqlcipher_key_digest",
+                       MailKeyDigest(raw_sqlcipher));
 
-      sqlcipher_key = raw_sqlcipher;
-      credential_key = raw_credential;
+      sqlcipher_key_ = std::move(raw_sqlcipher);
+      credential_key_ = std::move(raw_credential);
+
+      // Prove the store round-trips before a database is created with this
+      // key; OSCrypt reports no error when it decrypts to something else.
+      std::string stored_cipher;
+      std::string verified_key;
+      base::Base64Decode(prefs->GetString("maho.mail.sqlcipher_key_encrypted"),
+                         &stored_cipher);
+      if (!encryptor_->DecryptString(stored_cipher, &verified_key) ||
+          verified_key != sqlcipher_key_) {
+        LOG(ERROR) << "[MahoMailService] OS key store does not return the key "
+                      "it stored; keeping mail keys in a profile-local file.";
+        prefs->SetBoolean("maho.mail.key_store_is_file", true);
+        prefs->CommitPendingWrite();
+        base::ThreadPool::PostTaskAndReplyWithResult(
+            FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+            base::BindOnce(&WriteMailKeyFile, MailKeyFileFor(profile_->GetPath()),
+                           sqlcipher_key_, credential_key_),
+            base::BindOnce(&MahoMailService::OnMailKeyFileWritten,
+                           weak_ptr_factory_.GetWeakPtr()));
+        return;
+      }
+
+      // Pref writes are flushed lazily. The helper creates the SQLCipher
+      // database with this key as soon as it starts, so a process death before
+      // that flush leaves a database encrypted with a key that exists nowhere
+      // any more. Start the helper only once the key has reached disk;
+      // StartGeneration() re-checks its own preconditions.
+      prefs->CommitPendingWrite(base::BindOnce(
+          &MahoMailService::StartGeneration, weak_ptr_factory_.GetWeakPtr()));
+      return;
     } else {
       // Decrypt keys
       std::string raw_sqlcipher_enc;
@@ -563,6 +676,34 @@ void MahoMailService::EnsureHelperLaunched(
       if (!encryptor_->DecryptString(raw_sqlcipher_enc, &sqlcipher_key) ||
           !encryptor_->DecryptString(raw_credential_enc, &credential_key)) {
         LOG(ERROR) << "[MahoMailService] Failed to decrypt keys!";
+        return;
+      }
+
+      const std::string stored_digest =
+          prefs->GetString("maho.mail.sqlcipher_key_digest");
+      if (stored_digest.empty()) {
+        // Written by a build that predates the digest; adopt the key in hand.
+        prefs->SetString("maho.mail.sqlcipher_key_digest",
+                         MailKeyDigest(sqlcipher_key));
+      } else if (stored_digest != MailKeyDigest(sqlcipher_key)) {
+        LOG(ERROR) << "[MahoMailService] OS key store returned a different key "
+                      "than it was given; the existing mail database can no "
+                      "longer be opened. Moving the keys to a profile-local "
+                      "file so this cannot repeat.";
+        sqlcipher_key = base::Base64Encode(crypto::RandBytesAsVector(32));
+        credential_key = base::Base64Encode(crypto::RandBytesAsVector(32));
+        sqlcipher_key_ = sqlcipher_key;
+        credential_key_ = credential_key;
+        prefs->SetBoolean("maho.mail.key_store_is_file", true);
+        prefs->SetString("maho.mail.sqlcipher_key_digest",
+                         MailKeyDigest(sqlcipher_key));
+        prefs->CommitPendingWrite();
+        base::ThreadPool::PostTaskAndReplyWithResult(
+            FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+            base::BindOnce(&WriteMailKeyFile, MailKeyFileFor(profile_->GetPath()),
+                           sqlcipher_key_, credential_key_),
+            base::BindOnce(&MahoMailService::OnMailKeyFileWritten,
+                           weak_ptr_factory_.GetWeakPtr()));
         return;
       }
     }
@@ -852,6 +993,29 @@ bool MahoMailService::IsCommandAvailable() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return IsEnabled() && lifecycle_state_ == LifecycleState::kReady &&
          launcher_ && !launcher_->has_given_up() && launcher_->GetHelper();
+}
+
+void MahoMailService::OnMailKeysReadFromFile(
+    std::pair<std::string, std::string> keys) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (keys.first.empty() || keys.second.empty()) {
+    LOG(ERROR) << "[MahoMailService] Mail key file is missing or unreadable; "
+                  "mail stays unavailable rather than recreating its database.";
+    return;
+  }
+  sqlcipher_key_ = std::move(keys.first);
+  credential_key_ = std::move(keys.second);
+  StartGeneration();
+}
+
+void MahoMailService::OnMailKeyFileWritten(bool written) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!written) {
+    LOG(ERROR) << "[MahoMailService] Failed to persist mail keys; not starting "
+                  "the helper with a key that would be lost.";
+    return;
+  }
+  StartGeneration();
 }
 
 void MahoMailService::StartGeneration() {
@@ -1384,14 +1548,24 @@ void MahoMailService::SaveAttachment(
       std::move(callback));
 }
 
-void MahoMailService::ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, MailReadCallback callback) {
+void MahoMailService::ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, const std::string& page_origin, MailReadCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   mojom::MahoMailHelper* helper = GetHelperOrNull();
   if (!helper) {
     std::move(callback).Run(false, kMahoMailHelperUnavailable);
     return;
   }
-  helper->ExtractOtp(account_id, folder_id, query, max_age_seconds, WrapReadReply(std::move(callback)));
+  helper->ExtractOtp(account_id, folder_id, query, max_age_seconds, page_origin, WrapReadReply(std::move(callback)));
+}
+
+void MahoMailService::ExtractMessagesOtp(int64_t max_age_seconds, const std::string& page_origin, MailReadCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  mojom::MahoMailHelper* helper = GetHelperOrNull();
+  if (!helper) {
+    std::move(callback).Run(false, kMahoMailHelperUnavailable);
+    return;
+  }
+  helper->ExtractMessagesOtp(max_age_seconds, page_origin, WrapReadReply(std::move(callback)));
 }
 
 void MahoMailService::SnoozeEmail(const std::string& email_id, const std::string& snooze_until, MailReadCallback callback) {
@@ -1922,7 +2096,7 @@ void MahoMailService::DeleteTemplate(const std::string& id, MailReadCallback cal
 
 void MahoMailService::PushBrowserAiKeys(mojom::MahoMailHelper* helper) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!helper || !profile_ || !encryptor_.has_value()) {
+  if (!helper || !profile_ || !encryptor_) {
     return;
   }
 
@@ -2582,8 +2756,16 @@ void MahoMailService::GetBehaviorSnapshot(BehaviorReadCallback callback) {
               std::move(callback).Run(false, MailBehaviorSnapshot());
               return;
             }
-            const auto snapshot = ParseMailBehaviorSnapshot(
-                result.empty() ? "{}" : result);
+            // The read answers with the JSON encoding of an Option<String>,
+            // so the stored dict arrives as a JSON *string* and an unset row
+            // as `null`. Parsing the envelope directly always failed the
+            // is_dict() check and made every behavior read report failure.
+            std::string stored =
+                DecodeAppSettingRead(result).value_or(std::string());
+            if (stored.empty()) {
+              stored = "{}";
+            }
+            const auto snapshot = ParseMailBehaviorSnapshot(stored);
             if (!snapshot) {
               std::move(callback).Run(false, MailBehaviorSnapshot());
               return;
@@ -2593,7 +2775,7 @@ void MahoMailService::GetBehaviorSnapshot(BehaviorReadCallback callback) {
             }
             const std::string migrated =
                 SerializeMailBehaviorSnapshot(*snapshot);
-            if (migrated != result) {
+            if (migrated != stored) {
               // Best-effort canonicalization is intentionally deferred to the
               // next successful CAS write; reads remain side-effect free.
             }

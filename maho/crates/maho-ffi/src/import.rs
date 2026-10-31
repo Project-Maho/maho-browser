@@ -167,6 +167,9 @@ impl PasswordImportCommitDestination for VaultPasswordImportDestination<'_> {
         let username = credential.username;
         let input = VaultLoginInput {
             metadata: VaultItemPublicMetadata {
+                favorite: false,
+                trashed_at: None,
+                has_notes: false,
                 title: origin_url,
                 origins: vec![origin],
                 username_hint: username.clone(),
@@ -685,7 +688,7 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
         let handle = thread::Builder::new()
             .name("maho-import-orchestrator".into())
             .spawn(move || {
-                let _gate = crate::import_gate::GateGuard;
+                let gate = crate::import_gate::GateGuard;
                 let mut orchestrator = Orchestrator::new(destination);
                 if !essentials.is_empty() {
                     orchestrator.set_selected_essentials(essentials);
@@ -710,14 +713,22 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
                     })
                     .ok();
 
-                loop {
+                let terminal_event: Option<ImportProgress> = loop {
                     if cancel_clone.load(Ordering::SeqCst) {
                         orchestrator.cancel();
-                        ctx.invoke(3, 0, 0, ptr::null());
-                        break;
+                        break Some(ImportProgress::AllComplete);
                     }
                     match rx.recv_timeout(std::time::Duration::from_millis(100)) {
                         Ok(progress) => {
+                            if matches!(
+                                progress,
+                                ImportProgress::AllComplete | ImportProgress::Error { .. }
+                            ) {
+                                // Terminal progress is held back: the gate must
+                                // be released BEFORE the caller learns the import
+                                // ended, or its very next FFI call is rejected.
+                                break Some(progress);
+                            }
                             ctx.forward_progress(&progress);
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -725,16 +736,38 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
                         }
                         Err(mpsc::RecvTimeoutError::Disconnected) => {
                             // Drain remaining events and exit
+                            let mut terminal = None;
                             for progress in rx.try_iter() {
-                                ctx.forward_progress(&progress);
+                                if matches!(
+                                    progress,
+                                    ImportProgress::AllComplete | ImportProgress::Error { .. }
+                                ) {
+                                    terminal = Some(progress);
+                                } else {
+                                    ctx.forward_progress(&progress);
+                                }
                             }
-                            break;
+                            break terminal;
                         }
                     }
-                }
+                };
 
                 if let Some(h) = worker {
                     let _ = h.join();
+                }
+
+                // Release the import gate before the terminal callback fires:
+                // C++ resumes FFI calls as soon as it sees the terminal event,
+                // and every one of them would short-circuit on is_active() if
+                // the GateGuard were still held here (it would only drop at
+                // thread exit, after the callback).
+                drop(gate);
+                match terminal_event {
+                    Some(progress) => ctx.forward_progress(&progress),
+                    // Defensive: no terminal progress arrived (e.g. the worker
+                    // panicked mid-import). The caller still needs one terminal
+                    // callback, and it must fire with the gate released.
+                    std::option::Option::None => ctx.invoke(3, 0, 0, ptr::null()),
                 }
             })
             .ok();
@@ -878,6 +911,38 @@ impl CallbackContext {
                 let msg_ptr = msg.as_ref().map(|m| m.as_ptr()).unwrap_or(ptr::null());
                 self.invoke(4, 0, 0, msg_ptr);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    #[test]
+    fn review_terminal_import_callback_releases_gate() {
+        unsafe extern "C" fn progress(kind: u32, _: u32, _: i32, _: *const c_char, data: *mut c_void) {
+            if kind == 3 || kind == 4 {
+                let tx = &*data.cast::<mpsc::Sender<bool>>();
+                tx.send(!crate::import_gate::is_active()).unwrap();
+            }
+        }
+        let mut core = Box::new(MahoCore::new());
+        let browser = CString::new(serde_json::json!({
+            "browser_type": "Chrome", "display_name": "fixture", "profile_path": "/unused",
+            "services_supported": 0, "requires_full_disk_access": false
+        }).to_string()).unwrap();
+        let (tx, rx) = mpsc::channel::<bool>();
+        unsafe {
+            let handle = maho_import_orchestrator_start(
+                core.as_mut(), browser.as_ptr(), 0, ptr::null(), progress,
+                None, None, None, (&tx as *const mpsc::Sender<bool>).cast_mut().cast(),
+            );
+            assert!(!handle.is_null());
+            let released = rx.recv_timeout(std::time::Duration::from_secs(10));
+            maho_import_orchestrator_free(handle);
+            assert!(released.unwrap(), "terminal callback fired before import gate release");
+            assert!(rx.try_recv().is_err(), "terminal callback must fire exactly once");
         }
     }
 }

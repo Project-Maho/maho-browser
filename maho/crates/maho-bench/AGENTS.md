@@ -11,6 +11,7 @@ Benchmark crate boundary for workspace performance and comparison harnesses.
 | Task | Location | Notes |
 |------|----------|-------|
 | Benchmarks | `src/` | Perf/comparison harnesses |
+| Browser CLI Harness | `src/browser_cli/`, `browser_cli/` | Workload definitions, fixtures W1-W6, result schema, driver harness |
 | Dependencies / features | `Cargo.toml` | Crate wiring |
 
 ## CONVENTIONS

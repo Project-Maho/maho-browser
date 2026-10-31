@@ -10,13 +10,16 @@
 
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
+#include "base/test/test_future.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/webui/maho_routines/maho_routines.mojom.h"
+#include "maho/browser/ui/webui/maho_routines/maho_trace_recorder_client.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -114,8 +117,8 @@ class MahoRoutinesPageHandlerTest : public BrowserWithTestWindowTest {
       std::ignore = page_remote.InitWithNewPipeAndPassReceiver();
     }
     content::WebContents* contents =
-        browser() && browser()->tab_strip_model()
-            ? browser()->tab_strip_model()->GetActiveWebContents()
+        browser() && browser()->GetTabStripModel()
+            ? browser()->GetTabStripModel()->GetActiveWebContents()
             : nullptr;
     return std::make_unique<MahoRoutinesPageHandler>(
         handler_remote_.BindNewPipeAndPassReceiver(), std::move(page_remote),
@@ -550,6 +553,78 @@ TEST_F(MahoRoutinesPageHandlerTest, LatestRunJsonMapsObjectPayload) {
     EXPECT_FALSE(MahoRoutinesPageHandler::ParseLatestRunJsonForTesting(payload))
         << payload;
   }
+}
+
+TEST_F(MahoRoutinesPageHandlerTest, TraceRecorderClientRecordsEventsAndExportsJson) {
+  auto* client = maho::MahoTraceRecorderClient::GetInstance();
+  ASSERT_TRUE(client);
+
+  content::WebContents* contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(contents);
+  EXPECT_TRUE(client->Start(contents, 101));
+  EXPECT_TRUE(client->is_recording());
+  EXPECT_EQ(client->tab_id(), 101);
+
+  client->RecordClick(std::string("@e1"), 120.0, 240.0);
+  client->RecordFill("test query", std::string("#search"));
+  client->RecordNavigate("https://example.org/search");
+
+  std::string json = client->StopAndExportJson();
+  EXPECT_FALSE(client->is_recording());
+  EXPECT_EQ(client->tab_id(), 0);
+
+  std::optional<base::DictValue> parsed =
+      base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->FindInt("version"), 3);
+  const base::ListValue* steps = parsed->FindList("steps");
+  ASSERT_TRUE(steps);
+  EXPECT_GE(steps->size(), 3u);
+}
+
+TEST_F(MahoRoutinesPageHandlerTest, StartAndStopTraceRecordingViaHandler) {
+  TestRoutinesPage page;
+  auto handler = MakeHandler(page.TakeRemote());
+
+  base::test::TestFuture<bool> start_future;
+  handler->StartTraceRecording(0, start_future.GetCallback());
+  EXPECT_TRUE(start_future.Get());
+
+  base::test::TestFuture<bool, int64_t> status_future;
+  handler->IsTraceRecording(status_future.GetCallback());
+  auto [is_rec, active_tab] = status_future.Take();
+  EXPECT_TRUE(is_rec);
+
+  base::test::TestFuture<const std::optional<std::string>&,
+                         const std::optional<std::string>&>
+      stop_future;
+  handler->StopTraceRecording(stop_future.GetCallback());
+  auto [trace_json, error] = stop_future.Take();
+  EXPECT_TRUE(trace_json.has_value());
+  EXPECT_FALSE(error.has_value());
+}
+
+TEST_F(MahoRoutinesPageHandlerTest, CreateRoutineFromTraceCreatesCustomRoutine) {
+  TestRoutinesPage page;
+  auto handler = MakeHandler(page.TakeRemote());
+
+  const std::string sample_trace =
+      R"({"version":3,"steps":[{"at_ms":0,"step":{"kind":"navigate","url":"https://example.com"}}]})";
+
+  base::test::TestFuture<bool> create_future;
+  handler->CreateRoutineFromTrace(
+      "Recorded Automation", "Automatically open example", sample_trace,
+      "0 12 * * *", std::nullopt, create_future.GetCallback());
+  EXPECT_TRUE(create_future.Get());
+
+  auto routines = ListAll(handler.get());
+  auto it = std::find_if(
+      routines.begin(), routines.end(),
+      [](const auto& r) { return r->name == "Recorded Automation"; });
+  ASSERT_NE(it, routines.end());
+  EXPECT_TRUE((*it)->is_custom);
+  EXPECT_EQ((*it)->schedule, "0 12 * * *");
 }
 
 }  // namespace

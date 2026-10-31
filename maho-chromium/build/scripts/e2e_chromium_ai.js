@@ -101,15 +101,43 @@ function seedProfile(dir, ai) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function cdpHttp(p, port) {
-  const r = await fetch(`http://127.0.0.1:${port}${p}`,
-    { method: p.startsWith('/json/new') ? 'PUT' : 'GET' });
-  return r.json();
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}${p}`,
+      { method: p.startsWith('/json/new') ? 'PUT' : 'GET' });
+    const text = await r.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      if (p.startsWith('/json/new')) {
+        return { error: text };
+      }
+      throw new Error(`non-JSON (${r.status}): ${text.slice(0, 100)}`);
+    }
+  } catch (err) {
+    const causeStr = err.cause ? (err.cause.code || err.cause.message || String(err.cause)) : '';
+    throw new Error(`cdpHttp(${p}, port=${port}) failed: ${err.message}${causeStr ? ` (${causeStr})` : ''}`);
+  }
 }
 
-async function waitForCdp(timeoutMs, port) {
+async function waitForCdp(timeoutMs, port, child) {
   const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
   while (Date.now() < deadline) {
-    try { await cdpHttp('/json/version', port); return true; } catch (e) { await sleep(1000); }
+    attempt++;
+    if (child && child.exitCode !== null) {
+      console.log(`[waitForCdp] child exited early with code=${child.exitCode}, signal=${child.signalCode}`);
+      return false;
+    }
+    try {
+      const ver = await cdpHttp('/json/version', port);
+      console.log(`[waitForCdp] connected after ${attempt} attempts (${Date.now() - (deadline - timeoutMs)}ms)`);
+      return true;
+    } catch (e) {
+      if (attempt % 5 === 0) {
+        console.log(`[waitForCdp] attempt ${attempt} failed: ${e.message} (cause: ${e.cause ? e.cause.code || e.cause.message : 'none'})`);
+      }
+      await sleep(1000);
+    }
   }
   return false;
 }
@@ -293,15 +321,31 @@ async function scenario_ai_real_turn(port) {
 async function resetToNewConversation(page) {
   await page.evalJs(`(() => {
     const buttons = Array.from(document.querySelectorAll('button'));
-    const newChat = buttons.find(b =>
+    const btn = buttons.find(b =>
+      (b.getAttribute('aria-label') === 'Start new session' ||
+       b.getAttribute('aria-label') === 'New conversation' ||
+       b.getAttribute('title') === 'New session' ||
+       b.getAttribute('title') === 'New conversation' ||
+       b.textContent.includes('New Chat')) &&
+      !b.closest('[hidden]')
+    ) || buttons.find(b =>
+      b.getAttribute('aria-label') === 'Start new session' ||
       b.getAttribute('aria-label') === 'New conversation' ||
+      b.getAttribute('title') === 'New session' ||
       b.getAttribute('title') === 'New conversation' ||
-      b.textContent.includes('New Chat') ||
-      b.querySelector('svg')
+      b.textContent.includes('New Chat')
     );
-    if (newChat) newChat.click();
+    if (btn) btn.click();
   })()`);
-  await sleep(1000);
+  // Wait up to 5 seconds for messages to clear and SuggestionChips to appear
+  for (let i = 0; i < 25; i++) {
+    await sleep(200);
+    const hasChips = await page.evalJs(`(() => {
+      const btns = Array.from(document.querySelectorAll('button'));
+      return btns.some(b => b.textContent.trim() === 'Summarize');
+    })()`);
+    if (hasChips) break;
+  }
 }
 
 async function submitPromptViaComposer(page, text) {
@@ -377,6 +421,14 @@ async function scenario_ai_mock_quick_action_context(port) {
       `document.body.innerText.includes(${JSON.stringify(MOCK.pageMarker)})`);
     if (!fixtureReady) throw new Error('fixture page did not render its context marker');
 
+    // Click "Back to chat" if currently in routines view
+    await panel.evalJs(`(() => {
+      const backBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Back to chat'));
+      if (backBtn) backBtn.click();
+    })()`);
+    await sleep(500);
+
+    // If there's an ongoing session or messages, click "Start new session"
     await resetToNewConversation(panel);
 
     let clicked = false;
@@ -395,7 +447,18 @@ async function scenario_ai_mock_quick_action_context(port) {
       if (clicked) break;
       await sleep(1000);
     }
-    if (!clicked) throw new Error('Summarize quick action was not visible');
+    if (!clicked) {
+      const debugInfo = await panel.evalJs(`(() => {
+        const buttons = Array.from(document.querySelectorAll('button')).map(b => b.textContent.trim() + '|' + (b.getAttribute('aria-label') || ''));
+        return {
+          buttons,
+          hasTextarea: !!document.querySelector('textarea'),
+          textareaVal: document.querySelector('textarea')?.value || '',
+          bodySnippet: document.body.innerText.slice(0, 300),
+        };
+      })()`);
+      throw new Error(`Summarize quick action was not visible. Debug: ${JSON.stringify(debugInfo)}`);
+    }
 
     const body = await waitForBodyText(panel, MOCK.marker, 40000);
     if (!body) throw new Error(`no streamed quick-action reply (marker "${MOCK.marker}") within 40s`);
@@ -469,6 +532,47 @@ const SCENARIOS = {
 // --- Instance lifecycle (reused by default/serve) ----------------------------
 
 function rmProfile(dir) {
+  const logPath = path.join(dir, 'launch.log');
+  if (fs.existsSync(logPath)) {
+    try {
+      const content = fs.readFileSync(logPath, 'utf8');
+      if (content.trim()) {
+        const lines = content.trim().split('\n');
+        console.log(`--- MAHO LAUNCH LOG TOTAL LINES: ${lines.length} ---`);
+        // Find fatal, check, error, or exception lines
+        const criticalLines = lines.filter(l => 
+          l.includes('FATAL') || l.includes('CHECK') || l.includes('ERROR:') || 
+          l.includes('Backtrace') || l.includes('Crash') || l.includes('MAHO_INIT_AUDIT') ||
+          l.includes('signal') || l.includes('Abort')
+        );
+        console.log('--- CRITICAL LOG LINES ---');
+        console.log(criticalLines.join('\n'));
+        console.log('--- MAHO LAUNCH LOG (TAIL 150 LINES) ---');
+        console.log(lines.slice(-150).join('\n'));
+        console.log('--- END LAUNCH LOG ---');
+      }
+    } catch (e) {}
+  }
+  // Check for crash reports generated in ~/Library/Logs/DiagnosticReports
+  try {
+    const diagDir = path.join(os.homedir(), 'Library/Logs/DiagnosticReports');
+    console.log(`[rmProfile] checking diagDir=${diagDir}, exists=${fs.existsSync(diagDir)}`);
+    if (fs.existsSync(diagDir)) {
+      const files = fs.readdirSync(diagDir);
+      console.log(`[rmProfile] diagDir files count=${files.length}, list=${files.slice(0, 10).join(',')}`);
+      const mahoFiles = files.filter(f => f.includes('Maho') || f.includes('Chromium'));
+      if (mahoFiles.length > 0) {
+        mahoFiles.sort((a, b) => fs.statSync(path.join(diagDir, b)).mtimeMs - fs.statSync(path.join(diagDir, a)).mtimeMs);
+        const newest = path.join(diagDir, mahoFiles[0]);
+        console.log(`--- CRASH REPORT: ${newest} ---`);
+        const report = fs.readFileSync(newest, 'utf8');
+        console.log(report.split('\n').slice(0, 80).join('\n'));
+        console.log('--- END CRASH REPORT ---');
+      }
+    }
+  } catch (e) {
+    console.log(`[rmProfile] could not check DiagnosticReports: ${e.message}`);
+  }
   if (process.env.MAHO_E2E_KEEP_PROFILE === '1') { console.log(`profile kept: ${dir}`); return; }
   try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 }); } catch (e) {}
 }
@@ -482,26 +586,58 @@ function launchInstance({ bin, port, profileDir, aiConfig }) {
     `--user-data-dir=${profileDir}`,
     '--no-first-run',
     '--disable-features=GlassFrame',
+    '--enable-logging=stderr',
+    '--vmodule=*maho*=2',
   ], { stdio: ['ignore', logFd, logFd], detached: true });
   child.on('error', (e) => { console.log(`FATAL launch: ${e.message}`); });
-  const cleanup = () => {
-    try { process.kill(-child.pid); } catch (e) {}
+  child.on('exit', (code, sig) => {
+    console.log(`[child exit] pid=${child.pid} exited with code=${code}, signal=${sig}`);
+  });
+  const cleanup = async () => {
+    try { process.kill(-child.pid, 'SIGTERM'); } catch (e) {}
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(child.pid, 0);
+        await sleep(100);
+      } catch (e) {
+        break;
+      }
+    }
+    try { process.kill(-child.pid, 'SIGKILL'); } catch (e) {}
     try { fs.closeSync(logFd); } catch (e) {}
+    const portDeadline = Date.now() + 3000;
+    while (Date.now() < portDeadline) {
+      try {
+        await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(200) });
+        await sleep(100);
+      } catch (e) {
+        break;
+      }
+    }
   };
   return { child, cleanup, logPath };
 }
 
-async function runScenarios(names, port) {
+async function runScenarios(names, port, child) {
   let failures = 0;
   for (const name of names) {
     const fn = SCENARIOS[name];
     if (!fn) { console.log(`SKIP ${name} (unknown)`); continue; }
+    if (child && child.exitCode !== null) {
+      console.log(`[runScenarios] skipping ${name} because child process exited (code=${child.exitCode}, sig=${child.signalCode})`);
+      failures++;
+      continue;
+    }
     try {
       const detail = await fn(port);
       console.log(`PASS ${name} — ${detail}`);
     } catch (e) {
       failures++;
       console.log(`FAIL ${name} — ${e.message}`);
+      if (child && child.exitCode !== null) {
+        console.log(`[runScenarios] detected child exit during/after ${name}: code=${child.exitCode}, sig=${child.signalCode}`);
+      }
     }
   }
   return failures;
@@ -558,15 +694,15 @@ async function main() {
   const { child, cleanup } = launchInstance({ bin: BIN, port: PORT, profileDir, aiConfig: ai });
 
   if (serve) {
-    if (!(await waitForCdp(45000, PORT))) {
-      cleanup(); rmProfile(profileDir);
+    if (!(await waitForCdp(45000, PORT, child))) {
+      await cleanup(); rmProfile(profileDir);
       console.log('FATAL serve: CDP endpoint never came up');
       return 1;
     }
     console.log(`CDP_PORT=${PORT}`);
     console.log(`PID=${child.pid}`);
     console.log('SERVING (send SIGINT/SIGTERM to stop)');
-    const shutdown = () => { cleanup(); rmProfile(profileDir); process.exit(0); };
+    const shutdown = async () => { await cleanup(); rmProfile(profileDir); process.exit(0); };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
     await new Promise(() => {});
@@ -574,17 +710,18 @@ async function main() {
   }
 
   let failures = 0;
-  const shutdown = () => { cleanup(); rmProfile(profileDir); process.exit(130); };
+  const shutdown = async () => { await cleanup(); rmProfile(profileDir); process.exit(130); };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   try {
-    if (!(await waitForCdp(45000, PORT))) throw new Error('CDP endpoint never came up');
-    failures = await runScenarios(names, PORT);
+    console.log(`[main] waiting for CDP on port ${PORT}...`);
+    if (!(await waitForCdp(45000, PORT, child))) throw new Error('CDP endpoint never came up');
+    failures = await runScenarios(names, PORT, child);
   } catch (e) {
     console.log(`FATAL ${e.message}`);
     failures++;
   } finally {
-    cleanup();
+    await cleanup();
     rmProfile(profileDir);
     await closeMock();
   }

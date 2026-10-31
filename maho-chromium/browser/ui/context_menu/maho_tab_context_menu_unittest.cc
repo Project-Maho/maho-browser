@@ -210,11 +210,12 @@ TEST(MahoTabContextMenuTest, TopLevelOrderMatchesProduction) {
   // 11  Boost
   // 12  Move to (submenu)
   // 13  [separator]
-  // 14  Archive Tab
-  // 15  Archive Tabs Below
-  // 16  [separator]
-  // 17  Close Tab
-  ASSERT_EQ(items.size(), 18u);
+  // 14  Sleep Tab
+  // 15  Archive Tab
+  // 16  Archive Tabs Below
+  // 17  [separator]
+  // 18  Close Tab
+  ASSERT_EQ(items.size(), 19u);
 
   EXPECT_EQ(items[0].type, ui::MenuModel::TYPE_COMMAND);
   EXPECT_EQ(items[0].command_id, IDC_MAHO_TAB_COPY_URL);
@@ -259,15 +260,18 @@ TEST(MahoTabContextMenuTest, TopLevelOrderMatchesProduction) {
   EXPECT_EQ(items[13].type, ui::MenuModel::TYPE_SEPARATOR);
 
   EXPECT_EQ(items[14].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[14].command_id, IDC_MAHO_TAB_ARCHIVE);
+  EXPECT_EQ(items[14].command_id, IDC_MAHO_TAB_FREEZE);
 
   EXPECT_EQ(items[15].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[15].command_id, IDC_MAHO_TAB_ARCHIVE_BELOW);
+  EXPECT_EQ(items[15].command_id, IDC_MAHO_TAB_ARCHIVE);
 
-  EXPECT_EQ(items[16].type, ui::MenuModel::TYPE_SEPARATOR);
+  EXPECT_EQ(items[16].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[16].command_id, IDC_MAHO_TAB_ARCHIVE_BELOW);
 
-  EXPECT_EQ(items[17].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[17].command_id, IDC_MAHO_TAB_CLOSE);
+  EXPECT_EQ(items[17].type, ui::MenuModel::TYPE_SEPARATOR);
+
+  EXPECT_EQ(items[18].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[18].command_id, IDC_MAHO_TAB_CLOSE);
 }
 
 TEST(MahoTabContextMenuTest, TopLevelHasExactlyFourSeparators) {
@@ -427,6 +431,12 @@ TEST(MahoTabContextMenuTest, ArchiveTabSilentWithNullBrowser) {
   menu.ExecuteCommand(IDC_MAHO_TAB_ARCHIVE, 0);
 }
 
+TEST(MahoTabContextMenuTest, FreezeSilentWithNullBrowser) {
+  MahoTabContextMenu menu(nullptr, 0);
+  menu.ExecuteCommand(IDC_MAHO_TAB_FREEZE, 0);
+  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_FREEZE));
+}
+
 TEST(MahoTabContextMenuTest, BuildMenuModelMultiSelect) {
   std::vector<std::string> selected_ids = {"tab-1", "tab-2"};
   MahoTabContextMenu menu(nullptr, 0, nullptr, "tab-1", selected_ids);
@@ -438,6 +448,7 @@ TEST(MahoTabContextMenuTest, BuildMenuModelMultiSelect) {
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_PIN));
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_UNMUTE));
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_MOVE_TO_SPACE));
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_FREEZE));
 
   // Single-only items must not be present
   EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_TAB_COPY_URL));

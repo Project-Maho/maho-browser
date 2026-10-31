@@ -1,12 +1,19 @@
 #include "maho/browser/ai/maho_browser_tool_registry.h"
 
 #include <array>
+#include <cstdlib>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "base/files/file_util.h"
+#include "base/json/json_writer.h"
+#include "base/test/bind.h"
+#include "base/test/task_environment.h"
 #include "base/values.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
+#include "maho/browser/ai/maho_browser_tool_executor.h"
+#include "maho/browser/mcp/maho_mcp_session.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -87,11 +94,71 @@ base::DictValue ControlSchema(std::string_view name) {
   return schema->Clone();
 }
 
+class ObserveStubDelegate : public maho::MahoMcpBrowserDelegate {
+ public:
+  ObserveStubDelegate() = default;
+  ~ObserveStubDelegate() override = default;
+
+  std::vector<maho::MahoMcpSession::TabInfo> GetTabList() override {
+    maho::MahoMcpSession::TabInfo tab;
+    tab.id = 1;
+    tab.url = "https://example.com/observe";
+    tab.is_active = true;
+    return {tab};
+  }
+  std::vector<maho::MahoMcpSession::ConsoleMessage> GetConsoleMessages(int) override { return {}; }
+  std::vector<maho::MahoMcpSession::NavigationEvent> GetNavigationEvents(int, int64_t) override { return {}; }
+  std::string GetPageText(int) override { return "Observed page text"; }
+  base::Value GetAccessibilitySnapshot(int, maho::MahoMcpSession::RefTable* out_refs) override {
+    if (out_refs) {
+      (*out_refs)[1] = 101;
+    }
+    base::DictValue dict;
+    dict.Set("role", "rootWebArea");
+    return base::Value(std::move(dict));
+  }
+  PageContentResult GetPageContent(int) override { return {}; }
+  PageContextResult GetPageContext(int) override { return {}; }
+  SearchResult SearchInPage(int, const std::string&) override { return {}; }
+  QuerySelectorResult QuerySelector(int, const std::string&) override { return {}; }
+  std::string GetElementText(int, const std::string&) override { return {}; }
+  std::string GetElementAttribute(int, const std::string&, const std::string&) override { return {}; }
+  bool WaitForSelector(int, const std::string&, int) override { return true; }
+  int CreateNewTab(const GURL&) override { return 1; }
+  bool CloseTab(int) override { return true; }
+  std::vector<BookmarkInfo> SearchBookmarks(const std::string&) override { return {}; }
+  BookmarkInfo CreateBookmark(const std::string&, const GURL&, const std::string&) override { return {}; }
+  std::vector<HistoryEntry> SearchHistory(const std::string&, size_t) override { return {}; }
+  void CaptureFullPagePngBase64(int, base::OnceCallback<void(std::string, std::optional<maho::MahoMcpCaptureMetrics>)> cb) override {
+    std::move(cb).Run("", std::nullopt);
+  }
+  void CaptureElementPngBase64(int, ui::AXNodeID, base::OnceCallback<void(std::string)> cb) override {
+    std::move(cb).Run("");
+  }
+  bool Scroll(int, const std::string&, int, std::optional<ui::AXNodeID>) override { return true; }
+  bool Click(int, ui::AXNodeID) override { return true; }
+  bool Type(int, ui::AXNodeID, const std::string&) override { return true; }
+  bool Select(int, ui::AXNodeID, const std::string&) override { return true; }
+  bool Hover(int, ui::AXNodeID) override { return true; }
+  bool KeyPress(int, const std::string&, const std::vector<std::string>&) override { return true; }
+  bool ActivateTab(int) override { return true; }
+  bool Navigate(int, const GURL&) override { return true; }
+  bool SetViewportSize(int, int, int) override { return true; }
+  void StartNetworkCapture(const std::string&, int, const maho::ResolvedMahoMcpTarget&, StartNetworkCaptureCallback cb) override {
+    std::move(cb).Run({});
+  }
+  void StopNetworkCapture(const std::string&, const maho::ResolvedMahoMcpTarget&, StopNetworkCaptureCallback cb) override {
+    std::move(cb).Run({});
+  }
+  void CancelNetworkCapture(const std::string&) override {}
+};
+
 TEST(MahoBrowserToolRegistryTest, CharacterizesCurrentDesktopProjection) {
   const std::set<std::string> expected = {
       "browser_accessibility_snapshot",
       "browser_click",
       "browser_file_upload_select",
+      "browser_history_back",
       "browser_history_search_desktop",
       "browser_hover",
       "browser_key_press",
@@ -126,16 +193,18 @@ TEST(MahoBrowserToolRegistryTest, CharacterizesCurrentDesktopProjection) {
   };
 
   base::ListValue tools = MahoBrowserToolRegistry::SerializePhase1ToolSchemas();
-  EXPECT_EQ(tools.size(), 40u);
+  EXPECT_EQ(tools.size(), 43u);
   std::set<std::string> expected_names(expected);
   expected_names.insert("browser_act_and_observe");
   expected_names.insert("browser_locator_click");
   expected_names.insert("browser_locator_type");
+  expected_names.insert("browser_observe");
+  expected_names.insert("browser_request_help");
   expected_names.insert("browser_tab_list");
   expected_names.insert("browser_tab_new");
   expected_names.insert("browser_tab_switch");
-    EXPECT_EQ(ToolNames(tools), expected_names);
-  EXPECT_EQ(maho::ai::kMahoBrowserActionContractCount, 15u);
+  EXPECT_EQ(ToolNames(tools), expected_names);
+  EXPECT_EQ(maho::ai::kMahoBrowserActionContractCount, 18u);
 
   size_t action_contract_entries = 0;
   for (const MahoBrowserToolRegistry::ToolSchema &schema :
@@ -144,7 +213,7 @@ TEST(MahoBrowserToolRegistryTest, CharacterizesCurrentDesktopProjection) {
       ++action_contract_entries;
     }
   }
-  EXPECT_EQ(action_contract_entries, 14u);
+  EXPECT_EQ(action_contract_entries, 17u);
 }
 
 TEST(MahoBrowserToolRegistryTest,
@@ -255,6 +324,57 @@ TEST(MahoBrowserToolRegistryTest,
   EXPECT_TRUE(upload_metadata->FindBool("requires_approval").value());
 }
 
+TEST(MahoBrowserToolRegistryTest, ObserveContractMetadata) {
+  base::ListValue tools = MahoBrowserToolRegistry::SerializePhase1ToolSchemas();
+  const base::DictValue *observe = FindSerializedTool(tools, "browser_observe");
+  ASSERT_TRUE(observe);
+  const base::DictValue *metadata = observe->FindDict("approval_metadata");
+  ASSERT_TRUE(metadata);
+  EXPECT_EQ(*metadata->FindString("kind"), "read");
+  EXPECT_EQ(*metadata->FindString("approval"), "not_required");
+  EXPECT_FALSE(metadata->FindBool("requires_approval").value());
+  EXPECT_EQ(*metadata->FindString("lease"), "not_required");
+  EXPECT_FALSE(metadata->FindBool("requires_lease").value());
+  EXPECT_EQ(*metadata->FindString("domain_policy"), "active_tab_origin");
+}
+
+TEST(MahoBrowserToolRegistryTest, ObserveDispatchExecutesWithoutApproval) {
+  base::test::TaskEnvironment task_environment;
+  ObserveStubDelegate delegate;
+  bool approval_requested = false;
+  auto approval_callback = base::BindRepeating(
+      [](bool* requested,
+         const MahoBrowserToolExecutor::BrowserActionAuthorization&) {
+        *requested = true;
+        MahoBrowserToolExecutor::BrowserActionApprovalDecision decision;
+        decision.approved = true;
+        return decision;
+      },
+      &approval_requested);
+
+  MahoBrowserToolExecutor executor(
+      /*browser=*/nullptr,
+      /*browser_tools_v1_enabled=*/true,
+      /*ai_gate=*/base::BindRepeating([] { return true; }),
+      /*action_approval_callback=*/std::move(approval_callback),
+      /*browser_action_delegate_for_testing=*/&delegate,
+      /*browser_action_lease_registry_for_testing=*/nullptr,
+      /*browser_action_lease_holder_id=*/"test-session");
+
+  base::DictValue arguments;
+  base::DictValue outcome;
+  executor.Execute("browser_observe", arguments,
+                   base::BindLambdaForTesting([&](base::DictValue result) {
+                     outcome = std::move(result);
+                   }));
+
+  EXPECT_FALSE(approval_requested);
+  EXPECT_TRUE(outcome.FindBool("ok").value_or(false));
+  EXPECT_EQ(*outcome.FindString("tool"), "browser_observe");
+  EXPECT_EQ(*outcome.FindString("text"), "Observed page text");
+  EXPECT_EQ(outcome.FindInt("ref_count").value_or(0), 1);
+}
+
 TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
   const std::set<std::string> expected = {
       "browser_accessibility_snapshot",
@@ -264,6 +384,7 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
       "browser_click",
       "browser_console_messages",
       "browser_file_upload_select",
+      "browser_history_back",
       "browser_get_blocked_domains",
       "browser_history_search",
       "browser_hover",
@@ -271,12 +392,14 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
       "browser_locator_click",
       "browser_locator_type",
       "browser_navigate",
+      "browser_observe",
       "browser_network_get_har",
       "browser_network_start_capture",
       "browser_network_stop_capture",
       "browser_page_content",
       "browser_page_context",
       "browser_page_text",
+      "browser_request_help",
       "browser_routines_list",
       "browser_routines_run",
       "browser_same_origin_fetch",
@@ -320,14 +443,14 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
     EXPECT_TRUE(actual.insert(std::string(descriptor->tool_name)).second)
         << descriptor->tool_name;
   }
-  EXPECT_EQ(capabilities.size(), 54u);
+  EXPECT_EQ(capabilities.size(), 57u);
   EXPECT_EQ(actual, expected);
 }
 
 TEST(MahoBrowserToolRegistryTest, PublicAndControlSchemasAreClosed) {
   base::ListValue public_tools =
       MahoBrowserToolRegistry::SerializePublicMcpCapabilities();
-  ASSERT_EQ(public_tools.size(), 54u);
+  ASSERT_EQ(public_tools.size(), 57u);
 
   auto expect_closed_schema = [](const base::DictValue &tool) {
     const std::string *name = tool.FindString("name");
@@ -408,9 +531,13 @@ TEST(MahoBrowserToolRegistryTest, CatalogSchemasMatchRuntimeArguments) {
   const base::DictValue& file_upload =
       PublicSchema(tools, "browser_file_upload_select");
   EXPECT_EQ(PropertyNames(file_upload),
-            std::set<std::string>({"path", "tab_id"}));
+            std::set<std::string>({"css", "path", "selector", "tab_id"}));
   EXPECT_EQ(StringSet(*file_upload.FindList("required")),
             std::set<std::string>({"path"}));
+
+  const base::DictValue& history_back =
+      PublicSchema(tools, "browser_history_back");
+  EXPECT_EQ(PropertyNames(history_back), std::set<std::string>({"tab_id"}));
 
   const base::DictValue &mail_search =
       PublicSchema(tools, "mail_search_emails");
@@ -447,6 +574,18 @@ TEST(MahoBrowserToolRegistryTest, CatalogSchemasMatchRuntimeArguments) {
   EXPECT_EQ(StringSet(*lease.FindList("required")),
             std::set<std::string>({"tab_id"}));
 
+  base::DictValue borrow = ControlSchema("browser_tab_borrow");
+  EXPECT_EQ(PropertyNames(borrow),
+            std::set<std::string>({"agent_space_id", "origin_space_id", "tab_id", "ttl_seconds"}));
+  EXPECT_EQ(StringSet(*borrow.FindList("required")),
+            std::set<std::string>({"tab_id"}));
+
+  base::DictValue tab_return = ControlSchema("browser_tab_return");
+  EXPECT_EQ(PropertyNames(tab_return),
+            std::set<std::string>({"tab_id"}));
+  EXPECT_EQ(StringSet(*tab_return.FindList("required")),
+            std::set<std::string>({"tab_id"}));
+
   base::DictValue oauth = ControlSchema("mail_complete_oauth");
   EXPECT_EQ(PropertyNames(oauth), std::set<std::string>({"code", "state"}));
   EXPECT_EQ(StringSet(*oauth.FindList("required")),
@@ -461,7 +600,7 @@ TEST(MahoBrowserToolRegistryTest, CatalogSchemasMatchRuntimeArguments) {
 
 TEST(MahoBrowserToolRegistryTest, CanonicalDescriptorsHaveCompletePolicy) {
   const auto &descriptors = MahoBrowserToolRegistry::GetCapabilityDescriptors();
-  EXPECT_EQ(descriptors.size(), 87u);
+  EXPECT_EQ(descriptors.size(), 92u);
   EXPECT_TRUE(
       MahoBrowserToolRegistry::ValidateCapabilityDescriptors(descriptors));
 
@@ -512,8 +651,8 @@ TEST(MahoBrowserToolRegistryTest, FeatureGatesFilterSurfaceProjection) {
       MahoBrowserToolRegistry::kBrowserMcp);
   const auto gated = MahoBrowserToolRegistry::GetCapabilitiesForSurface(
       MahoBrowserToolRegistry::kBrowserMcp, false, false, false);
-  EXPECT_EQ(all.size(), 54u);
-  EXPECT_EQ(gated.size(), 40u);
+  EXPECT_EQ(all.size(), 57u);
+  EXPECT_EQ(gated.size(), 43u);
   for (const auto *descriptor : gated) {
     EXPECT_EQ(descriptor->feature_gate,
               MahoBrowserToolRegistry::FeatureGate::kAlways);
@@ -578,7 +717,7 @@ TEST(MahoBrowserToolRegistryTest,
 TEST(MahoBrowserToolRegistryTest, ControlPlaneProjectionExcludesPublicTools) {
   const auto controls = MahoBrowserToolRegistry::GetCapabilitiesForSurface(
       MahoBrowserToolRegistry::kControlPlane);
-  ASSERT_EQ(controls.size(), 21u);
+  ASSERT_EQ(controls.size(), 23u);
   const std::set<std::string_view> expected = {
       "browser_acquire_lease",
       "browser_adopt_tab",
@@ -590,6 +729,8 @@ TEST(MahoBrowserToolRegistryTest, ControlPlaneProjectionExcludesPublicTools) {
       "browser_release_lease",
       "browser_release_tab",
       "browser_revoke_exact_origin",
+      "browser_tab_borrow",
+      "browser_tab_return",
       "mail_add_account",
       "mail_complete_oauth",
       "mail_delete_account",
@@ -618,7 +759,7 @@ TEST(MahoBrowserToolRegistryTest,
   EXPECT_EQ(diagnostics.FindInt("catalogVersion"), 1);
   EXPECT_EQ(diagnostics.FindInt("schemaVersion"), 1);
   EXPECT_EQ(diagnostics.FindInt("resultVersion"), 1);
-  EXPECT_EQ(diagnostics.FindInt("canonicalCount"), 87);
+  EXPECT_EQ(diagnostics.FindInt("canonicalCount"), 92);
   ASSERT_TRUE(diagnostics.FindString("catalogHash"));
   EXPECT_EQ(diagnostics.FindString("catalogHash")->size(), 64u);
 
@@ -632,8 +773,8 @@ TEST(MahoBrowserToolRegistryTest,
   ASSERT_TRUE(surfaces);
   const base::DictValue* public_mcp = surfaces->FindDict("publicMcp");
   ASSERT_TRUE(public_mcp);
-  EXPECT_EQ(public_mcp->FindInt("count"), 40);
-  EXPECT_EQ(public_mcp->FindList("ids")->size(), 40u);
+  EXPECT_EQ(public_mcp->FindInt("count"), 43);
+  EXPECT_EQ(public_mcp->FindList("ids")->size(), 43u);
   EXPECT_FALSE(surfaces->Find("desktopAgent"));
   EXPECT_FALSE(surfaces->Find("cliAgent"));
   EXPECT_FALSE(surfaces->Find("cliGeneric"));
@@ -644,6 +785,58 @@ TEST(MahoBrowserToolRegistryTest,
   EXPECT_EQ(serialized.find("credential_value"), std::string::npos);
   EXPECT_EQ(serialized.find("raw_arguments"), std::string::npos);
   EXPECT_EQ(serialized.find("control.origin.grant"), std::string::npos);
+}
+
+// Regenerates the packaged CLI tool-catalog snapshot from this registry: the CLI
+// resolves capabilities against that snapshot whenever no browser is running, so
+// it must carry every surface's projection plus the full publicMcp tool list.
+// Set MAHO_CATALOG_SNAPSHOT_OUT=<path> to write it; otherwise it is inert.
+TEST(MahoBrowserToolRegistryTest, WritesPackagedCatalogSnapshotWhenAsked) {
+  const char* out_path = std::getenv("MAHO_CATALOG_SNAPSHOT_OUT");
+  if (!out_path || !*out_path) {
+    GTEST_SKIP() << "set MAHO_CATALOG_SNAPSHOT_OUT=<path> to regenerate";
+  }
+
+  static constexpr auto kSurfaces =
+      std::to_array<MahoBrowserToolRegistry::Surface>({
+          MahoBrowserToolRegistry::kDesktopAgent,
+          MahoBrowserToolRegistry::kPublicMcp,
+          MahoBrowserToolRegistry::kControlPlane,
+          MahoBrowserToolRegistry::kCliAgent,
+          MahoBrowserToolRegistry::kCliGeneric,
+      });
+
+  base::DictValue diagnostics = MahoBrowserToolRegistry::SerializeDiagnostics(
+      MahoBrowserToolRegistry::kPublicMcp, /*mail_enabled=*/true,
+      /*routines_enabled=*/true, /*vault_enabled=*/true,
+      /*native_input_enabled=*/true);
+  base::DictValue surfaces;
+  for (MahoBrowserToolRegistry::Surface surface : kSurfaces) {
+    base::DictValue projection = MahoBrowserToolRegistry::SerializeDiagnostics(
+        surface, /*mail_enabled=*/true, /*routines_enabled=*/true,
+        /*vault_enabled=*/true, /*native_input_enabled=*/true);
+    const base::DictValue* single_surface = projection.FindDict("surfaces");
+    ASSERT_TRUE(single_surface) << static_cast<int>(surface);
+    // `base::DictValue` iterates as prvalue `std::pair<const std::string&,
+    // Value&>` entries, so bind with `auto&&` (a `const auto&` here trips
+    // -Wrange-loop-bind-reference under -Werror).
+    for (auto&& entry : *single_surface) {
+      surfaces.Set(entry.first, entry.second.Clone());
+    }
+  }
+  diagnostics.Set("surfaces", std::move(surfaces));
+
+  base::DictValue snapshot;
+  snapshot.Set("catalogDiagnostics", std::move(diagnostics));
+  snapshot.Set("tools", MahoBrowserToolRegistry::SerializePublicMcpCapabilities(
+                             /*mail_enabled=*/true, /*routines_enabled=*/true,
+                             /*vault_enabled=*/true,
+                             /*native_input_enabled=*/true));
+
+  std::string json;
+  ASSERT_TRUE(base::JSONWriter::WriteWithOptions(
+      snapshot, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json));
+  ASSERT_TRUE(base::WriteFile(base::FilePath::FromUTF8Unsafe(out_path), json));
 }
 
 TEST(MahoBrowserToolRegistryTest, UnknownAndIncompleteMetadataFailClosed) {
@@ -1197,6 +1390,121 @@ TEST(MahoBrowserToolRegistryTest,
     }
   }
   EXPECT_TRUE(has_frame_token);
+}
+
+TEST(MahoBrowserToolRegistryTest, HelpRequestContractMetadata) {
+  base::ListValue tools = MahoBrowserToolRegistry::SerializePhase1ToolSchemas();
+  const base::DictValue* help =
+      FindSerializedTool(tools, "browser_request_help");
+  ASSERT_TRUE(help);
+  const base::DictValue* metadata = help->FindDict("approval_metadata");
+  ASSERT_TRUE(metadata);
+  EXPECT_EQ(*metadata->FindString("kind"), "action");
+  EXPECT_EQ(*metadata->FindString("approval"), "not_required");
+  EXPECT_FALSE(metadata->FindBool("requires_approval").value());
+  EXPECT_EQ(*metadata->FindString("lease"), "not_required");
+  EXPECT_FALSE(metadata->FindBool("requires_lease").value());
+  EXPECT_EQ(*metadata->FindString("domain_policy"), "active_tab_origin");
+
+  const auto* desc =
+      MahoBrowserToolRegistry::FindCapability("browser_request_help");
+  ASSERT_TRUE(desc);
+  EXPECT_EQ(desc->canonical_id, "browser.request_help");
+  EXPECT_EQ(desc->category, MahoBrowserToolRegistry::Category::kInput);
+  ASSERT_TRUE(desc->browser_action_contract);
+  EXPECT_EQ(desc->browser_action_contract->kind,
+            maho::ai::BrowserActionKind::kAction);
+  EXPECT_EQ(desc->browser_action_contract->approval,
+            maho::ai::BrowserActionApproval::kNotRequired);
+  EXPECT_EQ(desc->browser_action_contract->lease,
+            maho::ai::BrowserActionLease::kNotRequired);
+  EXPECT_EQ(desc->browser_action_contract->domain_policy,
+            maho::ai::BrowserActionDomainPolicy::kActiveTabOrigin);
+}
+
+TEST(MahoBrowserToolRegistryTest, HelpRequestSchemaRequiresPrompt) {
+  base::ListValue tools = MahoBrowserToolRegistry::SerializePhase1ToolSchemas();
+  const base::DictValue* help =
+      FindSerializedTool(tools, "browser_request_help");
+  ASSERT_TRUE(help);
+
+  const base::DictValue* schema = help->FindDict("input_schema");
+  ASSERT_TRUE(schema);
+
+  const base::DictValue* properties = schema->FindDict("properties");
+  ASSERT_TRUE(properties);
+  EXPECT_TRUE(properties->contains("prompt"));
+  EXPECT_TRUE(properties->contains("timeout_ms"));
+  EXPECT_TRUE(properties->contains("request_id"));
+
+  const base::ListValue* required = schema->FindList("required");
+  ASSERT_TRUE(required);
+  bool has_prompt = false;
+  bool has_timeout = false;
+  bool has_request_id = false;
+  for (const auto& r : *required) {
+    if (r.is_string()) {
+      if (r.GetString() == "prompt") {
+        has_prompt = true;
+      } else if (r.GetString() == "timeout_ms") {
+        has_timeout = true;
+      } else if (r.GetString() == "request_id") {
+        has_request_id = true;
+      }
+    }
+  }
+  EXPECT_TRUE(has_prompt);
+  EXPECT_FALSE(has_timeout);
+  EXPECT_FALSE(has_request_id);
+
+  // Missing or empty prompt fails validation
+  base::DictValue empty_params;
+  std::string error;
+  base::DictValue outcome =
+      MahoBrowserToolRegistry::ExecuteBrowserRequestHelp(empty_params, &error);
+  EXPECT_FALSE(error.empty());
+  EXPECT_TRUE(outcome.empty());
+
+  base::DictValue blank_params;
+  blank_params.Set("prompt", "");
+  std::string blank_error;
+  base::DictValue blank_outcome =
+      MahoBrowserToolRegistry::ExecuteBrowserRequestHelp(blank_params, &blank_error);
+  EXPECT_FALSE(blank_error.empty());
+  EXPECT_TRUE(blank_outcome.empty());
+}
+
+TEST(MahoBrowserToolRegistryTest, HelpRequestDispatchReturnsWaiting) {
+  // Stub dispatch without request_id -> server-minted id with waiting status
+  base::DictValue params;
+  params.Set("prompt", "Please solve the verification challenge.");
+  std::string error;
+  base::DictValue outcome =
+      MahoBrowserToolRegistry::ExecuteBrowserRequestHelp(params, &error);
+  EXPECT_TRUE(error.empty());
+  const std::string* status = outcome.FindString("status");
+  ASSERT_TRUE(status);
+  EXPECT_EQ(*status, "waiting");
+  const std::string* request_id = outcome.FindString("request_id");
+  ASSERT_TRUE(request_id);
+  EXPECT_FALSE(request_id->empty());
+
+  // Stub dispatch with explicit request_id and timeout_ms
+  base::DictValue explicit_params;
+  explicit_params.Set("prompt", "Please complete 2FA on screen.");
+  explicit_params.Set("request_id", "req-custom-42");
+  explicit_params.Set("timeout_ms", 60000);
+  std::string explicit_error;
+  base::DictValue explicit_outcome =
+      MahoBrowserToolRegistry::ExecuteBrowserRequestHelp(explicit_params,
+                                                        &explicit_error);
+  EXPECT_TRUE(explicit_error.empty());
+  const std::string* explicit_status = explicit_outcome.FindString("status");
+  ASSERT_TRUE(explicit_status);
+  EXPECT_EQ(*explicit_status, "waiting");
+  const std::string* explicit_id = explicit_outcome.FindString("request_id");
+  ASSERT_TRUE(explicit_id);
+  EXPECT_EQ(*explicit_id, "req-custom-42");
 }
 
 } // namespace

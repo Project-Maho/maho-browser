@@ -17,7 +17,7 @@ export interface UseComposerDraftOptions {
   bridge: MahoBridge;
   /** Current draft scope, or null while the scope is not yet decided. */
   scope: ComposerDraftScope | null;
-  /** Applies restored text to the composer. Called at most once per scope. */
+  /** Applies restored text once when entering a scope. */
   onRestore: (text: string) => void;
   /** Set when the composer must not be hydrated (e.g. an auto-submitted goal). */
   suppressRestore?: boolean;
@@ -28,6 +28,8 @@ export interface ComposerDraftController {
   handleDraftChange: (text: string) => void;
   /** Persist the current text immediately (blur / visibility change). */
   flush: () => void;
+  /** Capture the submitted revision; acknowledge without deleting later edits. */
+  captureSend: () => (destination?: ComposerDraftScope) => Promise<void>;
   /** Delete the persisted draft for the current scope. Await before reset. */
   clear: () => Promise<void>;
   /** Delete the persisted draft for an explicit scope (e.g. the pre-promotion one). */
@@ -44,8 +46,8 @@ export function useComposerDraft({
   const onRestoreRef = useRef(onRestore);
   const suppressRestoreRef = useRef(suppressRestore);
   const dirtyRef = useRef(false);
+  const editRef = useRef({ revision: 0, text: '' });
   const scopeRef = useRef<ComposerDraftScope | null>(scope);
-  const restoredScopesRef = useRef<Set<string>>(new Set());
 
   onRestoreRef.current = onRestore;
   suppressRestoreRef.current = suppressRestore;
@@ -55,8 +57,6 @@ export function useComposerDraft({
 
   useEffect(() => {
     if (scope === null || currentKey === null) return;
-    if (restoredScopesRef.current.has(currentKey)) return;
-    restoredScopesRef.current.add(currentKey);
 
     // Any keystroke or goal auto-submit between request and response wins.
     dirtyRef.current = false;
@@ -72,6 +72,7 @@ export function useComposerDraft({
 
     return () => {
       cancelled = true;
+      void store.flush(scope);
     };
   }, [currentKey, scope, store]);
 
@@ -95,6 +96,8 @@ export function useComposerDraft({
 
   useEffect(() => {
     return () => {
+      // flush synchronously queues every pending write before dispose drops timers.
+      void store.flush();
       store.dispose();
     };
   }, [store]);
@@ -102,6 +105,7 @@ export function useComposerDraft({
   const handleDraftChange = useCallback(
     (text: string) => {
       dirtyRef.current = true;
+      editRef.current = { revision: editRef.current.revision + 1, text };
       const activeScope = scopeRef.current;
       if (activeScope === null) return;
       store.save(activeScope, text);
@@ -122,5 +126,22 @@ export function useComposerDraft({
     await store.clear(activeScope);
   }, [store]);
 
-  return { clear, clearScope, flush, handleDraftChange };
+  const captureSend = useCallback(() => {
+    const submittedScope = scopeRef.current;
+    const revision = editRef.current.revision;
+    return async (destination?: ComposerDraftScope) => {
+      if (submittedScope === null) return;
+      if (editRef.current.revision === revision) {
+        await store.clear(submittedScope);
+      } else if (destination && scopeKey(destination) !== scopeKey(submittedScope)) {
+        store.save(destination, editRef.current.text);
+        await store.flush(destination);
+        await store.clear(submittedScope);
+      } else {
+        await store.flush(submittedScope);
+      }
+    };
+  }, [store]);
+
+  return { captureSend, clear, clearScope, flush, handleDraftChange };
 }

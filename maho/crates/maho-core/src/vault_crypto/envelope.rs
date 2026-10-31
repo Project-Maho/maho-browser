@@ -164,6 +164,7 @@ fn wrapping_aad(
         WrappingDomain::User => 1,
         WrappingDomain::Recovery => 2,
         WrappingDomain::Device => 3,
+        WrappingDomain::Account => 4,
     };
     contextual_aad(
         b"maho-vault-key-wrap-v1",

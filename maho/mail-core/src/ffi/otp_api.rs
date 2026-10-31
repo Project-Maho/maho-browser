@@ -10,16 +10,29 @@ use crate::ffi::non_empty;
 use crate::ffi::read_api::{accept_read, accept_read_call, blocking_json, MahoMailReadCallback};
 use crate::otp::{best_otp_candidate, OtpMessage};
 
+#[cfg(test)]
+#[path = "otp_api_tests.rs"]
+mod tests;
+
+
 #[no_mangle]
 pub extern "C" fn MahoMailExtractOtp(
     account_id: *const c_char,
     folder_id: *const c_char,
     query: *const c_char,
     max_age_seconds: i64,
+    page_origin: *const c_char,
     callback: MahoMailReadCallback,
     user_data: *mut c_void,
 ) -> bool {
     accept_read_call(move || {
+        // Null or empty means the requesting page is unknown, which leaves
+        // domain binding unevaluated instead of rejecting every candidate.
+        let origin_filter = if page_origin.is_null() {
+            None
+        } else {
+            non_empty(page_origin, "page_origin").ok()
+        };
         let account_filter = if account_id.is_null() {
             None
         } else {
@@ -120,7 +133,7 @@ pub extern "C" fn MahoMailExtractOtp(
                         let msg = OtpMessage {
                             sender_email: from_address.as_deref(),
                             recipient_email: None,
-                            page_origin: None,
+                            page_origin: origin_filter.as_deref(),
                             subject: &subject,
                             body_text: &body_t,
                             body_html: &body_h,
@@ -145,9 +158,9 @@ pub extern "C" fn MahoMailExtractOtp(
                         {"field": "otp", "name": "one-time-code", "value": cand.code},
                         {"field": "code", "name": "one-time-code", "value": cand.code}
                     ]);
-                    Ok(mappings.to_string())
+                    Ok(mappings)
                 } else {
-                    Ok("[]".to_string())
+                    Ok(json!([]))
                 }
             })
         })

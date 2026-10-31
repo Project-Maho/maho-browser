@@ -10,11 +10,15 @@ impl MahoCore {
         expected_revision: VaultRevision,
         update: VaultLoginUpdate,
     ) -> Result<VaultItemPublicDto, VaultCrudError> {
-        let repository = self.vault_repository().map_err(storage_error)?;
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::ItemUpdated)
+            .map_err(storage_error)?;
         let result = self
             .vault_runtime
             .update_login(&repository, id, expected_revision, update);
-        self.record_vault_operation_result(VaultAuditOperation::ItemUpdated, result)
+        let outcome = self.record_vault_operation_result(VaultAuditOperation::ItemUpdated, result);
+        self.push_vault_item_sync_after(&outcome);
+        outcome
     }
 
     pub fn vault_delete_item(
@@ -22,11 +26,15 @@ impl MahoCore {
         id: VaultItemId,
         expected_revision: VaultRevision,
     ) -> Result<VaultItemPublicDto, VaultCrudError> {
-        let repository = self.vault_repository().map_err(storage_error)?;
+        let repository = self
+            .vault_mutation_repository(VaultAuditOperation::ItemDeleted)
+            .map_err(storage_error)?;
         let result = self
             .vault_runtime
             .delete_item(&repository, id, expected_revision);
-        self.record_vault_operation_result(VaultAuditOperation::ItemDeleted, result)
+        let outcome = self.record_vault_operation_result(VaultAuditOperation::ItemDeleted, result);
+        self.push_vault_item_sync_after(&outcome);
+        outcome
     }
 }
 

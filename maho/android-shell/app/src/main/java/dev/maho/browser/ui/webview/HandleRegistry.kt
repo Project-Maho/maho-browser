@@ -14,6 +14,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * eliminating use-after-free races.
  */
 class HandleRegistry {
+    internal enum class WaitOperation { Unregister, Close }
+
+    // Observation only: called under the monitor immediately before an actual wait.
+    internal var onWaitForTesting: ((WaitOperation) -> Unit)? = null
+
     private val handles = ConcurrentHashMap<String, Long>()
     private val activeLeases = ConcurrentHashMap<String, AtomicInteger>()
     private val lock = Any()
@@ -59,6 +64,7 @@ class HandleRegistry {
         var interrupted = false
         if (counter != null) {
             while (counter.get() > 0) {
+                onWaitForTesting?.invoke(WaitOperation.Unregister)
                 try {
                     (lock as java.lang.Object).wait(100)
                 } catch (_: InterruptedException) {
@@ -82,6 +88,7 @@ class HandleRegistry {
         var interrupted = false
         for (counter in activeLeases.values) {
             while (counter.get() > 0) {
+                onWaitForTesting?.invoke(WaitOperation.Close)
                 try {
                     (lock as java.lang.Object).wait(100)
                 } catch (_: InterruptedException) {

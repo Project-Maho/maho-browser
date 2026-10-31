@@ -61,7 +61,7 @@ class MahoDownloadBridgeBrowserTest : public InProcessBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
 
     ASSERT_TRUE(downloads_dir_.CreateUniqueTempDir());
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     profile->GetPrefs()->SetBoolean(prefs::kPromptForDownload, false);
     DownloadPrefs::FromBrowserContext(profile)->SetDownloadPath(
         downloads_dir_.GetPath());
@@ -102,14 +102,14 @@ class MahoDownloadBridgeBrowserTest : public InProcessBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(MahoDownloadBridgeBrowserTest,
                        RealDownloadIsIngestedIntoMahoStore) {
-  ASSERT_FALSE(browser()->profile()->IsOffTheRecord());
+  ASSERT_FALSE(browser()->GetProfile()->IsOffTheRecord());
   ASSERT_NE(maho::MahoDownloadBridgeServiceFactory::GetForProfile(
-                browser()->profile()),
+                browser()->GetProfile()),
             nullptr);
   ASSERT_NE(maho::GetCore(), nullptr);
 
   content::DownloadManager* manager =
-      browser()->profile()->GetDownloadManager();
+      browser()->GetProfile()->GetDownloadManager();
   content::DownloadTestObserverTerminal observer(
       manager, /*wait_count=*/1,
       content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
@@ -135,7 +135,7 @@ IN_PROC_BROWSER_TEST_F(MahoDownloadBridgeBrowserTest,
   ASSERT_NE(maho::GetCore(), nullptr);
 
   content::DownloadManager* manager =
-      browser()->profile()->GetDownloadManager();
+      browser()->GetProfile()->GetDownloadManager();
   content::DownloadTestObserverTerminal observer(
       manager, /*wait_count=*/1,
       content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
@@ -163,21 +163,21 @@ IN_PROC_BROWSER_TEST_F(MahoDownloadBridgeBrowserTest,
   ASSERT_NE(maho::GetCore(), nullptr);
 
   // The bridge service must be absent for incognito (factory is regular-only).
-  Browser* incognito = CreateIncognitoBrowser();
+  Browser* incognito = static_cast<Browser*>(CreateIncognitoBrowser());
   ASSERT_TRUE(incognito);
-  ASSERT_TRUE(incognito->profile()->IsOffTheRecord());
+  ASSERT_TRUE(incognito->GetProfile()->IsOffTheRecord());
   EXPECT_EQ(maho::MahoDownloadBridgeServiceFactory::GetForProfileIfExists(
-                incognito->profile()),
+                incognito->GetProfile()),
             nullptr);
 
   // Configure the incognito profile to auto-accept the download.
-  incognito->profile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
+  incognito->GetProfile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
                                                false);
-  DownloadPrefs::FromBrowserContext(incognito->profile())
+  DownloadPrefs::FromBrowserContext(incognito->GetProfile())
       ->SetDownloadPath(downloads_dir_.GetPath());
 
   content::DownloadManager* inc_manager =
-      incognito->profile()->GetDownloadManager();
+      incognito->GetProfile()->GetDownloadManager();
   content::DownloadTestObserverTerminal observer(
       inc_manager, /*wait_count=*/1,
       content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);

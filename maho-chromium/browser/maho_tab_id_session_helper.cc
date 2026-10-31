@@ -271,8 +271,8 @@ void MahoTabIdSessionHelper::OnSessionRestoreFinished(Profile* profile, int num_
   // (Suspended panes absent from the model still need the core-persistence fix.)
   if (auto* collection = GlobalBrowserCollection::GetInstance()) {
     collection->ForEach([profile](BrowserWindowInterface* browser_interface) {
-      Browser* browser = browser_interface->GetBrowserForMigrationOnly();
-      if (!browser || browser->profile() != profile) {
+      Browser* browser = static_cast<Browser*>(browser_interface);
+      if (!browser || browser->GetProfile() != profile) {
         return true;
       }
       BrowserView* browser_view =
@@ -328,8 +328,8 @@ void MahoTabIdSessionHelper::PerformSessionMigration(Profile* profile, MahoCore*
     auto* collection = GlobalBrowserCollection::GetInstance();
     if (collection) {
       collection->ForEach([profile, space_id, &target_browser](BrowserWindowInterface* browser_interface) {
-        Browser* browser = browser_interface->GetBrowserForMigrationOnly();
-        if (browser && browser->profile() == profile) {
+        Browser* browser = static_cast<Browser*>(browser_interface);
+        if (browser && browser->GetProfile() == profile) {
           std::string browser_space_id =
               maho::MahoSpaceProfileBridge::GetInstance()
                   ? maho::MahoSpaceProfileBridge::GetInstance()->GetActiveSpaceId(browser)
@@ -346,7 +346,7 @@ void MahoTabIdSessionHelper::PerformSessionMigration(Profile* profile, MahoCore*
       continue;
     }
 
-    TabStripModel* tab_strip_model = target_browser->tab_strip_model();
+    TabStripModel* tab_strip_model = target_browser->GetTabStripModel();
     if (!tab_strip_model) {
       continue;
     }
@@ -377,7 +377,7 @@ void MahoTabIdSessionHelper::PerformSessionMigration(Profile* profile, MahoCore*
       std::string wc_url = url.is_empty() ? std::string() : url.spec();
 
       if (wc_url == core_tab.url && fresh_id != core_tab.id) {
-        MigrateTabIdentity(core, wc, fresh_id, core_tab.id, space_id, wc_url, target_browser->session_id().id());
+        MigrateTabIdentity(core, wc, fresh_id, core_tab.id, space_id, wc_url, target_browser->GetSessionID().id());
         migrated_count++;
       }
     }
@@ -396,7 +396,7 @@ void MahoTabIdSessionHelper::PerformSessionMigration(Profile* profile, MahoCore*
       std::string wc_url = url.is_empty() ? std::string() : url.spec();
 
       if (wc_url == core_tab.url && fresh_id != core_tab.id) {
-        MigrateTabIdentity(core, wc, fresh_id, core_tab.id, space_id, wc_url, target_browser->session_id().id());
+        MigrateTabIdentity(core, wc, fresh_id, core_tab.id, space_id, wc_url, target_browser->GetSessionID().id());
         migrated_count++;
       }
     }

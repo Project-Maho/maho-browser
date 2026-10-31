@@ -22,7 +22,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/share/share_attempt.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/sharing_hub/sharing_hub_bubble_controller.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/browser_context.h"
@@ -471,7 +472,8 @@ void MahoDomScreenshotHandler::OnSendToClicked() {
     Finish();
     return;
   }
-  Browser* browser = chrome::FindBrowserWithTab(wc);
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(wc);
   if (!browser) {
     Finish();
     return;

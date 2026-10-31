@@ -176,11 +176,17 @@ fn relay_base_url_defaults_and_trims_trailing_slash() {
 fn loopback_success_page_declares_utf8_charset() {
     // The success page contains a U+2026 ellipsis; without an explicit
     // charset the browser decodes the UTF-8 bytes as Latin-1 and shows "â€¦".
+    let response = super::success_response();
     assert!(
-        SUCCESS_RESPONSE.contains("charset=utf-8"),
-        "success response must declare charset=utf-8"
+        response.contains("charset=utf-8"),
+        "success response must declare charset=utf-8, got: {response}"
     );
-    assert!(SUCCESS_RESPONSE.contains('\u{2026}'));
+    assert!(response.contains('\u{2026}'));
+    // A length-delimited body completes without depending on socket teardown.
+    assert!(
+        response.contains(&format!("Content-Length: {}", SUCCESS_BODY.len())),
+        "success response must carry a matching Content-Length, got: {response}"
+    );
 }
 
 #[test]
@@ -189,7 +195,7 @@ fn loopback_success_page_auto_closes_tab() {
     // stale 127.0.0.1 callback tab lingers (a lingering tab can be restored
     // and later hit a dead port -> "site can't be reached").
     assert!(
-        SUCCESS_RESPONSE.contains("window.close()"),
+        super::success_response().contains("window.close()"),
         "success page must self-close"
     );
 }
@@ -201,7 +207,7 @@ fn accept_with_timeout_returns_promptly_when_cancelled() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let cancel = std::sync::atomic::AtomicBool::new(true);
     let start = std::time::Instant::now();
-    let result = accept_with_timeout(&listener, &cancel);
+    let result = accept_with_timeout(&listener, &cancel, start);
     let err = result.expect_err("cancelled accept must error");
     assert!(
         err.to_string().contains("cancelled"),
@@ -230,4 +236,72 @@ fn cancel_google_sign_in_flags_registered_flow_only() {
         "unknown state must be a no-op"
     );
     take_cancel("state-cancel-unit-1");
+}
+
+#[test]
+fn idle_probe_connection_does_not_consume_the_flow() {
+    // REGRESSION (F5): the loopback listener used to accept exactly one
+    // connection and give it the entire backstop budget as its read timeout.
+    // Anything that opened the port without sending a request (a speculative
+    // preconnect socket, a local security scanner) therefore consumed the
+    // flow, and the real OAuth redirect - which arrives on the *next*
+    // connection - was never accepted. The provider page then hung until the
+    // 900s backstop expired, which is what Windows certification observed.
+    //
+    // Here the first connection closes without sending anything, and the
+    // second carries a callback. Reaching the callback at all (even to reject
+    // it on state mismatch) proves the listener moved past the dead probe.
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("local_addr").port();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+
+    let worker = std::thread::spawn(move || {
+        super::accept_and_exchange(&listener, "expected-state", &cancel)
+    });
+
+    // Probe: connect, send nothing, close. Must be skipped, not consumed.
+    let probe = std::net::TcpStream::connect(("127.0.0.1", port)).expect("probe connect");
+    probe
+        .shutdown(std::net::Shutdown::Both)
+        .expect("probe shutdown");
+
+    // Real callback on a fresh connection, with a deliberately wrong state so
+    // the flow rejects it locally instead of reaching the relay.
+    let mut callback = std::net::TcpStream::connect(("127.0.0.1", port)).expect("callback connect");
+    callback
+        .write_all(
+            b"GET /?state=not-the-expected-state&code=abc HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+        )
+        .expect("write callback request");
+    let mut response = String::new();
+    let _ = callback.read_to_string(&mut response);
+
+    let err = worker
+        .join()
+        .expect("listener thread")
+        .expect_err("mismatched state must be rejected");
+    assert!(
+        err.to_string().contains("state mismatch"),
+        "listener must have processed the second connection, got: {err}"
+    );
+    assert!(
+        response.contains("400"),
+        "callback connection must receive the rejection response, got: {response}"
+    );
+}
+
+#[test]
+fn oauth_callback_predicate_ignores_unrelated_requests() {
+    assert!(!super::is_oauth_callback(""));
+    assert!(!super::is_oauth_callback(
+        "GET /favicon.ico HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+    ));
+    assert!(super::is_oauth_callback(
+        "GET /?state=s&code=c HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+    ));
+    assert!(super::is_oauth_callback(
+        "GET /?error=access_denied HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+    ));
 }

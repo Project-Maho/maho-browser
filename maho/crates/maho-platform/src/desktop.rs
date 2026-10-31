@@ -121,8 +121,32 @@ pub fn perform_input_with(
 }
 
 pub fn perform_input(req: DesktopInputRequest) -> Result<DesktopOutcome, PlatformError> {
-    let trusted = accessibility_trusted();
-    let mut backend = EnigoBackend::new()?;
+    perform_input_with_factory(req, EnigoBackend::new, accessibility_trusted())
+}
+
+fn perform_input_with_factory<B: InputBackend>(
+    req: DesktopInputRequest,
+    factory: impl FnOnce() -> Result<B, PlatformError>,
+    trusted: bool,
+) -> Result<DesktopOutcome, PlatformError> {
+    if req.dry_run {
+        return Ok(DesktopOutcome::DryRun {
+            description: req.action.describe(),
+        });
+    }
+    if !req.approve {
+        return Err(PlatformError::ApprovalRequired {
+            action: "desktop.input".into(),
+        });
+    }
+    #[cfg(target_os = "macos")]
+    if !trusted {
+        return Err(PlatformError::PermissionRequired {
+            scope: "accessibility".into(),
+            deep_link: DEEP_LINK_ACCESSIBILITY.into(),
+        });
+    }
+    let mut backend = factory()?;
     perform_input_with(req, &mut backend, trusted)
 }
 
@@ -308,6 +332,55 @@ mod tests {
             approve,
             dry_run,
         }
+    }
+
+    #[test]
+    fn factory_failure_does_not_override_dry_run_or_approval() {
+        let factory = || -> Result<RecordingBackend, PlatformError> {
+            Err(PlatformError::Io("desktop unavailable".into()))
+        };
+        let dry = perform_input_with_factory(
+            req(
+                DesktopAction::Click {
+                    button: MouseButton::Left,
+                },
+                false,
+                true,
+            ),
+            factory,
+            false,
+        );
+        assert!(matches!(dry, Ok(DesktopOutcome::DryRun { .. })), "{dry:?}");
+        let unapproved = perform_input_with_factory(
+            req(
+                DesktopAction::Click {
+                    button: MouseButton::Left,
+                },
+                false,
+                false,
+            ),
+            factory,
+            false,
+        );
+        assert!(
+            matches!(unapproved, Err(PlatformError::ApprovalRequired { .. })),
+            "{unapproved:?}"
+        );
+        #[cfg(target_os = "macos")]
+        assert!(matches!(
+            perform_input_with_factory(
+                req(
+                    DesktopAction::Click {
+                        button: MouseButton::Left
+                    },
+                    true,
+                    false
+                ),
+                factory,
+                false
+            ),
+            Err(PlatformError::PermissionRequired { .. })
+        ));
     }
 
     #[test]

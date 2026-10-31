@@ -77,7 +77,12 @@ export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinitio
     {kind: 'live-card', card: {
       title: 'Performance & browser behavior',
       description: '',
-      settingKeys: ['advanced.hardware_acceleration', 'advanced.preload_pages'],
+      settingKeys: [
+        'advanced.memory_saver_mode',
+        'advanced.memory_saver_timeout',
+        'advanced.hardware_acceleration',
+        'advanced.preload_pages',
+      ],
       wide: true,
     }},
   ],

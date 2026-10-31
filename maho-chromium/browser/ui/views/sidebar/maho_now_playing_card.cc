@@ -274,10 +274,18 @@ CreateMediaActionButton(views::Button::PressedCallback callback, int button_id,
   return button;
 }
 
+// Binds every button state to palette colors. views::IconColors would leave
+// hovered/pressed on the OS-theme kColorIconHovered.
 void SetButtonIcon(views::ImageButton *button, const gfx::VectorIcon &icon,
                    int icon_size, SkColor foreground, SkColor disabled) {
-  views::SetImageFromVectorIconWithColor(
-      button, icon, icon_size, views::IconColors(foreground, disabled));
+  const ui::ImageModel normal =
+      ui::ImageModel::FromVectorIcon(icon, foreground, icon_size);
+  button->SetImageModel(views::Button::STATE_NORMAL, normal);
+  button->SetImageModel(views::Button::STATE_HOVERED, normal);
+  button->SetImageModel(views::Button::STATE_PRESSED, normal);
+  button->SetImageModel(
+      views::Button::STATE_DISABLED,
+      ui::ImageModel::FromVectorIcon(icon, disabled, icon_size));
 }
 
 MahoNowPlayingCard::MahoNowPlayingCard(
@@ -325,7 +333,7 @@ void MahoNowPlayingCard::UpdateWithMediaSessionInfo(
     SetButtonIcon(play_pause_button_,
                   is_playing ? maho_lucide_icons::kPauseIcon
                              : maho_lucide_icons::kPlayIcon,
-                  18, palette_.primary_text, palette_.secondary_text);
+                  18, palette_.neutral_glyph, palette_.disabled_text);
   }
 }
 
@@ -429,9 +437,8 @@ void MahoNowPlayingCard::SetSidebarPalette(const MahoSidebarPalette &palette) {
     }
   }
   if (close_button_) {
-    views::SetImageFromVectorIconWithColor(
-        close_button_, maho_lucide_icons::kXIcon, 12,
-        views::IconColors(palette_.secondary_text, palette_.secondary_text));
+    SetButtonIcon(close_button_, maho_lucide_icons::kXIcon, 12,
+                  palette_.neutral_glyph, palette_.disabled_text);
   }
   if (auto *favicon_button =
           views::AsViewClass<GlassHoverImageButton>(favicon_view_.get())) {
@@ -442,7 +449,7 @@ void MahoNowPlayingCard::SetSidebarPalette(const MahoSidebarPalette &palette) {
   }
   if (prev_button_) {
     SetButtonIcon(prev_button_, maho_lucide_icons::kSkipBackIcon, 14,
-                  palette_.primary_text, palette_.secondary_text);
+                  palette_.neutral_glyph, palette_.disabled_text);
   }
   if (play_pause_button_) {
     const bool is_playing =
@@ -451,11 +458,11 @@ void MahoNowPlayingCard::SetSidebarPalette(const MahoSidebarPalette &palette) {
     SetButtonIcon(play_pause_button_,
                   is_playing ? maho_lucide_icons::kPauseIcon
                              : maho_lucide_icons::kPlayIcon,
-                  18, palette_.primary_text, palette_.secondary_text);
+                  18, palette_.neutral_glyph, palette_.disabled_text);
   }
   if (next_button_) {
     SetButtonIcon(next_button_, maho_lucide_icons::kSkipForwardIcon, 14,
-                  palette_.primary_text, palette_.secondary_text);
+                  palette_.neutral_glyph, palette_.disabled_text);
   }
   UpdateMuteButton();
   SchedulePaint();
@@ -511,6 +518,8 @@ void MahoNowPlayingCard::BuildLayout() {
   title_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   title_label_->SetElideBehavior(gfx::ELIDE_TAIL);
   title_label_->SetSkipSubpixelRenderingOpacityCheck(true);
+  // Palette colors are pre-resolved for contrast (see UpdateAppearance).
+  title_label_->SetAutoColorReadabilityEnabled(false);
   layout1->SetFlexForView(title_label_, 1);
 
   close_button_ = title_row_->AddChildView(
@@ -526,6 +535,7 @@ void MahoNowPlayingCard::BuildLayout() {
   artist_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   artist_label_->SetElideBehavior(gfx::ELIDE_TAIL);
   artist_label_->SetSkipSubpixelRenderingOpacityCheck(true);
+  artist_label_->SetAutoColorReadabilityEnabled(false);
 
   progress_row_ = AddChildView(std::make_unique<views::View>());
   auto *layout3 =
@@ -538,6 +548,7 @@ void MahoNowPlayingCard::BuildLayout() {
       progress_row_->AddChildView(std::make_unique<views::Label>(
           u"0:00", views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
   current_timestamp_label_->SetSkipSubpixelRenderingOpacityCheck(true);
+  current_timestamp_label_->SetAutoColorReadabilityEnabled(false);
 
   progress_view_ =
       progress_row_->AddChildView(std::make_unique<PaletteProgressView>(
@@ -550,6 +561,7 @@ void MahoNowPlayingCard::BuildLayout() {
   duration_label_ = progress_row_->AddChildView(std::make_unique<views::Label>(
       u"0:00", views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
   duration_label_->SetSkipSubpixelRenderingOpacityCheck(true);
+  duration_label_->SetAutoColorReadabilityEnabled(false);
 
   auto *row4 = AddChildView(std::make_unique<views::View>());
   auto *layout4 = row4->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -636,14 +648,12 @@ void MahoNowPlayingCard::UpdateMuteButton() {
   if (!mute_button_)
     return;
   if (is_muted_) {
-    views::SetImageFromVectorIconWithColor(
-        mute_button_, maho_lucide_icons::kVolumeXIcon, 14,
-        views::IconColors(palette_.secondary_text, palette_.secondary_text));
+    SetButtonIcon(mute_button_, maho_lucide_icons::kVolumeXIcon, 14,
+                  palette_.neutral_glyph, palette_.disabled_text);
     mute_button_->SetTooltipText(u"Unmute");
   } else {
-    views::SetImageFromVectorIconWithColor(
-        mute_button_, maho_lucide_icons::kVolume2Icon, 14,
-        views::IconColors(palette_.secondary_text, palette_.secondary_text));
+    SetButtonIcon(mute_button_, maho_lucide_icons::kVolume2Icon, 14,
+                  palette_.neutral_glyph, palette_.disabled_text);
     mute_button_->SetTooltipText(u"Mute");
   }
 }
@@ -664,7 +674,7 @@ void MahoNowPlayingCard::OnFaviconPressed() {
   content::WebContents *contents =
       content::MediaSession::GetWebContentsFromRequestId(item_id_);
   if (contents && browser_) {
-    TabStripModel *model = browser_->tab_strip_model();
+    TabStripModel *model = browser_->GetTabStripModel();
     if (model) {
       int index = model->GetIndexOfWebContents(contents);
       if (index != TabStripModel::kNoTab) {

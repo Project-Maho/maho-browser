@@ -7,7 +7,7 @@ import {
   announceComposeReady,
   closeSelf,
 } from "../../hooks/usePopoutWindow";
-import type { ComposeInitPayload } from "../../hooks/usePopoutWindow";
+import type { ComposeInitPayload } from "../../events";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { ComposeForm } from "./ComposeForm";
 
@@ -20,8 +20,8 @@ export function ComposeWindow() {
   // Set up focus trap for popout window accessibility
   useFocusTrap(windowRef, initialized);
 
-  useComposeInitListener((payload: ComposeInitPayload) => {
-    setInitPayload(payload);
+  useComposeInitListener((payload) => {
+    setInitPayload(payload as ComposeInitPayload);
     setInitialized(true);
   });
 
@@ -75,6 +75,10 @@ export function ComposeWindow() {
         initialDraftId={initPayload?.draftId}
         replyTo={initPayload?.replyTo}
         forwardFrom={initPayload?.forwardFrom}
+        forwardEmailUid={initPayload?.forwardEmailUid}
+        forwardFolderId={initPayload?.forwardFolderId}
+        initialAttachments={initPayload?.initialAttachments}
+        initialReadReceipt={initPayload?.initialReadReceipt}
         accounts={accounts}
         isPopout={true}
       />

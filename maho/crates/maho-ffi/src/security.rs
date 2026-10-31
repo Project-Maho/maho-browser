@@ -56,6 +56,8 @@ fn to_vault_password_entries(items: Vec<VaultItemPublicDto>) -> *mut c_char {
 
 fn vault_login_items(core: &MahoCore) -> Vec<VaultItemPublicDto> {
     let request = VaultItemListRequest {
+        trash: Default::default(),
+        favorites_only: false,
         schema_version: VaultSchemaVersion::CURRENT,
         provider: Some(maho_types::passwords::PasswordProviderKind::MahoNative),
         kinds: vec![VaultItemKind::Login],
@@ -284,6 +286,9 @@ pub unsafe extern "C" fn maho_core_add_password(
             if let Some(origin) = credential_origin_from_domain(domain) {
                 let input = maho_core::vault_manager::VaultLoginInput {
                     metadata: maho_types::vault::VaultItemPublicMetadata {
+                        favorite: false,
+                        trashed_at: None,
+                        has_notes: false,
                         title: domain.to_string(),
                         origins: vec![origin],
                         username_hint: username.to_string(),
@@ -338,6 +343,9 @@ pub unsafe extern "C" fn maho_core_update_password_username(
                 return false;
             };
             let metadata = VaultItemPublicMetadata {
+                favorite: false,
+                trashed_at: None,
+                has_notes: false,
                 title: item.title,
                 origins: item.origins,
                 username_hint: username.to_string(),
@@ -346,6 +354,7 @@ pub unsafe extern "C" fn maho_core_update_password_username(
                 passkey: item.passkey,
             };
             let update = maho_core::vault_manager::VaultLoginUpdate {
+                notes: None,
                 metadata,
                 username: username.to_string(),
                 password: None,

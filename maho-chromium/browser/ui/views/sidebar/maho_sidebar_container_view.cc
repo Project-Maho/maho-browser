@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -32,6 +33,8 @@
 #include "ui/events/event.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/geometry/transform.h"
+#include "ui/compositor/layer.h"
 #include "ui/views/controls/resize_area.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view_class_properties.h"
@@ -100,16 +103,22 @@ MahoSidebarContainerView::MahoSidebarContainerView(Browser* browser)
       base::Milliseconds(sidebar_layout::kSidebarRevealDurationMs));
   reveal_animation_.SetTweenType(gfx::Tween::EASE_OUT);
 
+  // Own layer: the auto-hide sidebar floats over the web contents, which only
+  // a layer stacked above the contents can paint over and hit-test ahead of,
+  // and the reveal slides via a compositor transform instead of relayouts.
+  SetPaintToLayer();
+  layer()->SetFillsBoundsOpaquely(false);
+
   sidebar_view_ = AddChildView(std::make_unique<MahoSidebarView>(browser));
   resize_handle_view_ = AddChildView(std::make_unique<views::ResizeArea>(this));
 
-  is_private_ = browser->profile()->IsIncognitoProfile() &&
-                browser->profile()->IsPrimaryOTRProfile();
+  is_private_ = browser->GetProfile()->IsIncognitoProfile() &&
+                browser->GetProfile()->IsPrimaryOTRProfile();
   private_sidebar_width_ = sidebar_layout::kDefaultRailWidthDp;
   if (is_private_) {
     was_panel_expanded_ = private_panel_expanded_;
   } else {
-    PrefService* prefs = browser->profile()->GetPrefs();
+    PrefService* prefs = browser->GetProfile()->GetPrefs();
     was_panel_expanded_ = sidebar_prefs::IsSidebarPanelExpanded(prefs);
     pref_registrar_.Init(prefs);
     pref_registrar_.Add(
@@ -151,7 +160,7 @@ PeekSourceRole MahoSidebarContainerView::GetPeekSourceRole(
     return PeekSourceRole::kUnresolved;
   }
 
-  TabStripModel* tab_strip = browser->tab_strip_model();
+  TabStripModel* tab_strip = browser->GetTabStripModel();
   const int index = tab_strip ? tab_strip->GetIndexOfWebContents(web_contents)
                               : TabStripModel::kNoTab;
   if (!tab_strip || index == TabStripModel::kNoTab) {
@@ -282,24 +291,8 @@ void MahoSidebarContainerView::OnPanelExpandedChanged() {
 }
 
 void MahoSidebarContainerView::OnSidebarWidthChanged() {
-  if (IsAutoHideMode()) {
-    if (reveal_animation_.is_animating()) {
-      AnimationProgressed(&reveal_animation_);
-    } else if (!is_hover_revealed_) {
-      return;
-    } else {
-      ApplyPreferredWidthFromPrefs();
-      if (parent()) {
-        parent()->InvalidateLayout();
-      }
-    }
-    if (overlay_host_) {
-      overlay_host_->UpdateLibraryOverlayBounds();
-    }
-    return;
-  }
-
   ApplyPreferredWidthFromPrefs();
+  ApplyRevealTransform();
   if (parent()) {
     parent()->InvalidateLayout();
   }
@@ -319,6 +312,8 @@ void MahoSidebarContainerView::ApplyPanelState() {
     hide_delay_timer_.Stop();
     hover_reveal_suppression_timer_.Stop();
     sidebar_view_->SetVisible(true);
+    ApplyRevealTransform();
+    ApplySidebarViewBackground();
     ApplyPreferredWidthFromPrefs();
   } else {
     if (was_pinned) {
@@ -326,19 +321,21 @@ void MahoSidebarContainerView::ApplyPanelState() {
       hover_reveal_suppression_timer_.Start(
           FROM_HERE, kHoverRevealSuppressionDuration, this,
           &MahoSidebarContainerView::OnHoverRevealSuppressionExpired);
+      // Collapsing a pinned sidebar slides it out over the contents.
+      is_hover_revealed_ = sidebar_view_->GetVisible();
     }
     if (is_hover_revealed_ || reveal_animation_.is_animating()) {
-      if (reveal_animation_.IsShowing()) {
-        reveal_animation_.Hide();
-      }
+      ApplyPreferredWidthFromPrefs();
+      ApplySidebarViewBackground();
+      reveal_animation_.Hide();
     } else {
       reveal_animation_.Reset(0.0);
       sidebar_view_->SetVisible(false);
-      SetPreferredSize(
-          gfx::Size(sidebar_layout::kCollapsedRailWidthDp, 0));
-      PreferredSizeChanged();
+      ApplyRevealTransform();
+      ApplyPreferredWidthFromPrefs();
     }
   }
+  UpdateZOrder();
   if (now_playing_view_) {
     now_playing_view_->UpdateVisibilityState();
   }
@@ -350,6 +347,27 @@ void MahoSidebarContainerView::ApplyPanelState() {
 }
 
 void MahoSidebarContainerView::ApplyPreferredWidthFromPrefs() {
+  // The preferred width is the width reserved beside the contents. An
+  // auto-hide sidebar reserves none; it floats over the contents at
+  // GetFloatingOverlayWidth(), which BrowserView layout reads directly.
+  const int reserved_width = IsAutoHideMode()
+                                 ? sidebar_layout::kCollapsedRailWidthDp
+                                 : ComputeExpandedWidth();
+  SetPreferredSize(gfx::Size(reserved_width, 0));
+  PreferredSizeChanged();
+}
+
+int MahoSidebarContainerView::GetFloatingOverlayWidth() const {
+  if (!IsAutoHideMode()) {
+    return 0;
+  }
+  if (is_hover_revealed_ || reveal_animation_.is_animating()) {
+    return ComputeExpandedWidth();
+  }
+  return sidebar_layout::kHoverTriggerWidthDp;
+}
+
+int MahoSidebarContainerView::ComputeExpandedWidth() const {
   int width = sidebar_prefs::GetSidebarWidthForLayout(ReadSidebarWidth());
   if (sidebar_view_) {
     auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
@@ -375,12 +393,56 @@ void MahoSidebarContainerView::ApplyPreferredWidthFromPrefs() {
       }
     }
   }
-  SetPreferredSize(gfx::Size(width, 0));
-  PreferredSizeChanged();
+  return width;
+}
+
+void MahoSidebarContainerView::ApplyRevealTransform() {
+  gfx::Transform transform;
+  if (IsAutoHideMode() &&
+      (is_hover_revealed_ || reveal_animation_.is_animating())) {
+    const double hidden_fraction = 1.0 - reveal_animation_.GetCurrentValue();
+    const float offset =
+        static_cast<float>(hidden_fraction * ComputeExpandedWidth());
+    transform.Translate(GetMirrored() ? offset : -offset, 0);
+  }
+  layer()->SetTransform(transform);
+}
+
+void MahoSidebarContainerView::ApplySidebarViewBackground() {
+  if (GetWidget()) {
+    static_cast<MahoSidebarView*>(sidebar_view_.get())
+        ->ApplySidebarBackground();
+  }
+}
+
+void MahoSidebarContainerView::UpdateZOrder() {
+  // A floating (auto-hide) sidebar must be stacked above the contents so it
+  // paints over them and wins hit-testing; a pinned one keeps its original
+  // slot below them. Keyboard focus order stays sidebar-before-contents.
+  auto* browser_view = views::AsViewClass<BrowserView>(parent());
+  views::View* contents =
+      browser_view ? browser_view->contents_container() : nullptr;
+  if (!contents) {
+    return;
+  }
+  const std::optional<size_t> self_index = browser_view->GetIndexOf(this);
+  const std::optional<size_t> contents_index =
+      browser_view->GetIndexOf(contents);
+  if (!self_index || !contents_index) {
+    return;
+  }
+  const bool above = *self_index > *contents_index;
+  if (above == IsAutoHideMode()) {
+    return;
+  }
+  browser_view->ReorderChildView(this, *contents_index);
+  InsertBeforeInFocusList(contents);
 }
 
 void MahoSidebarContainerView::MaybePersistSidebarWidth(int width) {
-  if (width <= sidebar_layout::kCollapsedRailWidthDp) {
+  // Auto-hide bounds are the floating hover strip or the floating sidebar,
+  // never a user-chosen width.
+  if (IsAutoHideMode() || width <= sidebar_layout::kCollapsedRailWidthDp) {
     return;
   }
   if (reveal_animation_.is_animating()) {
@@ -482,6 +544,11 @@ void MahoSidebarContainerView::OnMouseExited(const ui::MouseEvent& event) {
 void MahoSidebarContainerView::StartReveal() {
   is_hover_revealed_ = true;
   sidebar_view_->SetVisible(true);
+  ApplySidebarViewBackground();
+  // Start fully off-screen, then grow the floating bounds to the full sidebar
+  // once; the slide itself is a transform and never relayouts the browser.
+  ApplyRevealTransform();
+  RelayoutParent(this);
   reveal_animation_.Show();
   hide_delay_timer_.Start(
       FROM_HERE,
@@ -536,15 +603,7 @@ bool MahoSidebarContainerView::IsCursorInsideContainerScreenBounds() const {
 
 void MahoSidebarContainerView::AnimationProgressed(
     const gfx::Animation* animation) {
-  const int full_width =
-      sidebar_prefs::GetSidebarWidthForLayout(ReadSidebarWidth());
-  const double fraction = reveal_animation_.GetCurrentValue();
-  const int trigger_width = sidebar_layout::kCollapsedRailWidthDp;
-  const int animated_width = trigger_width +
-      static_cast<int>((full_width - trigger_width) * fraction);
-
-  SetPreferredSize(gfx::Size(animated_width, 0));
-  PreferredSizeChanged();
+  ApplyRevealTransform();
 }
 
 void MahoSidebarContainerView::AnimationEnded(
@@ -552,9 +611,9 @@ void MahoSidebarContainerView::AnimationEnded(
   if (IsAutoHideMode() && reveal_animation_.GetCurrentValue() == 0.0) {
     is_hover_revealed_ = false;
     sidebar_view_->SetVisible(false);
-    SetPreferredSize(
-        gfx::Size(sidebar_layout::kCollapsedRailWidthDp, 0));
-    PreferredSizeChanged();
+    ApplyRevealTransform();
+    ApplySidebarViewBackground();
+    // Shrink the floating bounds back to the hover strip.
     RelayoutParent(this);
     CheckAndNotifyAutoHide();
   }
@@ -621,13 +680,14 @@ void MahoSidebarContainerView::CreateNowPlayingHostIfNeeded() {
   auto host = std::make_unique<MahoSidebarNowPlayingView>(browser_);
   auto* host_ptr = host.get();
   now_playing_view_ = sidebar->AddNowPlayingView(std::move(host));
-  auto* coordinator = MahoNowPlayingCoordinatorFactory::GetForProfile(browser_->profile());
+  auto* coordinator = MahoNowPlayingCoordinatorFactory::GetForProfile(browser_->GetProfile());
   if (coordinator) {
     coordinator->RegisterHost(host_ptr);
   }
 }
 
 void MahoSidebarContainerView::AttachOverlayHost() {
+  UpdateZOrder();
   if (overlay_host_) {
     return;
   }
@@ -747,14 +807,14 @@ bool MahoSidebarContainerView::ReadPanelExpanded() const {
   if (is_private_) {
     return private_panel_expanded_;
   }
-  return sidebar_prefs::IsSidebarPanelExpanded(browser_->profile()->GetPrefs());
+  return sidebar_prefs::IsSidebarPanelExpanded(browser_->GetProfile()->GetPrefs());
 }
 
 int MahoSidebarContainerView::ReadSidebarWidth() const {
   if (is_private_) {
     return private_sidebar_width_;
   }
-  return browser_->profile()->GetPrefs()->GetInteger(
+  return browser_->GetProfile()->GetPrefs()->GetInteger(
       sidebar_prefs::kSidebarWidth);
 }
 
@@ -763,7 +823,7 @@ void MahoSidebarContainerView::WriteSidebarWidth(int clamped_width) {
     private_sidebar_width_ = clamped_width;
     return;
   }
-  PrefService* prefs = browser_->profile()->GetPrefs();
+  PrefService* prefs = browser_->GetProfile()->GetPrefs();
   if (prefs->GetInteger(sidebar_prefs::kSidebarWidth) != clamped_width) {
     prefs->SetInteger(sidebar_prefs::kSidebarWidth, clamped_width);
   }
@@ -773,7 +833,7 @@ bool MahoSidebarContainerView::ReadSpacesFullViewport() const {
   if (is_private_) {
     return false;
   }
-  return browser_->profile()->GetPrefs()->GetBoolean(
+  return browser_->GetProfile()->GetPrefs()->GetBoolean(
       sidebar_prefs::kSpacesFullViewport);
 }
 
@@ -786,7 +846,7 @@ void MahoSidebarContainerView::TogglePanelExpanded() {
     }
     return;
   }
-  sidebar_prefs::ToggleSidebarPanelExpanded(browser_->profile()->GetPrefs());
+  sidebar_prefs::ToggleSidebarPanelExpanded(browser_->GetProfile()->GetPrefs());
 }
 
 void MahoSidebarContainerView::OnScrollEvent(ui::ScrollEvent* event) {

@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use maho_storage::sqlite::{EncryptedVaultItemRow, VaultTombstoneCas};
 use maho_types::passwords::PasswordProviderKind;
 use maho_types::vault::{
@@ -13,7 +13,9 @@ use crate::vault_manager::record::{
     canonical_origins, decode_envelope, encode_envelope, mask_username, provider_token, public_dto,
     serialize_record, LiveSecret, RecordSecret, VaultRecordPayload,
 };
-use crate::vault_manager::{VaultCrudError, VaultLoginUpdate, VaultManager};
+use crate::vault_manager::{
+    VaultCredentialFormDetails, VaultCrudError, VaultLoginUpdate, VaultManager,
+};
 use crate::vault_runtime::repository::VaultRepository;
 
 use super::{VaultRuntime, VaultSecretResult};
@@ -62,9 +64,41 @@ impl VaultRuntime {
             }
             let username = update.username.trim().to_string();
             let mut metadata = update.metadata;
+            metadata.favorite = record.metadata.favorite;
+            metadata.trashed_at = record.metadata.trashed_at;
+            metadata.totp = record.metadata.totp.clone();
             metadata.item_kind = VaultItemKind::Login;
             metadata = canonicalize_metadata(metadata, Some(&username))?;
-            reject_duplicate(manager, repository, &metadata, &username, id)?;
+            // `None` preserves the stored form detail (an update that carries no
+            // browser-form context, e.g. a settings-originated rename, must not
+            // silently drop the fields the store round-trip depends on).
+            let mut form_details = match update.form_details {
+                Some(form_details) => Some(form_details),
+                Option::None => record.form_details.clone(),
+            };
+            if let Some(notes) = update.notes {
+                let details = form_details.get_or_insert_with(VaultCredentialFormDetails::default);
+                details.notes.clear();
+                if !notes.is_empty() {
+                    // `VaultCredentialNote` is `ZeroizeOnDrop`, so struct-update
+                    // syntax (`..Default::default()`) cannot move out of it.
+                    let mut note = crate::vault_manager::VaultCredentialNote::default();
+                    note.value = notes.as_str().to_string();
+                    // Chromium time is microsecond-precision; Linux clocks
+                    // report nanoseconds, which the serializer rejects.
+                    note.date_created =
+                        DateTime::<Utc>::from_timestamp_micros(Utc::now().timestamp_micros());
+                    details.notes.push(note);
+                }
+            }
+            reject_duplicate(
+                manager,
+                repository,
+                &metadata,
+                &username,
+                form_details.as_ref(),
+                id,
+            )?;
             let secret = match update.password {
                 Some(password) => RecordSecret::Login {
                     password: password.as_str().to_string(),
@@ -76,24 +110,20 @@ impl VaultRuntime {
                     _ => return Err(VaultCrudError::ItemKindMismatch),
                 },
             };
-            // `None` preserves the stored form detail (an update that carries no
-            // browser-form context, e.g. a settings-originated rename, must not
-            // silently drop the fields the store round-trip depends on).
-            let form_details = match update.form_details {
-                Some(form_details) => Some(form_details),
-                Option::None => record.form_details.clone(),
-            };
-            let updated = VaultRecordPayload {
+            let mut updated = VaultRecordPayload {
                 schema_version: VaultSchemaVersion::CURRENT,
                 metadata,
                 username: Some(username),
                 secret,
                 last_used_at: record.last_used_at,
                 form_details,
+                totp_seed: record.totp_seed.clone(),
             };
+            updated.metadata.has_notes = updated.has_notes();
             let updated_row = encrypt_updated_row(manager, &row, &id, &updated)?;
+            let dto = public_dto(&updated_row, &updated)?;
             persist_update(manager, repository, &updated_row, row.revision, &id)?;
-            public_dto(&updated_row, &updated)
+            Ok(dto)
         })
         .map_err(VaultCrudError::from)?
     }
@@ -110,6 +140,9 @@ impl VaultRuntime {
             let tombstone = VaultRecordPayload {
                 schema_version: VaultSchemaVersion::CURRENT,
                 metadata: VaultItemPublicMetadata {
+                    favorite: false,
+                    trashed_at: None,
+                    has_notes: false,
                     title: String::new(),
                     origins: Vec::new(),
                     username_hint: String::new(),
@@ -121,6 +154,7 @@ impl VaultRuntime {
                 secret: RecordSecret::Tombstone,
                 last_used_at: None,
                 form_details: None,
+                totp_seed: None,
             };
             let envelope = manager
                 .encrypt_and_wrap(&serialize_record(&tombstone)?, &id)
@@ -128,7 +162,11 @@ impl VaultRuntime {
             let envelope = encode_envelope(&envelope)?;
             let timestamp = Utc::now().to_rfc3339();
             let new_revision = row.revision + 1;
-            let persisted = repository
+            let mut deleted = row.clone();
+            deleted.revision = new_revision;
+            deleted.updated_at = timestamp.clone();
+            let dto = public_dto(&deleted, &record)?;
+            match repository
                 .tombstone_item_cas(&VaultTombstoneCas {
                     id: &row.id,
                     expected_revision: row.revision,
@@ -137,15 +175,14 @@ impl VaultRuntime {
                     updated_at: &timestamp,
                     deleted_at: &timestamp,
                 })
-                .map_err(storage_error)?;
-            if !persisted {
-                return Err(classify_cas_failure(repository, &id, row.revision));
+                .map_err(storage_error)?
+            {
+                Some(count) => {
+                    manager.set_item_count(count);
+                    Ok(dto)
+                }
+                None => Err(classify_cas_failure(repository, &id, row.revision)),
             }
-            refresh_item_count(manager, repository)?;
-            let mut deleted = row.clone();
-            deleted.revision = new_revision;
-            deleted.updated_at = timestamp;
-            public_dto(&deleted, &record)
         })
         .map_err(VaultCrudError::from)?
     }
@@ -227,25 +264,26 @@ impl VaultRuntime {
         id: VaultItemId,
         timestamp_secs: u64,
     ) -> Result<Zeroizing<String>, VaultCrudError> {
-        let VaultSecretResult::Totp {
-            seed,
-            algorithm,
-            digits,
-            period_seconds,
-        } = self.use_secret(
-            repository,
-            VaultSecretUseRequest::new(id, VaultItemKind::Totp),
-        )?
-        else {
-            return Err(VaultCrudError::FieldMismatch);
-        };
-        Ok(Zeroizing::new(generate_totp(
-            &seed,
-            timestamp_secs,
-            algorithm,
-            period_seconds,
-            digits,
-        )))
+        self.with_manager(|manager| {
+            let (row, mut record) = active_item(manager, repository, &id)?;
+            if record.metadata.trashed_at.is_some() {
+                return Err(VaultCrudError::ItemNotFound);
+            }
+            let seed = match &record.secret {
+                RecordSecret::Totp { seed } => seed.as_slice(),
+                RecordSecret::Login { .. } => record.totp_seed.as_deref().ok_or(VaultCrudError::FieldMismatch)?,
+                _ => return Err(VaultCrudError::ItemKindMismatch),
+            };
+            let metadata = record.metadata.totp.as_ref().ok_or(VaultCrudError::MalformedPayload)?;
+            let period = u64::from(metadata.period_seconds.value());
+            if period == 0 { return Err(VaultCrudError::MalformedPayload); }
+            let code = Zeroizing::new(generate_totp(seed, timestamp_secs, metadata.algorithm,
+                period, u32::from(u8::from(metadata.digits))));
+            record.last_used_at = Some(Utc::now());
+            let updated = encrypt_updated_row(manager, &row, &id, &record)?;
+            persist_update(manager, repository, &updated, row.revision, &id)?;
+            Ok(code)
+        }).map_err(VaultCrudError::from)?
     }
 
     fn use_secret(
@@ -255,6 +293,9 @@ impl VaultRuntime {
     ) -> Result<VaultSecretResult, VaultCrudError> {
         self.with_manager(|manager| {
             let (row, mut record) = active_item(manager, repository, &request.id)?;
+            if record.metadata.trashed_at.is_some() {
+                return Err(VaultCrudError::ItemNotFound);
+            }
             if let Some(expected_revision) = request.expected_revision {
                 ensure_revision(&row, expected_revision)?;
             }
@@ -306,7 +347,7 @@ fn secret_result_from_record(
     }
 }
 
-fn active_item(
+pub(super) fn active_item(
     manager: &VaultManager,
     repository: &VaultRepository<'_>,
     id: &VaultItemId,
@@ -330,7 +371,7 @@ fn active_item(
     ))
 }
 
-fn ensure_revision(
+pub(super) fn ensure_revision(
     row: &EncryptedVaultItemRow,
     expected: VaultRevision,
 ) -> Result<(), VaultCrudError> {
@@ -361,6 +402,7 @@ fn reject_duplicate(
     repository: &VaultRepository<'_>,
     metadata: &VaultItemPublicMetadata,
     username: &str,
+    form_details: Option<&VaultCredentialFormDetails>,
     excluded: VaultItemId,
 ) -> Result<(), VaultCrudError> {
     let provider = provider_token(PasswordProviderKind::MahoNative);
@@ -369,24 +411,18 @@ fn reject_duplicate(
         if id == excluded
             || row.provider != provider
             || record.metadata.item_kind != VaultItemKind::Login
-            || record.username.as_deref().unwrap_or("").trim() != username.trim()
         {
             continue;
         }
-        if metadata.origins.iter().any(|origin| {
-            record
-                .metadata
-                .origins
-                .iter()
-                .any(|stored| stored == origin)
-        }) {
+        if super::crud_create::has_same_identity(&record, &metadata.origins, username, form_details)
+        {
             return Err(VaultCrudError::Duplicate { existing: id });
         }
     }
     Ok(())
 }
 
-fn encrypt_updated_row(
+pub(super) fn encrypt_updated_row(
     manager: &VaultManager,
     row: &EncryptedVaultItemRow,
     id: &VaultItemId,
@@ -402,28 +438,23 @@ fn encrypt_updated_row(
     Ok(updated)
 }
 
-fn persist_update(
+pub(super) fn persist_update(
     manager: &mut VaultManager,
     repository: &VaultRepository<'_>,
     row: &EncryptedVaultItemRow,
     expected: i64,
     id: &VaultItemId,
 ) -> Result<(), VaultCrudError> {
-    if !repository
+    match repository
         .update_item_cas(row, expected)
         .map_err(storage_error)?
     {
-        return Err(classify_cas_failure(repository, id, expected));
+        Some(count) => {
+            manager.set_item_count(count);
+            Ok(())
+        }
+        None => Err(classify_cas_failure(repository, id, expected)),
     }
-    refresh_item_count(manager, repository)
-}
-
-fn refresh_item_count(
-    manager: &mut VaultManager,
-    repository: &VaultRepository<'_>,
-) -> Result<(), VaultCrudError> {
-    manager.set_item_count(repository.count_active_items().map_err(storage_error)?);
-    Ok(())
 }
 
 fn classify_cas_failure(
@@ -445,7 +476,7 @@ fn storage_error(error: maho_storage::StorageError) -> VaultCrudError {
     VaultCrudError::Storage(error.to_string())
 }
 
-fn generate_totp(
+pub(super) fn generate_totp(
     seed: &[u8],
     timestamp_secs: u64,
     algorithm: TotpAlgorithm,

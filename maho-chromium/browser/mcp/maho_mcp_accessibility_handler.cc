@@ -540,6 +540,7 @@ bool MahoMcpAccessibilityHandler::IsInteractiveRole(ax::mojom::Role role) {
     case ax::mojom::Role::kRadioButton:
     case ax::mojom::Role::kComboBoxGrouping:
     case ax::mojom::Role::kComboBoxMenuButton:
+    case ax::mojom::Role::kComboBoxSelect:
     case ax::mojom::Role::kListBox:
     case ax::mojom::Role::kMenu:
     case ax::mojom::Role::kMenuItem:
@@ -658,6 +659,8 @@ std::string MahoMcpAccessibilityHandler::RoleToString(ax::mojom::Role role) {
     case ax::mojom::Role::kComboBoxGrouping:
       return "combobox";
     case ax::mojom::Role::kComboBoxMenuButton:
+      return "combobox";
+    case ax::mojom::Role::kComboBoxSelect:
       return "combobox";
     case ax::mojom::Role::kListBox:
       return "listbox";
@@ -794,6 +797,13 @@ base::Value MahoMcpAccessibilityHandler::SerializeNode(
         data.GetStringAttribute(ax::mojom::StringAttribute::kAutoComplete);
     if (!autocomplete.empty()) {
       dict.Set("autocomplete", autocomplete);
+    }
+  }
+  if (data.HasStringAttribute(ax::mojom::StringAttribute::kHtmlId)) {
+    const std::string& html_id =
+        data.GetStringAttribute(ax::mojom::StringAttribute::kHtmlId);
+    if (!html_id.empty()) {
+      dict.Set("elementId", html_id);
     }
   }
   for (const auto& attr : data.html_attributes) {
@@ -1129,6 +1139,7 @@ bool MahoMcpAccessibilityHandler::SelectByRef(ui::AXTree& tree,
   ax::mojom::Role role = node->data().role;
   return role == ax::mojom::Role::kComboBoxGrouping ||
          role == ax::mojom::Role::kComboBoxMenuButton ||
+         role == ax::mojom::Role::kComboBoxSelect ||
          role == ax::mojom::Role::kTextFieldWithComboBox ||
          role == ax::mojom::Role::kListBox;
 }

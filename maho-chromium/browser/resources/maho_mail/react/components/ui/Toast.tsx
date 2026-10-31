@@ -30,7 +30,7 @@ function StructuredToast({ summary, detail }: StructuredMessage) {
             e.stopPropagation();
             setExpanded(!expanded);
           }}
-          className="text-muted-foreground hover:text-foreground shrink-0"
+          className="mail-pressable flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground"
           aria-label={expanded ? "Collapse details" : "Expand details"}
         >
           {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}

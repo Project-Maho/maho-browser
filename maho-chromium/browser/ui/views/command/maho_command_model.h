@@ -26,6 +26,7 @@
 #include "maho/browser/maho_private_context_policy.h"  // nogncheck
 #include "maho/browser/ui/views/command/maho_remote_search_suggestions.h"
 #include "ui/gfx/image/image.h"
+#include "url/gurl.h"
 
 class Browser;
 class BrowserWindowInterface;
@@ -117,6 +118,7 @@ struct CommandSuggestion {
 class MahoCommandModel : public TabStripModelObserver,
                          public BrowserCollectionObserver {
   friend class MahoCommandModelTest;
+  friend class MahoCommandModelTabObserverTest;
  public:
   using ResultsCallback =
       base::RepeatingCallback<void(std::vector<CommandSuggestion>)>;
@@ -144,6 +146,15 @@ class MahoCommandModel : public TabStripModelObserver,
   std::vector<CommandSuggestion> GetRecentSearches();
   const SiteSearchEngine* MatchSiteSearch(const std::string& query) const;
   const SiteSearchEngine* MatchExactSiteSearchKeyword(const std::string& trimmed) const;
+  // Expands the site-search engine registered under |prefix| for |query|.
+  // Returns an invalid GURL when no engine matches or the template does not
+  // produce an http(s) URL.
+  GURL BuildSiteSearchUrl(const std::string& prefix,
+                          const std::string& query) const;
+  // Substitutes the URL-escaped |query| into a {query}, {searchTerms} or %s
+  // placeholder of |url_template|.
+  static GURL ExpandSiteSearchTemplate(const std::string& url_template,
+                                       const std::string& query);
   const std::vector<SiteSearchEngine>& site_search_engines() const {
     return site_search_engines_;
   }
@@ -240,21 +251,32 @@ class MahoCommandModel : public TabStripModelObserver,
       const std::string& engine_name);
   static std::optional<CommandSuggestion> BuildNavigationSuggestionForQuery(
       const std::string& query);
+
+  // How typed palette text should navigate, classified with the omnibox's
+  // AutocompleteInput rules (TLD/IP/port heuristics). Scheme-less input
+  // canonicalizes to http://; HTTPS-Upgrades then upgrades unique hosts with
+  // an automatic http fallback and leaves localhost/IP/intranet hosts on http,
+  // exactly like omnibox navigations. std::nullopt means the text is a search.
+  struct TypedNavigation {
+    GURL url;
+    // True when the user explicitly typed an http:// scheme; the navigation
+    // must then set NavigateParams::url_typed_with_http_scheme so
+    // HTTPS-Upgrades does not override the explicit choice.
+    bool typed_http_scheme = false;
+  };
+  static std::optional<TypedNavigation> ClassifyTypedNavigation(
+      const std::string& text);
+
   static std::vector<CommandSuggestion> ParseSearchResultsJson(
-      const std::string& json_str,
-      const std::vector<CommandSuggestion>& chromium_bookmarks);
+      const std::string& json_str);
 
  private:
   // Returns cached JSON (rebuilds lazily when tabs_cache_dirty_ is true).
   // Must be called on the UI sequence.
   std::string BuildTabsJson();
-  static std::vector<CommandSuggestion> BuildChromiumBookmarkSuggestions(
-      Browser* browser,
-      const std::string& query);
   static std::vector<CommandSuggestion> SearchOnPool(
       const std::string& query,
       const std::string& tabs_json,
-      const std::vector<CommandSuggestion>& chromium_bookmarks,
       CommandOverlayMode mode,
       bool is_incognito);
 
@@ -294,7 +316,6 @@ class MahoCommandModel : public TabStripModelObserver,
       const TabStripModelChange& change,
       const TabStripSelectionChange& selection) override;
   void OnTabChangedAt(tabs::TabInterface* tab,
-                      int index,
                       TabChangeType change_type) override;
 
   // BrowserCollectionObserver:

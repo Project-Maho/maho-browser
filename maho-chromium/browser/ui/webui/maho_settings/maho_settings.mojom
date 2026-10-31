@@ -377,10 +377,51 @@ struct VaultItem {
   string? last_used_at;
   bool has_totp;
   bool has_passkey;
+  bool favorite;
+  string? trashed_at;
+  bool has_notes;
 };
 
 enum SecretAction {
   kCopy = 0,
+  kReveal = 1,
+};
+
+struct VaultTotpCodeResult {
+  bool success;
+  string? code;
+  uint32 seconds_remaining;
+  uint32 period;
+  string? error_code;
+};
+
+struct PasswordGeneratorOptions {
+  string mode = "password";
+  uint32 length = 20;
+  bool include_lowercase = true;
+  bool include_uppercase = true;
+  bool include_digits = true;
+  bool include_symbols = true;
+  bool avoid_ambiguous = false;
+  uint32 word_count = 5;
+  string separator = "-";
+  bool capitalize = true;
+  bool include_number = true;
+};
+
+struct GeneratedPasswordResult {
+  bool success;
+  string? password;
+  uint32 strength_score;
+  double entropy_bits;
+};
+
+struct VaultHealthReport {
+  bool success;
+  array<string> weak_item_ids;
+  array<array<string>> reused_groups;
+  uint32 total_logins;
+  string? error_code;
 };
 
 struct VaultOperationResult {
@@ -648,6 +689,7 @@ struct BrowserVersionInfo {
   // self-update from the release feed, so the UI hides the check/apply
   // controls. Not platform-gated: every shipped platform has a real delegate.
   bool update_supported;
+  string update_guidance;
 };
 
 enum MailNotificationPermission {
@@ -821,23 +863,45 @@ interface PageHandler {
   UnlockVaultWithRecovery(string recovery_secret)
       => (VaultOperationResult result);
   LockVault() => (VaultOperationResult result);
+  LockNow() => (VaultOperationResult result);
   ListVaultItems(PasswordProviderKind? provider,
                  array<VaultItemKind> kinds,
                  string? cursor,
-                 uint32 limit) => (VaultItemListResult result);
+                 uint32 limit, bool trash_only, bool favorites_only)
+      => (VaultItemListResult result);
   SearchVaultItems(string origin,
                    PasswordProviderKind? provider,
                    array<VaultItemKind> kinds) => (VaultItemListResult result);
   AddVaultLogin(string title,
                 array<string> origins,
                 string username,
-                string password) => (VaultOperationResult result);
+                string password, string? notes) => (VaultOperationResult result);
   UpdateVaultLogin(string item_id,
                    uint64 expected_revision,
                    string title,
                    array<string> origins,
                    string username,
-                   string? password) => (VaultOperationResult result);
+                   string? password, string? notes) => (VaultOperationResult result);
+  TrashVaultItem(string item_id, uint64 expected_revision)
+      => (VaultOperationResult result);
+  RestoreVaultItem(string item_id, uint64 expected_revision)
+      => (VaultOperationResult result);
+  EmptyVaultTrash() => (VaultOperationResult result);
+  SetVaultItemFavorite(string item_id, uint64 expected_revision, bool favorite)
+      => (VaultOperationResult result);
+  // `username` is the stored (unmasked) login username; VaultItem only
+  // carries a masked display hint.
+  GetVaultItemNotes(string item_id)
+      => (bool success, string? notes, string? error_code, string? username);
+  AddVaultSecureNote(string title, string notes) => (VaultOperationResult result);
+  UpdateVaultSecureNote(string item_id, uint64 expected_revision,
+                       string title, string notes) => (VaultOperationResult result);
+  SetVaultLoginTotp(string item_id, uint64 expected_revision, string secret)
+      => (VaultOperationResult result);
+  GetVaultTotpCode(string item_id) => (VaultTotpCodeResult result);
+  GeneratePassword(PasswordGeneratorOptions options) => (GeneratedPasswordResult result);
+  EstimatePasswordStrength(string password) => (uint32 score, double entropy_bits);
+  GetVaultHealthReport() => (VaultHealthReport result);
   DeleteVaultItem(string item_id, uint64 expected_revision)
       => (VaultOperationResult result);
   UseVaultSecret(string item_id,
@@ -909,7 +973,6 @@ interface PageHandler {
 
   OpenExtensionsPage();
   OpenChromiumSettingsPage();
-  OpenBookmarksPage();
   OpenMigrationDialog();
 
   SetBYOKKey(string provider, string key) => (bool success);

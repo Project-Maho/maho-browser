@@ -50,6 +50,16 @@ export const PINNED_CLOSE_BEHAVIOR_OPTIONS = [
   {value: 'close', label: 'Close the pinned tab'},
 ];
 
+export const VAULT_AUTO_LOCK_OPTIONS = [
+  {value: '0', label: 'Never'},
+  {value: '1', label: 'After 1 minute'},
+  {value: '5', label: 'After 5 minutes'},
+  {value: '15', label: 'After 15 minutes'},
+  {value: '30', label: 'After 30 minutes'},
+  {value: '60', label: 'After 1 hour'},
+  {value: '240', label: 'After 4 hours'},
+];
+
 export const TRANSLATE_LANGUAGE_OPTIONS = [
   {value: '', label: 'Automatic (match your preferred language)'},
   {value: 'en', label: 'English'},
@@ -114,7 +124,7 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
       scope: 'profile',
       selectedProfile: true,
       label: 'Translate pages into',
-      description: 'The language Maho translates web pages into. Right-click a page and choose "Translate this page" to translate it into this language.',
+      description: 'The language Maho translates web pages into. Use the translate button in the page header, or right-click a page and choose "Translate this page".',
       control: 'select',
       options: TRANSLATE_LANGUAGE_OPTIONS,
     },
@@ -198,6 +208,31 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
       label: 'Block third-party cookies',
       description: 'Block cookies set by other sites while you browse. When off, standard cookie controls stay disabled.',
       control: 'toggle',
+    },
+  },
+  {
+    key: 'advanced.memory_saver_mode',
+    metadata: {
+      scope: 'device',
+      selectedProfile: false,
+      label: 'Memory Saver',
+      description: 'Frees up memory from inactive tabs so your active tabs and other apps stay fast. Inactive tabs reload automatically when you open them.',
+      control: 'toggle',
+    },
+  },
+  {
+    key: 'advanced.memory_saver_timeout',
+    metadata: {
+      scope: 'device',
+      selectedProfile: false,
+      label: 'Discard inactive tabs',
+      description: 'Choose when background tabs become inactive and their memory is freed.',
+      control: 'select',
+      options: [
+        {value: '2', label: 'Aggressive (after 2 hours)'},
+        {value: '1', label: 'Balanced (after 4 hours)'},
+        {value: '0', label: 'Conservative (after 6 hours)'},
+      ],
     },
   },
   {
@@ -379,6 +414,27 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
       label: 'Password provider',
       description: 'Choose the password provider used by Maho.',
       control: 'select',
+    },
+  },
+  {
+    key: 'autofill.vault_auto_lock_minutes',
+    metadata: {
+      scope: 'core-global',
+      selectedProfile: false,
+      label: 'Lock Maho Vault after',
+      description: 'Lock the Vault automatically after this much inactivity.',
+      control: 'select',
+      options: VAULT_AUTO_LOCK_OPTIONS,
+    },
+  },
+  {
+    key: 'autofill.vault_require_device_auth',
+    metadata: {
+      scope: 'core-global',
+      selectedProfile: false,
+      label: 'Require device authentication',
+      description: 'Ask for Touch ID (or your device passcode) before filling, copying, or changing saved passwords.',
+      control: 'toggle',
     },
   },
   {

@@ -50,10 +50,10 @@ function ToolbarButton({
       title={title}
       aria-label={title}
       aria-pressed={active}
-      className={`rounded p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+      className={`mail-pressable flex h-8 w-8 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
         active
-          ? "bg-muted text-foreground"
-          : "text-muted-foreground hover:bg-card hover:text-foreground"
+          ? "bg-primary/10 text-primary"
+          : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
       }`}
     >
       {children}
@@ -68,6 +68,19 @@ export function RichTextEditor({ content, onChange, placeholder, ariaLabel, auto
   const mobile = isMobile();
   const [showLinkInput, setShowLinkInput] = useState(false);
   const [linkValue, setLinkValue] = useState("");
+
+  useEffect(() => {
+    if (!showLinkInput) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setShowLinkInput(false);
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [showLinkInput]);
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -102,7 +115,7 @@ export function RichTextEditor({ content, onChange, placeholder, ariaLabel, auto
 
     const currentHtml = editor.getHTML();
     if (currentHtml !== content) {
-      editor.commands.setContent(content);
+      editor.commands.setContent(content, { emitUpdate: false });
     }
   }, [content, editor]);
 
@@ -178,7 +191,7 @@ export function RichTextEditor({ content, onChange, placeholder, ariaLabel, auto
 
   return (
     <div className="flex flex-1 flex-col">
-      <div className={cn("border-b border-border px-4 py-1.5", mobile && "py-2")} role="toolbar" aria-label={t("compose.formattingOptions")}>
+      <div className={cn("border-b border-border/60 px-1 py-1.5", mobile && "py-2")} role="toolbar" aria-label={t("compose.formattingOptions")}>
         <div className="flex flex-wrap items-center gap-0.5">
           <ToolbarButton
             onClick={() => editor.chain().focus().toggleBold().run()}
@@ -204,7 +217,7 @@ export function RichTextEditor({ content, onChange, placeholder, ariaLabel, auto
             </ToolbarButton>
           )}
 
-          {!mobile && <div className="mx-1 h-5 w-px bg-muted" />}
+          {!mobile && <div className="mx-1 h-5 w-px bg-border" />}
 
           <ToolbarButton onClick={handleLink} active={editor.isActive("link")} title={t("compose.link")}>
             <LinkIcon size={16} />
@@ -215,7 +228,7 @@ export function RichTextEditor({ content, onChange, placeholder, ariaLabel, auto
             </ToolbarButton>
           )}
 
-          {!mobile && <div className="mx-1 h-5 w-px bg-muted" />}
+          {!mobile && <div className="mx-1 h-5 w-px bg-border" />}
 
           <ToolbarButton
             onClick={() => editor.chain().focus().toggleBulletList().run()}
@@ -241,7 +254,7 @@ export function RichTextEditor({ content, onChange, placeholder, ariaLabel, auto
             </ToolbarButton>
           )}
 
-          {!mobile && <div className="mx-1 h-5 w-px bg-muted" />}
+          {!mobile && <div className="mx-1 h-5 w-px bg-border" />}
 
           {showUndo && (
             <ToolbarButton onClick={() => editor.chain().focus().undo().run()} title={t("compose.undo")}>
@@ -255,7 +268,16 @@ export function RichTextEditor({ content, onChange, placeholder, ariaLabel, auto
           )}
         </div>
         {mobile && showLinkInput && (
-          <div className="mt-2 flex items-end gap-2 rounded-xl border border-border bg-card/40 p-2">
+          <div
+            className="mt-2 flex items-end gap-2 rounded-xl border border-border bg-card/40 p-2"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                setShowLinkInput(false);
+              }
+            }}
+          >
             <Input
               value={linkValue}
               onChange={setLinkValue}
@@ -273,7 +295,7 @@ export function RichTextEditor({ content, onChange, placeholder, ariaLabel, auto
             <button
               type="button"
               onClick={() => setShowLinkInput(false)}
-              className="flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+              className="mail-pressable flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground"
               aria-label={t("common.cancel", "Cancel")}
             >
               <X size={16} />

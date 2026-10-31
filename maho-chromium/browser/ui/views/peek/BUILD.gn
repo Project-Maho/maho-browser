@@ -43,7 +43,6 @@ source_set("maho_peek") {
     "//base",
     "//chrome/browser:browser_public_dependencies",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/ui/web_modal:browser_window_modal_dialog_delegate",
     "//components/web_modal",
     "//content/public/browser",
     "//printing/buildflags",

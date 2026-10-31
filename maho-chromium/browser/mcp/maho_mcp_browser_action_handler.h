@@ -66,7 +66,14 @@ class MahoMcpBrowserActionHandler {
     int ref = arguments->FindInt("ref").value();
     ui::AXNodeID ax_id = validation.value.FindInt("ax_id").value();
 
-    bool clicked = delegate && delegate->Click(tab_id, ax_id);
+    const bool force =
+        arguments ? arguments->FindBool("force").value_or(false) : false;
+    bool clicked = false;
+    if (force) {
+      clicked = delegate && delegate->ClickForced(tab_id, ax_id);
+    } else {
+      clicked = delegate && delegate->Click(tab_id, ax_id);
+    }
     if (!clicked) {
       return MakeError(-32000,
                        "Action failed: click could not be dispatched");
@@ -75,6 +82,9 @@ class MahoMcpBrowserActionHandler {
     base::DictValue result;
     result.Set("clicked", clicked);
     result.Set("ref", ref);
+    if (force) {
+      result.Set("forced", true);
+    }
     return MakeSuccess(std::move(result));
   }
 
@@ -254,7 +264,7 @@ class MahoMcpBrowserActionHandler {
          key == "Backspace" || key == "Delete" || key == "ArrowUp" ||
          key == "ArrowDown" || key == "ArrowLeft" || key == "ArrowRight" ||
          key == "Home" || key == "End" || key == "PageUp" ||
-         key == "PageDown" ||
+         key == "PageDown" || key == "Space" || key == " " ||
          (key[0] == 'F' && key.size() > 1 && key.size() <= 3));
     if (!valid_key) {
       return MakeError(-32602, "Invalid params: unknown key");
@@ -297,13 +307,50 @@ class MahoMcpBrowserActionHandler {
     if (path.empty()) {
       return MakeError(-32602, "Invalid params: path required");
     }
-    if (!delegate || !delegate->SelectFileForPendingChooser(tab_id, path)) {
+
+    const base::Value* selector_val = arguments->Find("selector");
+    if (!selector_val) {
+      selector_val = arguments->Find("css");
+    }
+
+    const std::string* selector_str = nullptr;
+    if (selector_val) {
+      if (!selector_val->is_string()) {
+        return MakeError(-32602, "Invalid params: selector must be a string");
+      }
+      selector_str = &selector_val->GetString();
+      if (selector_str->empty()) {
+        return MakeError(-32602, "Invalid params: selector cannot be empty");
+      }
+    }
+
+    bool selected = false;
+    if (selector_str) {
+      selected =
+          delegate && delegate->SelectFileForInput(tab_id, *selector_str, path);
+    } else {
+      selected =
+          delegate && delegate->SelectFileForPendingChooser(tab_id, path);
+    }
+
+    if (!selected) {
       return MakeError(-32000,
                        "Action failed: file upload could not be dispatched");
     }
 
     base::DictValue result;
     result.Set("file_selected", true);
+    return MakeSuccess(std::move(result));
+  }
+
+  static Result HandleHistoryBack(MahoMcpBrowserDelegate* delegate,
+                                  int tab_id) {
+    if (!delegate || !delegate->GoBack(tab_id)) {
+      return MakeError(-32000, "Action failed: no history back entry");
+    }
+    base::DictValue result;
+    result.Set("navigated", true);
+    result.Set("went_back", true);
     return MakeSuccess(std::move(result));
   }
 

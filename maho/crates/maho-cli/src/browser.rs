@@ -62,6 +62,8 @@ fn default_tool_timeout(tool: &str) -> Duration {
             | "browser_scroll"
             | "browser_hover"
             | "browser_file_upload_select"
+            | "browser_page_content"
+            | "browser_page_text"
             | "vault_fill_credential"
             | "vault_fill_totp"
     ) {
@@ -102,7 +104,9 @@ pub async fn connect_autonomous(override_path: Option<&str>) -> Result<BrowserCl
         None => default_socket_path(),
     };
 
-    let result = BrowserClient::connect_autonomous_as(&path, connection_timeout(), ControllerKind::MahoCli).await;
+    let result =
+        BrowserClient::connect_autonomous_as(&path, connection_timeout(), ControllerKind::MahoCli)
+            .await;
     result.map_err(|e| {
         if matches!(e, maho_browser_mcp::error::McpBridgeError::SocketConnect(_)) {
             anyhow::anyhow!(
@@ -459,20 +463,31 @@ pub fn parse_duration_to_seconds(s: &str) -> Result<i64> {
         bail!("empty duration string");
     }
 
-    let (num_str, suffix) = s.split_at(s.len() - 1);
+    // Split on the final character, never the final byte: a multi-byte suffix
+    // must fail as an unknown suffix instead of panicking on a byte boundary.
+    let mut chars = s.chars();
+    let suffix = match chars.next_back() {
+        Some(suffix) => suffix,
+        None => bail!("empty duration string"),
+    };
+    let num_str = chars.as_str();
     let num: i64 = num_str
         .parse()
         .with_context(|| format!("invalid duration number: {num_str:?}"))?;
 
-    let multiplier = match suffix {
-        "d" => 86400,
-        "h" => 3600,
-        "m" => 60,
-        "s" => 1,
+    let multiplier: i64 = match suffix {
+        'd' => 86400,
+        'h' => 3600,
+        'm' => 60,
+        's' => 1,
         _ => bail!("unknown duration suffix: {suffix:?}. Use d/h/m/s"),
     };
 
-    Ok(num * multiplier)
+    // Checked math: a duration that overflows i64 must be rejected, not panic.
+    match num.checked_mul(multiplier) {
+        Some(seconds) => Ok(seconds),
+        None => bail!("duration out of range: {s:?}"),
+    }
 }
 
 /// Truncate a string to `max` chars, appending "..." if truncated.
@@ -582,6 +597,8 @@ mod tests {
             "browser_screenshot_element",
             "browser_scroll",
             "browser_hover",
+            "browser_page_content",
+            "browser_page_text",
             "vault_fill_credential",
             "vault_fill_totp",
         ] {

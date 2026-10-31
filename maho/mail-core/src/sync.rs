@@ -9,15 +9,19 @@ use futures::stream::{FuturesUnordered, StreamExt as _};
 use futures::FutureExt as _;
 use maho_core::folder_normalize::{classify_folder, folder_type_to_string, is_visible_folder};
 use maho_core::imap_client::ImapEnvelope;
-use rusqlite::{params, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::account::{connect_imap, resolve_account_auth, safe_logout, AccountAuth};
+use crate::account::{
+    connect_imap_with_retry, resolve_account_auth, safe_logout, AccountAuth,
+};
 use crate::error::{MailFfiError, Result};
 use crate::state::{AppCtx, WorkerHandle};
 
 const DEFAULT_SYNC_INTERVAL_MINUTES: u64 = 15;
+#[path = "sync_reconciliation.rs"]
+mod reconciliation;
 static SYNC_INTERVAL_MINUTES: AtomicU64 = AtomicU64::new(DEFAULT_SYNC_INTERVAL_MINUTES);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const SUPERVISOR_BACKOFF_MAX: Duration = Duration::from_secs(60);
@@ -44,6 +48,8 @@ struct FolderFetchResult {
     folder: FolderSyncTarget,
     envelopes: Vec<ImapEnvelope>,
     server_uid_validity: u32,
+    reconciliation: Vec<ImapEnvelope>,
+    flag_snapshot: Option<reconciliation::Snapshot>,
 }
 
 pub fn start_sync_worker(ctx: Arc<AppCtx>, account_id: String) -> WorkerHandle {
@@ -61,6 +67,7 @@ pub fn start_sync_worker(ctx: Arc<AppCtx>, account_id: String) -> WorkerHandle {
     WorkerHandle {
         stop,
         tasks: vec![sync_task, idle_task],
+        wake: None,
     }
 }
 
@@ -104,14 +111,7 @@ where
 }
 
 fn is_auth_error(err: &MailFfiError) -> bool {
-    match err {
-        MailFfiError::MissingCredentials(_) | MailFfiError::OAuth2Refresh(_) => true,
-        MailFfiError::Core(ref app_err) => {
-            let msg = app_err.to_string().to_uppercase();
-            msg.contains("AUTHENTICATIONFAILED") || msg.contains("UNAUTHORIZED")
-        }
-        _ => false,
-    }
+    crate::account::is_auth_error(err)
 }
 
 async fn sync_loop(
@@ -130,7 +130,7 @@ async fn sync_loop(
             }
             Err(err) => {
                 log::warn!("[mail-ffi] sync failed for {account_id}: {err}");
-                if is_auth_error(&err) {
+                if is_auth_error(&err) && !matches!(err, MailFfiError::OAuth2Refresh(_)) {
                     crate::ffi::emit_reauth_event(&account_id, "unknown", &err.to_string());
                 }
             }
@@ -186,7 +186,7 @@ async fn idle_loop(
             Ok(false) => {}
             Err(err) => {
                 log::warn!("[mail-ffi] idle failed for {account_id}: {err}");
-                if is_auth_error(&err) {
+                if is_auth_error(&err) && !matches!(err, MailFfiError::OAuth2Refresh(_)) {
                     crate::ffi::emit_reauth_event(&account_id, "unknown", &err.to_string());
                 }
             }
@@ -215,13 +215,19 @@ pub async fn sync_account_once(ctx: Arc<AppCtx>, account_id: &str) -> Result<usi
     })
     .await?;
 
-    let folder_metadata = {
-        let resolved = resolved.clone();
+    let folder_ctx = Arc::clone(&ctx);
+    let (folder_metadata, resolved) = {
+        let mut resolved = resolved.clone();
         spawn_blocking_result("folder fetch", move || {
-            let mut client = connect_imap(&resolved)?;
+            let conn = folder_ctx
+                .pool
+                .get()
+                .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+            let mut client =
+                connect_imap_with_retry(&conn, &folder_ctx.credential_key, &mut resolved)?;
             let folders = client.list_folders()?;
             safe_logout(client);
-            Ok(folders)
+            Ok((folders, resolved))
         })
         .await?
     };
@@ -346,7 +352,7 @@ fn existing_folders(
 fn sync_targets(conn: &rusqlite::Connection, account_id: &str) -> Result<Vec<FolderSyncTarget>> {
     let mut stmt = conn.prepare(
         "SELECT id, path, folder_type, last_synced_uid, uid_validity FROM folders
-         WHERE account_id = ?1 AND folder_type IN ('inbox', 'sent', 'drafts', 'archive', 'custom')",
+         WHERE account_id = ?1 AND folder_type IN ('inbox', 'sent', 'drafts', 'archive', 'custom', 'spam', 'trash')",
     )?;
     let rows = stmt.query_map([account_id], |row| {
         let last_uid: i64 = row.get(3)?;
@@ -371,14 +377,44 @@ async fn sync_folder(
     resolved: AccountAuth,
     folder: FolderSyncTarget,
 ) -> Result<(FolderSyncTarget, usize, Vec<NewMailArrival>)> {
+    let connect_ctx = Arc::clone(&ctx);
+    sync_folder_with_connector(ctx, resolved, folder, move |auth| {
+        let conn = connect_ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let mut auth_copy = auth.clone();
+        connect_imap_with_retry(&conn, &connect_ctx.credential_key, &mut auth_copy)
+    })
+    .await
+}
+
+async fn sync_folder_with_connector<F>(
+    ctx: Arc<AppCtx>,
+    resolved: AccountAuth,
+    folder: FolderSyncTarget,
+    connect: F,
+) -> Result<(FolderSyncTarget, usize, Vec<NewMailArrival>)>
+where
+    F: FnOnce(&AccountAuth) -> Result<maho_core::imap_client::ImapClient> + Send + 'static,
+{
     let _folder_permit = Arc::clone(&FOLDER_SYNC_SEMAPHORE)
         .acquire_owned()
         .await
         .map_err(|_| MailFfiError::Internal("folder sync semaphore closed".into()))?;
     let account_id = resolved.account.id.clone();
+    let backfill_wake = crate::state::registry().backfill_wake(&account_id);
     let fetched_folder = folder.clone();
+    let history_pool = ctx.pool.clone();
     let fetched = spawn_blocking_result("message fetch", move || {
-        let mut client = connect_imap(&resolved)?;
+        let conn = history_pool.get().map_err(|error| MailFfiError::Pool(error.to_string()))?;
+        let oldest_uid: Option<u32> = conn.query_row(
+                "SELECT MIN(uid) FROM emails WHERE account_id=?1 AND folder_id=?2 AND uid>0",
+                params![resolved.account.id, fetched_folder.id], |row| row.get(0),
+            )?;
+        let flag_selection = reconciliation::select(&conn, &fetched_folder)?;
+        drop(conn);
+        let mut client = connect(&resolved)?;
         let initial_since_uid = if fetched_folder.uid_validity == 0 {
             0
         } else {
@@ -393,30 +429,60 @@ async fn sync_folder(
             let (reset_envelopes, _) = client.fetch_envelopes_since_uid(&fetched_folder.path, 0)?;
             envelopes = reset_envelopes;
         }
+        // Revisit a bounded recent window even when there are no new UIDs.
+        let (reconciliation, reconciliation_epoch) =
+            client.fetch_envelopes_since_uid(&fetched_folder.path, 0)?;
+        if reconciliation_epoch != server_uid_validity {
+            return Err(MailFfiError::Internal("mailbox epoch changed during reconciliation".into()));
+        }
+        if !reset_required && fetched_folder.uid_validity != 0 {
+            if let Some(oldest_uid) = oldest_uid.filter(|uid| *uid > 1) {
+                let (history, history_epoch) = client.fetch_envelopes_before_uid(&fetched_folder.path, oldest_uid)?;
+                if history_epoch != server_uid_validity {
+                    safe_logout(client);
+                    return Err(MailFfiError::Internal("mailbox epoch changed during history fetch".into()));
+                }
+                envelopes.extend(history);
+            }
+        }
+        let flag_snapshot = if !reset_required && fetched_folder.uid_validity != 0 {
+            Some(reconciliation::fetch(&mut client, &fetched_folder, server_uid_validity, flag_selection))
+        } else {
+            None
+        };
         safe_logout(client);
         Ok(FolderFetchResult {
             folder: fetched_folder,
             envelopes,
             server_uid_validity,
+            reconciliation,
+            flag_snapshot: flag_snapshot.transpose()?,
         })
     })
     .await?;
 
     let result_folder = fetched.folder.clone();
     let (inserted, arrivals) = spawn_blocking_result("message batch write", move || {
-        let conn = ctx
+        let mut conn = ctx
             .pool
             .get()
             .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-        sync_envelopes_into_cache(
-            &conn,
+        sync_envelopes_with_snapshots(
+            &mut conn,
             &account_id,
             &fetched.folder,
             &fetched.envelopes,
             fetched.server_uid_validity,
+            Some(&fetched.reconciliation),
+            fetched.flag_snapshot.as_ref(),
         )
     })
     .await?;
+    if inserted > 0 {
+        if let Some(wake) = backfill_wake {
+            wake.notify_one();
+        }
+    }
     Ok((result_folder, inserted, arrivals))
 }
 
@@ -430,30 +496,111 @@ struct NewMailArrival {
     epoch: u64,
 }
 
+#[cfg(test)]
 fn sync_envelopes_into_cache(
-    conn: &rusqlite::Connection,
+    conn: &mut rusqlite::Connection,
     account_id: &str,
     folder: &FolderSyncTarget,
     envelopes: &[ImapEnvelope],
     server_uid_validity: u32,
 ) -> Result<(usize, Vec<NewMailArrival>)> {
+    sync_envelopes_with_reconciliation(conn, account_id, folder, envelopes, server_uid_validity, None)
+}
+
+#[cfg(test)]
+fn sync_envelopes_with_reconciliation(
+    conn: &mut rusqlite::Connection,
+    account_id: &str,
+    folder: &FolderSyncTarget,
+    envelopes: &[ImapEnvelope],
+    server_uid_validity: u32,
+    reconciliation: Option<&[ImapEnvelope]>,
+) -> Result<(usize, Vec<NewMailArrival>)> {
+    sync_envelopes_with_snapshots(conn, account_id, folder, envelopes, server_uid_validity, reconciliation, None)
+}
+
+fn sync_envelopes_with_snapshots(
+    conn: &mut rusqlite::Connection,
+    account_id: &str,
+    folder: &FolderSyncTarget,
+    envelopes: &[ImapEnvelope],
+    server_uid_validity: u32,
+    reconciliation: Option<&[ImapEnvelope]>,
+    flag_snapshot: Option<&reconciliation::Snapshot>,
+) -> Result<(usize, Vec<NewMailArrival>)> {
     let rebuilding_baseline = folder.uid_validity == 0
         || (server_uid_validity != 0 && server_uid_validity != folder.uid_validity);
-    let transaction = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // A fetch owns the epoch it started from, not whichever epoch is current
+    // when its blocking network operation eventually finishes.
+    let (current_epoch, current_cursor): (u32, u32) = transaction.query_row(
+        "SELECT uid_validity, last_synced_uid FROM folders WHERE id = ?1 AND account_id = ?2",
+        params![folder.id, account_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if current_epoch != folder.uid_validity {
+        return Err(MailFfiError::Internal("stale mailbox epoch".into()));
+    }
+    let mut current_folder = folder.clone();
+    current_folder.last_synced_uid = current_cursor;
+    let flags_current = flag_snapshot.map(|snapshot| reconciliation::is_current(&transaction, folder, snapshot)).transpose()?.unwrap_or(true);
+    let reconciliation = reconciliation.filter(|_| current_cursor <= folder.last_synced_uid && flags_current);
+    // Both pages describe the same pre-rule server state. Merge their identities
+    // before applying rules so no later pass can undo a rule or resurrect a row.
+    let mut merged = envelopes.to_vec();
+    let mut seen: std::collections::HashSet<_> = envelopes.iter().map(|env| env.uid).collect();
+    if let Some(snapshot) = reconciliation {
+        merged.extend(snapshot.iter().filter(|env| seen.insert(env.uid)).cloned());
+    }
+    if !flags_current {
+        let existing = existing_uids(&transaction, &folder.id, &merged)?;
+        merged.retain(|env| !existing.contains(&env.uid));
+    }
     let (inserted, arrivals) = insert_envelopes_with_arrivals(
         &transaction,
         account_id,
-        folder,
-        envelopes,
+        &current_folder,
+        &merged,
         server_uid_validity,
     )?;
+    if let Some(snapshot) = reconciliation {
+        // A short newest-page snapshot covers the entire mailbox. A full
+        // page only proves membership at or above its minimum UID.
+        let lower = if snapshot.len() < 500 { 1 } else {
+            snapshot.iter().map(|env| env.uid).min().unwrap_or(1)
+        };
+        let present: std::collections::HashSet<_> = snapshot.iter().map(|env| env.uid).collect();
+        let candidates = {
+            let mut statement = transaction.prepare(
+                "SELECT uid FROM emails WHERE account_id=?1 AND folder_id=?2 AND uid>=?3 ORDER BY uid LIMIT 500",
+            )?;
+            let rows = statement.query_map(params![account_id, folder.id, lower], |row| row.get::<_, u32>(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for uid in candidates {
+            if !present.contains(&uid) && !maho_core::services::offline_queue::has_pending_mail_mutation(&transaction, account_id, &folder.path, uid)? {
+                transaction.execute(
+                    "DELETE FROM emails WHERE account_id=?1 AND folder_id=?2 AND uid=?3",
+                    params![account_id, folder.id, uid],
+                )?;
+            }
+        }
+        transaction.execute(
+            "UPDATE folders SET total_count=(SELECT count(*) FROM emails WHERE folder_id=?1),
+             unread_count=(SELECT count(*) FROM emails WHERE folder_id=?1 AND is_read=0) WHERE id=?1",
+            [&folder.id],
+        )?;
+    }
+    if let Some(snapshot) = flag_snapshot {
+        reconciliation::apply(&transaction, folder, snapshot)?;
+    }
     transaction.commit()?;
     Ok((
         inserted,
         if rebuilding_baseline {
             Vec::new()
         } else {
-            arrivals
+            arrivals.into_iter().filter(|arrival| arrival.cursor > u64::from(current_cursor)).collect()
         },
     ))
 }
@@ -482,7 +629,7 @@ fn insert_envelopes_with_arrivals(
         && server_uid_validity != folder.uid_validity;
 
     if reset_required {
-        conn.execute("DELETE FROM emails WHERE folder_id = ?1", [&folder.id])?;
+        conn.execute("DELETE FROM emails WHERE folder_id = ?1 AND uid > 0", [&folder.id])?;
     }
 
     let existing_uids = existing_uids(conn, &folder.id, envelopes)?;
@@ -491,6 +638,8 @@ fn insert_envelopes_with_arrivals(
     } else {
         server_uid_validity
     };
+    // Rule-generated outbox rows must capture the epoch of this fetched page.
+    conn.execute("UPDATE folders SET uid_validity=?1 WHERE id=?2", params![effective_uid_validity, folder.id])?;
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut inserted = 0usize;
     let mut arrivals = Vec::new();
@@ -502,6 +651,9 @@ fn insert_envelopes_with_arrivals(
     for env in envelopes {
         if env.uid > max_uid {
             max_uid = env.uid;
+        }
+        if maho_core::services::offline_queue::has_pending_mail_mutation(conn, account_id, &folder.path, env.uid)? {
+            continue;
         }
         if existing_uids.contains(&env.uid) {
             conn.execute(
@@ -516,6 +668,7 @@ fn insert_envelopes_with_arrivals(
             )?;
             continue;
         }
+        let is_new_incoming = env.uid > folder.last_synced_uid;
         let email_id = Uuid::new_v4().to_string();
         let inserted_rows = conn.execute(
             "INSERT OR IGNORE INTO emails
@@ -539,7 +692,7 @@ fn insert_envelopes_with_arrivals(
                 env.from_name,
                 serde_json::to_string(&env.to_addresses).unwrap_or_else(|_| "[]".to_string()),
                 serde_json::to_string(&env.cc_addresses).unwrap_or_else(|_| "[]".to_string()),
-                env.date,
+                normalize_envelope_date(&env.date),
                 env.subject.chars().take(100).collect::<String>(),
                 env.flags.iter().any(|f| f.contains("Seen")),
                 env.flags.iter().any(|f| f.contains("Flagged")),
@@ -552,22 +705,6 @@ fn insert_envelopes_with_arrivals(
             continue;
         }
         inserted += inserted_rows;
-        arrivals.push(NewMailArrival {
-            email_id: email_id.clone(),
-            message_id: if env.message_id.is_empty() {
-                email_id.clone()
-            } else {
-                env.message_id.clone()
-            },
-            sender: env
-                .from_name
-                .clone()
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| env.from_address.clone()),
-            subject: env.subject.clone(),
-            cursor: u64::from(env.uid),
-            epoch: u64::from(effective_uid_validity),
-        });
         for att in &env.attachments {
             conn.execute(
                 "INSERT OR IGNORE INTO attachments (id, email_id, part_id, filename, mime_type, size, content_id)
@@ -583,6 +720,38 @@ fn insert_envelopes_with_arrivals(
                 ],
             )?;
         }
+
+        if is_new_incoming {
+            crate::ffi::organize_api::evaluate_rules_for_email_in_tx(conn, account_id, &email_id)?;
+            let email_status: Option<(bool, String)> = conn
+                .query_row(
+                    "SELECT is_read, folder_id FROM emails WHERE id = ?1",
+                    params![&email_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+
+            if let Some((is_read, current_folder_id)) = email_status {
+                if current_folder_id == folder.id && !is_read {
+                    arrivals.push(NewMailArrival {
+                        email_id: email_id.clone(),
+                        message_id: if env.message_id.is_empty() {
+                            email_id.clone()
+                        } else {
+                            env.message_id.clone()
+                        },
+                        sender: env
+                            .from_name
+                            .clone()
+                            .filter(|name| !name.is_empty())
+                            .unwrap_or_else(|| env.from_address.clone()),
+                        subject: env.subject.clone(),
+                        cursor: u64::from(env.uid),
+                        epoch: u64::from(effective_uid_validity),
+                    });
+                }
+            }
+        }
     }
     conn.execute(
         "UPDATE folders SET total_count = (SELECT COUNT(*) FROM emails WHERE folder_id = ?1),
@@ -591,6 +760,14 @@ fn insert_envelopes_with_arrivals(
         params![folder.id, max_uid as i64, effective_uid_validity as i64],
     )?;
     Ok((inserted, arrivals))
+}
+
+fn normalize_envelope_date(date: &str) -> String {
+    chrono::DateTime::parse_from_rfc2822(date)
+        .or_else(|_| chrono::DateTime::parse_from_rfc3339(date))
+        .map(|date| date.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        // Missing or malformed provider dates have no trustworthy instant.
+        .unwrap_or_else(|_| date.to_string())
 }
 
 fn existing_uids(
@@ -602,38 +779,46 @@ fn existing_uids(
     if uids.is_empty() {
         return Ok(std::collections::HashSet::new());
     }
-    let placeholders = std::iter::repeat_n("?", uids.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let query = format!(
-        "SELECT uid FROM emails
-         WHERE folder_id = ? AND uid IN ({placeholders})"
-    );
-    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
-        vec![Box::new(folder_id.to_string())];
-    for uid in uids {
-        params_vec.push(Box::new(uid as i64));
+    let mut result = std::collections::HashSet::new();
+    for chunk in uids.chunks(500) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let query = format!(
+            "SELECT uid FROM emails
+             WHERE folder_id = ? AND uid IN ({placeholders})"
+        );
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(folder_id.to_string())];
+        for uid in chunk {
+            params_vec.push(Box::new(*uid as i64));
+        }
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn.prepare(&query)?;
+        let rows = stmt.query_map(refs.as_slice(), |row| row.get::<_, i64>(0))?;
+        for row in rows.flatten() {
+            if let Ok(uid) = u32::try_from(row) {
+                result.insert(uid);
+            }
+        }
     }
-    let refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-    let mut stmt = conn.prepare(&query)?;
-    let rows = stmt.query_map(refs.as_slice(), |row| row.get::<_, i64>(0))?;
-    Ok(rows
-        .filter_map(std::result::Result::ok)
-        .filter_map(|uid| u32::try_from(uid).ok())
-        .collect())
+    Ok(result)
 }
 
 async fn idle_wait_once(ctx: Arc<AppCtx>, account_id: &str) -> Result<bool> {
     let account_id = account_id.to_string();
     tokio::task::spawn_blocking(move || {
-        let conn = ctx
-            .pool
-            .get()
-            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-        let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
-        let folders = sync_targets(&conn, &account_id)?;
+        // The database is one connection behind a mutex, and an IDLE wait blocks
+        // for minutes: read what is needed, then release it before waiting.
+        let (mut resolved, folders) = ctx.with_db(|conn| {
+            let resolved = resolve_account_auth(conn, &ctx.credential_key, &account_id)?;
+            let folders = sync_targets(conn, &account_id)?;
+            Ok((resolved, folders))
+        })?;
         for folder in folders {
-            let mut client = connect_imap(&resolved)?;
+            let mut client = ctx.with_db(|conn| {
+                connect_imap_with_retry(conn, &ctx.credential_key, &mut resolved)
+            })?;
             let changed = client.idle_wait(&folder.path, IDLE_TIMEOUT)?;
             safe_logout(client);
             if changed {
@@ -647,6 +832,22 @@ async fn idle_wait_once(ctx: Arc<AppCtx>, account_id: &str) -> Result<bool> {
 }
 
 #[cfg(test)]
+#[path = "sync_review_tests.rs"]
+mod review_tests;
+
+#[cfg(test)]
+#[path = "sync_wire_review_tests.rs"]
+mod wire_review_tests;
+
+#[cfg(test)]
+#[path = "sync_rule_tests.rs"]
+mod rule_tests;
+
+#[cfg(test)]
+#[path = "sync_backfill_wake_tests.rs"]
+mod backfill_wake_tests;
+
+#[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
@@ -656,6 +857,31 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         maho_core::db::migrations::run_migrations(&conn).unwrap();
         let ids = existing_uids(&conn, "inbox", &[]).unwrap();
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn existing_uids_handles_large_uid_sets_without_exceeding_variable_limit() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        maho_core::db::migrations::run_migrations(&conn).unwrap();
+        let envelopes: Vec<ImapEnvelope> = (1..=40_000)
+            .map(|uid| ImapEnvelope {
+                uid,
+                message_id: format!("<{uid}@example.com>"),
+                in_reply_to: None,
+                subject: "test".to_string(),
+                from_address: "a@example.com".to_string(),
+                from_name: None,
+                to_addresses: vec![],
+                cc_addresses: vec![],
+                date: "2026-08-01T00:00:00Z".to_string(),
+                flags: vec![],
+                size: 100,
+                has_attachments: false,
+                attachments: vec![],
+            })
+            .collect();
+        let ids = existing_uids(&conn, "inbox", &envelopes).unwrap();
         assert!(ids.is_empty());
     }
 
@@ -1026,7 +1252,7 @@ mod tests {
     #[test]
     fn uid_validity_rebuild_caches_history_then_publishes_next_arrival_once() {
         // Given a previously synchronized inbox from an older UIDVALIDITY epoch.
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         maho_core::db::migrations::run_migrations(&conn).unwrap();
         conn.execute(
             "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, smtp_host, username)
@@ -1060,7 +1286,7 @@ mod tests {
             test_envelope(2, "Historical two"),
         ];
         let (baseline_inserted, baseline_arrivals) =
-            sync_envelopes_into_cache(&conn, "acc1", &old_epoch, &historical, 5678).unwrap();
+            sync_envelopes_into_cache(&mut conn, "acc1", &old_epoch, &historical, 5678).unwrap();
 
         // Then they are cached without producing arrival publications.
         assert_eq!(baseline_inserted, 2);
@@ -1079,7 +1305,7 @@ mod tests {
         assert_eq!(new_epoch.last_synced_uid, 2);
         assert_eq!(new_epoch.uid_validity, 5678);
         let (arrival_inserted, arrivals) = sync_envelopes_into_cache(
-            &conn,
+            &mut conn,
             "acc1",
             &new_epoch,
             &[test_envelope(3, "Genuine arrival")],
@@ -1105,7 +1331,7 @@ mod tests {
     #[test]
     fn initial_account_bootstrap_establishes_a_quiet_baseline_by_contract() {
         // Given a newly discovered inbox with no persisted UIDVALIDITY epoch.
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         maho_core::db::migrations::run_migrations(&conn).unwrap();
         conn.execute(
             "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, smtp_host, username)
@@ -1129,7 +1355,7 @@ mod tests {
 
         // When existing mailbox history is cached for the first time.
         let (inserted, arrivals) = sync_envelopes_into_cache(
-            &conn,
+            &mut conn,
             "acc1",
             &bootstrap,
             &[test_envelope(10, "Existing mail")],
@@ -1170,7 +1396,7 @@ mod tests {
 
     #[test]
     fn message_and_flag_batch_rolls_back_when_folder_cursor_update_fails() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         maho_core::db::migrations::run_migrations(&conn).unwrap();
         conn.execute(
             "INSERT INTO accounts (id, email, display_name, auth_type, imap_host, smtp_host, username)
@@ -1209,7 +1435,7 @@ mod tests {
         existing.flags = vec!["\\Seen".to_string(), "\\Flagged".to_string()];
 
         assert!(sync_envelopes_into_cache(
-            &conn,
+            &mut conn,
             "acc1",
             &folder,
             &[existing, test_envelope(11, "New")],

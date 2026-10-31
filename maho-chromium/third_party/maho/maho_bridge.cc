@@ -20,6 +20,7 @@
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "maho_ffi.h"
 #include "url/gurl.h"
@@ -469,6 +470,141 @@ void SetVaultLockCallbackForTesting(VaultLockCallbackForTesting callback) {
   GetVaultLockCallbackForTesting() = std::move(callback);
 }
 
+void SecureClearBuffer(char* buffer, size_t length) {
+  if (!buffer || length == 0) {
+    return;
+  }
+  UNSAFE_BUFFERS({
+    volatile char* p = buffer;
+    for (size_t i = 0; i < length; ++i) {
+      p[i] = 0;
+    }
+  });
+}
+
+void SecureClearString(std::string* value) {
+  if (!value || value->empty()) {
+    return;
+  }
+  SecureClearBuffer(value->data(), value->size());
+  value->clear();
+}
+
+namespace {
+
+std::string TakeAndFreeMahoJson(char* raw_json, bool sensitive = false) {
+  if (!raw_json) {
+    return std::string();
+  }
+  std::string result(raw_json);
+  if (sensitive) {
+    SecureClearBuffer(raw_json, result.size());
+  }
+  maho_string_free(raw_json);
+  return result;
+}
+
+}  // namespace
+
+std::string VaultTrashItemJson(MahoCore* core, const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_trash_item_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
+std::string VaultRestoreItemJson(MahoCore* core, const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_restore_item_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
+std::string VaultSetFavoriteJson(MahoCore* core, const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_set_favorite_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
+std::string VaultEmptyTrashJson(MahoCore* core) {
+  if (!core) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_empty_trash_json(core);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
+std::string VaultGetNotesJson(MahoCore* core, const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_get_notes_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/true);
+}
+
+std::string VaultAddSecureNoteJson(MahoCore* core, const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_add_secure_note_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
+std::string VaultUpdateSecureNoteJson(MahoCore* core,
+                                      const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_update_secure_note_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
+std::string VaultSetLoginTotpJson(MahoCore* core, const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_set_login_totp_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
+std::string VaultTotpCodeJson(MahoCore* core, const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_totp_code_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/true);
+}
+
+std::string VaultHealthReportJson(MahoCore* core) {
+  if (!core) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_health_report_json(core);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
+std::string VaultGeneratePasswordJson(MahoCore* core,
+                                      const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_generate_password_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/true);
+}
+
+std::string VaultPasswordStrengthJson(MahoCore* core,
+                                      const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_password_strength_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
 std::string Version() {
   // TODO(maho): Add maho_core_version() to maho-ffi
   return "0.1.0";
@@ -816,6 +952,19 @@ std::string SearchBookmarks(MahoCore* core,
   return ret;
 }
 
+std::string AddBookmark(MahoCore* core,
+                        const char* url,
+                        const char* title,
+                        const char* folder_id) {
+  char* result = maho_core_add_bookmark_json(core, url, title, folder_id);
+  if (!result) {
+    return std::string();
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
 std::string HandleEvent(MahoCore* core, const char* event_json) {
   char* result = maho_core_handle_event(core, event_json);
   if (!result) {
@@ -862,3 +1011,64 @@ void InstallLogCallback() {
 }
 
 }  // namespace maho::core
+
+namespace maho {
+
+TraceRecorder::TraceRecorder() : handle_(maho_trace_recorder_create()) {}
+
+TraceRecorder::~TraceRecorder() {
+  if (handle_) {
+    maho_trace_recorder_destroy(handle_);
+    handle_ = nullptr;
+  }
+}
+
+void TraceRecorder::RecordClick(const std::optional<std::string>& target_ref,
+                                double x,
+                                double y) {
+  if (!handle_) {
+    return;
+  }
+  maho_trace_recorder_record_click(
+      handle_, target_ref ? target_ref->c_str() : nullptr, x, y);
+}
+
+void TraceRecorder::RecordFill(const std::string& text,
+                               const std::optional<std::string>& selector) {
+  if (!handle_) {
+    return;
+  }
+  maho_trace_recorder_record_fill(
+      handle_, text.c_str(), selector ? selector->c_str() : nullptr);
+}
+
+void TraceRecorder::RecordNavigate(const std::string& url) {
+  if (!handle_) {
+    return;
+  }
+  maho_trace_recorder_record_navigate(handle_, url.c_str());
+}
+
+void TraceRecorder::RecordHover(const std::optional<std::string>& target_ref) {
+  if (!handle_) {
+    return;
+  }
+  maho_trace_recorder_record_hover(
+      handle_, target_ref ? target_ref->c_str() : nullptr);
+}
+
+std::string TraceRecorder::FinishAndExportJson() {
+  if (!handle_) {
+    return "{}";
+  }
+  char* json = maho_trace_recorder_finish_json(handle_);
+  handle_ = nullptr;  // finish_json deallocates the recorder
+  if (!json) {
+    return "{}";
+  }
+  std::string result(json);
+  maho_string_free(json);
+  return result;
+}
+
+}  // namespace maho

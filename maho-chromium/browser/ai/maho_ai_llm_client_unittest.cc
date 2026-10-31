@@ -9,9 +9,12 @@
 
 #include "base/functional/bind.h"
 #include "base/test/task_environment.h"
+#include "components/os_crypt/async/browser/test_utils.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
+#include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
+#include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -44,6 +47,10 @@ class MahoAiLlmClientTestHelper {
     client->url_loader_ = network::SimpleURLLoader::Create(
         std::make_unique<network::ResourceRequest>(),
         TRAFFIC_ANNOTATION_FOR_TESTS);
+  }
+  static void CompleteRefresh(MahoAiLlmClient* client,
+                              maho::auth::RefreshedTokens tokens) {
+    client->OnRefreshComplete(true, 200, std::move(tokens));
   }
   static bool HasRequest(const MahoAiLlmClient* client) {
     return client->url_loader_ != nullptr;
@@ -304,6 +311,56 @@ TEST_F(MahoAiLlmClientTest, PerRequestProviderSelection) {
 
   prefs_.SetString(maho::ai_prefs::kByokOpenAIEncryptedB64, "key-openai");
   EXPECT_TRUE(client.HasConfiguredCredential("openai"));
+}
+
+// The relay rotates the refresh token on every /auth/refresh and invalidates
+// the one it consumed. Dropping the rotated pair left the profile holding a
+// dead refresh token, so the next refresh failed and the user was signed out.
+TEST_F(MahoAiLlmClientTest, RefreshPersistsRotatedRelayTokens) {
+  namespace account_prefs = maho::account_prefs;
+  auto* registry = prefs_.registry();
+  registry->RegisterStringPref(account_prefs::kRelayAccessTokenEncryptedB64,
+                               "");
+  registry->RegisterStringPref(account_prefs::kRelayRefreshTokenEncryptedB64,
+                               "");
+  registry->RegisterInt64Pref(account_prefs::kRelayAccessTokenExpiresAt, 0);
+  registry->RegisterInt64Pref(account_prefs::kRelayRefreshTokenExpiresAt, 0);
+  registry->RegisterStringPref(account_prefs::kRelayUserEmail, "");
+  registry->RegisterStringPref(account_prefs::kRelayUserId, "");
+  registry->RegisterStringPref(account_prefs::kRelayUserDisplayName, "");
+  registry->RegisterStringPref(account_prefs::kRelayUserTier, "");
+  registry->RegisterStringPref(account_prefs::kRelayOAuthProvider, "");
+  registry->RegisterStringPref(account_prefs::kRelayOAuthProviderSub, "");
+  prefs_.SetString(account_prefs::kRelayUserEmail, "user@example.com");
+  prefs_.SetString(account_prefs::kRelayOAuthProvider, "google");
+  prefs_.SetString(account_prefs::kRelayOAuthProviderSub, "subject-123");
+
+  const auto encryptor =
+      os_crypt_async::GetTestEncryptorForTesting();
+  MahoAiLlmClient client(&prefs_, nullptr, encryptor.get(),
+                         /*provider_adapter_v2_enabled=*/false);
+  MahoAiLlmClientTestHelper::SetCallbacks(
+      &client, {}, base::BindOnce([](const std::string&) {}));
+
+  maho::auth::RefreshedTokens tokens;
+  tokens.access_token = "rotated-access";
+  tokens.refresh_token = "rotated-refresh";
+  tokens.access_expires_at = 1'900'000'000;
+  tokens.refresh_expires_at = 1'990'000'000;
+  MahoAiLlmClientTestHelper::CompleteRefresh(&client, std::move(tokens));
+
+  EXPECT_EQ("rotated-access",
+            maho::auth::GetRelayAccessToken(&prefs_, *encryptor));
+  EXPECT_EQ("rotated-refresh",
+            maho::auth::GetRelayRefreshToken(&prefs_, *encryptor));
+  EXPECT_EQ(1'900'000'000,
+            prefs_.GetInt64(account_prefs::kRelayAccessTokenExpiresAt));
+  EXPECT_EQ(1'990'000'000,
+            prefs_.GetInt64(account_prefs::kRelayRefreshTokenExpiresAt));
+  EXPECT_EQ("user@example.com",
+            prefs_.GetString(account_prefs::kRelayUserEmail));
+  EXPECT_EQ("subject-123",
+            prefs_.GetString(account_prefs::kRelayOAuthProviderSub));
 }
 
 }  // namespace

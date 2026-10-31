@@ -29,6 +29,31 @@ extern "C" {
     fn CGPreflightScreenCaptureAccess() -> bool;
 }
 
+pub(crate) fn capture_target_path(output: Option<PathBuf>) -> Result<PathBuf, PlatformError> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_CAPTURE: AtomicU64 = AtomicU64::new(0);
+    if let Some(path) = output {
+        return Ok(path);
+    }
+    loop {
+        let id = NEXT_CAPTURE.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("maho-capture-{}-{id}.png", std::process::id()));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(_) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(PlatformError::Io(error.to_string())),
+        }
+    }
+}
+
 /// Capture the primary screen or active display to an image file.
 ///
 /// If `output` is `None`, writes to a temporary file in `$TMPDIR`.
@@ -43,13 +68,7 @@ pub fn capture_screen(output: Option<PathBuf>) -> Result<CaptureInfo, PlatformEr
             });
         }
 
-        let target_path = output.unwrap_or_else(|| {
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            std::env::temp_dir().join(format!("maho-capture-{ts}.png"))
-        });
+        let target_path = capture_target_path(output)?;
 
         let result = std::process::Command::new("/usr/sbin/screencapture")
             .args(["-x", "-D", "1"])
@@ -93,13 +112,7 @@ mod linux {
         let runner = SystemRunner;
         let chain =
             crate::backends::probe_chain("linux", crate::backends::GroundingCapability::Capture);
-        let target_path = output.unwrap_or_else(|| {
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            std::env::temp_dir().join(format!("maho-capture-{ts}.png"))
-        });
+        let target_path = capture_target_path(output)?;
         let mut attempted: Vec<&str> = Vec::new();
         for tool in chain {
             let Some(program) = runner.which(tool) else {
@@ -135,6 +148,17 @@ mod linux {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_capture_paths_are_reserved_and_distinct() {
+        let first = capture_target_path(None).unwrap();
+        std::fs::write(&first, b"first image").unwrap();
+        let second = capture_target_path(None).unwrap();
+        std::fs::write(&second, b"second image").unwrap();
+        assert_eq!(std::fs::read(&first).unwrap(), b"first image");
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_file(second).unwrap();
+    }
 
     #[test]
     fn test_preflight_screen_capture_smoke() {

@@ -22,6 +22,14 @@ pub struct SearchParams {
     pub folder_id: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub subject: Option<String>,
+    pub has_attachment: Option<bool>,
+    pub is_unread: Option<bool>,
+    pub is_starred: Option<bool>,
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
 }
 
 pub fn list_accounts(ctx: &AppCtx) -> Result<Vec<AccountSummary>> {
@@ -75,6 +83,7 @@ pub fn search_emails(ctx: &AppCtx, params: &SearchParams) -> Result<SearchResult
     }
     if params.folder_id.is_some() {
         query.folder_id = params.folder_id.clone();
+        query.mailbox = None;
     }
     if params.limit.is_some() {
         query.limit = params.limit;
@@ -82,6 +91,14 @@ pub fn search_emails(ctx: &AppCtx, params: &SearchParams) -> Result<SearchResult
     if params.offset.is_some() {
         query.offset = params.offset;
     }
+    query.from = params.from.clone().or(query.from);
+    query.to = params.to.clone().or(query.to);
+    query.subject = params.subject.clone().or(query.subject);
+    query.has_attachment = params.has_attachment.or(query.has_attachment);
+    query.is_unread = params.is_unread.or(query.is_unread);
+    query.is_starred = params.is_starred.or(query.is_starred);
+    query.date_from = params.date_from.clone().or(query.date_from);
+    query.date_to = params.date_to.clone().or(query.date_to);
     maho_core::services::search::search_emails(&conn, &query).map_err(Into::into)
 }
 
@@ -93,25 +110,59 @@ pub async fn get_email(ctx: Arc<AppCtx>, email_id: &str) -> Result<EmailDetailRe
 }
 
 fn get_email_blocking(ctx: &AppCtx, email_id: &str) -> Result<EmailDetailResponse> {
-    let conn = ctx
-        .pool
-        .get()
-        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    get_email_with_connector(ctx, email_id, connect_imap)
+}
+
+fn get_email_with_connector(
+    ctx: &AppCtx,
+    email_id: &str,
+    connect: impl FnOnce(&crate::account::AccountAuth) -> Result<maho_core::imap_client::ImapClient>,
+) -> Result<EmailDetailResponse> {
+    // The database is one connection behind a mutex, so the guard is scoped to
+    // each database step and released for the length of the IMAP fetch.
     let (mut email, attachments, needs_fetch) =
-        maho_core::services::email::get_email_from_db(&conn, email_id)?;
+        ctx.with_db(|conn| Ok(maho_core::services::email::get_email_from_db(conn, email_id)?))?;
     if needs_fetch {
-        let folder_path: String = conn
-            .query_row(
-                "SELECT path FROM folders WHERE id = ?1",
-                [&email.folder_id],
-                |row| row.get(0),
-            )
-            .map_err(|_| MailFfiError::Internal("email folder missing".to_string()))?;
-        let resolved = resolve_account_auth(&conn, &ctx.credential_key, &email.account_id)?;
-        let mut client = connect_imap(&resolved)?;
-        if let Some(fetched) = client.fetch_body_with_mdn_by_uid(&folder_path, email.uid as u32)? {
+        let uid = u32::try_from(email.uid).ok().filter(|uid| *uid > 0)
+            .ok_or(MailFfiError::InvalidArg("email has no valid IMAP UID"))?;
+        let (folder_path, epoch, resolved) = ctx.with_db(|conn| {
+            let (folder_path, epoch): (String, Option<u32>) = conn.query_row(
+                "SELECT path, uid_validity FROM folders WHERE id = ?1 AND account_id = ?2",
+                rusqlite::params![email.folder_id, email.account_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            let epoch = epoch.filter(|epoch| *epoch > 0)
+                .ok_or(MailFfiError::InvalidArg("mailbox epoch is unavailable"))?;
+            let resolved = resolve_account_auth(conn, &ctx.credential_key, &email.account_id)?;
+            Ok((folder_path, epoch, resolved))
+        })?;
+        let mut client = connect(&resolved)?;
+        let fetched = (|| -> Result<_> {
+            if client.get_uid_validity(&folder_path)? != epoch {
+                return Err(MailFfiError::Internal("mailbox epoch changed before body fetch".into()));
+            }
+            Ok(client.fetch_body_with_mdn_by_uid(&folder_path, uid)?)
+        })();
+        safe_logout(client);
+        let fetched = fetched?;
+        let mut conn = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM emails e JOIN folders f ON e.folder_id=f.id
+             AND e.account_id=f.account_id WHERE e.id=?1 AND e.account_id=?2
+             AND e.folder_id=?3 AND e.uid=?4 AND f.path=?5 AND f.uid_validity=?6)",
+            rusqlite::params![email_id, email.account_id, email.folder_id, uid, folder_path, epoch],
+            |row| row.get(0),
+        )?;
+        if !current {
+            return Err(MailFfiError::Internal("mailbox identity changed during body fetch".into()));
+        }
+        if let Some(fetched) = fetched {
             maho_core::services::email::update_email_body_with_mdn(
-                &conn,
+                &transaction,
                 email_id,
                 fetched.body_text.clone(),
                 fetched.body_html.clone(),
@@ -120,10 +171,18 @@ fn get_email_blocking(ctx: &AppCtx, email_id: &str) -> Result<EmailDetailRespons
             email.body_text = fetched.body_text;
             email.body_html = fetched.body_html;
         }
-        safe_logout(client);
+        transaction.commit()?;
     }
     Ok(EmailDetailResponse { email, attachments })
 }
+
+#[cfg(test)]
+#[path = "read_body_review_tests.rs"]
+mod body_review_tests;
+
+#[cfg(test)]
+#[path = "read_query_tests.rs"]
+mod read_query_tests;
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
@@ -174,10 +233,7 @@ mod tests {
         let ctx = crate::test_support::ctx(pool);
         let params = SearchParams {
             query: "Hello".to_string(),
-            account_id: None,
-            folder_id: None,
-            limit: None,
-            offset: None,
+            ..Default::default()
         };
         let result = search_emails(&ctx, &params).unwrap();
         assert_eq!(result.emails.len(), 2);
@@ -190,10 +246,7 @@ mod tests {
         let ctx = crate::test_support::ctx(pool);
         let params = SearchParams {
             query: "is:starred".to_string(),
-            account_id: None,
-            folder_id: None,
-            limit: None,
-            offset: None,
+            ..Default::default()
         };
         let result = search_emails(&ctx, &params).unwrap();
         assert_eq!(result.emails.len(), 1);
@@ -212,6 +265,7 @@ mod tests {
                 folder_id: None,
                 limit: Some(1),
                 offset: Some(0),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -223,6 +277,7 @@ mod tests {
                 folder_id: None,
                 limit: Some(1),
                 offset: Some(1),
+                ..Default::default()
             },
         )
         .unwrap();

@@ -29,6 +29,10 @@
 
 namespace maho_settings_password_helpers {
 
+bool ConsumeSettingsAuthorization(
+    const std::string& authorization_profile_key,
+    maho::passwords::PasswordAuthorizationAction action);
+
 namespace {
 
 constexpr char kVaultOperationFailed[] = "Vault operation failed.";
@@ -54,15 +58,7 @@ std::string TakeImportJson(char* value) {
 }
 
 void SecureClearString(std::string* value) {
-  // Volatile writes prevent the compiler from eliding the wipe. This is the
-  // one intentional raw-buffer operation in the helper boundary.
-  UNSAFE_BUFFERS({
-    volatile char* bytes = value->data();
-    for (size_t i = 0; i < value->size(); ++i) {
-      bytes[i] = 0;
-    }
-  });
-  value->clear();
+  maho::core::SecureClearString(value);
 }
 
 std::optional<maho_settings::mojom::PasswordProviderKind>
@@ -137,6 +133,8 @@ std::optional<std::string> SecretActionToken(
     maho_settings::mojom::SecretAction action) {
   switch (action) {
     case maho_settings::mojom::SecretAction::kCopy:
+      return "copy";
+    case maho_settings::mojom::SecretAction::kReveal:
       return "copy";
   }
   return std::nullopt;
@@ -381,6 +379,8 @@ bool PerformSecretAction(maho_settings::mojom::SecretAction action,
           ->CopySecretToClipboard(std::move(secret_text));
       return true;
     }
+    case maho_settings::mojom::SecretAction::kReveal:
+      return false;  // Only the browser-owned dialog callback may reveal.
   }
   return false;
 }
@@ -449,7 +449,8 @@ std::optional<maho_settings::mojom::VaultStatusPtr> ParseVaultStatus(
 bool ContainsSecretMaterial(const base::DictValue& dict) {
   constexpr std::string_view kForbiddenFields[] = {
       "password",   "username", "secret", "encryptedPayload", "envelope",
-      "ciphertext", "nonce",    "tag",    "privateKey",       "seed"};
+      "ciphertext", "nonce",    "tag",    "privateKey",       "seed",
+      "notes", "totpSeed"};
   for (std::string_view field : kForbiddenFields) {
     if (dict.Find(field)) {
       return true;
@@ -550,7 +551,15 @@ std::optional<maho_settings::mojom::VaultItemPtr> ParseVaultItem(
     return std::nullopt;
   }
   const std::string* id = dict.FindString("id");
-  const std::optional<double> revision = dict.FindDouble("revision");
+  uint64_t revision = 0;
+  const std::string* revision_text = dict.FindString("revision");
+  const auto revision_number = dict.FindDouble("revision");
+  const bool valid_revision = revision_text
+      ? base::StringToUint64(*revision_text, &revision)
+      : revision_number && IsValidUint64(*revision_number);
+  if (!revision_text && valid_revision) {
+    revision = static_cast<uint64_t>(*revision_number);
+  }
   const std::string* provider = dict.FindString("provider");
   const std::string* item_kind = dict.FindString("itemKind");
   const std::string* title = dict.FindString("title");
@@ -560,7 +569,7 @@ std::optional<maho_settings::mojom::VaultItemPtr> ParseVaultItem(
   const std::string* updated_at = dict.FindString("updatedAt");
   const auto parsed_provider =
       provider ? VaultProviderFromToken(*provider) : std::nullopt;
-  if (!id || id->empty() || !revision || !IsValidUint64(*revision) ||
+  if (!id || id->empty() || !valid_revision ||
       !parsed_provider || !item_kind || !title || !origins || !username_hint ||
       !created_at || !updated_at) {
     return std::nullopt;
@@ -568,7 +577,7 @@ std::optional<maho_settings::mojom::VaultItemPtr> ParseVaultItem(
 
   auto item = maho_settings::mojom::VaultItem::New();
   item->id = *id;
-  item->revision = static_cast<uint64_t>(*revision);
+  item->revision = revision;
   item->provider = *parsed_provider;
   item->item_kind = VaultItemKindFromToken(*item_kind);
   item->title = *title;
@@ -587,6 +596,11 @@ std::optional<maho_settings::mojom::VaultItemPtr> ParseVaultItem(
   }
   item->has_totp = dict.Find("totp") && !dict.Find("totp")->is_none();
   item->has_passkey = dict.Find("passkey") && !dict.Find("passkey")->is_none();
+  item->favorite = dict.FindBool("favorite").value_or(false);
+  item->has_notes = dict.FindBool("hasNotes").value_or(false);
+  if (const auto* trashed_at = dict.FindString("trashedAt")) {
+    item->trashed_at = *trashed_at;
+  }
   return item;
 }
 
@@ -761,7 +775,71 @@ base::DictValue VaultMetadataJson(const std::string& title,
 std::string WriteVaultRequest(base::DictValue request) {
   std::string json;
   base::JSONWriter::Write(request, &json);
+  for (const char* key : {"password", "notes", "secret", "masterPassphrase",
+                          "recoverySecret"}) {
+    if (auto* value = request.FindString(key)) {
+      SecureClearString(value);
+    }
+  }
   return json;
+}
+
+class VaultJsonResponse {
+ public:
+  explicit VaultJsonResponse(std::string json) {
+    value_ = base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+    SecureClearString(&json);
+  }
+  ~VaultJsonResponse() {
+    if (value_) {
+      Clear(*value_);
+    }
+  }
+  const base::DictValue* data() const {
+    const auto* root = value_ ? value_->GetIfDict() : nullptr;
+    return root && root->FindBool("ok").value_or(false)
+        ? root->FindDict("data") : nullptr;
+  }
+  std::string error() const {
+    const auto* root = value_ ? value_->GetIfDict() : nullptr;
+    return root ? VaultErrorCode(*root) : "invalid_response";
+  }
+ private:
+  static void Clear(base::Value& value) {
+    if (value.is_string()) {
+      SecureClearString(&value.GetString());
+    } else if (value.is_dict()) {
+      for (auto entry : value.GetDict()) {
+        Clear(entry.second);
+      }
+    } else if (value.is_list()) {
+      for (auto& entry : value.GetList()) {
+        Clear(entry);
+      }
+    }
+  }
+  std::optional<base::Value> value_;
+};
+
+base::DictValue ItemRevisionRequest(const std::string& id, uint64_t revision) {
+  return base::DictValue().Set("id", id)
+      .Set("expectedRevision", base::NumberToString(revision));
+}
+
+maho_settings::mojom::VaultOperationResultPtr RunVaultMutation(
+    const std::string& profile_key,
+    maho::passwords::PasswordAuthorizationAction action,
+    base::DictValue request,
+    std::string (*operation)(MahoCore*, const char*)) {
+  std::string json = WriteVaultRequest(std::move(request));
+  MahoCore* core = maho::GetCore();
+  if (!core || !ConsumeSettingsAuthorization(profile_key, action)) {
+    SecureClearString(&json);
+    return VaultOperationFailure(core ? "reauth_required" : "core_unavailable");
+  }
+  auto response = operation(core, json.c_str());
+  SecureClearString(&json);
+  return ParseVaultOperationResultJson(response);
 }
 
 void SetOptionalProvider(
@@ -954,6 +1032,9 @@ maho_settings::mojom::VaultOperationResultPtr ParseVaultOperationResultJson(
   if (!data) {
     return VaultOperationFailure("invalid_response");
   }
+  if (ContainsSecretMaterial(*data)) {
+    return VaultOperationFailure("invalid_response");
+  }
 
   auto result = maho_settings::mojom::VaultOperationResult::New();
   result->success = true;
@@ -977,9 +1058,16 @@ maho_settings::mojom::VaultOperationResultPtr ParseVaultOperationResultJson(
       }
       uint64_t rev = 0;
       if (const std::string* rev_str = data->FindString("revision")) {
-        base::StringToUint64(*rev_str, &rev);
+        if (!base::StringToUint64(*rev_str, &rev)) {
+          return VaultOperationFailure("invalid_response");
+        }
       } else if (std::optional<double> rev_num = data->FindDouble("revision")) {
+        if (!IsValidUint64(*rev_num)) {
+          return VaultOperationFailure("invalid_response");
+        }
         rev = static_cast<uint64_t>(*rev_num);
+      } else {
+        return VaultOperationFailure("invalid_response");
       }
       auto item = maho_settings::mojom::VaultItem::New();
       item->id = *id;
@@ -1148,13 +1236,17 @@ maho_settings::mojom::VaultItemListResultPtr ListVaultItemsFromCore(
     const std::optional<maho_settings::mojom::PasswordProviderKind>& provider,
     const std::vector<maho_settings::mojom::VaultItemKind>& kinds,
     const std::optional<std::string>& cursor,
-    uint32_t limit) {
+    uint32_t limit,
+    bool trash_only,
+    bool favorites_only) {
   MahoCore* core = maho::GetCore();
   if (!core) {
     return VaultItemListFailure("core_unavailable");
   }
   base::DictValue request;
   request.Set("schemaVersion", 1);
+  request.Set("trash", trash_only ? "only" : "exclude");
+  request.Set("favoritesOnly", favorites_only);
   SetOptionalProvider(request, provider);
   request.Set("kinds", VaultItemKindsJson(kinds));
   request.Set("cursor", cursor && !cursor->empty() ? base::Value(*cursor)
@@ -1314,7 +1406,8 @@ maho_settings::mojom::VaultOperationResultPtr AddVaultLoginInCore(
     const std::string& title,
     const std::vector<std::string>& origins,
     const std::string& username,
-    const std::string& password) {
+    const std::string& password,
+    const std::optional<std::string>& notes) {
   MahoCore* core = maho::GetCore();
   if (!core) {
     return VaultOperationFailure("core_unavailable");
@@ -1323,6 +1416,9 @@ maho_settings::mojom::VaultOperationResultPtr AddVaultLoginInCore(
   request.Set("metadata", VaultMetadataJson(title, origins));
   request.Set("username", username);
   request.Set("password", password);
+  if (notes) {
+    request.Set("notes", *notes);
+  }
   std::string json = WriteVaultRequest(std::move(request));
   if (!ConsumeSettingsAuthorization(
           authorization_profile_key,
@@ -1342,21 +1438,21 @@ maho_settings::mojom::VaultOperationResultPtr UpdateVaultLoginInCore(
     const std::string& title,
     const std::vector<std::string>& origins,
     const std::string& username,
-    const std::optional<std::string>& password) {
+    const std::optional<std::string>& password,
+    const std::optional<std::string>& notes) {
   MahoCore* core = maho::GetCore();
   if (!core) {
     return VaultOperationFailure("core_unavailable");
   }
-  if (expected_revision >
-      static_cast<uint64_t>(std::numeric_limits<int>::max())) {
-    return VaultOperationFailure("unsupported_revision");
-  }
   base::DictValue request;
   request.Set("id", item_id);
-  request.Set("expectedRevision", static_cast<int>(expected_revision));
+  request.Set("expectedRevision", base::NumberToString(expected_revision));
   request.Set("metadata", VaultMetadataJson(title, origins));
   request.Set("username", username);
   request.Set("password", password ? base::Value(*password) : base::Value());
+  if (notes) {
+    request.Set("notes", *notes);
+  }
   std::string json = WriteVaultRequest(std::move(request));
   if (!ConsumeSettingsAuthorization(
           authorization_profile_key,
@@ -1377,13 +1473,9 @@ maho_settings::mojom::VaultOperationResultPtr DeleteVaultItemInCore(
   if (!core) {
     return VaultOperationFailure("core_unavailable");
   }
-  if (expected_revision >
-      static_cast<uint64_t>(std::numeric_limits<int>::max())) {
-    return VaultOperationFailure("unsupported_revision");
-  }
   base::DictValue request;
   request.Set("id", item_id);
-  request.Set("expectedRevision", static_cast<int>(expected_revision));
+  request.Set("expectedRevision", base::NumberToString(expected_revision));
   std::string json = WriteVaultRequest(std::move(request));
   if (!ConsumeSettingsAuthorization(
           authorization_profile_key,
@@ -1400,7 +1492,8 @@ maho_settings::mojom::VaultOperationResultPtr UseVaultSecretInCore(
     const std::string& authorization_profile_key,
     const std::string& item_id,
     uint64_t expected_revision,
-    maho_settings::mojom::SecretAction action) {
+    maho_settings::mojom::SecretAction action,
+    base::OnceCallback<bool(const char*)> reveal) {
   MahoCore* core = maho::GetCore();
   if (!core) {
     return VaultOperationFailure("core_unavailable");
@@ -1413,17 +1506,13 @@ maho_settings::mojom::VaultOperationResultPtr UseVaultSecretInCore(
                              maho_settings::mojom::VaultLockState::kUnlocked) {
     return VaultOperationFailure("locked");
   }
-  if (expected_revision >
-      static_cast<uint64_t>(std::numeric_limits<int>::max())) {
-    return VaultOperationFailure("unsupported_revision");
-  }
   const std::optional<std::string> action_token = SecretActionToken(action);
   if (!action_token) {
     return VaultOperationFailure("invalid_action");
   }
   base::DictValue request;
   request.Set("itemId", item_id);
-  request.Set("expectedRevision", static_cast<int>(expected_revision));
+  request.Set("expectedRevision", base::NumberToString(expected_revision));
   request.Set("action", *action_token);
   std::string json = WriteVaultRequest(std::move(request));
   if (!ConsumeSettingsAuthorization(
@@ -1437,12 +1526,246 @@ maho_settings::mojom::VaultOperationResultPtr UseVaultSecretInCore(
   if (!raw_secret) {
     return VaultOperationFailure("secret_unavailable");
   }
-  const bool action_completed = PerformSecretAction(action, raw_secret);
+  const bool action_completed = action == maho_settings::mojom::SecretAction::kReveal
+      ? reveal && std::move(reveal).Run(raw_secret)
+      : PerformSecretAction(action, raw_secret);
   maho_vault_free_secret_buffer(raw_secret);
   if (!action_completed) {
     return VaultOperationFailure("action_failed");
   }
   return VaultOperationSuccess();
+}
+
+maho_settings::mojom::VaultOperationResultPtr TrashVaultItemInCore(
+    const std::string& profile_key, const std::string& id, uint64_t revision) {
+  return RunVaultMutation(profile_key,
+      maho::passwords::PasswordAuthorizationAction::kDelete,
+      ItemRevisionRequest(id, revision), maho::core::VaultTrashItemJson);
+}
+
+maho_settings::mojom::VaultOperationResultPtr RestoreVaultItemInCore(
+    const std::string& profile_key, const std::string& id, uint64_t revision) {
+  return RunVaultMutation(profile_key,
+      maho::passwords::PasswordAuthorizationAction::kUpdate,
+      ItemRevisionRequest(id, revision), maho::core::VaultRestoreItemJson);
+}
+
+maho_settings::mojom::VaultOperationResultPtr EmptyVaultTrashInCore(
+    const std::string& profile_key) {
+  auto* core = maho::GetCore();
+  if (!core) {
+    return VaultOperationFailure("core_unavailable");
+  }
+  if (!ConsumeSettingsAuthorization(profile_key,
+          maho::passwords::PasswordAuthorizationAction::kDelete)) {
+    return VaultOperationFailure("reauth_required");
+  }
+  VaultJsonResponse response(maho::core::VaultEmptyTrashJson(core));
+  const auto* data = response.data();
+  if (!data) {
+    return VaultOperationFailure(response.error());
+  }
+  auto ids = ReadStringList(data->FindList("tombstonedIds"));
+  auto count = ReadUint32(*data, "count");
+  if (ContainsSecretMaterial(*data) || !ids || !count || ids->size() != *count) {
+    return VaultOperationFailure("invalid_response");
+  }
+  return VaultOperationSuccess();
+}
+
+maho_settings::mojom::VaultOperationResultPtr SetVaultItemFavoriteInCore(
+    const std::string& profile_key, const std::string& id, uint64_t revision,
+    bool favorite) {
+  auto request = ItemRevisionRequest(id, revision);
+  request.Set("favorite", favorite);
+  return RunVaultMutation(profile_key,
+      maho::passwords::PasswordAuthorizationAction::kUpdate,
+      std::move(request), maho::core::VaultSetFavoriteJson);
+}
+
+maho_settings::mojom::VaultOperationResultPtr AddVaultSecureNoteInCore(
+    const std::string& profile_key, const std::string& title,
+    const std::string& notes) {
+  base::DictValue request;
+  request.Set("title", title);
+  request.Set("notes", notes);
+  return RunVaultMutation(profile_key,
+      maho::passwords::PasswordAuthorizationAction::kAdd,
+      std::move(request), maho::core::VaultAddSecureNoteJson);
+}
+
+maho_settings::mojom::VaultOperationResultPtr UpdateVaultSecureNoteInCore(
+    const std::string& profile_key, const std::string& id, uint64_t revision,
+    const std::string& title, const std::string& notes) {
+  auto request = ItemRevisionRequest(id, revision);
+  request.Set("title", title);
+  request.Set("notes", notes);
+  return RunVaultMutation(profile_key,
+      maho::passwords::PasswordAuthorizationAction::kUpdate,
+      std::move(request), maho::core::VaultUpdateSecureNoteJson);
+}
+
+maho_settings::mojom::VaultOperationResultPtr SetVaultLoginTotpInCore(
+    const std::string& profile_key, const std::string& id, uint64_t revision,
+    const std::string& secret) {
+  auto request = ItemRevisionRequest(id, revision);
+  request.Set("secret", secret);
+  return RunVaultMutation(profile_key,
+      maho::passwords::PasswordAuthorizationAction::kUpdate,
+      std::move(request), maho::core::VaultSetLoginTotpJson);
+}
+
+VaultNotesResult::VaultNotesResult() = default;
+VaultNotesResult::VaultNotesResult(const VaultNotesResult&) = default;
+VaultNotesResult& VaultNotesResult::operator=(const VaultNotesResult&) =
+    default;
+VaultNotesResult::VaultNotesResult(VaultNotesResult&&) = default;
+VaultNotesResult& VaultNotesResult::operator=(VaultNotesResult&&) = default;
+VaultNotesResult::~VaultNotesResult() = default;
+
+VaultNotesResult GetVaultItemNotesFromCore(const std::string& id) {
+  VaultNotesResult result;
+  if (!maho::GetCore()) {
+    result.error_code = "core_unavailable";
+    return result;
+  }
+  const auto json = WriteVaultRequest(base::DictValue().Set("id", id));
+  VaultJsonResponse response(maho::core::VaultGetNotesJson(maho::GetCore(), json.c_str()));
+  const auto* data = response.data();
+  const auto* notes = data ? data->FindString("notes") : nullptr;
+  if (!notes) {
+    result.error_code = response.error();
+    return result;
+  }
+  result.success = true;
+  result.notes = *notes;
+  if (const auto* username = data->FindString("username")) {
+    result.username = *username;
+  }
+  return result;
+}
+
+maho_settings::mojom::VaultTotpCodeResultPtr GetVaultTotpCodeFromCore(
+    const std::string& id) {
+  auto result = maho_settings::mojom::VaultTotpCodeResult::New();
+  if (!maho::GetCore()) {
+    result->error_code = "core_unavailable";
+    return result;
+  }
+  const auto json = WriteVaultRequest(base::DictValue().Set("id", id));
+  VaultJsonResponse response(maho::core::VaultTotpCodeJson(maho::GetCore(), json.c_str()));
+  const auto* data = response.data();
+  if (!data) {
+    result->error_code = response.error();
+    return result;
+  }
+  const auto* code = data->FindString("code");
+  auto seconds = ReadUint32(*data, "secondsRemaining");
+  auto period = ReadUint32(*data, "period");
+  if (!code || (code->size() != 6 && code->size() != 8) ||
+      !std::all_of(code->begin(), code->end(), [](char c) { return c >= '0' && c <= '9'; }) ||
+      !seconds || !period || !*period || *seconds > *period) {
+    result->error_code = "invalid_response";
+    return result;
+  }
+  result->success = true;
+  result->code = *code;
+  result->seconds_remaining = *seconds;
+  result->period = *period;
+  return result;
+}
+
+maho_settings::mojom::GeneratedPasswordResultPtr GeneratePasswordInCore(
+    const maho_settings::mojom::PasswordGeneratorOptions& options) {
+  auto result = maho_settings::mojom::GeneratedPasswordResult::New();
+  if (!maho::GetCore() || options.length > 128 || options.word_count > 12) {
+    return result;
+  }
+  base::DictValue request;
+  request.Set("mode", options.mode);
+  request.Set("length", static_cast<int>(options.length));
+  request.Set("includeLowercase", options.include_lowercase);
+  request.Set("includeUppercase", options.include_uppercase);
+  request.Set("includeDigits", options.include_digits);
+  request.Set("includeSymbols", options.include_symbols);
+  request.Set("avoidAmbiguous", options.avoid_ambiguous);
+  request.Set("wordCount", static_cast<int>(options.word_count));
+  request.Set("separator", options.separator);
+  request.Set("capitalize", options.capitalize);
+  request.Set("includeNumber", options.include_number);
+  const auto json = WriteVaultRequest(std::move(request));
+  VaultJsonResponse response(maho::core::VaultGeneratePasswordJson(maho::GetCore(), json.c_str()));
+  const auto* data = response.data();
+  if (!data || !data->FindBool("success").value_or(false)) {
+    return result;
+  }
+  const auto* password = data->FindString("password");
+  auto score = ReadUint32(*data, "strengthScore");
+  auto entropy = data->FindDouble("entropyBits");
+  if (!password || !score || *score > 4 || !entropy ||
+      !std::isfinite(*entropy) || *entropy < 0) {
+    return result;
+  }
+  result->success = true;
+  result->password = *password;
+  result->strength_score = *score;
+  result->entropy_bits = *entropy;
+  return result;
+}
+
+std::pair<uint32_t, double> EstimatePasswordStrengthInCore(
+    const std::string& password) {
+  if (!maho::GetCore()) {
+    return {0, 0};
+  }
+  auto json = WriteVaultRequest(base::DictValue().Set("password", password));
+  VaultJsonResponse response(maho::core::VaultPasswordStrengthJson(maho::GetCore(), json.c_str()));
+  SecureClearString(&json);
+  const auto* data = response.data();
+  if (!data || ContainsSecretMaterial(*data)) {
+    return {0, 0};
+  }
+  auto score = ReadUint32(*data, "score");
+  auto entropy = data->FindDouble("entropyBits");
+  if (!score || *score > 4 || !entropy || !std::isfinite(*entropy) || *entropy < 0) {
+    return {0, 0};
+  }
+  return {*score, *entropy};
+}
+
+maho_settings::mojom::VaultHealthReportPtr GetVaultHealthReportFromCore() {
+  auto result = maho_settings::mojom::VaultHealthReport::New();
+  if (!maho::GetCore()) {
+    result->error_code = "core_unavailable";
+    return result;
+  }
+  VaultJsonResponse response(maho::core::VaultHealthReportJson(maho::GetCore()));
+  const auto* data = response.data();
+  if (!data) {
+    result->error_code = response.error();
+    return result;
+  }
+  auto weak = ReadStringList(data->FindList("weak"));
+  const auto* groups = data->FindList("reused");
+  auto count = ReadUint32(*data, "totalLogins");
+  if (ContainsSecretMaterial(*data) || !weak || !groups || !count) {
+    result->error_code = "invalid_response";
+    return result;
+  }
+  std::vector<std::vector<std::string>> reused;
+  for (const auto& group : *groups) {
+    auto ids = ReadStringList(group.GetIfList());
+    if (!ids) {
+      result->error_code = "invalid_response";
+      return result;
+    }
+    reused.push_back(std::move(*ids));
+  }
+  result->success = true;
+  result->weak_item_ids = std::move(*weak);
+  result->reused_groups = std::move(reused);
+  result->total_logins = *count;
+  return result;
 }
 
 maho_settings::mojom::VaultProviderStatusPtr BuildVaultProviderStatus(
@@ -1647,6 +1970,89 @@ bool UpdateAutofillSettingsInCore(bool passwords_enabled,
   base::DictValue settings;
   settings.Set("autofill", std::move(autofill));
 
+  std::string json;
+  base::JSONWriter::Write(base::Value(std::move(settings)), &json);
+  maho_core_update_settings(core, json.c_str());
+  return true;
+}
+
+bool IsSupportedVaultAutoLockMinutes(unsigned int minutes) {
+  switch (minutes) {
+    case 0:
+    case 1:
+    case 5:
+    case 15:
+    case 30:
+    case 60:
+    case 240:
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::optional<unsigned int> ReadVaultAutoLockMinutesFromCore() {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return std::nullopt;
+  }
+  const std::string json = TakeVaultJson(maho_core_get_settings(core));
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  const base::DictValue* autofill =
+      parsed && parsed->is_dict() ? parsed->GetDict().FindDict("autofill")
+                                  : nullptr;
+  const std::optional<int> minutes =
+      autofill ? autofill->FindInt("vaultAutoLockMinutes") : std::nullopt;
+  if (!minutes || *minutes < 0) {
+    return std::nullopt;
+  }
+  return static_cast<unsigned int>(*minutes);
+}
+
+bool UpdateVaultAutoLockMinutesInCore(unsigned int minutes) {
+  if (!IsSupportedVaultAutoLockMinutes(minutes)) {
+    return false;
+  }
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return false;
+  }
+  base::DictValue autofill;
+  autofill.Set("vaultAutoLockMinutes", static_cast<int>(minutes));
+  base::DictValue settings;
+  settings.Set("autofill", std::move(autofill));
+  std::string json;
+  base::JSONWriter::Write(base::Value(std::move(settings)), &json);
+  maho_core_update_settings(core, json.c_str());
+  return true;
+}
+
+bool ReadVaultDeviceAuthRequiredFromCore() {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return true;
+  }
+  const std::string json = TakeVaultJson(maho_core_get_settings(core));
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  const base::DictValue* autofill =
+      parsed && parsed->is_dict() ? parsed->GetDict().FindDict("autofill")
+                                  : nullptr;
+  const std::optional<bool> required =
+      autofill ? autofill->FindBool("vaultRequireDeviceAuth") : std::nullopt;
+  return required.value_or(true);
+}
+
+bool UpdateVaultDeviceAuthRequiredInCore(bool required) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return false;
+  }
+  base::DictValue autofill;
+  autofill.Set("vaultRequireDeviceAuth", required);
+  base::DictValue settings;
+  settings.Set("autofill", std::move(autofill));
   std::string json;
   base::JSONWriter::Write(base::Value(std::move(settings)), &json);
   maho_core_update_settings(core, json.c_str());

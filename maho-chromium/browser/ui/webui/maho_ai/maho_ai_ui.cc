@@ -14,7 +14,7 @@
 #include "base/task/thread_pool.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
@@ -111,12 +111,14 @@ void MahoAIUI::RedirectTabHostedNavigationToSidePanel() {
     return;
   }
 
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+  Browser* browser = static_cast<Browser*>(
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents));
   if (!browser) {
     return;
   }
 
-  if (browser->is_type_popup()) {
+  if ((browser->GetType() == BrowserWindowInterface::TYPE_POPUP)) {
     return;
   }
 
@@ -137,7 +139,7 @@ void MahoAIUI::RedirectTabHostedNavigationToSidePanel() {
   side_panel_ui->Show(SidePanelEntryId::kMahoAiPanel);
 
   const int tab_index =
-      browser->tab_strip_model()->GetIndexOfWebContents(web_contents);
+      browser->GetTabStripModel()->GetIndexOfWebContents(web_contents);
   if (tab_index == TabStripModel::kNoTab) {
     return;
   }
@@ -147,18 +149,18 @@ void MahoAIUI::RedirectTabHostedNavigationToSidePanel() {
       base::BindOnce(
           [](base::WeakPtr<MahoAIUI> weak_self, Browser* browser,
              content::WebContents* web_contents, int expected_index) {
-            if (!weak_self || !browser || !browser->tab_strip_model()) {
+            if (!weak_self || !browser || !browser->GetTabStripModel()) {
               return;
             }
 
             const int current_index =
-                browser->tab_strip_model()->GetIndexOfWebContents(web_contents);
+                browser->GetTabStripModel()->GetIndexOfWebContents(web_contents);
             if (current_index != expected_index ||
                 current_index == TabStripModel::kNoTab) {
               return;
             }
 
-            browser->tab_strip_model()->CloseWebContentsAt(
+            browser->GetTabStripModel()->CloseWebContentsAt(
                 current_index, TabCloseTypes::CLOSE_USER_GESTURE);
           },
           weak_factory_.GetWeakPtr(), browser, web_contents, tab_index));
@@ -176,8 +178,7 @@ void MahoAIUI::CreatePageHandler(
   content::WebContents* host = web_ui()->GetWebContents();
   BrowserWindowInterface* browser_window =
       host ? webui::GetBrowserWindowInterface(host) : nullptr;
-  Browser* browser =
-      browser_window ? browser_window->GetBrowserForMigrationOnly() : nullptr;
+  Browser* browser = static_cast<Browser*>(browser_window);
 
   Profile* profile = Profile::FromWebUI(web_ui());
 

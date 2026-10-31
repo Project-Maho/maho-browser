@@ -19,7 +19,7 @@ class MahoMruTabTrackerTest : public BrowserWithTestWindowTest {
 
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
-    tracker_ = std::make_unique<MahoMruTabTracker>(browser()->tab_strip_model());
+    tracker_ = std::make_unique<MahoMruTabTracker>(browser()->GetTabStripModel());
   }
 
   void TearDown() override {
@@ -32,7 +32,7 @@ class MahoMruTabTrackerTest : public BrowserWithTestWindowTest {
     AddTab(browser(), url);
     // AddTab() activates the newly inserted tab at index 0. Re-activate
     // deterministically for clarity in tests.
-    TabStripModel* strip = browser()->tab_strip_model();
+    TabStripModel* strip = browser()->GetTabStripModel();
     strip->ActivateTabAt(0);
     return strip->GetActiveWebContents();
   }
@@ -49,7 +49,7 @@ TEST_F(MahoMruTabTrackerTest, ActivationOrderIsMRU) {
   AddTab(browser(), GURL("http://b.test/"));
   AddTab(browser(), GURL("http://c.test/"));
 
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
   ASSERT_EQ(3, strip->count());
 
   strip->ActivateTabAt(2);
@@ -67,7 +67,7 @@ TEST_F(MahoMruTabTrackerTest, ActivationOrderIsMRU) {
 TEST_F(MahoMruTabTrackerTest, RemovedTabDropsFromMru) {
   AddTab(browser(), GURL("http://a.test/"));
   AddTab(browser(), GURL("http://b.test/"));
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
   ASSERT_EQ(2, strip->count());
 
   content::WebContents* to_close = strip->GetWebContentsAt(1);
@@ -83,7 +83,7 @@ TEST_F(MahoMruTabTrackerTest, RemovedTabDropsFromMru) {
 // Inserting a tab lands it at position [1], never displacing MRU[0].
 TEST_F(MahoMruTabTrackerTest, NewTabInsertsAtPositionOne) {
   AddTab(browser(), GURL("http://a.test/"));
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
 
   content::WebContents* first_active = strip->GetActiveWebContents();
   ASSERT_TRUE(first_active);

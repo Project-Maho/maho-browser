@@ -109,6 +109,20 @@ fn semantic_help(verb: &str) -> Option<&'static str> {
     }
 }
 
+/// Printed above the command list. Agents truncate `--help` with `head -40`,
+/// which previously cut off the semantic verbs that clap renders after Options.
+pub const AGENT_PREAMBLE: &str = "\
+Agent contract (read this before the command list):
+  delegate:   maho agent ask <goal> (runs in browser AI panel)
+  fallback:   explicit direct control for precise single steps:
+  one step:   maho click --tab <id> <selector>
+              maho type --tab <id> [--submit] <text>
+  many steps: maho browser pipe
+              one JSON object per line; required field op
+              ops: observe, click, type, navigate, wait, act
+  CLI agent:  maho agent task <goal> --approve-all (separate runtime)
+";
+
 fn extra_root_help() -> &'static str {
     "\nQuick entry:\n  maho <http(s)://url>                  Open the URL in a new browser tab\n\nSemantic browser interaction:\n  maho click [--tab <id>] <selector>\n  maho type [--tab <id>] [--submit] <text>\n  maho key [--tab <id>] <key-name>\n  maho scroll [--tab <id>] [--amount N | --to top|bottom]\n  maho hover [--tab <id>] <selector>\n  maho select [--tab <id>] <selector> <value>\n"
 }
@@ -374,6 +388,7 @@ impl crate::Cli {
             Ok(ParseAction::Parse(args)) => <Self as clap::Parser>::parse_from(args),
             Ok(ParseAction::RootHelp) => {
                 let mut command = <Self as clap::CommandFactory>::command();
+                command = command.before_help(AGENT_PREAMBLE);
                 print!("{}{}", command.render_long_help(), extra_root_help());
                 std::process::exit(0);
             }
@@ -402,6 +417,26 @@ mod tests {
             ParseAction::Parse(args) => args.iter().map(arg_text).collect(),
             ParseAction::RootHelp | ParseAction::PrintAndExit(_) => panic!("unexpected help exit"),
         }
+    }
+
+    #[test]
+    fn root_help_puts_agent_contract_above_options() {
+        let mut command =
+            <crate::Cli as clap::CommandFactory>::command().before_help(AGENT_PREAMBLE);
+        let help = command.render_long_help().to_string();
+        let contract = help
+            .find("maho agent task")
+            .expect("agent handoff must be in the preamble");
+        let click = help
+            .find("maho click --tab")
+            .expect("one-step command must be in the preamble");
+        let pipe = help
+            .find("maho browser pipe")
+            .expect("pipe must be in the preamble");
+        let options = help.find("\nOptions:").expect("options heading");
+        assert!(contract < options, "head -40 must still see the handoff");
+        assert!(click < options);
+        assert!(pipe < options);
     }
 
     #[test]

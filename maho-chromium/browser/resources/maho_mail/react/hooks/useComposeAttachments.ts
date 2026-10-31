@@ -18,6 +18,8 @@ export interface UseComposeAttachmentsReturn {
   attachments: ComposeAttachment[];
   setAttachments: React.Dispatch<React.SetStateAction<ComposeAttachment[]>>;
   isDragActive: boolean;
+  isReading: boolean;
+  readingRef: MutableRefObject<boolean>;
   handleFileSelected: (files: FileList | null) => Promise<void>;
   removeAttachment: (filename: string) => void;
   clearAttachments: () => void;
@@ -68,7 +70,7 @@ function readFileAsBase64(file: File): Promise<string> {
         return;
       }
       const encoded = reader.result.split(",")[1];
-      if (!encoded) {
+      if (encoded === undefined) {
         reject(new Error(`Failed to encode "${file.name}"`));
         return;
       }
@@ -96,6 +98,8 @@ export function useComposeAttachments({
 
   const [attachments, setAttachments] = useState<ComposeAttachment[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
+  const [isReading, setIsReading] = useState(false);
+  const readingRef = useRef(false);
   const dragDepthRef = useRef(0);
   const attachmentsRef = useRef<ComposeAttachment[]>(attachments);
 
@@ -131,6 +135,10 @@ export function useComposeAttachments({
   const handleFileSelected = useCallback(
     async (files: FileList | null) => {
       if (!files || files.length === 0) return;
+      if (readingRef.current) {
+        toast("error", "Please wait for attachments to finish loading.");
+        return;
+      }
 
       const incoming = Array.from(files);
       const current = attachmentsRef.current;
@@ -149,7 +157,7 @@ export function useComposeAttachments({
 
       for (const file of incoming) {
         if (file.size > maxFileSize) {
-          toast("error", t("compose.attachmentTooBig", { name: file.name }));
+          toast("error", t("compose.exceedsFileSize", { name: file.name }));
           continue;
         }
 
@@ -164,6 +172,9 @@ export function useComposeAttachments({
 
       if (acceptedFiles.length === 0) return;
 
+      readingRef.current = true;
+      setIsReading(true);
+      try {
       const newAttachments = await Promise.all(
         acceptedFiles.map(async (file) => {
           const data = await readFileAsBase64(file);
@@ -175,7 +186,14 @@ export function useComposeAttachments({
         }),
       );
 
-      setAttachments((prev) => [...prev, ...newAttachments]);
+      attachmentsRef.current = [...attachmentsRef.current, ...newAttachments];
+      setAttachments(attachmentsRef.current);
+      } catch (error) {
+        toast("error", error instanceof Error ? error.message : "Failed to read attachment");
+      } finally {
+        readingRef.current = false;
+        setIsReading(false);
+      }
     },
     [t, toast, maxFileSize, maxTotalSize, maxFileCount],
   );
@@ -235,6 +253,8 @@ export function useComposeAttachments({
     attachments,
     setAttachments,
     isDragActive,
+    isReading,
+    readingRef,
     handleFileSelected,
     removeAttachment,
     clearAttachments,

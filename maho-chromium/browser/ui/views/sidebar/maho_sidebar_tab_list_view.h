@@ -463,6 +463,30 @@ class MahoSidebarTabListView : public views::View,
   // ResolveTabStripIndexForTabId keeps lookups correct after the clear.
   void InvalidateTabIndexCache();
 
+  // Re-syncs each section's realized window against the CURRENT viewport after
+  // the hosting ScrollView finished a layout pass.
+  //
+  // RebuildRows() reconciles while the new rows are still unlaid-out, so it
+  // necessarily reads a stale scroll geometry; the following layout resizes the
+  // content extent and ScrollView::Layout() then CLAMPS the scroll offset via
+  // ConstrainScrollToBounds(). That clamp moves the viewport without ever
+  // calling OnScrolled(), so no contents-scrolled notification fires and
+  // OnScrollChanged() never runs — the realized rows stay parked outside the
+  // viewport while the skeleton spacers fill it, which reads to the user as
+  // "the sidebar tab list vanished" until the next scroll or rebuild.
+  //
+  // Reconciling here (post-layout, post-clamp) is the only point where the
+  // final viewport is known. Converges: a window that already matches leaves
+  // both spacer sizes untouched, and View::SetPreferredSize() is a no-op for an
+  // unchanged size, so no further layout is scheduled.
+  void SyncRealizedWindowAfterLayout();
+
+  // Called from the ScrollView post-layout callback. That callback runs before
+  // this view's own subtree is laid out, so row/spacer geometry is still stale
+  // there; the sync is posted to run once the layout pass has settled.
+  // Coalesces repeated layout passes into one sync.
+  void SchedulePostLayoutSync();
+
  private:
   friend class RebuildRowsBatchScoper;
   friend class SidebarInsertionLaneView;
@@ -629,6 +653,12 @@ class MahoSidebarTabListView : public views::View,
   // scrolled callback) must never re-enter reconciliation while an outer
   // reconcile is mid-mutation of window_ indices / rows_container children.
   bool reconciling_ = false;
+  // Re-entrancy guard for SyncRealizedWindowAfterLayout. Realizing rows inside
+  // the post-layout callback can schedule another layout pass; without this the
+  // callback could nest inside itself mid-reconcile.
+  bool post_layout_syncing_ = false;
+  // True while a SchedulePostLayoutSync() task is queued.
+  bool post_layout_sync_pending_ = false;
   // reconciling_ ends after each reconcile; this spans the full scroll
   // reconcile plus synchronous presentation callback.
   bool scroll_presenting_ = false;
@@ -990,6 +1020,8 @@ class SidebarTabRowView : public views::View,
   // P3: Skip redundant close-button icon swap (VectorIcon re-render) when the
   // minus/X state hasn't toggled. Called ~870×/hover cycle.
   bool last_close_button_show_minus_ = false;
+  // False until the close glyphs are rendered for the current palette/theme.
+  bool close_button_images_valid_ = false;
   SkColor last_title_color_ = SK_ColorTRANSPARENT;
   bool split_compact_ = false;
   MahoSidebarPalette palette_;

@@ -14,6 +14,7 @@
 #include "base/functional/callback.h"
 #include "base/values.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
+#include "maho/browser/maho_core_holder.h"
 #include "ui/gfx/image/image.h"
 
 class Browser;
@@ -49,6 +50,8 @@ struct FooterSpaceState {
 // Result of background Phase 0 + Phase 2 work (FFI + JSON parse + base64
 // decode). Returned by value from ThreadPool, consumed on UI thread.
 struct SidebarStateBackgroundResult {
+  uint64_t core_generation = 0;
+  std::vector<CoreTabFacts> tab_facts;
   SidebarStateBackgroundResult();
   SidebarStateBackgroundResult(SidebarStateBackgroundResult&&);
   SidebarStateBackgroundResult& operator=(SidebarStateBackgroundResult&&);
@@ -201,7 +204,6 @@ class MahoSidebarStateAdapter {
   ~MahoSidebarStateAdapter();
 
   MahoSidebarTopBarModel BuildTopBarModel(Browser* browser) const;
-  MahoSidebarSearchModel BuildSearchModel(Browser* browser) const;
   static MahoSidebarFavoritesModel BuildFavoritesModelForSpaceIdJson(
       std::string active_space_id_json);
   // Invalidates, fetches, and republishes the favorites fragment atomically
@@ -233,7 +235,6 @@ class MahoSidebarStateAdapter {
   struct CycleSpaceCache;
   mutable std::unique_ptr<CycleSpaceCache> cycle_space_cache_;
   mutable MahoSidebarFavoritesModel favorites_model_;
-  std::u16string GetActiveHostText(Browser* browser) const;
 
   // V2 FFI: single call replacing 3 separate v1 FFI hops.
   std::string FetchSidebarStateV2(::MahoCore* core,

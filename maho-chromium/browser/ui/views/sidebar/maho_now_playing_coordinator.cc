@@ -5,7 +5,8 @@
 #include <algorithm>
 
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/browser_process.h"
 #include "components/global_media_controls/public/media_item_manager.h"
@@ -64,8 +65,9 @@ global_media_controls::MediaItemUI* MahoNowPlayingCoordinator::ShowMediaItem(
   MahoNowPlayingCardHost* target_host = nullptr;
   
   if (contents) {
-    Browser* browser = chrome::FindBrowserWithTab(contents);
-    if (browser && browser->profile() == profile_) {
+    Browser* browser = static_cast<Browser*>(
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(contents));
+    if (browser && browser->GetProfile() == profile_) {
       target_host = FindHostForBrowser(browser);
       if (!target_host) {
         // Delayed visible host
@@ -121,8 +123,9 @@ void MahoNowPlayingCoordinator::RefreshMediaItem(
   
   MahoNowPlayingCardHost* target_host = nullptr;
   if (contents) {
-    Browser* browser = chrome::FindBrowserWithTab(contents);
-    if (browser && browser->profile() == profile_) {
+    Browser* browser = static_cast<Browser*>(
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(contents));
+    if (browser && browser->GetProfile() == profile_) {
       target_host = FindHostForBrowser(browser);
     }
   } else {
@@ -276,7 +279,7 @@ void MahoNowPlayingCoordinator::UnregisterHost(MahoNowPlayingCardHost* host) {
 
 void MahoNowPlayingCoordinator::OnTabStripModelChanged(Browser* browser) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (browser->profile() != profile_) return;
+  if (browser->GetProfile() != profile_) return;
   
   MahoNowPlayingCardHost* host = FindHostForBrowser(browser);
   if (!host) return;
@@ -293,8 +296,9 @@ void MahoNowPlayingCoordinator::OnTabStripModelChanged(Browser* browser) {
         content::MediaSession::GetWebContentsFromRequestId(id);
     if (!contents) continue;
 
-    Browser* current_browser = chrome::FindBrowserWithTab(contents);
-    if (current_browser && current_browser != browser && current_browser->profile() == profile_) {
+    Browser* current_browser = static_cast<Browser*>(
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(contents));
+    if (current_browser && current_browser != browser && current_browser->GetProfile() == profile_) {
       MahoNowPlayingCardHost* new_host = FindHostForBrowser(current_browser);
       auto item_weak = item_id_to_item_weak_map_[id];
       if (new_host) {

@@ -23,6 +23,22 @@ thread_local! {
 
 pub(crate) static NEXT_CALLBACK_TOKEN: AtomicU64 = AtomicU64::new(1);
 
+/// Serializes tests that flip the process-global SQLCipher test key
+/// (`maho_storage::sqlite::set_sqlcipher_key`). The key is process-wide, so
+/// parallel tests injecting different values make each other's
+/// `SqliteStorage::open` fail with "file is not a database". Every test that
+/// (re)configures the key and then opens databases must hold this guard for
+/// the whole key-sensitive region — in practice, for the whole test body
+/// (see `core_with_storage` helpers, the routines tests, and the
+/// runtime-config roundtrip test).
+#[cfg(test)]
+pub(crate) fn sqlcipher_test_key_lock() -> MutexGuard<'static, ()> {
+    use std::sync::{Mutex, OnceLock};
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
 
 #[cfg(test)]
 fn import_gate_rwlock() -> &'static std::sync::RwLock<()> {
@@ -270,5 +286,7 @@ pub(crate) unsafe fn maho_core_free_string(s: *mut c_char) {
     }
 }
 
-pub(crate) fn dispatch_split_callbacks_for_updates(_updates: &[maho_types::events::core_update::CoreUpdate]) {
+pub(crate) fn dispatch_split_callbacks_for_updates(
+    _updates: &[maho_types::events::core_update::CoreUpdate],
+) {
 }

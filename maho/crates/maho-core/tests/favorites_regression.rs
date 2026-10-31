@@ -490,3 +490,226 @@ fn is_tab_close_protected_true_for_pinned_and_favorite() {
     assert!(!core.is_tab_close_protected(normal.as_ref()));
     assert!(!core.is_tab_close_protected("nonexistent-id"));
 }
+
+/// Closing a favorite must put it to sleep at its home (pinned) URL so the
+/// next open lands on the pinned page instead of the last visited page.
+#[test]
+fn closing_a_favorite_sleeps_it_at_its_pinned_url() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab_id(&mut core, "https://home.example.com");
+    core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: tab_id.clone(),
+    });
+
+    // The user authors a distinct home URL, then navigates the tab away.
+    let json = format!(
+        r#"{{"kind":"set_tab_pinned_url","tab_id":"{}","url":"https://pinned.example.com"}}"#,
+        tab_id.0
+    );
+    core.handle_event(serde_json::from_str::<ShellEvent>(&json).expect("set pinned url must parse"));
+    core.handle_event(ShellEvent::TabUrlUpdated {
+        tab_id: tab_id.clone(),
+        url: Url::new("https://elsewhere.example.com/page"),
+    });
+
+    let captured: std::rc::Rc<std::cell::RefCell<Vec<CoreUpdate>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = captured.clone();
+    core.on_update(Box::new(move |update| sink.borrow_mut().push(update)));
+
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id: tab_id.clone(),
+        expected_space_id: None,
+    });
+
+    let tab = core
+        .tab_manager()
+        .get_tab(&tab_id)
+        .expect("a closed favorite must survive as a sleeping ghost");
+    assert!(
+        matches!(tab.state, TabLifecycleState::Suspended { .. }),
+        "closed favorite must be suspended, got: {:?}",
+        tab.state
+    );
+    assert_eq!(
+        tab.pinned_url,
+        Some(Url::new("https://pinned.example.com")),
+        "close must not clobber the authored home URL"
+    );
+    assert_eq!(
+        tab.url,
+        Url::new("https://pinned.example.com"),
+        "closed favorite must sleep at its pinned URL"
+    );
+    assert!(
+        captured.borrow().iter().any(|update| matches!(
+            update,
+            CoreUpdate::TabUpdated { tab_id: id, changes }
+                if *id == tab_id && changes.url.as_deref() == Some("https://pinned.example.com")
+        )),
+        "the URL reset must be announced with TabUpdated, got: {:?}",
+        captured.borrow()
+    );
+}
+
+/// The shell's two-stage close dispatches suspend_tab directly: favorites reset
+/// to their pinned URL, while pinned (non-favorite) tabs keep the live URL so
+/// pinned_close_behavior stays authoritative.
+#[test]
+fn suspend_event_resets_favorites_only() {
+    let mut core = MahoCore::new();
+    let fav = create_tab_id(&mut core, "https://fav-home.example");
+    core.handle_event(ShellEvent::FavoriteTab { tab_id: fav.clone() });
+    let pinned = create_tab_id(&mut core, "https://pin-home.example");
+    core.handle_event(ShellEvent::PinTab {
+        tab_id: pinned.clone(),
+    });
+
+    let json = format!(
+        r#"{{"kind":"set_tab_pinned_url","tab_id":"{}","url":"https://fav-pinned.example"}}"#,
+        fav.0
+    );
+    core.handle_event(serde_json::from_str::<ShellEvent>(&json).expect("set pinned url must parse"));
+
+    for tab_id in [fav.clone(), pinned.clone()] {
+        core.handle_event(ShellEvent::TabUrlUpdated {
+            tab_id,
+            url: Url::new("https://elsewhere.example/live"),
+        });
+    }
+
+    core.handle_event(ShellEvent::SuspendTab { tab_id: fav.clone() });
+    core.handle_event(ShellEvent::SuspendTab {
+        tab_id: pinned.clone(),
+    });
+
+    let fav_tab = core.tab_manager().get_tab(&fav).expect("favorite exists");
+    assert!(matches!(fav_tab.state, TabLifecycleState::Suspended { .. }));
+    assert_eq!(
+        fav_tab.url,
+        Url::new("https://fav-pinned.example"),
+        "suspended favorite must reset to its pinned URL"
+    );
+
+    let pinned_tab = core
+        .tab_manager()
+        .get_tab(&pinned)
+        .expect("pinned tab exists");
+    assert!(matches!(
+        pinned_tab.state,
+        TabLifecycleState::Suspended { .. }
+    ));
+    assert_eq!(
+        pinned_tab.url,
+        Url::new("https://elsewhere.example/live"),
+        "pinned tabs must keep the live URL on suspend"
+    );
+}
+
+/// A restart must reopen favorites at their pinned URL: load_state resets the
+/// live URL for favorites only, leaving pinned/normal tabs untouched.
+#[test]
+fn load_state_restores_favorites_at_their_pinned_url() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let storage_path = temp_dir.path().join("maho-core.lmdb");
+
+    let tabs_json = r#"[
+        {
+            "id": "tab-fav",
+            "parentId": null,
+            "spaceId": "space-test",
+            "url": "https://last-visited.example/page",
+            "title": "Fav",
+            "customTitle": null,
+            "favicon": null,
+            "state": { "kind": "active" },
+            "isMuted": false,
+            "zoomLevel": 1.0,
+            "createdAt": "2026-07-08T00:00:00Z",
+            "lastActiveAt": "2026-07-08T00:00:00Z",
+            "scrollPosition": {"x": 0, "y": 0},
+            "pinnedUrl": "https://home.example",
+            "windowId": null,
+            "isPinned": true,
+            "isFavorite": true,
+            "favoriteOrder": 0
+        },
+        {
+            "id": "tab-pinned",
+            "parentId": null,
+            "spaceId": "space-test",
+            "url": "https://pin-last.example/page",
+            "title": "Pinned",
+            "customTitle": null,
+            "favicon": null,
+            "state": { "kind": "active" },
+            "isMuted": false,
+            "zoomLevel": 1.0,
+            "createdAt": "2026-07-08T00:00:00Z",
+            "lastActiveAt": "2026-07-08T00:00:00Z",
+            "scrollPosition": {"x": 0, "y": 0},
+            "pinnedUrl": "https://pin-home.example",
+            "windowId": null,
+            "isPinned": true,
+            "isFavorite": false,
+            "favoriteOrder": null
+        },
+        {
+            "id": "tab-normal",
+            "parentId": null,
+            "spaceId": "space-test",
+            "url": "https://normal.example/page",
+            "title": "Normal",
+            "customTitle": null,
+            "favicon": null,
+            "state": { "kind": "active" },
+            "isMuted": false,
+            "zoomLevel": 1.0,
+            "createdAt": "2026-07-08T00:00:00Z",
+            "lastActiveAt": "2026-07-08T00:00:00Z",
+            "scrollPosition": {"x": 0, "y": 0},
+            "pinnedUrl": null,
+            "windowId": null,
+            "isPinned": false,
+            "isFavorite": false,
+            "favoriteOrder": null
+        }
+    ]"#;
+
+    {
+        let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path).expect("init storage");
+        storage.put("tabs", tabs_json.as_bytes()).unwrap();
+        let version_bytes = serde_json::to_vec(&3u32).unwrap();
+        storage.put("schema_version", &version_bytes).unwrap();
+    }
+
+    let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
+    core.load_state().expect("state should restore");
+
+    let fav = core
+        .tab_manager()
+        .get_tab(&TabId::new("tab-fav"))
+        .unwrap();
+    assert_eq!(
+        fav.url,
+        Url::new("https://home.example"),
+        "favorite must restart at its pinned URL"
+    );
+    assert_eq!(fav.pinned_url, Some(Url::new("https://home.example")));
+
+    let pinned = core
+        .tab_manager()
+        .get_tab(&TabId::new("tab-pinned"))
+        .unwrap();
+    assert_eq!(
+        pinned.url,
+        Url::new("https://pin-last.example/page"),
+        "pinned tabs must keep their live URL across a restart"
+    );
+
+    let normal = core
+        .tab_manager()
+        .get_tab(&TabId::new("tab-normal"))
+        .unwrap();
+    assert_eq!(normal.url, Url::new("https://normal.example/page"));
+}

@@ -38,6 +38,9 @@ fn origins(values: &[&str]) -> Vec<CredentialOrigin> {
 
 fn login_meta(title: &str, origin_values: &[&str]) -> VaultItemPublicMetadata {
     VaultItemPublicMetadata {
+        favorite: false,
+        trashed_at: None,
+        has_notes: false,
         title: title.to_string(),
         origins: origins(origin_values),
         username_hint: String::new(),
@@ -63,6 +66,9 @@ fn login_input(
 
 fn totp_meta() -> VaultItemPublicMetadata {
     VaultItemPublicMetadata {
+        favorite: false,
+        trashed_at: None,
+        has_notes: false,
         title: "Example TOTP".to_string(),
         origins: origins(&["https://example.com"]),
         username_hint: String::new(),
@@ -82,6 +88,8 @@ fn totp_meta() -> VaultItemPublicMetadata {
 
 fn list_all() -> VaultItemListRequest {
     VaultItemListRequest {
+        trash: Default::default(),
+        favorites_only: false,
         schema_version: VaultSchemaVersion::CURRENT,
         provider: None,
         kinds: Vec::new(),
@@ -430,6 +438,7 @@ fn vault_crud_update_password_domain_username_bumps_revision() {
             dto.id,
             VaultRevision::new(1),
             VaultLoginUpdate {
+                notes: None,
                 metadata,
                 username: "bob".to_string(),
                 password: Some(Zeroizing::new(SENTINEL.to_string())),
@@ -474,6 +483,7 @@ fn vault_crud_stale_revision_update_conflicts_and_preserves_row() {
         dto.id,
         VaultRevision::new(99),
         VaultLoginUpdate {
+            notes: None,
             metadata,
             username: "alice".to_string(),
             password: Some(Zeroizing::new("newpw".to_string())),

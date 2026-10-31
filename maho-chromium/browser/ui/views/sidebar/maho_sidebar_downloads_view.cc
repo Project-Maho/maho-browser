@@ -666,9 +666,17 @@ std::unique_ptr<views::ImageButton> CreateActionButton(
     const std::u16string& accessible_name,
     base::RepeatingClosure callback,
     const MahoSidebarPalette& palette) {
-  auto button = views::CreateVectorImageButtonWithNativeTheme(
-      std::move(callback), icon, 14, palette.neutral_glyph,
-      palette.primary_text, palette.primary_text);
+  // CreateVectorImageButtonWithNativeTheme takes ui::ColorId (an int); the
+  // palette SkColors must be bound per state instead.
+  auto button = views::CreateVectorImageButton(std::move(callback));
+  const ui::ImageModel normal =
+      ui::ImageModel::FromVectorIcon(icon, palette.neutral_glyph, 14);
+  button->SetImageModel(views::Button::STATE_NORMAL, normal);
+  button->SetImageModel(views::Button::STATE_HOVERED, normal);
+  button->SetImageModel(views::Button::STATE_PRESSED, normal);
+  button->SetImageModel(
+      views::Button::STATE_DISABLED,
+      ui::ImageModel::FromVectorIcon(icon, palette.disabled_text, 14));
   button->SetBorder(nullptr);
   button->SetPreferredSize(gfx::Size(24, 24));
   button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
@@ -937,8 +945,8 @@ END_METADATA
 MahoSidebarDownloadsView::MahoSidebarDownloadsView(Browser* browser)
     : browser_(browser) {
   BuildUi();
-  if (browser_ && browser_->profile()) {
-    auto* service = maho::MahoDownloadBridgeServiceFactory::GetForProfile(browser_->profile());
+  if (browser_ && browser_->GetProfile()) {
+    auto* service = maho::MahoDownloadBridgeServiceFactory::GetForProfile(browser_->GetProfile());
     if (service) {
       service->AddObserver(this);
     }
@@ -946,8 +954,8 @@ MahoSidebarDownloadsView::MahoSidebarDownloadsView(Browser* browser)
 }
 
 MahoSidebarDownloadsView::~MahoSidebarDownloadsView() {
-  if (browser_ && browser_->profile()) {
-    auto* service = maho::MahoDownloadBridgeServiceFactory::GetForProfileIfExists(browser_->profile());
+  if (browser_ && browser_->GetProfile()) {
+    auto* service = maho::MahoDownloadBridgeServiceFactory::GetForProfileIfExists(browser_->GetProfile());
     if (service) {
       service->RemoveObserver(this);
     }
@@ -1100,8 +1108,8 @@ void MahoSidebarDownloadsView::ApplyPalette() {
         kHeaderSearchIconSizeDp));
   }
   if (search_field_) {
-    search_field_->SetTextColor(palette_.primary_text);
-    search_field_->set_placeholder_text_color(palette_.secondary_text);
+    search_field_->SetMahoResolvedTextColor(palette_.primary_text);
+    search_field_->SetMahoResolvedPlaceholderTextColor(palette_.secondary_text);
   }
   if (empty_state_view_) {
     static_cast<DownloadsEmptyStateView*>(empty_state_view_.get())
@@ -1115,7 +1123,7 @@ void MahoSidebarDownloadsView::ReloadDownloads() {
     downloads = *testing_downloads_;
   } else if (browser_ &&
              MahoIsCapabilityAllowed(
-                 browser_->profile(),
+                 browser_->GetProfile(),
                  MahoPrivateCapability::kMahoDownloadMetadata)) {
     // Defense-in-depth: ParseDownloads() reads the process-global regular
     // MahoCore. The primary OTR boundary is the is_otr_ gate at the sidebar
@@ -1210,7 +1218,7 @@ void MahoSidebarDownloadsView::HandleDownloadAction(
     // download metadata (see ReloadDownloads()).
     if (!browser_ ||
         !MahoIsCapabilityAllowed(
-            browser_->profile(),
+            browser_->GetProfile(),
             MahoPrivateCapability::kMahoDownloadMetadata)) {
       return;
     }
@@ -1275,8 +1283,8 @@ void MahoSidebarDownloadsView::HandleDownloadAction(
   // Additionally drive the live download::DownloadItem (if one exists in this
   // session) so an in-progress transfer actually pauses/resumes/cancels in
   // Chromium's download system. These no-op safely when there is no live item.
-  if (browser_ && browser_->profile()) {
-    auto* service = maho::MahoDownloadBridgeServiceFactory::GetForProfile(browser_->profile());
+  if (browser_ && browser_->GetProfile()) {
+    auto* service = maho::MahoDownloadBridgeServiceFactory::GetForProfile(browser_->GetProfile());
     if (service) {
       switch (action) {
         case DownloadActionKind::kPause:
@@ -1310,7 +1318,7 @@ void MahoSidebarDownloadsView::HandleResolvedDownloadFileAction(
                   << (action == DownloadActionKind::kOpen ? "open" : "reveal");
     return;
   }
-  auto* profile = browser_ ? browser_->profile() : nullptr;
+  auto* profile = browser_ ? browser_->GetProfile() : nullptr;
   if (action == DownloadActionKind::kOpen) {
     platform_util::OpenItem(profile, path, platform_util::OPEN_FILE,
                             platform_util::OpenOperationCallback());

@@ -398,7 +398,7 @@ export function MahoAiApp({store}: {store: MahoAiStore}) {
       store.toggleAttachment(attachment);
     },
     onSetAISelection: (selection: AISelectionRequest) => {
-      return store.setAISelection(selection);
+      return store.setDefaultAISelection(selection);
     },
     onOpenSettings: () => {
       void store.openSettings();
@@ -441,7 +441,7 @@ export function MahoAiApp({store}: {store: MahoAiStore}) {
       void store.setViewMode(mode);
     },
     onSetAISelection: (selection: AISelectionRequest) => {
-      return store.setAISelection(selection);
+      return store.setDefaultAISelection(selection);
     },
   }), [store]);
 

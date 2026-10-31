@@ -9,7 +9,7 @@ use crate::error::PlatformError;
 use crate::grounding::{AppTarget, ScreenElement};
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::UI::Accessibility::{
     CUIAutomation8, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker,
@@ -33,6 +33,18 @@ pub fn read_elements(app: AppTarget) -> Result<Vec<ScreenElement>, PlatformError
                 initiated.0
             )));
         }
+        struct ComApartment(bool);
+        impl Drop for ComApartment {
+            fn drop(&mut self) {
+                if self.0 {
+                    // SAFETY: balances this thread's successful CoInitializeEx.
+                    unsafe { CoUninitialize() };
+                }
+            }
+        }
+        // S_OK and S_FALSE both acquire ownership; changed mode acquires none.
+        // Declare before the interfaces so they are released before teardown.
+        let _apartment = ComApartment(initiated.is_ok());
         let automation: IUIAutomation =
             CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER).map_err(com_err)?;
         let walker = automation.ControlViewWalker().map_err(com_err)?;

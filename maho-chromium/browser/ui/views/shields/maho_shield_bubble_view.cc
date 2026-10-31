@@ -23,6 +23,7 @@
 #include "maho/third_party/maho/maho_bridge.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/class_property.h"
 #include "ui/base/models/image_model.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_variant.h"
@@ -44,6 +45,9 @@
 namespace maho {
 
 namespace {
+
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(views::BubbleDialogDelegate,
+                                 kShieldDelegateKey)
 
 constexpr int kBubbleWidth = 296;
 constexpr int kStatusIconSize = 18;
@@ -163,8 +167,10 @@ views::Widget* CreateShieldBubble(
       browser, origin, blocked_count, is_excepted, target_web_contents));
 
   views::Widget* widget =
-      views::BubbleDialogDelegate::CreateBubble(std::move(delegate));
+      views::BubbleDialogDelegate::CreateBubbleDeprecated(
+          delegate.get(), views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   if (widget) {
+    widget->SetProperty(kShieldDelegateKey, std::move(delegate));
     widget->Show();
   }
   return widget;

@@ -3,6 +3,10 @@ import { useState, useEffect, useCallback, type MutableRefObject } from "react";
 export interface UseComposeSecurityParams {
   isOpen: boolean;
   prevIsOpenRef: MutableRefObject<boolean>;
+  initialReadReceipt?: boolean;
+  initialPgpEncrypt?: boolean;
+  initialSmimeSign?: boolean;
+  initialSmimeEncrypt?: boolean;
 }
 
 export interface UseComposeSecurityReturn {
@@ -19,11 +23,15 @@ export interface UseComposeSecurityReturn {
 export function useComposeSecurity({
   isOpen,
   prevIsOpenRef,
+  initialReadReceipt = false,
+  initialPgpEncrypt = false,
+  initialSmimeSign = false,
+  initialSmimeEncrypt = false,
 }: UseComposeSecurityParams): UseComposeSecurityReturn {
-  const [pgpEncrypt, setPgpEncrypt] = useState(false);
-  const [smimeSign, setSmimeSign] = useState(false);
-  const [smimeEncrypt, setSmimeEncrypt] = useState(false);
-  const [requestReadReceipt, setRequestReadReceipt] = useState(false);
+  const [pgpEncrypt, setPgpEncrypt] = useState(initialPgpEncrypt);
+  const [smimeSign, setSmimeSign] = useState(initialSmimeSign);
+  const [smimeEncrypt, setSmimeEncrypt] = useState(initialSmimeEncrypt);
+  const [requestReadReceipt, setRequestReadReceipt] = useState(initialReadReceipt);
 
   // Reset all toggles on first-open transition (prevIsOpenRef false → true)
   useEffect(() => {
@@ -32,11 +40,11 @@ export function useComposeSecurity({
     const isFirstOpen = !prevIsOpenRef.current;
     if (!isFirstOpen) return;
 
-    setPgpEncrypt(false);
-    setSmimeSign(false);
-    setSmimeEncrypt(false);
-    setRequestReadReceipt(false);
-  }, [isOpen, prevIsOpenRef]);
+    setPgpEncrypt(initialPgpEncrypt);
+    setSmimeSign(initialSmimeSign);
+    setSmimeEncrypt(initialSmimeEncrypt);
+    setRequestReadReceipt(initialReadReceipt);
+  }, [isOpen, prevIsOpenRef, initialReadReceipt, initialPgpEncrypt, initialSmimeSign, initialSmimeEncrypt]);
 
   const togglePgpEncrypt = useCallback((next: boolean) => {
     setPgpEncrypt(next);

@@ -9,7 +9,11 @@
 #undef ShowBubble
 
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/browser_actions.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/passwords/passwords_model_delegate.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -32,7 +36,7 @@ public:
 #define CreateBubble CreateBubble_ChromiumImpl
 #define ShowBubble ShowBubble_ChromiumImpl
 #define BubbleDialogDelegateView BubbleDialogDelegateViewChromiumPassthrough
-#include "src/chrome/browser/ui/views/passwords/password_bubble_view_base.cc"
+#include "../src/chrome/browser/ui/views/passwords/password_bubble_view_base.cc"
 #undef BubbleDialogDelegateView
 #undef ShowBubble
 #undef CreateBubble
@@ -63,8 +67,11 @@ bool ShouldUseMahoPasswordSaveUpdateView(content::WebContents *web_contents) {
 // static
 void PasswordBubbleViewBase::ShowBubble(content::WebContents *web_contents,
                                         DisplayReason reason) {
-  BrowserWindowInterface *browser = chrome::FindBrowserWithTab(web_contents);
-  DCHECK(browser);
+  BrowserWindowInterface *browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
+  if (!browser) {
+    return;
+  }
   DCHECK(browser->GetWindow());
   DCHECK(!g_manage_passwords_bubble_ ||
          !g_manage_passwords_bubble_->GetWidget()->IsVisible());
@@ -102,11 +109,11 @@ void PasswordBubbleViewBase::ShowBubble(content::WebContents *web_contents,
       },
       bubble));
 
-  if (browser && browser->GetActions() &&
-      browser->GetActions()->root_action_item()) {
+  auto *browser_actions = BrowserActions::From(browser);
+  if (browser_actions && browser_actions->root_action_item()) {
     auto *passwords_action_item = actions::ActionManager::Get().FindAction(
         kActionShowPasswordsBubbleOrPage,
-        browser->GetActions()->root_action_item());
+        browser_actions->root_action_item());
     if (passwords_action_item) {
       bool should_suppress_next_button_trigger =
           g_manage_passwords_bubble_->ShouldCloseOnDeactivate();

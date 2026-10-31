@@ -112,6 +112,30 @@ class TestMacBundleValidation(unittest.TestCase):
                 ):
                     _verify._verify_bundle_metadata(fixture.app, 'arm64')
 
+    def test_metadata_verifies_product_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = MacBundleFixture(temp_dir)
+            with patch.object(
+                _verify,
+                '_run',
+                return_value=_completed(['lipo'], stdout='arm64\n'),
+            ):
+                with self.assertRaisesRegex(
+                    _verify.VerificationError,
+                    'unexpected CFBundleShortVersionString',
+                ):
+                    _verify._verify_bundle_metadata(fixture.app, 'arm64', expected_version='2026.9.27')
+
+                with (fixture.app / 'Contents' / 'Info.plist').open('wb') as f:
+                    plistlib.dump({
+                        'CFBundleExecutable': 'Maho',
+                        'CFBundleIdentifier': _verify.EXPECTED_BUNDLE_ID,
+                        'CFBundlePackageType': 'APPL',
+                        'CFBundleShortVersionString': '2026.9.27',
+                        'CFBundleVersion': '2026.9.27',
+                    }, f)
+                _verify._verify_bundle_metadata(fixture.app, 'arm64', expected_version='2026.9.27')
+
     def test_signature_rejects_apple_development_identity(self) -> None:
         verify_result = _completed(['codesign'], stdout='', stderr='')
         details = _completed(

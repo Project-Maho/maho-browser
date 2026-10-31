@@ -50,6 +50,9 @@ impl TestCore {
             (&mut *self.core)
                 .vault_add_login(VaultLoginInput {
                     metadata: VaultItemPublicMetadata {
+                        favorite: false,
+                        trashed_at: None,
+                        has_notes: false,
                         title: "Backend".to_string(),
                         origins: vec![origin],
                         username_hint: "backend@example.com".to_string(),

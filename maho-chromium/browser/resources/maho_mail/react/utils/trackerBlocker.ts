@@ -181,7 +181,10 @@ export function blockExternalResources(
   const blockImages = options.blockImages ?? false;
   const blockTrackers = options.blockTrackers ?? false;
 
-  function shouldBlockUrl(url: string | null | undefined): { block: boolean; isTracker: boolean; domain: string | null } {
+  function shouldBlockUrl(
+    url: string | null | undefined,
+    isImage: boolean = false,
+  ): { block: boolean; isTracker: boolean; domain: string | null } {
     if (!url) return { block: false, isTracker: false, domain: null };
     const trimmed = url.trim();
     if (!/^https?:\/\//i.test(trimmed)) {
@@ -197,7 +200,10 @@ export function blockExternalResources(
       }
     }
 
-    const block = isTracker || (blockImages && !isTracker);
+    // Non-image external resources (<link>, <audio>, <video src>, <embed>, <object>, <iframe>, form action, etc.)
+    // are default-BLOCKED regardless of tracker-list membership.
+    // Image handling stays governed by user settings (blockImages / blockTrackers).
+    const block = !isImage || isTracker || blockImages;
     return { block, isTracker, domain };
   }
 
@@ -207,7 +213,7 @@ export function blockExternalResources(
     const domains: string[] = [];
 
     let newStyle = style.replace(/url\(\s*(['"]?)([^)]*)\1\s*\)/gi, (match, _quote, url) => {
-      const check = shouldBlockUrl(url);
+      const check = shouldBlockUrl(url, true);
       if (check.block) {
         blocked = true;
         if (check.isTracker) {
@@ -222,7 +228,7 @@ export function blockExternalResources(
     newStyle = newStyle.replace(
       /@import\s+(['"])([^'"]+)\1(\s*[^;]*)?;?/gi,
       (match, _quote, url) => {
-        const check = shouldBlockUrl(url);
+        const check = shouldBlockUrl(url, false);
         if (check.block) {
           blocked = true;
           if (check.isTracker) {
@@ -250,11 +256,12 @@ export function blockExternalResources(
   function blockUrlAttribute(
     el: Element,
     attributes: readonly string[],
+    isImage: boolean = false,
   ): void {
     for (const attr of attributes) {
       const value = el.getAttribute(attr);
       if (!value) continue;
-      const check = shouldBlockUrl(value);
+      const check = shouldBlockUrl(value, isImage);
       if (check.block) {
         el.removeAttribute(attr);
         recordBlock(check);
@@ -310,7 +317,7 @@ export function blockExternalResources(
       }
 
       if (src) {
-        const check = shouldBlockUrl(src);
+        const check = shouldBlockUrl(src, true);
         if (check.block || isPixelTracker) {
           el.setAttribute("src", TRANSPARENT_PIXEL_SVG);
           if (check.isTracker || isPixelTracker) {
@@ -333,7 +340,7 @@ export function blockExternalResources(
           if (match) {
             const url = match[1];
             const descriptor = match[2];
-            const check = shouldBlockUrl(url);
+            const check = shouldBlockUrl(url, true);
             if (check.block || isPixelTracker) {
               if (check.isTracker || isPixelTracker) {
                 trackersBlockedCount++;
@@ -361,7 +368,7 @@ export function blockExternalResources(
           if (match) {
             const url = match[1];
             const descriptor = match[2];
-            const check = shouldBlockUrl(url);
+            const check = shouldBlockUrl(url, true);
             if (check.block) {
               if (check.isTracker) {
                 trackersBlockedCount++;
@@ -379,11 +386,11 @@ export function blockExternalResources(
           el.setAttribute("srcset", newParts.join(", "));
         }
       }
-      blockUrlAttribute(el, ["src"]);
+      blockUrlAttribute(el, ["src"], false);
     } else if (tagName === "video") {
       const poster = el.getAttribute("poster");
       if (poster) {
-        const check = shouldBlockUrl(poster);
+        const check = shouldBlockUrl(poster, true);
         if (check.block) {
           el.setAttribute("poster", TRANSPARENT_PIXEL_SVG);
           if (check.isTracker) {
@@ -394,11 +401,12 @@ export function blockExternalResources(
           }
         }
       }
+      blockUrlAttribute(el, ["src"], false);
     } else if (tagName === "input") {
       if (el.getAttribute("type") === "image") {
         const src = el.getAttribute("src");
         if (src) {
-          const check = shouldBlockUrl(src);
+          const check = shouldBlockUrl(src, true);
           if (check.block) {
             el.setAttribute("src", TRANSPARENT_PIXEL_SVG);
             if (check.isTracker) {
@@ -411,23 +419,11 @@ export function blockExternalResources(
         }
       }
     } else if (tagName === "object") {
-      const data = el.getAttribute("data");
-      if (data) {
-        const check = shouldBlockUrl(data);
-        if (check.block) {
-          el.removeAttribute("data");
-          if (check.isTracker) {
-            trackersBlockedCount++;
-            if (check.domain) trackerDomainsSet.add(check.domain);
-          } else {
-            imagesBlockedCount++;
-          }
-        }
-      }
+      blockUrlAttribute(el, ["data"], false);
     } else if (tagName === "image") {
       const href = el.getAttribute("href") || el.getAttribute("xlink:href");
       if (href) {
-        const check = shouldBlockUrl(href);
+        const check = shouldBlockUrl(href, true);
         if (check.block) {
           el.setAttribute("href", TRANSPARENT_PIXEL_SVG);
           el.removeAttribute("xlink:href");
@@ -440,13 +436,13 @@ export function blockExternalResources(
         }
       }
     } else if (tagName === "iframe" || tagName === "embed" || tagName === "audio") {
-      blockUrlAttribute(el, ["src"]);
+      blockUrlAttribute(el, ["src"], false);
     } else if (tagName === "link") {
-      blockUrlAttribute(el, ["href"]);
+      blockUrlAttribute(el, ["href"], false);
     } else if (tagName === "use" || tagName === "feimage") {
-      blockUrlAttribute(el, ["href", "xlink:href"]);
+      blockUrlAttribute(el, ["href", "xlink:href"], false);
     } else if (tagName === "form") {
-      blockUrlAttribute(el, ["action"]);
+      blockUrlAttribute(el, ["action"], false);
     }
   }
 

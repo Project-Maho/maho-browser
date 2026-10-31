@@ -5,6 +5,8 @@
 
 #include <string>
 
+#include "base/functional/callback.h"
+
 namespace maho {
 
 class PlatformUpdaterDelegate {
@@ -22,6 +24,20 @@ class PlatformUpdaterDelegate {
 
   // Apply update and relaunch (if supported).
   virtual void ApplyUpdateAndRestart() = 0;
+
+  // Human-readable guidance shown when this install cannot self-update and the
+  // user must update some other way (e.g. a package manager or an app store).
+  // Empty when there is nothing to say.
+  virtual std::string GetUpdateGuidance() const = 0;
+
+  // Handler for the user asking to see the full release notes / version
+  // history. A platform updater (Sparkle) normally opens the appcast's
+  // releaseNotesLink in the default browser; that URL points at a release
+  // asset GitHub serves as a download, so the user got a saved .html file
+  // instead of readable notes. The browser layer injects a handler that opens
+  // Maho's own changelog surface in-app. Unsupported platforms keep the
+  // no-op default.
+  virtual void SetVersionHistoryHandler(base::RepeatingClosure handler) {}
 };
 
 }  // namespace maho

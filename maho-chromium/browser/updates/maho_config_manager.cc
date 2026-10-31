@@ -3,6 +3,7 @@
 #include "maho/browser/updates/maho_config_manager.h"
 
 #include <cstddef>
+#include <stdint.h>
 #include <string>
 #include <vector>
 

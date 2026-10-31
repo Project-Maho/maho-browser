@@ -58,6 +58,9 @@ pub(crate) struct VaultRecordPayload {
     /// back to Chromium's own defaults instead of failing the read.
     #[serde(default)]
     pub form_details: Option<VaultCredentialFormDetails>,
+    /// Optional login-attached seed; legacy records have no attached TOTP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totp_seed: Option<Vec<u8>>,
 }
 
 /// Short-lived owned decrypted secret handed to a privileged caller. Every
@@ -67,6 +70,17 @@ pub(crate) enum LiveSecret {
     TotpSeed(Zeroizing<Vec<u8>>),
     PasskeyPrivateKey(Zeroizing<Vec<u8>>),
     SecureBytes(Zeroizing<Vec<u8>>),
+}
+
+impl VaultRecordPayload {
+    pub(crate) fn has_notes(&self) -> bool {
+        match &self.secret {
+            RecordSecret::Login { .. } => self.form_details.as_ref()
+                .is_some_and(|details| details.notes.iter().any(|note| !note.value.is_empty())),
+            RecordSecret::SecureItem { notes, .. } => notes.as_ref().is_some_and(|notes| !notes.is_empty()),
+            _ => false,
+        }
+    }
 }
 
 impl LiveSecret {
@@ -163,6 +177,9 @@ pub(crate) fn public_dto(
 ) -> Result<VaultItemPublicDto, VaultCrudError> {
     let id = VaultItemId::from_str(&row.id).map_err(|_| VaultCrudError::MalformedPayload)?;
     Ok(VaultItemPublicDto {
+        favorite: record.metadata.favorite,
+        trashed_at: record.metadata.trashed_at,
+        has_notes: record.metadata.has_notes,
         schema_version: VaultSchemaVersion::CURRENT,
         id,
         revision: VaultRevision::new(u64::try_from(row.revision).unwrap_or(0)),
@@ -192,4 +209,20 @@ fn parse_timestamp(value: &str) -> Result<DateTime<Utc>, VaultCrudError> {
     DateTime::parse_from_rfc3339(value)
         .map(|timestamp| timestamp.with_timezone(&Utc))
         .map_err(|_| VaultCrudError::MalformedPayload)
+}
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+
+    #[test]
+    fn vault_legacy_payload_decodes_without_parity_fields() {
+        let payload = br#"{"schemaVersion":1,"metadata":{"title":"Legacy","origins":[],"usernameHint":"a***","itemKind":"login","totp":null,"passkey":null},"username":"alice","secret":{"kind":"login","password":"legacy-secret"},"lastUsedAt":null}"#;
+        let record = deserialize_record(payload).unwrap();
+        assert!(!record.metadata.favorite);
+        assert!(!record.metadata.has_notes);
+        assert!(record.metadata.trashed_at.is_none());
+        assert!(record.totp_seed.is_none());
+        assert!(matches!(&record.secret, RecordSecret::Login { password } if password == "legacy-secret"));
+    }
 }

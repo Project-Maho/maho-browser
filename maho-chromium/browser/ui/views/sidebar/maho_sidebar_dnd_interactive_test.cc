@@ -85,7 +85,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   const std::string expected_first_tab_id = state.favorites.items[1].tab_id;
   ASSERT_FALSE(moved_tab_id.empty());
   ASSERT_FALSE(expected_first_tab_id.empty());
-  ASSERT_GE(browser()->tab_strip_model()->count(), 2);
+  ASSERT_GE(browser()->GetTabStripModel()->count(), 2);
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     ResolveViews();
@@ -123,9 +123,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   ASSERT_TRUE(observer_.HasEvent("reorder_favorite"));
   EXPECT_EQ(favorites_->tile_tab_id_for_testing(0), expected_first_tab_id);
 
-  const int active_index = browser()->tab_strip_model()->active_index();
+  const int active_index = browser()->GetTabStripModel()->active_index();
   const int next_index = active_index == 0 ? 1 : 0;
-  browser()->tab_strip_model()->ActivateTabAt(next_index);
+  browser()->GetTabStripModel()->ActivateTabAt(next_index);
   base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(favorites_->tile_tab_id_for_testing(0), expected_first_tab_id)
@@ -186,7 +186,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragTabIntoFolder) {
   ResolveViews();
 
   MahoSidebarStateAdapter adapter;
-  auto state = adapter.BuildViewStateModel(browser());
+  auto state = adapter.BuildViewStateModel(static_cast<Browser*>(browser()));
 
   std::string folder_id;
   for (const auto& node : state.tab_list.normal_tree) {
@@ -298,9 +298,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   EXPECT_EQ(target_row->tab_id_for_testing(), target_id);
   target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
-  Browser* browser = this->browser();
+  Browser* browser = static_cast<Browser*>(this->browser());
   ASSERT_TRUE(browser);
-  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  TabStripModel* tab_strip_model = browser->GetTabStripModel();
   ASSERT_TRUE(tab_strip_model);
   ASSERT_TRUE(tab_strip_model->ContainsIndex(source_index));
   ASSERT_TRUE(tab_strip_model->ContainsIndex(target_index));
@@ -386,7 +386,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   ASSERT_TRUE(target_row);
   target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
   content::WebContents* source_contents =
       model->GetWebContentsAt(tabs[0]->tab_strip_index);
@@ -444,7 +444,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   }
   ASSERT_EQ(tabs.size(), 3u);
 
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
   content::WebContents* source_contents =
       model->GetWebContentsAt(tabs[0]->tab_strip_index);
@@ -458,7 +458,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
 
   model->ActivateTabAt(tabs[2]->tab_strip_index);
   split_tabs::SplitTabVisualData visual_data(
-      split_tabs::SplitTabLayout::kVertical, 0.5);
+      split_tabs::SplitTabLayout::kSideBySide, 0.5);
   model->AddToNewSplit({model->GetIndexOfWebContents(source_contents)},
                        visual_data,
                        split_tabs::SplitTabCreatedSource::kDragAndDropTab);
@@ -522,7 +522,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   }
   ASSERT_EQ(tabs.size(), 3u);
 
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
   content::WebContents* source_contents =
       model->GetWebContentsAt(tabs[0]->tab_strip_index);
@@ -536,7 +536,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
 
   model->ActivateTabAt(tabs[1]->tab_strip_index);
   split_tabs::SplitTabVisualData visual_data(
-      split_tabs::SplitTabLayout::kVertical, 0.5);
+      split_tabs::SplitTabLayout::kSideBySide, 0.5);
   model->AddToNewSplit({model->GetIndexOfWebContents(partner_contents)},
                        visual_data,
                        split_tabs::SplitTabCreatedSource::kDragAndDropTab);
@@ -601,7 +601,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   ASSERT_TRUE(target_row);
   target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
   content::WebContents* source_contents =
       model->GetWebContentsAt(tabs[0]->tab_strip_index);
@@ -886,9 +886,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   payload.space_id = state.tab_list.active_space_id;
   payload.tab_strip_index = source_index;
 
-  Browser* browser = this->browser();
+  Browser* browser = static_cast<Browser*>(this->browser());
   ASSERT_TRUE(browser);
-  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  TabStripModel* tab_strip_model = browser->GetTabStripModel();
   ASSERT_TRUE(tab_strip_model);
   const int target_index = target_row->live_tab_index_for_testing();
   ASSERT_GE(target_index, 0);

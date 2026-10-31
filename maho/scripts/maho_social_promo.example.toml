@@ -25,6 +25,9 @@ author_cooldown_hours = 168
 candidate_ttl_hours = 48
 similarity_limit = 0.88
 
+# Keep the browser tab open after manual REPL reply for inspection.
+keep_inspection_tab = true
+
 # Put your own/company handles here so discovery never queues self-replies.
 # Handles are normalized case-insensitively and may be written with or without @.
 excluded_authors = ["MahoBrowser"]
@@ -78,6 +81,7 @@ facts = [
 [platforms.x]
 enabled = true
 canonical_host = "x.com"
+posting_author = "MahoBrowser"
 search_url_template = "https://x.com/search?q={query}&src=typed_query&f=live"
 link_pattern = 'https://(?:x\.com|twitter\.com)/([A-Za-z0-9_]{1,15})/status/([0-9]+)'
 keywords = [
@@ -95,6 +99,7 @@ scan_scrolls = 2
 [platforms.threads]
 enabled = true
 canonical_host = "www.threads.net"
+posting_author = "MahoBrowser"
 search_url_template = "https://www.threads.net/search?q={query}"
 link_pattern = 'https://(?:www\.)?(?:threads\.net|threads\.com)/@([A-Za-z0-9._]+)/post/([A-Za-z0-9_-]+)'
 keywords = [

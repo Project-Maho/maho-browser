@@ -32,7 +32,6 @@ const char* MapRequestDestinationToFilterType(
     case network::mojom::RequestDestination::kWorker:
     case network::mojom::RequestDestination::kSharedWorker:
     case network::mojom::RequestDestination::kServiceWorker:
-    case network::mojom::RequestDestination::kSharedStorageWorklet:
     case network::mojom::RequestDestination::kAudioWorklet:
     case network::mojom::RequestDestination::kPaintWorklet:
       return "script";

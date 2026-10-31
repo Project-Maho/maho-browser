@@ -9,8 +9,12 @@
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -93,11 +97,11 @@ class MahoPeekLinkRoutingInteractiveUiTest : public InProcessBrowserTest {
     host_resolver()->AddRule("*", "127.0.0.1");
     ASSERT_TRUE(embedded_test_server()->Start());
     InProcessBrowserTest::SetUpOnMainThread();
-    if (browser()->tab_strip_model()->empty()) {
+    if (browser()->GetTabStripModel()->empty()) {
       chrome::AddTabAt(browser(), GURL("about:blank"), /*index=*/-1,
                        /*foreground=*/true);
     }
-    ASSERT_TRUE(browser()->tab_strip_model()->GetActiveWebContents());
+    ASSERT_TRUE(browser()->GetTabStripModel()->GetActiveWebContents());
     ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
     MahoAtcState::SetHasEnabledRules(false);
   }
@@ -114,7 +118,7 @@ class MahoPeekLinkRoutingInteractiveUiTest : public InProcessBrowserTest {
   }
 
   content::WebContents* active_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   content::WebContents* PreparePinnedSource() {
@@ -123,13 +127,13 @@ class MahoPeekLinkRoutingInteractiveUiTest : public InProcessBrowserTest {
     content::WebContents* source = active_contents();
     EXPECT_TRUE(source);
     const int index =
-        browser()->tab_strip_model()->GetIndexOfWebContents(source);
+        browser()->GetTabStripModel()->GetIndexOfWebContents(source);
     EXPECT_NE(TabStripModel::kNoTab, index);
     if (index != TabStripModel::kNoTab) {
-      browser()->tab_strip_model()->SetTabPinned(index, true);
+      browser()->GetTabStripModel()->SetTabPinned(index, true);
     }
     EXPECT_EQ(PeekSourceRole::kPinned,
-              MahoSidebarContainerView::GetPeekSourceRole(browser(), source));
+              MahoSidebarContainerView::GetPeekSourceRole(static_cast<Browser*>(browser()), source));
     return source;
   }
 
@@ -157,12 +161,12 @@ class MahoPeekLinkRoutingInteractiveUiTest : public InProcessBrowserTest {
       return nullptr;
     }
     const int index =
-        browser()->tab_strip_model()->GetIndexOfWebContents(favorite);
+        browser()->GetTabStripModel()->GetIndexOfWebContents(favorite);
     EXPECT_NE(TabStripModel::kNoTab, index);
     if (index == TabStripModel::kNoTab) {
       return nullptr;
     }
-    browser()->tab_strip_model()->SetTabPinned(index, false);
+    browser()->GetTabStripModel()->SetTabPinned(index, false);
 
     const std::string tab_id = tab_list->FindCoreTabIdByWebContents(favorite);
     EXPECT_FALSE(tab_id.empty());
@@ -172,7 +176,7 @@ class MahoPeekLinkRoutingInteractiveUiTest : public InProcessBrowserTest {
 
     DispatchShellEvent("favorite_tab", {{"tab_id", tab_id}});
     EXPECT_TRUE(base::test::RunUntil([&]() {
-      return MahoSidebarContainerView::GetPeekSourceRole(browser(), favorite) ==
+      return MahoSidebarContainerView::GetPeekSourceRole(static_cast<Browser*>(browser()), favorite) ==
              PeekSourceRole::kFavorite;
     }));
     EXPECT_EQ(source_url, favorite->GetLastCommittedURL());
@@ -188,7 +192,7 @@ class MahoPeekLinkRoutingInteractiveUiTest : public InProcessBrowserTest {
                                   ui::PAGE_TRANSITION_LINK,
                                   /*is_renderer_initiated=*/false);
     params.user_gesture = true;
-    static_cast<content::WebContentsDelegate*>(browser())->OpenURLFromTab(
+    BrowserWebContentsDelegate::From(browser())->OpenURLFromTab(
         source, params, base::NullCallback());
     navigation.Wait();
     EXPECT_TRUE(navigation.last_navigation_succeeded());
@@ -220,7 +224,7 @@ class MahoPeekLinkRoutingInteractiveUiTest : public InProcessBrowserTest {
       return std::string();
     }
     constexpr char kTargetSpace[] = "peek-routing-atc-space";
-    bridge->RegisterSpace(kTargetSpace, browser()->profile()->GetPath().BaseName());
+    bridge->RegisterSpace(kTargetSpace, browser()->GetProfile()->GetPath().BaseName());
     return kTargetSpace;
   }
 
@@ -283,11 +287,11 @@ IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
               WindowOpenDisposition::NEW_FOREGROUND_TAB);
   ASSERT_TRUE(
       WaitForPeekAt(embedded_test_server()->GetURL(kRedirectTargetPath)));
-  const int tab_count = browser()->tab_strip_model()->count();
+  const int tab_count = browser()->GetTabStripModel()->count();
   ui_test_utils::TabAddedWaiter tab_added(browser());
   OpenFromTab(source, target, WindowOpenDisposition::NEW_BACKGROUND_TAB);
   content::WebContents* added = tab_added.Wait();
-  EXPECT_EQ(tab_count + 1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(tab_count + 1, browser()->GetTabStripModel()->count());
   EXPECT_EQ(added, active_contents());
   EXPECT_EQ(target, added->GetLastCommittedURL());
   EXPECT_EQ(source_url, source->GetLastCommittedURL());
@@ -302,18 +306,18 @@ IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
   const GURL atc_target =
       embedded_test_server()->GetURL(kAtcHost, kTargetPath);
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       sidebar_prefs::kMahoMiniClickOverrideEnabled, true);
   ui_test_utils::BrowserCreatedObserver mini_created;
   content::OpenURLParams mini_params(
       atc_target, content::Referrer(), WindowOpenDisposition::NEW_SPLIT_VIEW,
       ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false);
   mini_params.user_gesture = true;
-  static_cast<content::WebContentsDelegate*>(browser())->OpenURLFromTab(
+  BrowserWebContentsDelegate::From(browser())->OpenURLFromTab(
       source, mini_params, base::NullCallback());
-  Browser* mini = mini_created.Wait();
+  Browser* mini = static_cast<Browser*>(mini_created.Wait());
   ASSERT_TRUE(mini);
-  EXPECT_TRUE(mini->is_type_popup());
+  EXPECT_TRUE((mini->GetType() == BrowserWindowInterface::TYPE_POPUP));
   EXPECT_EQ(origin_space, bridge->GetActiveSpaceId(browser()));
   EXPECT_FALSE(controller()->SlotBusy());
   CloseBrowserSynchronously(mini);
@@ -328,147 +332,46 @@ IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
-                       SeamB_NoAtcRulesRoutesPinnedAndFavorite) {
-  for (bool favorite_source : {false, true}) {
-    content::WebContents* source =
-        favorite_source ? PrepareFavoriteSource() : PreparePinnedSource();
-    ASSERT_TRUE(source);
-    const GURL source_url = source->GetLastCommittedURL();
-    const GURL target = embedded_test_server()->GetURL(kTargetPath);
-
-    content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
-    ASSERT_TRUE(WaitForPeekAt(target));
-    EXPECT_EQ(source_url, source->GetLastCommittedURL());
-
-    ui_test_utils::TabAddedWaiter tab_added(browser());
-    content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
-    content::WebContents* foreground = tab_added.Wait();
-    ASSERT_TRUE(foreground);
-    ASSERT_TRUE(base::test::RunUntil(
-        [&]() { return foreground->GetLastCommittedURL() == target; }));
-    EXPECT_EQ(target, foreground->GetLastCommittedURL());
-    EXPECT_EQ(foreground, active_contents());
-    EXPECT_EQ(source_url, source->GetLastCommittedURL());
-    HidePeek();
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
-                       CommandClickBypassesPeekForPinnedAndFavorite) {
-  const GURL target = embedded_test_server()->GetURL(kTargetPath);
-  for (bool favorite_source : {false, true}) {
-    SCOPED_TRACE(favorite_source ? "favorite source" : "pinned source");
-    content::WebContents* source =
-        favorite_source ? PrepareFavoriteSource() : PreparePinnedSource();
-    ASSERT_TRUE(source);
-    const GURL source_url = source->GetLastCommittedURL();
-
-    content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
-    ASSERT_TRUE(WaitForPeekAt(target));
-    EXPECT_EQ(source_url, source->GetLastCommittedURL());
-    HidePeek();
-
-    content::TestNavigationObserver navigation(target);
-    navigation.StartWatchingNewWebContents();
-    ui_test_utils::TabAddedWaiter tab_added(browser());
-    const gfx::Point click_point = gfx::ToFlooredPoint(
-        content::GetCenterCoordinatesOfElementWithId(source, "same-tab"));
-    content::SimulateMouseClickAt(source, blink::WebInputEvent::kMetaKey,
-                                  blink::WebMouseEvent::Button::kLeft,
-                                  click_point);
-    content::WebContents* added = tab_added.Wait();
-    navigation.Wait();
-
-    ASSERT_TRUE(added);
-    EXPECT_TRUE(navigation.last_navigation_succeeded());
-    EXPECT_EQ(target, added->GetLastCommittedURL());
-    EXPECT_EQ(source_url, source->GetLastCommittedURL());
-    EXPECT_EQ(source, active_contents());
-    ASSERT_TRUE(base::test::RunUntil([&]() {
-      return controller()->state_for_testing() ==
-             MahoPeekController::State::Closed;
-    }));
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
-                       ShiftClickForcesPeekFromNormalTab) {
-  const GURL source_url = embedded_test_server()->GetURL(kSourcePath);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), source_url));
-  content::WebContents* source = active_contents();
-  ASSERT_TRUE(source);
-  // Arc parity: force_peek applies to ANY tab, including a normal (unpinned,
-  // non-Favorite) source.
-  ASSERT_EQ(PeekSourceRole::kNormal,
-            MahoSidebarContainerView::GetPeekSourceRole(browser(), source));
-
-  const GURL target = embedded_test_server()->GetURL(kTargetPath);
-
-  // A Shift-click arrives as a renderer-initiated NEW_WINDOW; force_peek routes
-  // it into Peek instead of a new window, from a normal tab.
-  const gfx::Point click_point = gfx::ToFlooredPoint(
-      content::GetCenterCoordinatesOfElementWithId(source, "same-tab"));
-  content::SimulateMouseClickAt(source, blink::WebInputEvent::kShiftKey,
-                                blink::WebMouseEvent::Button::kLeft,
-                                click_point);
-  ASSERT_TRUE(WaitForPeekAt(target));
-  EXPECT_EQ(source_url, source->GetLastCommittedURL());
-  EXPECT_EQ(source, active_contents());
-  HidePeek();
-}
-
-IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
-                       SeamB_RedirectDoesNotReevaluatePeek) {
+                       SameTabNavigationStaysInTab) {
   content::WebContents* source = PreparePinnedSource();
   ASSERT_TRUE(source);
-  const GURL source_url = source->GetLastCommittedURL();
+  const GURL target = embedded_test_server()->GetURL(kTargetPath);
+
+  // Same-tab navigations are never rerouted into Peek, with or without ATC
+  // rules: an in-page (location.href / same-tab) navigation stays in its tab.
+  for (bool with_atc : {false, true}) {
+    MahoAtcState::SetHasEnabledRules(with_atc);
+    content::TestNavigationObserver navigation(source);
+    content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
+    navigation.Wait();
+    EXPECT_EQ(target, source->GetLastCommittedURL());
+    EXPECT_FALSE(controller()->SlotBusy());
+    EXPECT_EQ(with_atc, MahoAtcState::HasEnabledRules());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser(), embedded_test_server()->GetURL(kSourcePath)));
+    source = active_contents();
+    ASSERT_TRUE(source);
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
+                       SameTabRedirectDoesNotReevaluatePeek) {
+  content::WebContents* source = PreparePinnedSource();
+  ASSERT_TRUE(source);
   const GURL redirect_target =
       embedded_test_server()->GetURL(kRedirectTargetPath);
-  const int tab_count = browser()->tab_strip_model()->count();
+  const int tab_count = browser()->GetTabStripModel()->count();
 
-  content::TestNavigationObserver navigation(redirect_target);
-  navigation.StartWatchingNewWebContents();
+  // A same-tab link that redirects must not re-trigger Peek evaluation on the
+  // redirect hop; it stays in the source tab the whole way.
+  content::TestNavigationObserver navigation(source);
   content::SimulateMouseClickOrTapElementWithId(source, "redirect");
   navigation.Wait();
 
-  content::WebContents* peek_contents = WaitForPeekAt(redirect_target);
-  ASSERT_TRUE(peek_contents);
+  EXPECT_EQ(redirect_target, source->GetLastCommittedURL());
   EXPECT_EQ(redirect_target, navigation.last_navigation_url());
-  EXPECT_EQ(tab_count, browser()->tab_strip_model()->count());
-  EXPECT_EQ(source_url, source->GetLastCommittedURL());
-  EXPECT_EQ(MahoPeekController::State::Open,
-            controller()->state_for_testing());
-}
-
-IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
-                       PrefsOffAndAtcBehaviorPreserved) {
-  content::WebContents* source = PreparePinnedSource();
-  ASSERT_TRUE(source);
-  const GURL target = embedded_test_server()->GetURL(kTargetPath);
-
-  for (const char* disabled_pref : {sidebar_prefs::kPeekEnabled,
-                                    sidebar_prefs::kPeekLinkRoutingEnabled}) {
-    PrefService* prefs = browser()->profile()->GetPrefs();
-    prefs->SetBoolean(disabled_pref, false);
-    content::TestNavigationObserver normal_navigation(source);
-    content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
-    normal_navigation.Wait();
-    EXPECT_EQ(target, source->GetLastCommittedURL());
-    EXPECT_FALSE(controller()->SlotBusy());
-    ASSERT_TRUE(ui_test_utils::NavigateToURL(
-        browser(), embedded_test_server()->GetURL(kSourcePath)));
-    prefs->SetBoolean(disabled_pref, true);
-  }
-
-  MahoAtcState::SetHasEnabledRules(true);
-  const GURL source_url = source->GetLastCommittedURL();
-  content::TestNavigationObserver navigation(target);
-  navigation.StartWatchingNewWebContents();
-  content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
-  navigation.Wait();
-  ASSERT_TRUE(WaitForPeekAt(target));
-  EXPECT_EQ(source_url, source->GetLastCommittedURL());
-  EXPECT_TRUE(MahoAtcState::HasEnabledRules());
+  EXPECT_EQ(tab_count, browser()->GetTabStripModel()->count());
+  EXPECT_FALSE(controller()->SlotBusy());
 }
 
 }  // namespace

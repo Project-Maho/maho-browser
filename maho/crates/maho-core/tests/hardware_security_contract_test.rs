@@ -107,9 +107,13 @@ fn test_purpose_domain_separation() {
     let presence_policy = DeviceKeyPolicy::high_risk_presence();
 
     let db_handle = store.get_or_create_key("test_db", &db_policy).unwrap();
-    let vault_handle = store.get_or_create_key("test_vault", &vault_policy).unwrap();
+    let vault_handle = store
+        .get_or_create_key("test_vault", &vault_policy)
+        .unwrap();
     let id_handle = store.get_or_create_key("test_id", &id_policy).unwrap();
-    let pres_handle = store.get_or_create_key("test_pres", &presence_policy).unwrap();
+    let pres_handle = store
+        .get_or_create_key("test_pres", &presence_policy)
+        .unwrap();
 
     assert_eq!(db_handle.purpose, DeviceKeyPurpose::DatabaseRoot);
     assert_eq!(vault_handle.purpose, DeviceKeyPurpose::VaultDeviceWrap);
@@ -198,8 +202,7 @@ fn test_stage_a_migration_success() {
             &self,
             key: &DeviceKeyHandle,
             challenge: &[u8],
-        ) -> Result<maho_types::hardware_security::DeviceSignature, HardwareSecurityError>
-        {
+        ) -> Result<maho_types::hardware_security::DeviceSignature, HardwareSecurityError> {
             self.0.sign_challenge(key, challenge)
         }
         fn delete_key(&self, key: &DeviceKeyHandle) -> Result<(), HardwareSecurityError> {
@@ -212,17 +215,17 @@ fn test_stage_a_migration_success() {
     let profile_id = "user_default";
     let device_id = "machine_uuid_1";
 
-    let envelope = migrate_database_root_key(
-        &os_store,
-        legacy_db_key,
-        profile_id,
-        device_id,
-        |key| key == legacy_db_key,
-    )
-    .expect("migration should succeed and verify DB key");
+    let envelope =
+        migrate_database_root_key(&os_store, legacy_db_key, profile_id, device_id, |key| {
+            key == legacy_db_key
+        })
+        .expect("migration should succeed and verify DB key");
 
     assert_eq!(envelope.purpose, DeviceKeyPurpose::DatabaseRoot);
-    assert_eq!(envelope.format_version, ProtectedKeyEnvelopeV3::FORMAT_VERSION);
+    assert_eq!(
+        envelope.format_version,
+        ProtectedKeyEnvelopeV3::FORMAT_VERSION
+    );
 
     // Verify reopening
     let unwrapped = open_protected_envelope(&os_store, &envelope, profile_id, device_id).unwrap();
@@ -268,8 +271,7 @@ fn test_stage_a_migration_non_destructive_on_verifier_failure() {
             &self,
             key: &DeviceKeyHandle,
             challenge: &[u8],
-        ) -> Result<maho_types::hardware_security::DeviceSignature, HardwareSecurityError>
-        {
+        ) -> Result<maho_types::hardware_security::DeviceSignature, HardwareSecurityError> {
             self.0.sign_challenge(key, challenge)
         }
         fn delete_key(&self, key: &DeviceKeyHandle) -> Result<(), HardwareSecurityError> {
@@ -281,13 +283,7 @@ fn test_stage_a_migration_non_destructive_on_verifier_failure() {
     let legacy_db_key = b"legacy_invalid_key";
 
     // Fails on step 1 because verifier rejects it
-    let result = migrate_database_root_key(
-        &os_store,
-        legacy_db_key,
-        "prof",
-        "dev",
-        |_| false,
-    );
+    let result = migrate_database_root_key(&os_store, legacy_db_key, "prof", "dev", |_| false);
     assert_eq!(result, Err(HardwareSecurityError::AccessDenied));
 }
 
@@ -320,7 +316,10 @@ fn test_authenticated_key_operations() {
         )
         .expect("should begin operation");
 
-    let result = rx.recv().expect("should complete operation").expect("should succeed");
+    let result = rx
+        .recv()
+        .expect("should complete operation")
+        .expect("should succeed");
     match result {
         AuthenticatedKeyOperationResult::Signed(sig) => {
             assert!(!sig.signature.is_empty());

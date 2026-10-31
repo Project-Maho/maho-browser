@@ -42,20 +42,20 @@ TEST_F(MahoTabIdHelperTest, WebContentsConstructorConsumesQueue) {
   MahoTabIdHelper::SetPendingRestoredTabId("id-delta");
 
   AddTab(browser(), GURL("chrome://newtab"));
-  content::WebContents* wc1 = browser()->tab_strip_model()->GetWebContentsAt(0);
+  content::WebContents* wc1 = browser()->GetTabStripModel()->GetWebContentsAt(0);
   MahoTabIdHelper::CreateForWebContents(wc1);
   EXPECT_EQ(MahoTabIdHelper::FromWebContents(wc1)->stable_tab_id(), "id-gamma");
 
   AddTab(browser(), GURL("chrome://newtab"));
   // AddTab inserts the new tab at index 0, so retrieve wc2 from index 0
-  content::WebContents* wc2 = browser()->tab_strip_model()->GetWebContentsAt(0);
+  content::WebContents* wc2 = browser()->GetTabStripModel()->GetWebContentsAt(0);
   MahoTabIdHelper::CreateForWebContents(wc2);
   EXPECT_EQ(MahoTabIdHelper::FromWebContents(wc2)->stable_tab_id(), "id-delta");
 }
 
 TEST_F(MahoTabIdHelperTest, EmptyQueueGeneratesNewId) {
   AddTab(browser(), GURL("chrome://newtab"));
-  content::WebContents* wc = browser()->tab_strip_model()->GetWebContentsAt(0);
+  content::WebContents* wc = browser()->GetTabStripModel()->GetWebContentsAt(0);
   MahoTabIdHelper::CreateForWebContents(wc);
   EXPECT_FALSE(MahoTabIdHelper::FromWebContents(wc)->stable_tab_id().empty());
   EXPECT_TRUE(base::Uuid::ParseLowercase(
@@ -76,7 +76,7 @@ TEST_F(MahoTabIdHelperTest, SessionHelperSavesTabId) {
 
   // Add a tab to default browser and create its helper
   AddTab(browser(), GURL("chrome://newtab"));
-  content::WebContents* wc = browser()->tab_strip_model()->GetWebContentsAt(0);
+  content::WebContents* wc = browser()->GetTabStripModel()->GetWebContentsAt(0);
   MahoTabIdHelper::CreateForWebContents(wc);
   auto* tab_id_helper = MahoTabIdHelper::FromWebContents(wc);
   std::string expected_id = tab_id_helper->stable_tab_id();

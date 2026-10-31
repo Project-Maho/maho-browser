@@ -161,6 +161,10 @@ MahoAiIngressCoordinator::RegisterConsumer(ConsumerType type,
   return ConsumerRegistration(weak_factory_.GetWeakPtr(), id);
 }
 
+bool MahoAiIngressCoordinator::HasConsumer() const {
+  return !consumers_.empty();
+}
+
 base::WeakPtr<MahoAiIngressCoordinator> MahoAiIngressCoordinator::GetWeakPtr() {
   return weak_factory_.GetWeakPtr();
 }
@@ -191,7 +195,7 @@ void MahoAiIngressCoordinator::NotifyTerminal(uint64_t delivery_id) {
 
 void MahoAiIngressCoordinator::OnBrowserClosed(
     BrowserWindowInterface* browser) {
-  if (!browser || browser->GetBrowserForMigrationOnly() != browser_) {
+  if (!browser || browser != browser_) {
     return;
   }
   consumers_.clear();

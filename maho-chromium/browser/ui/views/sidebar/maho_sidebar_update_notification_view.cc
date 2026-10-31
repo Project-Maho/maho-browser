@@ -228,6 +228,7 @@ MahoSidebarUpdateNotificationView::MahoSidebarUpdateNotificationView() {
   heading_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   heading_->SetElideBehavior(gfx::ELIDE_TAIL);
   heading_->SetSubpixelRenderingEnabled(false);
+  heading_->SetAutoColorReadabilityEnabled(false);
   heading_->SetCanProcessEventsWithinSubtree(false);
   header_raw->SetHeading(heading_);
 
@@ -262,6 +263,12 @@ void MahoSidebarUpdateNotificationView::SetSidebarPalette(
   }
   if (divider_) {
     divider_->SetBackground(views::CreateSolidBackground(palette_.outline));
+  }
+  if (checkbox_) {
+    checkbox_->SetEnabledTextColors(palette_.primary_text);
+    checkbox_->SetTextColor(views::Button::STATE_DISABLED,
+                            palette_.disabled_text);
+    checkbox_->SetCheckedIconImageColor(palette_.focus_ring);
   }
   for (const auto& action_row : action_rows_) {
     if (!action_row) {
@@ -452,6 +459,10 @@ void MahoSidebarUpdateNotificationView::RebuildBody(
         views::kMarginsKey,
         gfx::Insets::TLBR(0, 0, kCheckboxBottomMargin, 0));
     checkbox_ = body_->AddChildView(std::move(checkbox_owned));
+    checkbox_->SetEnabledTextColors(palette_.primary_text);
+    checkbox_->SetTextColor(views::Button::STATE_DISABLED,
+                            palette_.disabled_text);
+    checkbox_->SetCheckedIconImageColor(palette_.focus_ring);
     if (cb.on_toggle) {
       base::RepeatingCallback<void(bool)> on_toggle = cb.on_toggle;
       views::Checkbox *cb_raw = checkbox_;
@@ -482,6 +493,7 @@ void MahoSidebarUpdateNotificationView::RebuildBody(
         button->AddChildView(std::make_unique<views::Label>(action.label));
     label->SetTextStyle(views::style::STYLE_BODY_4);
     label->SetEnabledColor(action.special ? SK_ColorWHITE : palette_.primary_text);
+    label->SetAutoColorReadabilityEnabled(false);
     label->SetHorizontalAlignment(action.special ? gfx::ALIGN_CENTER
                                                  : gfx::ALIGN_LEFT);
     label->SetSubpixelRenderingEnabled(false);

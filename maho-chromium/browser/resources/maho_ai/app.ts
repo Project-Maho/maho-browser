@@ -1,23 +1,6 @@
 const MOUNT_FLAG = '__mahoAiMounted';
 const MOUNT_TIMEOUT_MS = 6000;
 
-interface TrustedTypesPolicyLike {
-  createScriptURL(input: string): string;
-}
-
-interface TrustedTypesLike {
-  createPolicy(
-    name: string,
-    rules: {createScriptURL: (input: string) => string}
-  ): TrustedTypesPolicyLike;
-}
-
-declare global {
-  interface Window {
-    trustedTypes?: TrustedTypesLike;
-  }
-}
-
 function showBootError(title: string, detail: string | null): void {
   if ((window as unknown as Record<string, unknown>)[MOUNT_FLAG]) {
     return;

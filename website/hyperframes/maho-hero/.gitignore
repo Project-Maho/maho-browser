@@ -1,8 +1,0 @@
-# Local originals are adopted for rendering only; source-of-truth paths and hashes live in source-manifest.json.
-/assets/originals/
-
-# HyperFrames validation, transcode, render, and package-manager working state.
-/.hf-validate/
-/.transcode-cache/
-/render-scratch/
-/node_modules/

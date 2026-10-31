@@ -23,7 +23,6 @@
 namespace maho {
 namespace {
 
-constexpr size_t kTrafficLightSpacerIndex = 0;
 constexpr size_t kLeadingClusterIndex = 1;
 
 class MahoSidebarTopBarCharacterizationTest
@@ -58,9 +57,8 @@ TEST_F(MahoSidebarTopBarCharacterizationTest,
             top_bar()->leading_cluster_for_testing());
 
   views::View* nav = top_bar()->nav_cluster_for_testing();
-  ASSERT_EQ(nav->children().size(), 5u);
-  EXPECT_EQ(nav->children()[0], top_bar()->back_button_for_testing());
-  EXPECT_EQ(nav->children()[4], top_bar()->ai_button_for_testing());
+  ASSERT_EQ(nav->children().size(), 2u);
+  EXPECT_EQ(nav->children()[1], top_bar()->ai_button_for_testing());
   EXPECT_EQ(top_bar()->leading_cluster_for_testing()->children()[0],
             top_bar()->sidebar_toggle_button_for_testing());
 }
@@ -77,7 +75,7 @@ TEST_F(MahoSidebarTopBarCharacterizationTest,
   activity.session_id = "test-session";
   activity.state = maho::ai::ControlActivityState::kActing;
   activity.target = maho::ai::ControlTarget{
-      .window_id = browser()->session_id().id(),
+      .window_id = browser()->GetSessionID().id(),
       .tab_id = 999,
       .title = u"Controlled Tab",
   };

@@ -53,6 +53,7 @@ export interface SettingsState {
   readonly browserChannel: string;
   readonly updateState: number;
   readonly updateSupported: boolean;
+  readonly updateGuidance: string;
   readonly selectedProfileTarget: ProfileTarget | null;
   readonly selectedProfileContext: SelectedProfileContext | null;
   readonly selectedProfileMetadata: ProfileMetadata | null;
@@ -163,6 +164,7 @@ function createInitialState(): SettingsState {
     browserChannel: '',
     updateState: BrowserUpdateState.kIdle,
     updateSupported: false,
+    updateGuidance: '',
     selectedProfileTarget: null,
     selectedProfileContext: null,
     selectedProfileMetadata: null,
@@ -325,6 +327,7 @@ export class MahoSettingsStore {
         browserChannel: info.channel,
         updateState: info.updateState,
         updateSupported: info.updateSupported,
+        updateGuidance: info.updateGuidance,
       }));
     } catch (error) {
       console.warn('Failed to load browser version info', error);

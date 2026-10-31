@@ -32,6 +32,7 @@ interface DomainSnapshot {
 
 type RecordTransition = <Result>(
   operation: (bridge: BoostBridge) => Promise<Result>,
+  discardPending?: boolean,
 ) => Promise<Result>;
 
 export interface BoostController {
@@ -172,7 +173,8 @@ export function useBoostController(): BoostController {
   }, [reduce]);
 
   const runRecordTransition: RecordTransition = React.useCallback(async <Result>(
-      operation: (bridge: BoostBridge) => Promise<Result>): Promise<Result> => {
+      operation: (bridge: BoostBridge) => Promise<Result>,
+      discardPending = false): Promise<Result> => {
     while (recordTransitionRef.current) {
       await recordTransitionRef.current;
     }
@@ -180,17 +182,21 @@ export function useBoostController(): BoostController {
     if (!bridge || closedRef.current || modeTransitionRef.current) {
       throw new BoostControllerError('Boost actions are unavailable.');
     }
-    cancelUnsent();
-    revisionRef.current += 1;
     loadGenerationRef.current += 1;
-    invalidatePendingUpdates();
-    const transition = (async () => {
+    const transition = Promise.resolve().then(async () => {
+      if (discardPending) {
+        cancelUnsent();
+        revisionRef.current += 1;
+        invalidatePendingUpdates();
+      } else {
+        await flushAll();
+      }
       await settleUpdates();
       if (closedRef.current || bridgeRef.current !== bridge) {
         throw new BoostControllerError('Boost actions are unavailable.');
       }
       return operation(bridge);
-    })();
+    });
     const marker = transition.then(() => undefined, () => undefined);
     recordTransitionRef.current = marker;
     try {
@@ -200,7 +206,7 @@ export function useBoostController(): BoostController {
         recordTransitionRef.current = null;
       }
     }
-  }, [cancelUnsent, invalidatePendingUpdates, settleUpdates]);
+  }, [cancelUnsent, flushAll, invalidatePendingUpdates, settleUpdates]);
 
   const {close, closeFromHost, closeWithDialog} = useBoostTerminalActions({
     boostRef,
@@ -343,7 +349,7 @@ export function useBoostController(): BoostController {
         throw new BoostControllerError('Boost could not be reset.');
       }
       applySnapshot(await loadSnapshot(bridge, selectedBoostId, false));
-    });
+    }, true);
   }, [applySnapshot, loadSnapshot, runRecordTransition]);
 
   const renameBoost = React.useCallback(async (name: string): Promise<void> => {
@@ -405,7 +411,7 @@ export function useBoostController(): BoostController {
         await bridge.pageHandler.closeDialog();
       }
       return true;
-    });
+    }, true);
   }, [applySnapshot, loadSnapshot, runRecordTransition]);
 
   const setMode = React.useCallback(async (mode: WindowMode): Promise<void> => {

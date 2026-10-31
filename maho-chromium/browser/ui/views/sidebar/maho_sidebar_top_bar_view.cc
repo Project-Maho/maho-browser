@@ -18,7 +18,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -221,21 +220,6 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
   nav_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  back_button_ = AddControlButton(
-      nav_cluster_,
-      base::BindRepeating(&MahoSidebarTopBarView::OnBackPressed,
-                          weak_factory_.GetWeakPtr()),
-      maho_lucide_icons::kChevronLeftIcon, u"Back");
-  forward_button_ = AddControlButton(
-      nav_cluster_,
-      base::BindRepeating(&MahoSidebarTopBarView::OnForwardPressed,
-                          weak_factory_.GetWeakPtr()),
-      maho_lucide_icons::kChevronRightIcon, u"Forward");
-  reload_button_ = AddControlButton(
-      nav_cluster_,
-      base::BindRepeating(&MahoSidebarTopBarView::OnReloadPressed,
-                          weak_factory_.GetWeakPtr()),
-      maho_lucide_icons::kRotateCwIcon, u"Reload");
   mail_button_ = AddControlButton(
       nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnMailPressed,
@@ -255,7 +239,7 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
   unread_badge->SetCanProcessEventsWithinSubtree(false);
   mail_unread_badge_ = mail_button_->AddChildView(std::move(unread_badge));
   if (browser_) {
-    mail_pref_registrar_.Init(browser_->profile()->GetPrefs());
+    mail_pref_registrar_.Init(browser_->GetProfile()->GetPrefs());
     mail_pref_registrar_.Add(
         sidebar_prefs::kMahoMailEnabled,
         base::BindRepeating(&MahoSidebarTopBarView::UpdateMailButtonVisibility,
@@ -282,7 +266,9 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
   ApplyChromeSpacing();
   UpdateButtonImages();
   control_activity_service_ =
-      maho::ai::MahoControlActivityService::GetForProfile(browser_->profile());
+      browser_ ? maho::ai::MahoControlActivityService::GetForProfile(
+                     browser_->GetProfile())
+               : nullptr;
   if (control_activity_service_) {
     control_activity_service_->AddObserver(this);
   }
@@ -344,10 +330,10 @@ void MahoSidebarTopBarView::OnControlActivityChanged(
   std::string stable_target_tab_id;
   if (activity.target) {
     model.target_is_other_window =
-        activity.target->window_id != browser_->session_id().id();
+        activity.target->window_id != browser_->GetSessionID().id();
     model.target_title = activity.target->title;
     if (!model.target_is_other_window) {
-      TabStripModel* tab_strip = browser_->tab_strip_model();
+      TabStripModel* tab_strip = browser_->GetTabStripModel();
       for (int index = 0; tab_strip && index < tab_strip->count(); ++index) {
         content::WebContents* contents = tab_strip->GetWebContentsAt(index);
         auto* helper = contents
@@ -447,8 +433,7 @@ bool MahoSidebarTopBarView::IsPositionInWindowCaption(
   }
 #endif
   for (const views::ImageButton* button :
-       {sidebar_toggle_button_.get(), back_button_.get(), forward_button_.get(),
-        reload_button_.get(), ai_button_.get(), mail_button_.get()}) {
+       {sidebar_toggle_button_.get(), ai_button_.get(), mail_button_.get()}) {
     if (button && button->GetVisible()) {
       gfx::Point point_in_button = point;
       views::View::ConvertPointToTarget(this, button, &point_in_button);
@@ -460,29 +445,22 @@ bool MahoSidebarTopBarView::IsPositionInWindowCaption(
   return true;
 }
 
-// Adjusts spacing based on whether in-sidebar navigation is active. The chrome
-// stays visible even before the first navigable tab exists so startup/no-tab
-// states preserve the same top-row scaffold and caption behavior; button
-// enabled state is handled separately in UpdateButtonImages().
+// Keeps the top-row scaffold and caption behavior stable even before the
+// first navigable tab exists; button enabled state is handled separately in
+// UpdateButtonImages().
 void MahoSidebarTopBarView::ApplyChromeSpacing() {
   auto* leading_layout =
       static_cast<views::BoxLayout*>(leading_cluster_->GetLayoutManager());
   auto* nav_layout =
       static_cast<views::BoxLayout*>(nav_cluster_->GetLayoutManager());
 
-  const bool navigation_active = model_.navigation_enabled;
-
   leading_layout->set_between_child_spacing(
-      navigation_active ? sidebar_layout::kTopBarCompactLeadingGapDp
-                        : sidebar_layout::kTopBarButtonSpacingDp);
+      sidebar_layout::kTopBarButtonSpacingDp);
   nav_layout->set_between_child_spacing(sidebar_layout::kTopBarButtonSpacingDp);
 
   leading_cluster_->SetVisible(leading_actions_visible_);
-  leading_cluster_->SetProperty(
-      views::kMarginsKey,
-      gfx::Insets::TLBR(
-          0, 0, 0,
-          navigation_active ? sidebar_layout::kTopBarCompactLeadingGapDp : 0));
+  leading_cluster_->SetProperty(views::kMarginsKey,
+                                gfx::Insets::TLBR(0, 0, 0, 0));
   flex_spacer_->SetVisible(true);
   nav_cluster_->SetVisible(true);
 
@@ -498,17 +476,6 @@ void MahoSidebarTopBarView::UpdateButtonImages() {
 #endif
   UpdateButtonState(sidebar_toggle_button_, true,
                     maho_lucide_icons::kPanelLeftIcon, u"Toggle Sidebar");
-  UpdateButtonState(back_button_,
-                    model_.navigation_enabled && model_.can_go_back,
-                    maho_lucide_icons::kChevronLeftIcon, u"Back");
-  UpdateButtonState(forward_button_,
-                    model_.navigation_enabled && model_.can_go_forward,
-                    maho_lucide_icons::kChevronRightIcon, u"Forward");
-  UpdateButtonState(reload_button_,
-                    model_.navigation_enabled && model_.can_reload,
-                    model_.is_loading ? maho_lucide_icons::kXIcon
-                                      : maho_lucide_icons::kRotateCwIcon,
-                    model_.is_loading ? u"Stop" : u"Reload");
   UpdateButtonState(ai_button_, true, maho_lucide_icons::kMessageSquareIcon,
                     u"AI Panel");
   UpdateButtonState(mail_button_, true, maho_lucide_icons::kInboxIcon, u"Mail");
@@ -527,33 +494,20 @@ void MahoSidebarTopBarView::UpdateButtonState(views::ImageButton* button,
   button->SetAccessibleName(tooltip);
   ui::ImageModel image_model;
   if (palette_.primary_text != SK_ColorTRANSPARENT) {
-    SkColor icon_color =
-        enabled ? palette_.primary_text : palette_.disabled_text;
+    // Functional glyphs use the glyph role (>= 3:1), not the text role.
+    const SkColor icon_color =
+        enabled ? palette_.neutral_glyph : palette_.disabled_text;
     image_model = ui::ImageModel::FromVectorIcon(
         icon, icon_color, sidebar_layout::kTopBarIconSizeDp);
+    button->SetImageModel(
+        views::Button::STATE_DISABLED,
+        ui::ImageModel::FromVectorIcon(icon, palette_.disabled_text,
+                                       sidebar_layout::kTopBarIconSizeDp));
   } else {
     image_model = CreateTopBarButtonImage(
         icon, sidebar_layout::kTopBarIconSizeDp, GetTopBarButtonColor(enabled));
   }
   button->SetImageModel(views::Button::STATE_NORMAL, image_model);
-}
-
-void MahoSidebarTopBarView::OnBackPressed(const ui::Event& event) {
-  if (browser_) {
-    chrome::GoBack(browser_, WindowOpenDisposition::CURRENT_TAB);
-  }
-}
-
-void MahoSidebarTopBarView::OnForwardPressed(const ui::Event& event) {
-  if (browser_) {
-    chrome::GoForward(browser_, WindowOpenDisposition::CURRENT_TAB);
-  }
-}
-
-void MahoSidebarTopBarView::OnReloadPressed(const ui::Event& event) {
-  if (browser_) {
-    chrome::Reload(browser_, WindowOpenDisposition::CURRENT_TAB);
-  }
 }
 
 void MahoSidebarTopBarView::OnAiPressed(const ui::Event& event) {
@@ -562,9 +516,9 @@ void MahoSidebarTopBarView::OnAiPressed(const ui::Event& event) {
   }
 
   auto* side_panel_ui = browser_->GetFeatures().side_panel_ui();
-  if (side_panel_ui->GetCurrentEntryId(SidePanelType::kContent) ==
+  if (side_panel_ui->GetCurrentEntryId() ==
       SidePanelEntryId::kMahoAiPanel) {
-    side_panel_ui->Close(SidePanelType::kContent,
+    side_panel_ui->Close(
                          SidePanelEntryHideReason::kSidePanelClosed,
                          /*suppress_animations=*/true);
     return;
@@ -586,7 +540,7 @@ void MahoSidebarTopBarView::OnMailPressed(const ui::Event& event) {
   // filtered out of the sidebar tab list (see IsSidebarEligibleUrl) because the
   // control button above is the stable entry point.
   const GURL mail_url(maho::kMahoMailURL);
-  TabStripModel* tab_strip = browser_->tab_strip_model();
+  TabStripModel* tab_strip = browser_->GetTabStripModel();
   if (tab_strip) {
     for (int i = 0; i < tab_strip->count(); ++i) {
       content::WebContents* contents = tab_strip->GetWebContentsAt(i);
@@ -616,7 +570,7 @@ void MahoSidebarTopBarView::OnMailPressed(const ui::Event& event) {
 }
 void MahoSidebarTopBarView::OnToggleSidebarPressed(const ui::Event& event) {
   if (browser_) {
-    sidebar_prefs::ToggleSidebarPanelExpanded(browser_->profile()->GetPrefs());
+    sidebar_prefs::ToggleSidebarPanelExpanded(browser_->GetProfile()->GetPrefs());
   }
 }
 
@@ -690,8 +644,8 @@ void MahoSidebarTopBarView::UpdateMailButtonVisibility() {
   }
 
   const bool visible =
-      browser_ && !browser_->profile()->IsOffTheRecord() &&
-      sidebar_prefs::IsMahoMailEnabled(browser_->profile()->GetPrefs());
+      browser_ && !browser_->GetProfile()->IsOffTheRecord() &&
+      sidebar_prefs::IsMahoMailEnabled(browser_->GetProfile()->GetPrefs());
   if (mail_button_->GetVisible() != visible) {
     mail_button_->SetVisible(visible);
     PreferredSizeChanged();
@@ -704,11 +658,11 @@ void MahoSidebarTopBarView::UpdateMailUnreadBadge() {
     return;
   }
   const bool mail_enabled =
-      sidebar_prefs::IsMahoMailEnabled(browser_->profile()->GetPrefs());
+      sidebar_prefs::IsMahoMailEnabled(browser_->GetProfile()->GetPrefs());
   const bool badge_enabled =
-      browser_->profile()->GetPrefs()->GetBoolean("maho.mail.badge_enabled");
+      browser_->GetProfile()->GetPrefs()->GetBoolean("maho.mail.badge_enabled");
   const int unread =
-      browser_->profile()->GetPrefs()->GetInteger("maho.mail.unread_count");
+      browser_->GetProfile()->GetPrefs()->GetInteger("maho.mail.unread_count");
   const MailBadgePresentation presentation = ResolveMailBadgePresentation(
       mail_enabled && mail_button_ && mail_button_->GetVisible(), badge_enabled,
       unread);

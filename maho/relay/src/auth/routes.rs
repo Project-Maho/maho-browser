@@ -447,10 +447,15 @@ pub async fn oauth_google_exchange(mut req: Request, env: Env) -> Result<Respons
     Ok(Response::from_json(&GoogleExchangeResponse { id_token })?)
 }
 
+fn can_link_google_email(existing_verified: f64, google_verified: bool) -> bool {
+    existing_verified != 0.0 && google_verified
+}
+
 /// Resolves the account for a first-time Google identity: link to an existing
-/// same-email account only when Google asserts the address is verified,
-/// otherwise an attacker could pre-register an unverified Google address to
-/// hijack a password account. When no account exists, create one.
+/// same-email account only when both accounts have proved email ownership.
+/// Unverified password accounts may have been pre-registered by an attacker;
+/// reject the merge rather than inheriting their credentials and sessions.
+/// When no account exists, create one.
 async fn resolve_google_user(
     db: &D1Database,
     config: &RelayConfig,
@@ -458,7 +463,7 @@ async fn resolve_google_user(
     now: i64,
 ) -> Result<User> {
     if let Some(existing) = find_user_by_email(db, &identity.email).await? {
-        if !identity.email_verified {
+        if !can_link_google_email(existing.email_verified, identity.email_verified) {
             return Err(AppError::Conflict(
                 "email already exists; sign in with your password to link Google".to_string(),
             ));
@@ -472,9 +477,6 @@ async fn resolve_google_user(
             now,
         )
         .await?;
-        if existing.email_verified == 0.0 {
-            mark_email_verified(db, existing.id).await?;
-        }
         return find_user_by_id(db, existing.id)
             .await?
             .ok_or_else(|| AppError::Internal("linked user missing".to_string()));
@@ -698,6 +700,9 @@ pub async fn introspect(mut req: Request, env: Env) -> Result<Response> {
 pub async fn request_verify(req: Request, env: Env) -> Result<Response> {
     let db = env.d1("MAHO_DB")?;
     let auth = get_auth_context(&req, &db).await?;
+    let maho_env = env.var("MAHO_ENV").map(|v| v.to_string()).ok();
+    let resend_api_key = env.secret("RESEND_API_KEY").map(|v| v.to_string()).ok();
+    let delivery_key = verification_delivery_key(maho_env.as_deref(), resend_api_key.as_deref())?;
 
     let token = uuid::Uuid::new_v4().simple().to_string();
     let expires_at = chrono::Utc::now().timestamp() + 24 * 3600; // 24 hours
@@ -707,13 +712,7 @@ pub async fn request_verify(req: Request, env: Env) -> Result<Response> {
     let stmt = stmt.bind(&[js(&hashed)?, js(&expires_at)?, js(&auth.user.id)?])?;
     stmt.run().await?;
 
-    let resend_api_key = env
-        .secret("RESEND_API_KEY")
-        .map(|v| v.to_string())
-        .ok()
-        .filter(|k| !k.trim().is_empty());
-
-    if let Some(api_key) = resend_api_key.as_deref() {
+    if let Some(api_key) = delivery_key {
         send_verification_email(&env, api_key, &auth.user.email, &token).await?;
     }
 
@@ -722,7 +721,6 @@ pub async fn request_verify(req: Request, env: Env) -> Result<Response> {
     // email, defeating the ownership check. Expose it ONLY when MAHO_ENV is
     // explicitly set to a development/local value; all other values (including
     // unset) are treated as non-dev — FAIL CLOSED by default.
-    let maho_env = env.var("MAHO_ENV").map(|v| v.to_string()).ok();
     let dev_token = if should_expose_dev_token(maho_env.as_deref()) {
         Some(token)
     } else {
@@ -733,6 +731,14 @@ pub async fn request_verify(req: Request, env: Env) -> Result<Response> {
         status: "success".to_string(),
         dev_token,
     })?)
+}
+
+fn verification_delivery_key<'a>(maho_env: Option<&str>, key: Option<&'a str>) -> Result<Option<&'a str>> {
+    let key = key.filter(|key| !key.trim().is_empty());
+    if key.is_none() && !should_expose_dev_token(maho_env) {
+        return Err(AppError::Internal("RESEND_API_KEY missing".to_string()));
+    }
+    Ok(key)
 }
 
 fn should_expose_dev_token(maho_env: Option<&str>) -> bool {
@@ -973,13 +979,18 @@ pub fn parse_bypass_token(token: &str, service_token: &str) -> Option<(i32, i64)
     let sig_hex = parts[2];
 
     let sig_bytes = {
-        if !sig_hex.len().is_multiple_of(2) {
+        let sig_hex_bytes = sig_hex.as_bytes();
+        if !sig_hex_bytes.len().is_multiple_of(2) {
             return None;
         }
-        let mut bytes = Vec::with_capacity(sig_hex.len() / 2);
-        for i in (0..sig_hex.len()).step_by(2) {
-            let b = u8::from_str_radix(&sig_hex[i..i + 2], 16).ok()?;
-            bytes.push(b);
+        // Decode over BYTES: `len()` counts bytes while `&s[i..i + 2]` slices on char
+        // boundaries, so a multi-byte character at an even offset panics before the
+        // expiry/HMAC checks below ever run.
+        let mut bytes = Vec::with_capacity(sig_hex_bytes.len() / 2);
+        for pair in sig_hex_bytes.chunks_exact(2) {
+            let hi = (pair[0] as char).to_digit(16)?;
+            let lo = (pair[1] as char).to_digit(16)?;
+            bytes.push(((hi << 4) | lo) as u8);
         }
         bytes
     };
@@ -1079,6 +1090,24 @@ impl From<Session> for PublicSession {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn verification_requires_delivery_configuration_outside_development() {
+        for env in [None, Some("production"), Some("staging")] {
+            for key in [None, Some(" ")] {
+                assert!(super::verification_delivery_key(env, key).is_err());
+            }
+        }
+        assert_eq!(super::verification_delivery_key(Some("local"), None).unwrap(), None);
+        assert_eq!(super::verification_delivery_key(Some("production"), Some("key")).unwrap(), Some("key"));
+    }
+
+    #[test]
+    fn google_login_does_not_adopt_an_unverified_password_account() {
+        assert!(!super::can_link_google_email(0.0, true));
+        assert!(!super::can_link_google_email(1.0, false));
+        assert!(super::can_link_google_email(1.0, true));
+    }
+
     use super::account_with_google_metadata;
     use super::service_token_matches;
     use super::should_expose_dev_token;

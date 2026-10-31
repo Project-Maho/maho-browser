@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { resolveDragAndDrop } from "../dragAndDropImport";
+import { resolveDragAndDrop, type DragAndDropWrapper } from "../dragAndDropImport";
 
-const wrapper = () => null;
+const wrapper = (() => null) as unknown as DragAndDropWrapper;
 
 describe("resolveDragAndDrop", () => {
   it("returns a direct ESM function export", () => {

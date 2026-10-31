@@ -61,6 +61,7 @@ TEST_F(MahoAiIngressCoordinatorTest, ColdRetentionAndFIFO) {
   base::HistogramTester histograms;
   auto* coordinator =
       MahoAiIngressCoordinator::GetOrCreateForBrowser(browser());
+  EXPECT_FALSE(coordinator->HasConsumer());
 
   coordinator->Dispatch(MakeDispatch("id1", "q1"));
   coordinator->Dispatch(MakeDispatch("id2", "q2"));
@@ -72,6 +73,7 @@ TEST_F(MahoAiIngressCoordinatorTest, ColdRetentionAndFIFO) {
   TestConsumer consumer;
   auto reg = coordinator->RegisterConsumer(
       MahoAiIngressCoordinator::ConsumerType::kSidebar, consumer.GetCallback());
+  EXPECT_TRUE(coordinator->HasConsumer());
 
   // Only the first one is delivered because of FIFO transaction gating.
   ASSERT_EQ(1u, consumer.dispatches.size());
@@ -101,6 +103,7 @@ TEST_F(MahoAiIngressCoordinatorTest, DuplicateIgnoredForever) {
   TestConsumer consumer;
   auto reg = coordinator->RegisterConsumer(
       MahoAiIngressCoordinator::ConsumerType::kSidebar, consumer.GetCallback());
+  EXPECT_TRUE(coordinator->HasConsumer());
 
   coordinator->Dispatch(MakeDispatch("id1", "q1"));
   ASSERT_EQ(1u, consumer.dispatches.size());
@@ -112,6 +115,8 @@ TEST_F(MahoAiIngressCoordinatorTest, DuplicateIgnoredForever) {
   // lifetime.
   coordinator->Dispatch(MakeDispatch("id1", "q1_retry"));
   EXPECT_EQ(1u, consumer.dispatches.size());
+  reg.Reset();
+  EXPECT_FALSE(coordinator->HasConsumer());
 }
 
 TEST_F(MahoAiIngressCoordinatorTest, StaleAcceptTerminalNoOp) {
@@ -367,7 +372,7 @@ TEST_F(MahoAiIngressCoordinatorTest,
 
 TEST_F(MahoAiIngressCoordinatorTest, DispatchIsIsolatedPerBrowser) {
   std::unique_ptr<Browser> browser2 =
-      CreateBrowser(profile(), browser()->type(), false);
+      CreateBrowser(profile(), browser()->GetType(), false);
   auto* coord1 = MahoAiIngressCoordinator::GetOrCreateForBrowser(browser());
   auto* coord2 =
       MahoAiIngressCoordinator::GetOrCreateForBrowser(browser2.get());
@@ -406,7 +411,7 @@ TEST_F(MahoAiIngressCoordinatorTest, RemoveFromBrowserTearsDownSynchronously) {
 TEST_F(MahoAiIngressCoordinatorTest,
        RetainedWeakPtrTerminalsOnlyItsExactLiveCoordinator) {
   std::unique_ptr<Browser> browser2 =
-      CreateBrowser(profile(), browser()->type(), false);
+      CreateBrowser(profile(), browser()->GetType(), false);
   auto* coordinator1 =
       MahoAiIngressCoordinator::GetOrCreateForBrowser(browser());
   auto* coordinator2 =

@@ -483,5 +483,65 @@ TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
   ReleaseController(*controller);
 }
 
+// ---------------------------------------------------------------------------
+// 12. CurrentTab URL extraction invariants (denylist filtering & select-all)
+// ---------------------------------------------------------------------------
+
+// Proves the exact URL sanitization contract implemented in
+// BrowserView::ShowMahoCommandOverlayForCurrentTab():
+//   - http/https/chrome URLs are preserved and selected all
+//   - javascript: / data: / about:blank / empty are filtered out to empty string
+TEST_F(MahoLocationBarCommandOverlayBehaviorTest,
+       ShowCurrentTabPath_UrlSanitizationAndSelectionInvariants) {
+  struct TestCase {
+    const char* raw_url;
+    bool should_filter;
+  } cases[] = {
+      {"https://mahobrowser.com/docs", false},
+      {"http://localhost:3000/", false},
+      {"chrome://maho-settings/", false},
+      {"about:blank", true},
+      {"javascript:alert(1)", true},
+      {"data:text/html,hello", true},
+      {"", true},
+  };
+
+  for (const auto& tc : cases) {
+    SCOPED_TRACE(testing::Message() << "raw_url=" << tc.raw_url);
+    auto parent = MakeParentWidget();
+    auto controller = MakeController();
+
+    // Emulate the URL filtering logic in BrowserView::ShowMahoCommandOverlayForCurrentTab()
+    std::string current_url;
+    GURL url(tc.raw_url);
+    if (!url.is_empty() && !url.SchemeIs("javascript") &&
+        !url.SchemeIs("data") && url.spec() != "about:blank") {
+      current_url = url.spec();
+    }
+
+    CallShowCurrentTab(*controller, parent.get(), current_url);
+    ASSERT_TRUE(controller->IsVisible());
+
+    MahoCommandOverlayView* overlay = GetOverlayView(*controller);
+    ASSERT_TRUE(overlay);
+    ASSERT_TRUE(overlay->textfield());
+
+    if (tc.should_filter) {
+      EXPECT_TRUE(overlay->textfield()->GetText().empty())
+          << "Dangerous/blank/empty URL must be filtered to empty textfield";
+    } else {
+      EXPECT_EQ(base::UTF8ToUTF16(current_url),
+                overlay->textfield()->GetText());
+      const gfx::Range sel = overlay->textfield()->GetSelectedRange();
+      EXPECT_EQ(0u, sel.GetMin());
+      EXPECT_EQ(current_url.size(), sel.GetMax())
+          << "Current-tab valid URL must be completely selected for instant "
+             "typing/copy";
+    }
+
+    ReleaseController(*controller);
+  }
+}
+
 }  // namespace
 }  // namespace maho

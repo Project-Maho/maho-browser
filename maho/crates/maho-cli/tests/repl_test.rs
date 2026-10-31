@@ -85,7 +85,7 @@ async fn repl_navigate_then_quit() {
     let output = run_cli_with_stdin(
         &["browser", "repl"],
         &sock_path,
-        "navigate https://example.com\n.quit\n",
+        "target 7\nnavigate https://example.com\n.quit\n",
     );
     server.abort();
 
@@ -168,7 +168,7 @@ async fn repl_upload_dispatches_arbitrary_path() {
     let output = run_cli_with_stdin(
         &["browser", "repl"],
         &sock_path,
-        "upload /tmp/package.msix\n.quit\n",
+        "target 7\nupload /tmp/package.msix\n.quit\n",
     );
     server.abort();
 
@@ -180,9 +180,28 @@ async fn repl_upload_dispatches_arbitrary_path() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn repl_lease_acquires_active_tab_permission() {
-    // Bare `lease` resolves the active tab, then acquires an exclusive lease on
-    // it so subsequent click/type mutations pass the active-tab lease gate.
+async fn repl_lease_without_target_refuses_without_leasing() {
+    // Fail-closed contract: bare `lease` must NOT fall back to the focused tab.
+    let (_dir, sock_path, server) = make_mock_server(vec![]).await;
+
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "lease\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("No pinned target"),
+        "expected pin guidance in stdout, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Lease acquired."),
+        "bare lease must not acquire anything, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_lease_active_pins_and_leases_the_active_tab() {
+    // `lease active` is the deliberate opt-in: it resolves the currently active
+    // tab once and pins it, after which every mutation carries that tab_id.
     let tabs_resp = json!({
         "tabs": [
             {"id": 7, "title": "App Store Connect", "url": "https://appstoreconnect.apple.com", "is_active": true}
@@ -191,7 +210,7 @@ async fn repl_lease_acquires_active_tab_permission() {
     let lease_resp = json!({ "session_id": "test-lease" });
     let (_dir, sock_path, server) = make_mock_server(vec![tabs_resp, lease_resp]).await;
 
-    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "lease\n.quit\n");
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "lease active\n.quit\n");
     server.abort();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -202,13 +221,51 @@ async fn repl_lease_acquires_active_tab_permission() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn repl_lease_warns_when_stealing_from_previous_holder() {
+    // ADR 0016 keeps user-driven force-steal; the repl must make the steal
+    // visible instead of silently taking another session's lease.
+    let lease_resp = json!({ "session_id": "test-lease", "previous_holder": "pipe-session-42" });
+    let (_dir, sock_path, server) = make_mock_server(vec![lease_resp]).await;
+
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "lease 9\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("WARNING: stole lease on tab 9 from session 'pipe-session-42'"),
+        "expected steal warning in stdout, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_mutation_without_pinned_target_is_refused_client_side() {
+    // The repl refuses before dispatch: no tools/call reaches the browser. The
+    // refusal surfaces on stderr (the repl error channel), not stdout.
+    let (_dir, sock_path, server) = make_mock_server(vec![]).await;
+
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "click 1\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No pinned target"),
+        "expected client-side refusal on stderr, got: {stderr}"
+    );
+    assert!(
+        !stdout.contains("ok"),
+        "refused mutation must not report success, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn repl_key_press_sends_key() {
     // `key <name>` presses a keyboard key on the active tab — required to drive
     // custom comboboxes (filter text + Enter) whose options carry no @ref.
     let key_resp = json!({ "ok": true });
     let (_dir, sock_path, server) = make_mock_server(vec![key_resp]).await;
 
-    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "key Enter\n.quit\n");
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "target 7\nkey Enter\n.quit\n");
     server.abort();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -216,6 +273,25 @@ async fn repl_key_press_sends_key() {
         stdout.contains("ok"),
         "expected key-press confirmation in stdout, got: {stdout}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_browser_back_uses_history_action() {
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (_dir, sock_path, server) =
+        make_mock_server_capturing(vec![json!({"navigated":true})], captured.clone()).await;
+    let output = run_cli_with_stdin(
+        &["browser", "repl"],
+        &sock_path,
+        "target 7\nkey BrowserBack\n.quit\n",
+    );
+    server.abort();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("ok"));
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["params"]["name"], "browser_history_back");
+    assert_eq!(requests[0]["params"]["arguments"]["tab_id"], 7);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -227,7 +303,7 @@ async fn repl_select_sends_value() {
     let output = run_cli_with_stdin(
         &["browser", "repl"],
         &sock_path,
-        "select 58 com.maho.browser\n.quit\n",
+        "target 7\nselect 58 com.maho.browser\n.quit\n",
     );
     server.abort();
 
@@ -236,6 +312,20 @@ async fn repl_select_sends_value() {
         stdout.contains("ok"),
         "expected select confirmation in stdout, got: {stdout}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_select_observed_ref_sends_value() {
+    let snapshot = json!({"role":"WebArea","children":[{"role":"combobox","ref":31,"name":"Category"}]});
+    let (_dir, sock_path, server) = make_mock_server(vec![snapshot, json!({"ok":true})]).await;
+    let output = run_cli_with_stdin(
+        &["browser", "repl"],
+        &sock_path,
+        "target 7\nselect @e31 mail\n.quit\n",
+    );
+    server.abort();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("ok"));
 }
 
 fn asc_like_tree() -> Value {
@@ -278,7 +368,11 @@ async fn repl_click_by_name_resolves() {
     let clicked = json!({ "clicked": true });
     let (_dir, sock_path, server) = make_mock_server(vec![asc_like_tree(), clicked]).await;
 
-    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "click @New App\n.quit\n");
+    let output = run_cli_with_stdin(
+        &["browser", "repl"],
+        &sock_path,
+        "target 7\nclick @New App\n.quit\n",
+    );
     server.abort();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -297,7 +391,7 @@ async fn repl_type_by_name_resolves() {
     let output = run_cli_with_stdin(
         &["browser", "repl"],
         &sock_path,
-        "type @Name=Maho Browser\n.quit\n",
+        "target 7\ntype @Name=Maho Browser\n.quit\n",
     );
     server.abort();
 
@@ -439,8 +533,8 @@ async fn repl_grant_sends_grant_exact_origin() {
     let requests = captured.lock().unwrap();
     let grant_req = requests
         .iter()
-        .find(|req| req["method"] == "tools/call")
-        .expect("grant must issue a tools/call");
+        .find(|req| req["method"] == "maho/control/call")
+        .expect("grant must issue a maho/control/call (control-plane only capability)");
     assert_eq!(grant_req["params"]["name"], "browser_grant_exact_origin");
     assert_eq!(
         grant_req["params"]["arguments"]["origin"],
@@ -496,7 +590,7 @@ async fn repl_upload_dispatches_exact_path_matrix() {
         let (_dir, sock_path, server) =
             make_mock_server_capturing(vec![upload_resp], captured.clone()).await;
 
-        let input = format!("upload {}\n.quit\n", path);
+        let input = format!("target 7\nupload {}\n.quit\n", path);
         let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, &input);
         server.abort();
 

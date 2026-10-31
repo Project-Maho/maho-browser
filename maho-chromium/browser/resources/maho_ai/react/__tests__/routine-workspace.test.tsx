@@ -45,6 +45,38 @@ describe('RoutineWorkspace', () => {
     container.remove();
   });
 
+  it('shows eligibility failure and retries the eligibility lookup', async () => {
+    const client = {
+      isEligible: vi.fn().mockRejectedValueOnce(new Error('Disconnected')).mockResolvedValue(true),
+      list: vi.fn().mockResolvedValue([]), statuses: vi.fn().mockResolvedValue([]),
+      history: vi.fn().mockResolvedValue([]), subscribe: vi.fn().mockReturnValue(() => {}),
+    } as unknown as RoutineOperationsClient;
+    await act(async () => root.render(<RoutineWorkspace client={client} />));
+    expect.soft(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect.soft(container.querySelector('[aria-busy="true"]')).toBeNull();
+    const retry = container.querySelector<HTMLButtonElement>('[data-routine-retry]');
+    expect.soft(retry).not.toBeNull();
+    await act(async () => retry?.click());
+    expect.soft(client.isEligible).toHaveBeenCalledTimes(2);
+    expect.soft(container.querySelector('form')).not.toBeNull();
+  });
+
+  it.each(['Approve', 'Deny'])('shows rejection of a routine %s decision', async action => {
+    const client = {
+      isEligible: vi.fn().mockResolvedValue(true),
+      list: vi.fn().mockResolvedValue([{id: 'daily', name: 'Daily', schedule: null, trigger: null}]),
+      statuses: vi.fn().mockResolvedValue([{runId: 'run-1', routineId: 'daily', state: 'awaiting_approval', revision: 1n, approvalId: 'approval-1'}]),
+      history: vi.fn().mockResolvedValue([]), subscribe: vi.fn().mockReturnValue(() => {}),
+      approve: vi.fn().mockResolvedValue(false),
+    } as unknown as RoutineOperationsClient;
+    await act(async () => root.render(<RoutineWorkspace client={client} />));
+    const button = [...container.querySelectorAll('button')].find(button => button.textContent === action)!;
+    await act(async () => button.click());
+    expect(client.approve).toHaveBeenCalledWith('run-1', 'approval-1', action === 'Approve');
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(button.disabled).toBe(false);
+  });
+
   it('keeps a newer pushed status when an older refresh arrives', () => {
     const pushed = {
       runId: 'run-1',

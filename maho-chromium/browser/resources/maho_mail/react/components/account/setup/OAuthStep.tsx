@@ -75,7 +75,7 @@ export function OAuthStep({ provider, onBack, onSuccess }: OAuthStepProps) {
         type="button"
         onClick={onBack}
         disabled={authenticating}
-        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-6 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="-ml-2 mb-6 flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <ArrowLeft className="w-4 h-4" />
         Back

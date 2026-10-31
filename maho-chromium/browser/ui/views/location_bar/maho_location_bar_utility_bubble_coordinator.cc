@@ -34,7 +34,7 @@ void MahoLocationBarUtilityBubbleCoordinator::AttachToBrowser(
   if (!browser) {
     return;
   }
-  TabStripModel* tab_strip = browser->tab_strip_model();
+  TabStripModel* tab_strip = browser->GetTabStripModel();
   if (!tab_strip) {
     return;
   }

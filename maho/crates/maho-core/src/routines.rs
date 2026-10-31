@@ -995,10 +995,7 @@ mod tests {
     use super::*;
 
     fn test_init() {
-        static INIT: std::sync::Once = std::sync::Once::new();
-        INIT.call_once(|| {
-            let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
-        });
+        crate::install_test_sqlcipher_key();
     }
 
     #[test]

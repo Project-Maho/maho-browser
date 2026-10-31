@@ -24,6 +24,7 @@ describe('MahoSettingsStore settings delta & revision tracking', () => {
         channel: 'stable',
         updateState: 0,
         updateSupported: false,
+        updateGuidance: '',
       },
     });
   });
@@ -31,6 +32,36 @@ describe('MahoSettingsStore settings delta & revision tracking', () => {
   afterEach(() => {
     store.dispose();
     vi.clearAllMocks();
+  });
+
+  it('carries update guidance while retaining the ability to re-check', async () => {
+    const getBrowserVersionInfo = vi.fn().mockResolvedValue({info: {
+      version: '1.0.0',
+      channel: 'stable',
+      updateState: 2,
+      updateSupported: true,
+      updateGuidance: 'external-update',
+    }});
+    const checkForBrowserUpdates = vi.fn();
+    Object.assign(store.getHandler(), {
+      getBrowserVersionInfo,
+      checkForBrowserUpdates,
+    });
+    await store.refreshBrowserVersionInfo();
+    expect(store.getSnapshot().updateGuidance).toBe('external-update');
+    expect(store.getSnapshot().updateSupported).toBe(true);
+    expect(store.getSnapshot().updateState).toBe(2);
+    store.checkForBrowserUpdates();
+    expect(checkForBrowserUpdates).toHaveBeenCalledOnce();
+    expect(store.getSnapshot().updateState).toBe(1);
+
+    getBrowserVersionInfo.mockResolvedValueOnce({info: {
+      version: '1.0.0', channel: 'stable', updateState: 6,
+      updateSupported: true, updateGuidance: '',
+    }});
+    await store.refreshBrowserVersionInfo();
+    expect(store.getSnapshot().updateGuidance).toBe('');
+    expect(store.getSnapshot().updateState).toBe(6);
   });
 
   it('applies contiguous delta on bootstrapped store and updates revision', async () => {

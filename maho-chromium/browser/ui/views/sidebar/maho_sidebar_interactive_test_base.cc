@@ -6,6 +6,11 @@
 #include "base/command_line.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/run_until.h"
+#include "base/test/scoped_run_loop_timeout.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
+#include "maho/browser/ui/views/command/maho_command_overlay_view.h"
+#include "ui/views/test/widget_test.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
@@ -128,6 +133,23 @@ void MahoSidebarInteractiveTestBase::SetUpCommandLine(
   command_line->AppendSwitch("no-sandbox");
 }
 
+void MahoSidebarInteractiveTestBase::PreRunTestOnMainThread() {
+  content::RunAllPendingInMessageLoop();
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(30));
+  for (auto* window : GetAllBrowserWindowInterfaces()) {
+    auto* view = BrowserView::GetBrowserViewForBrowser(window);
+    auto* controller =
+        view ? view->GetMahoCommandOverlayControllerForTesting() : nullptr;
+    if (controller && controller->IsVisible()) {
+      views::test::WidgetDestroyedWaiter closed(
+          controller->GetOverlayViewForTesting()->GetWidget());
+      controller->Hide();
+      closed.Wait();
+    }
+  }
+  InteractiveBrowserTest::PreRunTestOnMainThread();
+}
+
 void MahoSidebarInteractiveTestBase::SetUpOnMainThread() {
   InteractiveBrowserTest::SetUpOnMainThread();
   host_resolver()->AddRule("*", "127.0.0.1");
@@ -193,7 +215,7 @@ MahoSidebarContainerView* MahoSidebarInteractiveTestBase::GetContainerView() {
 
 MahoSidebarViewStateModel MahoSidebarInteractiveTestBase::GetViewState() {
   MahoSidebarStateAdapter adapter;
-  MahoSidebarViewStateModel state = adapter.BuildViewStateModel(browser());
+  MahoSidebarViewStateModel state = adapter.BuildViewStateModel(static_cast<Browser*>(browser()));
   if (!state.tab_list.active_space_id.empty()) {
     const std::string active_space_id_json =
         base::GetQuotedJSONString(state.tab_list.active_space_id);
@@ -226,12 +248,12 @@ void MahoSidebarInteractiveTestBase::AddTestTab(
   auto* wc = chrome::AddAndReturnTabAt(browser(), url, -1, false);
   LOG(INFO) << "AddTestTab: url=" << url.spec() 
             << " wc=" << wc 
-            << " count=" << browser()->tab_strip_model()->count();
+            << " count=" << browser()->GetTabStripModel()->count();
 }
 
 void MahoSidebarInteractiveTestBase::AddTestTabs(int count) {
   for (int i = 0; i < count; ++i) {
-    GURL url(base::StringPrintf("about:blank#page%d", i));
+    GURL url(base::StringPrintf("data:text/html,page%d", i));
     std::u16string title =
         base::UTF8ToUTF16(base::StringPrintf("Page %d", i));
     AddTestTab(url, title);
@@ -248,7 +270,7 @@ void MahoSidebarInteractiveTestBase::SeedProfile(int seed_number) {
     return;
   }
 
-  SeedRuntimeVerificationState(browser()->profile(), seed_number);
+  SeedRuntimeVerificationState(browser()->GetProfile(), seed_number);
 
   ASSERT_TRUE(BlockAndPollUntil([this]() {
     ResolveViews();
@@ -264,7 +286,7 @@ void MahoSidebarInteractiveTestBase::SeedProfile(int seed_number) {
 
 void MahoSidebarInteractiveTestBase::SeedSidebarPrefs(bool layout_enabled,
                                                       bool panel_expanded) {
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetBoolean(sidebar_prefs::kSidebarLayoutEnabled, layout_enabled);
   prefs->SetBoolean(sidebar_prefs::kSidebarPanelExpanded, panel_expanded);
 }
@@ -541,12 +563,12 @@ void MahoSidebarInteractiveTestBase::ExpectSidebarVisible(bool visible) {
 
 void MahoSidebarInteractiveTestBase::ExpectSidebarLayoutEnabled(bool enabled) {
   EXPECT_EQ(enabled,
-            sidebar_prefs::IsSidebarLayoutEnabled(browser()->profile()->GetPrefs()));
+            sidebar_prefs::IsSidebarLayoutEnabled(browser()->GetProfile()->GetPrefs()));
 }
 
 void MahoSidebarInteractiveTestBase::ExpectSidebarPanelExpanded(bool expanded) {
   EXPECT_EQ(expanded,
-            sidebar_prefs::IsSidebarPanelExpanded(browser()->profile()->GetPrefs()));
+            sidebar_prefs::IsSidebarPanelExpanded(browser()->GetProfile()->GetPrefs()));
 }
 
 void MahoSidebarInteractiveTestBase::ExpectTabCount(int expected) {
@@ -557,7 +579,7 @@ void MahoSidebarInteractiveTestBase::ExpectTabCount(int expected) {
 }
 
 void MahoSidebarInteractiveTestBase::ExpectActiveTabIndex(int expected) {
-  EXPECT_EQ(expected, browser()->tab_strip_model()->active_index());
+  EXPECT_EQ(expected, browser()->GetTabStripModel()->active_index());
 }
 
 void MahoSidebarInteractiveTestBase::SeedArchivedTabs(
@@ -574,8 +596,8 @@ void MahoSidebarInteractiveTestBase::StopSidebarObservations() {
   if (bridge && sidebar_) {
     bridge->RemoveObserver(sidebar_);
   }
-  if (browser() && browser()->tab_strip_model() && sidebar_) {
-    browser()->tab_strip_model()->RemoveObserver(sidebar_);
+  if (browser() && browser()->GetTabStripModel() && sidebar_) {
+    browser()->GetTabStripModel()->RemoveObserver(sidebar_);
   }
 }
 

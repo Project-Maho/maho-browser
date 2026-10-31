@@ -64,6 +64,9 @@ fn every_vault_dto_has_a_stable_golden_wire_shape() {
         tag: vec![5, 6],
     };
     let metadata = VaultItemPublicMetadata {
+        favorite: false,
+        trashed_at: None,
+        has_notes: false,
         title: "Example".to_string(),
         origins: vec![origin.clone()],
         username_hint: "u***@example.com".to_string(),
@@ -88,6 +91,9 @@ fn every_vault_dto_has_a_stable_golden_wire_shape() {
         }),
         "publicMetadata": json(metadata.clone()),
         "publicItem": json(VaultItemPublicDto {
+            favorite: false,
+            trashed_at: None,
+            has_notes: false,
             schema_version: VaultSchemaVersion::V1,
             id: item_id,
             revision: VaultRevision::new(3),
@@ -103,6 +109,8 @@ fn every_vault_dto_has_a_stable_golden_wire_shape() {
             passkey: Some(passkey.clone()),
         }),
         "listRequest": json(VaultItemListRequest {
+            trash: Default::default(),
+            favorites_only: false,
             schema_version: VaultSchemaVersion::V1,
             provider: Some(PasswordProviderKind::MahoNative),
             kinds: vec![VaultItemKind::Login, VaultItemKind::Passkey],
@@ -140,6 +148,7 @@ fn every_vault_dto_has_a_stable_golden_wire_shape() {
             auto_lock_minutes: 15,
             failed_unlock_count: 1,
             retry_at: None,
+            account_escrowed: false,
         }),
         "policy": json(VaultPolicy {
             schema_version: VaultSchemaVersion::V1,

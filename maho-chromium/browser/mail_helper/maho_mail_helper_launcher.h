@@ -159,6 +159,7 @@ class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
    void OnConnectionError();
    void HandleFailureAndMaybeRelaunch();
    void ReinjectKeysIfPresent();
+  void StartKeyInjectionDeadline();
    void OnKeysInjected(bool success);
    void OnPrepareShutdownComplete();
    void OnShutdownComplete();

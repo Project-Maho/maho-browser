@@ -10,6 +10,7 @@
 #include "chrome/browser/ui/webui/sanitized_image/sanitized_image_source.h"
 #include "chrome/grit/maho_mail_resources.h"
 #include "chrome/grit/maho_mail_resources_map.h"
+#include "components/performance_manager/public/decorators/page_live_state_decorator.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -70,6 +71,13 @@ MahoMailUI::MahoMailUI(content::WebUI* web_ui)
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::FrameSrc,
       "frame-src 'self' chrome-res: data: blob:;");
+  // Memory Saver treats chrome:// pages as discardable, and Maho runs it in
+  // Aggressive mode (discard after 2h in the background). A discarded Mail tab
+  // reboots the whole SPA on return: booting screen, account/folder/list
+  // round-trips, then the list. Mail is a long-lived app surface (live sync,
+  // unread badge), so keep its tab resident like an extension-protected tab.
+  performance_manager::PageLiveStateDecorator::SetIsAutoDiscardable(
+      web_ui->GetWebContents(), false);
 }
 
 MahoMailUI::~MahoMailUI() = default;

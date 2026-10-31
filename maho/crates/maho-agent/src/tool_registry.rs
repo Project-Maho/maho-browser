@@ -193,6 +193,43 @@ pub fn composite_execute_definition() -> ToolDefinition {
     }
 }
 
+/// Caps an MCP tool result: the first text item is truncated in place to keep
+/// structure readable, then the whole serialized result is ALWAYS checked
+/// against `output_cap` (other content items can still exceed it).
+/// Shared by the desktop and iOS MCP clients.
+pub(crate) fn apply_mcp_output_cap(
+    mut val: serde_json::Value,
+    output_cap: usize,
+) -> anyhow::Result<serde_json::Value> {
+    if let Some(text_val) = val.pointer_mut("/content/0/text") {
+        if let Some(text) = text_val.as_str() {
+            if text.len() > output_cap {
+                let mut end = output_cap;
+                while end > 0 && !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let truncated = format!("{}... [output truncated]", &text[..end]);
+                *text_val = serde_json::Value::String(truncated);
+            }
+        }
+    }
+
+    let mut val_str = serde_json::to_string(&val)?;
+    if val_str.len() > output_cap {
+        let mut end = output_cap;
+        while end > 0 && !val_str.is_char_boundary(end) {
+            end -= 1;
+        }
+        val_str.truncate(end);
+        return Ok(serde_json::Value::String(format!(
+            "{}... [output truncated]",
+            val_str
+        )));
+    }
+
+    Ok(val)
+}
+
 pub fn get_platform_tools() -> Vec<ToolDefinition> {
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
@@ -275,27 +312,9 @@ pub fn get_platform_tools() -> Vec<ToolDefinition> {
                 sensitive: true,
                 permission: ToolPermission::AlwaysAsk,
             },
-            ToolDefinition {
-                name: "web_fetch".to_string(),
-                description: "Retrieve current content from a public HTTP or HTTPS URL".to_string(),
-                parameters_schema: serde_json::json!({
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "url": { "type": "string" }
-                    },
-                    "required": ["url"]
-                }),
-                provenance: ToolProvenance::BuiltinBrowser,
-                // Read-only retrieval of public web content, equivalent in
-                // reach to the user opening the URL in a tab. Per product
-                // decision this needs no per-call user consent, so URL
-                // validation in `web_fetch` is the enforcing boundary: public
-                // http(s) only, loopback/private/link-local rejected, DNS
-                // pinned, every redirect hop revalidated, response bounded.
-                sensitive: false,
-                permission: ToolPermission::AutoApprove,
-            },
+            // web_fetch is intentionally NOT advertised: no runtime dispatches
+            // WebFetchExecutor, so advertising it would offer the model an
+            // auto-approved tool that can never execute.
             web_search_definition(),
             image_search_definition(),
             notification_wait_definition(),
@@ -350,11 +369,11 @@ mod tests {
 
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         {
-            assert_eq!(tools.len(), 11);
+            assert_eq!(tools.len(), 10);
             assert!(tools.iter().any(|t| t.name == "fs_read"));
             assert!(tools.iter().any(|t| t.name == "fs_write"));
             assert!(tools.iter().any(|t| t.name == "shell_exec"));
-            assert!(tools.iter().any(|t| t.name == "web_fetch"));
+            assert!(!tools.iter().any(|t| t.name == "web_fetch"));
             assert!(tools.iter().any(|t| t.name == "web_search"));
             assert!(tools.iter().any(|t| t.name == "image_search"));
             assert!(tools.iter().any(|t| t.name == "notification_wait"));
@@ -468,18 +487,26 @@ mod tests {
         assert!(shell_exec.sensitive);
     }
 
-    // Public web retrieval is auto-approved by product decision, so no
-    // approval prompt gates it. That makes URL validation the only boundary;
-    // see the scheme/SSRF/size/timeout tests in `web_fetch`.
+    // No runtime dispatches WebFetchExecutor, so web_fetch must not be
+    // advertised as an (auto-approved) platform tool.
     #[test]
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    fn web_fetch_is_auto_approved_and_not_sensitive() {
-        let tools = get_platform_tools();
-        let web_fetch = tools
-            .iter()
-            .find(|tool| tool.name == "web_fetch")
-            .expect("desktop registry includes web_fetch");
-        assert_eq!(web_fetch.permission, ToolPermission::AutoApprove);
-        assert!(!web_fetch.sensitive);
+    fn web_fetch_is_not_advertised_without_a_dispatcher() {
+        assert!(!get_platform_tools().iter().any(|tool| tool.name == "web_fetch"));
+    }
+
+    #[test]
+    fn mcp_output_cap_enforced_even_after_first_item_truncated() {
+        let big = "x".repeat(200);
+        let val = serde_json::json!({"content": [
+            {"type": "text", "text": big.clone()},
+            {"type": "text", "text": big},
+        ]});
+        let capped = apply_mcp_output_cap(val, 50).unwrap();
+        let rendered = serde_json::to_string(&capped).unwrap();
+        assert!(
+            rendered.len() < 120,
+            "overall cap must apply even when item 0 was truncated: {} bytes",
+            rendered.len()
+        );
     }
 }

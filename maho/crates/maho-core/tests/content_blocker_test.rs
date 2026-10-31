@@ -18,6 +18,20 @@ fn resp(list_id: &str, status: u16, body: Option<&str>) -> FilterListUpdateRespo
 }
 
 #[test]
+fn deferred_restore_blocks_the_first_request_and_rebuilds_invalid_cache() {
+    let mut blocker = ContentBlocker::new();
+    blocker.add_filter_list("lazy".into(), "Lazy".into(), "https://example.com/list".into()).unwrap();
+    blocker.update_filter_list_content("lazy", "||ads.example.com^".to_string()).unwrap();
+    blocker.rebuild_engine_sync();
+    let hash = blocker.create_compile_snapshot().content_hash;
+    let cache = blocker.serialize_engine();
+    blocker.defer_engine_restore(Some(cache), hash.clone());
+    assert!(blocker.should_block_request("https://ads.example.com/ad.js", "https://example.com", "script"));
+    blocker.defer_engine_restore(Some(vec![0, 1, 2]), hash);
+    assert!(blocker.should_block_request("https://ads.example.com/ad.js", "https://example.com", "script"));
+}
+
+#[test]
 fn normalize_site_exception_key_handles_various_inputs() {
     assert_eq!(
         normalize_site_exception_key("https://www.example.co.uk:8443/path?q=1#hash"),
@@ -253,6 +267,43 @@ fn identical_content_and_304_do_not_schedule_rebuild() {
     );
     assert!(!cb.has_pending_candidate("easylist"));
     assert_eq!(cb.health().health_status, FilterHealthStatus::Ok);
+}
+
+// A 304 can only confirm content we already hold. With no stored body the
+// validators are stale, so the update must fail and drop them, forcing the
+// next fetch to be unconditional instead of reporting a healthy empty list.
+#[test]
+fn not_modified_without_stored_body_fails_and_drops_validators() {
+    let mut cb = ContentBlocker::new();
+    cb.hydrate_lists(vec![(
+        maho_core::content_blocker::default_seeded_filter_lists()
+            .into_iter()
+            .find(|list| list.id == "easylist")
+            .map(|mut list| {
+                list.etag = Some("\"stale\"".to_string());
+                list.last_modified = Some("Mon, 01 Jan 2026 00:00:00 GMT".to_string());
+                list
+            })
+            .unwrap(),
+        String::new(),
+    )]);
+
+    assert_eq!(
+        cb.apply_update_response(resp("easylist", 304, None)).unwrap(),
+        FilterUpdateOutcome::Failed { status_code: 304 }
+    );
+
+    let list = cb
+        .get_filter_lists()
+        .iter()
+        .find(|list| list.id == "easylist")
+        .unwrap();
+    assert_eq!(list.failure_count, 1);
+    assert_eq!(list.last_status, Some(304));
+    assert_eq!(list.etag, None);
+    assert_eq!(list.last_modified, None);
+    assert_eq!(list.last_success_timestamp, None);
+    assert_ne!(cb.health().health_status, FilterHealthStatus::Ok);
 }
 
 #[test]

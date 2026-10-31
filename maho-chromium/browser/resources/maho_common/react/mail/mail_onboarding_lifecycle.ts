@@ -18,7 +18,7 @@ const READINESS_RETRY_DELAYS_MS = [250, 500, 1000] as const;
 
 export type OAuthBeginResult =
   | { readonly ok: true; readonly state: string }
-  | { readonly ok: false; readonly errorMessage: string };
+  | { readonly ok: false; readonly errorMessage: string; readonly cancelled?: boolean };
 
 export interface LifecycleDelegate {
   onAccountsLoaded(accounts: readonly MailAccount[]): void;
@@ -34,6 +34,8 @@ export class MailOnboardingLifecycle {
   private initialLoaded = false;
   private unsubscribe: (() => void) | null = null;
   private activeOAuthState: string | null = null;
+  private oauthGeneration = 0;
+  private destroyed = false;
   private oauthAccountIds = new Set<string>();
   private deliveredInitialAccounts = false;
   private readinessRetryIndex = 0;
@@ -57,7 +59,14 @@ export class MailOnboardingLifecycle {
   }
 
   public async beginOAuth(provider: string): Promise<OAuthBeginResult> {
+    const generation = ++this.oauthGeneration;
+    if (this.destroyed) return {ok: false, cancelled: true, errorMessage: DEFAULT_OAUTH_ERROR};
     const result = await this.api.beginOAuth(provider);
+    if (this.destroyed || generation !== this.oauthGeneration) {
+      const state = result.ok ? normalizedOAuthState(result) : null;
+      if (state) await this.api.cancelOAuth(state);
+      return {ok: false, cancelled: true, errorMessage: DEFAULT_OAUTH_ERROR};
+    }
     if (!result.ok) {
       if (isMailHelperUnavailableError(result.errorJson)) {
         this.delegate.onReadinessChanged('preparing');
@@ -75,6 +84,7 @@ export class MailOnboardingLifecycle {
   }
 
   public start(): void {
+    this.destroyed = false;
     this.loadInitialAccounts();
     this.setupSubscription();
   }
@@ -132,6 +142,7 @@ export class MailOnboardingLifecycle {
   }
 
   public cancelActiveOAuth(): void {
+    this.oauthGeneration += 1;
     if (this.activeOAuthState) {
       const state = this.activeOAuthState;
       this.activeOAuthState = null;
@@ -140,6 +151,7 @@ export class MailOnboardingLifecycle {
   }
 
   public destroy(): void {
+    this.destroyed = true;
     this.clearReadinessRetry();
     if (this.unsubscribe) {
       this.unsubscribe();

@@ -5,6 +5,7 @@
 #include "base/test/launcher/unit_test_launcher.h"
 #include "base/test/test_io_thread.h"
 #include "base/threading/platform_thread.h"
+#include "build/build_config.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/test/base/chrome_unit_test_suite.h"
@@ -12,6 +13,10 @@
 #include "content/public/test/unittest_test_suite.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/embedder/scoped_ipc_support.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "chrome/install_static/test/scoped_install_details.h"
+#endif
 
 namespace {
 
@@ -47,6 +52,10 @@ int main(int argc, char** argv) {
   mojo::core::ScopedIPCSupport ipc_support(
       test_io_thread.task_runner(),
       mojo::core::ScopedIPCSupport::ShutdownPolicy::FAST);
+
+#if BUILDFLAG(IS_WIN)
+  install_static::ScopedInstallDetails scoped_install_details;
+#endif
 
   return base::LaunchUnitTests(argc, argv,
                                base::BindOnce(&content::UnitTestTestSuite::Run,

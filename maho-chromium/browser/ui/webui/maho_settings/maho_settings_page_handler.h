@@ -21,6 +21,7 @@
 #include "base/timer/timer.h"
 #include "components/os_crypt/async/common/encryptor.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "maho/browser/ui/webui/maho_ai_provider_oauth.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
@@ -39,6 +40,7 @@
 
 class PrefService;
 class Profile;
+class MahoVaultRevealDialog;
 
 extern "C" {
 struct MahoPasswordImportJob;
@@ -91,6 +93,7 @@ ProfileObservablesDecision DecideProfileObservablesSnapshotForTesting(
 }  // namespace maho_settings::testing
 
 class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
+                                 public content::WebContentsObserver,
                                  public maho::MahoMailService::Observer,
                                  public maho::MahoUpdateObserver,
                                  public maho::MahoSpaceProfileBridge::Observer,
@@ -145,7 +148,7 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
       std::vector<std::string>& affected_tasks,
       std::string& error_out);
   const os_crypt_async::Encryptor* encryptor() const {
-    return encryptor_.has_value() ? &encryptor_.value() : nullptr;
+    return encryptor_.get();
   }
   void NotifyShortcutRecorded(maho_settings::mojom::MojoKeyComboPtr key_combo);
 
@@ -658,11 +661,14 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
       const std::string& recovery_secret,
       UnlockVaultWithRecoveryCallback callback) override;
   void LockVault(LockVaultCallback callback) override;
+  void LockNow(LockNowCallback callback) override;
   void ListVaultItems(
       std::optional<maho_settings::mojom::PasswordProviderKind> provider,
       const std::vector<maho_settings::mojom::VaultItemKind>& kinds,
       const std::optional<std::string>& cursor,
       uint32_t limit,
+      bool trash_only,
+      bool favorites_only,
       ListVaultItemsCallback callback) override;
   void SearchVaultItems(
       const std::string& origin,
@@ -673,6 +679,7 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                      const std::vector<std::string>& origins,
                      const std::string& username,
                      const std::string& password,
+                     const std::optional<std::string>& notes,
                      AddVaultLoginCallback callback) override;
   void UpdateVaultLogin(const std::string& item_id,
                         uint64_t expected_revision,
@@ -680,7 +687,34 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                         const std::vector<std::string>& origins,
                         const std::string& username,
                         const std::optional<std::string>& password,
+                        const std::optional<std::string>& notes,
                         UpdateVaultLoginCallback callback) override;
+  void TrashVaultItem(const std::string& item_id, uint64_t expected_revision,
+                      TrashVaultItemCallback callback) override;
+  void RestoreVaultItem(const std::string& item_id, uint64_t expected_revision,
+                        RestoreVaultItemCallback callback) override;
+  void EmptyVaultTrash(EmptyVaultTrashCallback callback) override;
+  void SetVaultItemFavorite(const std::string& item_id,
+                            uint64_t expected_revision, bool favorite,
+                            SetVaultItemFavoriteCallback callback) override;
+  void GetVaultItemNotes(const std::string& item_id,
+                         GetVaultItemNotesCallback callback) override;
+  void AddVaultSecureNote(const std::string& title, const std::string& notes,
+                          AddVaultSecureNoteCallback callback) override;
+  void UpdateVaultSecureNote(const std::string& item_id,
+                             uint64_t expected_revision,
+                             const std::string& title, const std::string& notes,
+                             UpdateVaultSecureNoteCallback callback) override;
+  void SetVaultLoginTotp(const std::string& item_id, uint64_t expected_revision,
+                         const std::string& secret,
+                         SetVaultLoginTotpCallback callback) override;
+  void GetVaultTotpCode(const std::string& item_id,
+                        GetVaultTotpCodeCallback callback) override;
+  void GeneratePassword(maho_settings::mojom::PasswordGeneratorOptionsPtr options,
+                         GeneratePasswordCallback callback) override;
+  void EstimatePasswordStrength(const std::string& password,
+                                 EstimatePasswordStrengthCallback callback) override;
+  void GetVaultHealthReport(GetVaultHealthReportCallback callback) override;
   void DeleteVaultItem(const std::string& item_id,
                        uint64_t expected_revision,
                        DeleteVaultItemCallback callback) override;
@@ -768,7 +802,6 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
 
   void OpenExtensionsPage() override;
   void OpenChromiumSettingsPage() override;
-  void OpenBookmarksPage() override;
   void OpenMigrationDialog() override;
 
   void SetBYOKKey(const std::string& provider,
@@ -1038,6 +1071,8 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   // inactivity auto-lock evaluated by the periodic core tick) to the page so
   // transient secret UI is cleared and re-gated behind unlock.
   void OnVaultLockStateChanged(bool locked);
+  void WebContentsDestroyed() override;
+  void PrimaryPageChanged(content::Page& page) override;
 
   mojo::Receiver<maho_settings::mojom::PageHandler> receiver_;
   mojo::Remote<maho_settings::mojom::Page> page_;
@@ -1048,6 +1083,9 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   raw_ptr<PrefService> local_state_;
   PrefChangeRegistrar local_state_pref_registrar_;
   base::CallbackListSubscription vault_lock_state_subscription_;
+  std::unique_ptr<MahoVaultRevealDialog> vault_reveal_dialog_;
+  std::unique_ptr<device_reauth::DeviceAuthenticator> vault_reveal_authenticator_;
+  uint64_t vault_reveal_generation_ = 0;
 
   raw_ptr<Profile> selected_profile_ = nullptr;
   base::ScopedObservation<Profile, ProfileObserver>
@@ -1066,8 +1104,8 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   base::OneShotTimer notify_timer_;
   std::string last_emitted_snapshot_;
 
-  std::optional<os_crypt_async::Encryptor> encryptor_;
-  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+  scoped_refptr<os_crypt_async::Encryptor> encryptor_;
+  void OnOsCryptReady(scoped_refptr<os_crypt_async::Encryptor> encryptor);
   void OnProviderModelsRefreshed(const std::string& provider_id,
                                  const std::vector<std::string>& model_ids);
   void OnReauthAddComplete(
@@ -1092,6 +1130,7 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
       const std::string& item_id,
       uint64_t expected_revision,
       maho_settings::mojom::SecretAction action,
+      bool fresh_os_auth,
       std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
       UseVaultSecretCallback callback,
       bool success);

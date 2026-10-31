@@ -70,6 +70,41 @@ const ALLOWED_ATTR: string[] = [
  *  - style values are kept but DOMPurify strips url(javascript:) and
  *    CSS expression() payloads.
  */
+/**
+ * Marks HTML produced by Maho's own sanitized pipeline (reader iframe wrapper,
+ * print document). The Trusted Types default policy from bundle_react.mjs lets
+ * marker-carrying strings pass — their untrusted payload is already sanitized
+ * by sanitizeEmailHtml at the production boundary — and sanitizes anything
+ * else at the sink boundary, so a future path that writes unsanitized email
+ * HTML into a DOM sink is still defended.
+ */
+export const MAHO_SINK_MARKER = "<!--maho-tt-pipeline-->";
+
+declare global {
+  // Set on import below; consulted by the bundle's Trusted Types default
+  // policy. Optional until this module loads (no DOM sink runs before then).
+  // eslint-disable-next-line no-var
+  var __mahoSanitizeHtml: ((html: string) => string) | undefined;
+}
+
+// DOMPurify parses its input with DOMParser, which is itself a Trusted Types
+// HTML sink, so on chrome://maho-mail the default policy re-enters here while
+// a sanitize is already running. Re-sanitizing that inner, inert parse recursed
+// until DOMPurify returned an empty body (every reader iframe rendered blank).
+// The inner string is DOMPurify's own working copy and is sanitized by the
+// outer call, so it passes through.
+let sanitizeDepth = 0;
+
+globalThis.__mahoSanitizeHtml = (html: string): string => {
+  if (sanitizeDepth > 0 || html.includes(MAHO_SINK_MARKER)) return html;
+  sanitizeDepth++;
+  try {
+    return sanitizeEmailHtml(html);
+  } finally {
+    sanitizeDepth--;
+  }
+};
+
 export function sanitizeEmailHtml(html: string): string {
   if (!html) return "";
 

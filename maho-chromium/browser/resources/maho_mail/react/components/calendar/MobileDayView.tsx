@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import type { CalendarEvent } from "../../types";
 import { format, addDays, subDays } from "date-fns";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, MapPin } from "lucide-react";
 
 interface MobileDayViewProps {
   date: Date;
@@ -55,7 +55,7 @@ export function MobileDayView({ date, onNavigate, events, onSelectEvent }: Mobil
       <div className="flex items-center justify-between p-3 border-b border-border bg-muted/20">
         <button
           onClick={() => onNavigate(subDays(date, 1))}
-          className="p-1 hover:bg-muted rounded text-muted-foreground"
+          className="mail-pressable flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ChevronLeft size={16} />
         </button>
@@ -64,7 +64,7 @@ export function MobileDayView({ date, onNavigate, events, onSelectEvent }: Mobil
         </span>
         <button
           onClick={() => onNavigate(addDays(date, 1))}
-          className="p-1 hover:bg-muted rounded text-muted-foreground"
+          className="mail-pressable flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ChevronRight size={16} />
         </button>
@@ -99,7 +99,7 @@ export function MobileDayView({ date, onNavigate, events, onSelectEvent }: Mobil
             <button
               key={ev.id}
               onClick={() => onSelectEvent(ev)}
-              className="absolute left-14 right-4 rounded-md border border-primary/20 bg-primary/10 hover:bg-primary/20 text-left p-2 transition-all flex flex-col justify-between overflow-hidden shadow-sm"
+              className="absolute left-14 right-4 rounded-md border border-primary/20 bg-primary/10 hover:bg-primary/15 text-left p-2 transition-colors flex flex-col justify-between overflow-hidden shadow-sm"
               style={{
                 top: `${topPos}px`,
                 height: `${heightPos}px`,
@@ -111,8 +111,8 @@ export function MobileDayView({ date, onNavigate, events, onSelectEvent }: Mobil
                   {ev.summary || "(No Title)"}
                 </p>
                 {ev.location && (
-                  <p className="text-[10px] text-muted-foreground truncate">
-                    📍 {ev.location}
+                  <p className="flex items-center gap-1 text-[10px] text-muted-foreground truncate">
+                    <MapPin size={10} className="shrink-0" aria-hidden="true" /> {ev.location}
                   </p>
                 )}
               </div>

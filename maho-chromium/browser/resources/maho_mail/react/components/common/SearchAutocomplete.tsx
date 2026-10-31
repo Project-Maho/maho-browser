@@ -242,7 +242,7 @@ export function SearchAutocomplete({
           className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
             index === activeIndex
               ? "bg-primary/10 text-foreground"
-              : "text-muted-foreground hover:bg-card/60 hover:text-foreground"
+              : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
           }`}
         >
           {suggestion.kind === "recent" ? (

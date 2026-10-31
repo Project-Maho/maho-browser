@@ -200,6 +200,11 @@ struct SyncBootstrapMaterial {
   int version = 0;
   std::string room_id;
   std::string seed;
+  // Optional account-escrow vault key slots. Empty strings mean the bootstrap
+  // record carries no escrow (a legacy passphrase vault, or a record that this
+  // device should publish its own escrow to after sign-in).
+  std::string vault_kdf_params;
+  std::string vault_wrapped_account_key;
 };
 
 std::optional<SyncBootstrapMaterial>
@@ -220,7 +225,16 @@ ParseSyncBootstrap(const std::string &json) {
       seed->empty()) {
     return std::nullopt;
   }
-  return SyncBootstrapMaterial{*version, *room_id, *seed};
+  SyncBootstrapMaterial material{*version, *room_id, *seed};
+  if (const base::DictValue *escrow = dict.FindDict("vault_escrow")) {
+    const std::string *kdf_params = escrow->FindString("kdf_params");
+    const std::string *wrapped = escrow->FindString("wrapped_account_key");
+    if (kdf_params && wrapped && !kdf_params->empty() && !wrapped->empty()) {
+      material.vault_kdf_params = *kdf_params;
+      material.vault_wrapped_account_key = *wrapped;
+    }
+  }
+  return material;
 }
 
 std::string GetSyncRoomIdOnCoreSequence() {
@@ -251,14 +265,22 @@ std::optional<SyncBootstrapMaterial> GenerateSyncBootstrapOnCoreSequence() {
   return ParseSyncBootstrap(json);
 }
 
-bool ConfigureSyncBootstrapOnCoreSequence(std::string seed) {
+bool ConfigureSyncBootstrapOnCoreSequence(SyncBootstrapMaterial bootstrap) {
   MahoCore *core = maho::GetCore();
   if (!core) {
     return false;
   }
   const std::string relay_url = GetSyncRelayUrl();
-  char *value =
-      maho_core_configure_sync_bootstrap(core, relay_url.c_str(), seed.c_str());
+  const char *escrow_kdf_params = bootstrap.vault_kdf_params.empty()
+                                      ? nullptr
+                                      : bootstrap.vault_kdf_params.c_str();
+  const char *escrow_wrapped_key =
+      bootstrap.vault_wrapped_account_key.empty()
+          ? nullptr
+          : bootstrap.vault_wrapped_account_key.c_str();
+  char *value = maho_core_configure_sync_bootstrap_with_escrow(
+      core, relay_url.c_str(), bootstrap.seed.c_str(), escrow_kdf_params,
+      escrow_wrapped_key);
   if (!value) {
     return false;
   }
@@ -270,19 +292,135 @@ bool ConfigureSyncBootstrapOnCoreSequence(std::string seed) {
          parsed->GetDict().FindBool("success").value_or(false);
 }
 
-void ConfigureFetchedSyncBootstrap(SyncBootstrapMaterial bootstrap,
-                                   LoginResultCallback callback) {
+std::string ExportVaultEscrowOnCoreSequence() {
+  MahoCore *core = maho::GetCore();
+  if (!core) {
+    return {};
+  }
+  char *value = maho_core_export_vault_account_escrow(core);
+  if (!value) {
+    return {};
+  }
+  std::string json(value);
+  maho_string_free(value);
+  return json;
+}
+
+void PutVaultEscrow(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string access_token, std::string room_id, std::string seed,
+    std::string kdf_params, std::string wrapped_account_key,
+    LoginResultCallback callback) {
+  base::DictValue body;
+  body.Set("version", 1);
+  body.Set("room_id", room_id);
+  body.Set("seed", seed);
+  base::DictValue escrow;
+  escrow.Set("kdf_params", kdf_params);
+  escrow.Set("wrapped_account_key", wrapped_account_key);
+  body.Set("vault_escrow", std::move(escrow));
+  std::string body_json;
+  base::JSONWriter::Write(body, &body_json);
+
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = GURL(GetSyncRelayUrl() + "/sync/bootstrap");
+  request->method = "PUT";
+  request->headers.SetHeader("Authorization", "Bearer " + access_token);
+  request->headers.SetHeader("Content-Type", "application/json");
+  request->headers.SetHeader("Accept", "application/json");
+  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+  auto loader = network::SimpleURLLoader::Create(
+      std::move(request), kSyncBootstrapTrafficAnnotation);
+  loader->AttachStringForUpload(body_json, "application/json");
+  loader->SetTimeoutDuration(base::Seconds(30));
+  loader->SetAllowHttpErrorResults(true);
+  network::SharedURLLoaderFactory *factory_ptr = url_loader_factory.get();
+  loader->DownloadToString(
+      factory_ptr,
+      base::BindOnce(
+          [](std::unique_ptr<network::SimpleURLLoader> completed_loader,
+             LoginResultCallback cb,
+             std::optional<std::string> response_body) {
+            const auto *info = completed_loader->ResponseInfo();
+            const int status =
+                info && info->headers ? info->headers->response_code() : 0;
+            if (completed_loader->NetError() != net::OK || !response_body ||
+                (status != 200 && status != 201)) {
+              // Escrow publication is best-effort: sign-in must not fail
+              // because the vault key could not be escrowed yet.
+              LOG(WARNING) << "MahoSyncBootstrap: vault escrow PUT failed with "
+                           << "http_status=" << status;
+              std::move(cb).Run(true, std::string());
+              return;
+            }
+            std::move(cb).Run(true, std::string());
+          },
+          std::move(loader), std::move(callback)),
+      64 * 1024);
+}
+
+void PublishLocalVaultEscrow(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string access_token, std::string room_id, std::string seed,
+    LoginResultCallback callback) {
+  maho::PostCoreTask<std::string>(
+      FROM_HERE, base::BindOnce(&ExportVaultEscrowOnCoreSequence),
+      base::BindOnce(
+          [](scoped_refptr<network::SharedURLLoaderFactory> factory,
+             std::string token, std::string room_id, std::string seed,
+             LoginResultCallback cb, std::string json) {
+            std::optional<base::Value> parsed =
+                base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+            const base::DictValue *dict =
+                parsed && parsed->is_dict() ? &parsed->GetDict() : nullptr;
+            const std::string *kdf_params =
+                dict ? dict->FindString("kdfParams") : nullptr;
+            const std::string *wrapped =
+                dict ? dict->FindString("wrappedAccountKey") : nullptr;
+            if (!kdf_params || !wrapped || kdf_params->empty() ||
+                wrapped->empty()) {
+              // No local escrow (legacy passphrase vault): nothing to publish.
+              std::move(cb).Run(true, std::string());
+              return;
+            }
+            PutVaultEscrow(std::move(factory), std::move(token),
+                           std::move(room_id), std::move(seed), *kdf_params,
+                           *wrapped, std::move(cb));
+          },
+          std::move(url_loader_factory), std::move(access_token),
+          std::move(room_id), std::move(seed), std::move(callback)));
+}
+
+void ConfigureFetchedSyncBootstrap(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string access_token, SyncBootstrapMaterial bootstrap,
+    LoginResultCallback callback) {
+  const bool record_has_escrow = !bootstrap.vault_kdf_params.empty() &&
+                                 !bootstrap.vault_wrapped_account_key.empty();
+  const std::string room_id = bootstrap.room_id;
+  const std::string seed = bootstrap.seed;
   maho::PostCoreTask<bool>(
       FROM_HERE,
       base::BindOnce(&ConfigureSyncBootstrapOnCoreSequence,
-                     std::move(bootstrap.seed)),
+                     std::move(bootstrap)),
       base::BindOnce(
-          [](LoginResultCallback cb, bool configured) {
-            std::move(cb).Run(configured,
-                              configured ? std::string()
-                                         : "Unable to configure account Sync.");
+          [](scoped_refptr<network::SharedURLLoaderFactory> factory,
+             std::string token, std::string room_id, std::string seed,
+             bool record_has_escrow, LoginResultCallback cb, bool configured) {
+            if (!configured) {
+              std::move(cb).Run(false, "Unable to configure account Sync.");
+              return;
+            }
+            if (record_has_escrow) {
+              std::move(cb).Run(true, std::string());
+              return;
+            }
+            PublishLocalVaultEscrow(std::move(factory), std::move(token),
+                                    std::move(room_id), std::move(seed),
+                                    std::move(cb));
           },
-          std::move(callback)));
+          std::move(url_loader_factory), std::move(access_token), room_id, seed,
+          record_has_escrow, std::move(callback)));
 }
 
 void FetchAccountSyncBootstrap(
@@ -350,7 +488,8 @@ void PutGeneratedSyncBootstrap(
                                 "Invalid account Sync bootstrap response.");
               return;
             }
-            ConfigureFetchedSyncBootstrap(std::move(*stored), std::move(cb));
+            ConfigureFetchedSyncBootstrap(std::move(factory), std::move(token),
+                                          std::move(*stored), std::move(cb));
           },
           std::move(url_loader_factory), access_token, std::move(generated),
           std::move(callback), std::move(loader)),
@@ -411,7 +550,8 @@ void FetchAccountSyncBootstrap(
                                   "Invalid account Sync bootstrap response.");
                 return;
               }
-              ConfigureFetchedSyncBootstrap(std::move(*bootstrap),
+              ConfigureFetchedSyncBootstrap(std::move(factory), std::move(token),
+                                            std::move(*bootstrap),
                                             std::move(cb));
               return;
             }
@@ -685,6 +825,29 @@ void PreserveRelayIdentityMetadata(PrefService *prefs,
       prefs->GetString(maho::account_prefs::kRelayOAuthProvider);
   params->oauth_provider_sub =
       prefs->GetString(maho::account_prefs::kRelayOAuthProviderSub);
+}
+
+StoreTokensParams BuildRefreshedRelayTokenParams(PrefService *prefs,
+                                                const RefreshedTokens &tokens) {
+  StoreTokensParams params;
+  params.access_token = tokens.access_token;
+  params.refresh_token = tokens.refresh_token;
+  params.access_expires_at = tokens.access_expires_at;
+  params.refresh_expires_at = tokens.refresh_expires_at;
+  params.user_email = prefs->GetString(maho::account_prefs::kRelayUserEmail);
+  params.user_id = prefs->GetString(maho::account_prefs::kRelayUserId);
+  params.user_display_name =
+      prefs->GetString(maho::account_prefs::kRelayUserDisplayName);
+  params.user_tier = prefs->GetString(maho::account_prefs::kRelayUserTier);
+  PreserveRelayIdentityMetadata(prefs, &params);
+  return params;
+}
+
+bool StoreRefreshedRelayTokens(PrefService *prefs,
+                               const os_crypt_async::Encryptor &encryptor,
+                               const RefreshedTokens &tokens) {
+  return StoreRelayTokens(prefs, encryptor,
+                          BuildRefreshedRelayTokenParams(prefs, tokens));
 }
 
 void ClearRelayTokens(PrefService *prefs) {

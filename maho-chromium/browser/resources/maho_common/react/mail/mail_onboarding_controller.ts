@@ -69,7 +69,13 @@ export function useMailOnboardingController({
   const actionFlags = getMailOnboardingActionFlags(action);
   const visibleProviders = showAllProviders ? PROVIDERS : PROVIDERS.filter(provider => isPrimaryProviderId(provider.id));
 
+  const resetCredentials = () => {
+    setPassword('');
+    setTestSuccess(false);
+  };
+
   const selectProvider = async (provider: ProviderId) => {
+    resetCredentials();
     setSelectedProvider(provider);
     setError(null);
     setTestSuccess(false);
@@ -87,13 +93,19 @@ export function useMailOnboardingController({
       return;
     }
     lifecycle.setOauthAccountIds(oauthAccountIds.current);
-    const beginResult = await lifecycle.beginOAuth(provider);
-    if (beginResult.ok === false) {
+    try {
+      const beginResult = await lifecycle.beginOAuth(provider);
+      if (beginResult.ok === false && beginResult.cancelled) return;
+      if (beginResult.ok === false) {
+        setAction(null);
+        setError(beginResult.errorMessage);
+        return;
+      }
+      setStep('oauth');
+    } catch {
       setAction(null);
-      setError(beginResult.errorMessage);
-      return;
+      setError(copy('onboarding.oauthUnavailable', 'OAuth is unavailable. Try IMAP instead.'));
     }
-    setStep('oauth');
   };
 
   const applyServerTouched = (setter: (value: string) => void, value: string) => {
@@ -143,18 +155,23 @@ export function useMailOnboardingController({
     setAction('testing');
     setError(null);
     setTestSuccess(false);
-    const result = await api.testConnection(buildRequestJson('test', ports));
-    setAction(null);
-    if (!result.ok) {
-      const isHelperUnavailable = isMailHelperUnavailableError(result.resultJson);
-      if (isHelperUnavailable) setMailServiceStatus('preparing');
-      const fallback = isHelperUnavailable
-        ? copy('onboarding.mailPreparing', 'Mail is still getting ready. We will retry automatically.')
-        : copy('onboarding.testFailed', 'Could not connect to the IMAP server.');
-      setError(toSafeMailErrorMessage(result.resultJson, fallback));
-      return;
+    try {
+      const result = await api.testConnection(buildRequestJson('test', ports));
+      if (!result.ok) {
+        const isHelperUnavailable = isMailHelperUnavailableError(result.resultJson);
+        if (isHelperUnavailable) setMailServiceStatus('preparing');
+        const fallback = isHelperUnavailable
+          ? copy('onboarding.mailPreparing', 'Mail is still getting ready. We will retry automatically.')
+          : copy('onboarding.testFailed', 'Could not connect to the IMAP server.');
+        setError(toSafeMailErrorMessage(result.resultJson, fallback));
+        return;
+      }
+      setTestSuccess(true);
+    } catch {
+      setError(copy('onboarding.testFailed', 'Could not connect to the IMAP server.'));
+    } finally {
+      setAction(null);
     }
-    setTestSuccess(true);
   };
 
   const handleAddAccount = async () => {
@@ -171,48 +188,64 @@ export function useMailOnboardingController({
     if (!ports) return;
     setAction('adding');
     setError(null);
-    const result = await api.addAccount(buildRequestJson('add', ports));
-    setAction(null);
-    if (!result.ok) {
-      const isHelperUnavailable = isMailHelperUnavailableError(result.resultJson);
-      if (isHelperUnavailable) setMailServiceStatus('preparing');
-      const fallback = isHelperUnavailable
-        ? copy('onboarding.mailPreparing', 'Mail is still getting ready. We will retry automatically.')
-        : copy('onboarding.addFailed', 'Could not add this mail account.');
-      setError(toSafeMailErrorMessage(result.resultJson, fallback));
-      return;
+    try {
+      const result = await api.addAccount(buildRequestJson('add', ports));
+      if (!result.ok) {
+        const isHelperUnavailable = isMailHelperUnavailableError(result.resultJson);
+        if (isHelperUnavailable) setMailServiceStatus('preparing');
+        const fallback = isHelperUnavailable
+          ? copy('onboarding.mailPreparing', 'Mail is still getting ready. We will retry automatically.')
+          : copy('onboarding.addFailed', 'Could not add this mail account.');
+        setError(toSafeMailErrorMessage(result.resultJson, fallback));
+        return;
+      }
+      resetCredentials();
+      setStep(hasTranslationStep ? 'translation' : 'success');
+      try {
+        const accountsResult = await api.listAccounts();
+        if (accountsResult.ok) {
+          const parsed = parseMailAccounts(accountsResult.resultJson);
+          if (parsed) onAccountsChange(parsed);
+        }
+      } catch (error) {
+        // Creation succeeded. Account events or window focus will reconcile the list.
+        console.error('Mail account added, but account list refresh failed', error);
+      }
+    } catch {
+      setError(copy('onboarding.addFailed', 'Could not add this mail account.'));
+    } finally {
+      setAction(null);
     }
-    const accountsResult = await api.listAccounts();
-    if (accountsResult.ok) {
-      const parsed = parseMailAccounts(accountsResult.resultJson);
-      if (parsed) onAccountsChange(parsed);
-    }
-    setStep(hasTranslationStep ? 'translation' : 'success');
   };
 
   const handleDeleteAccount = async (account: MailAccount) => {
     setAction('deleting');
     setError(null);
-    const outcome = await deleteMailAccountWithConfirmation({
-      account,
-      accounts,
-      confirmDelete: confirmDeleteAccount ?? defaultConfirmDeleteAccount(copy),
-      deleteAccount: api.deleteAccount,
-      failureMessage: copy(
-        'onboarding.deleteFailed',
-        'Could not delete this mail account.',
-      ),
-    });
-    setAction(null);
-    switch (outcome.kind) {
-      case 'cancelled':
-        return;
-      case 'deleted':
-        onAccountsChange(outcome.accounts);
-        return;
-      case 'failed':
-        setError(outcome.errorMessage);
-        return;
+    try {
+      const outcome = await deleteMailAccountWithConfirmation({
+        account,
+        accounts,
+        confirmDelete: confirmDeleteAccount ?? defaultConfirmDeleteAccount(copy),
+        deleteAccount: api.deleteAccount,
+        failureMessage: copy(
+          'onboarding.deleteFailed',
+          'Could not delete this mail account.',
+        ),
+      });
+      switch (outcome.kind) {
+        case 'cancelled':
+          return;
+        case 'deleted':
+          onAccountsChange(outcome.accounts);
+          return;
+        case 'failed':
+          setError(outcome.errorMessage);
+          return;
+      }
+    } catch {
+      setError(copy('onboarding.deleteFailed', 'Could not delete this mail account.'));
+    } finally {
+      setAction(null);
     }
   };
 
@@ -242,7 +275,7 @@ export function useMailOnboardingController({
     providerActions: {onSelectProvider: selectProvider, onShowAllProvidersChange: setShowAllProviders},
     credentialsState: {selectedProvider, email, displayName, password, imapHost, smtpHost, imapPortText, smtpPortText, imapEncryption, smtpEncryption, showAdvanced, error, testSuccess, busy, actionFlags},
     credentialsActions: {
-      onBack: () => { setStep('provider'); setSelectedProvider(null); setError(null); },
+      onBack: () => { resetCredentials(); setStep('provider'); setSelectedProvider(null); setError(null); },
       onEmailChange: setEmail,
       onDisplayNameChange: setDisplayName,
       onPasswordChange: setPassword,

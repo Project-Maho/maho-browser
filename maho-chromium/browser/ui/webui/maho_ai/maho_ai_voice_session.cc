@@ -28,15 +28,15 @@
 namespace {
 
 // GGML small English q5_1 whisper model (~180 MB), MIT-licensed weights.
-// TODO(maho-voice): confirm the canonical Maho-hosted mirror before shipping.
+// Pinned to an immutable repo revision so the digest below cannot drift; the
+// digest is the upstream LFS object id (sha256) of that revision's file.
 constexpr char kModelUrl[] =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
-    "ggml-small.en-q5_1.bin";
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/"
+    "5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.en-q5_1.bin";
 constexpr char kModelFileName[] = "ggml-small.en-q5_1.bin";
 constexpr char kModelSubdir[] = "MahoVoiceModels";
-// TODO(maho-voice): fill with the real SHA-256 of the pinned model artifact.
-// An empty digest skips verification (dev-only) — MUST be set before release.
-constexpr char kModelSha256[] = "";
+constexpr char kModelSha256[] =
+    "bfdff4894dcb76bbf647d56263ea2a96645423f1669176f4844a1bf8e478ad30";
 
 // Generous single-utterance transcript buffers (push-to-talk).
 constexpr size_t kInitialTranscriptCap = 8192;

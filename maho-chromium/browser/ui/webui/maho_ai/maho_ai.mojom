@@ -385,6 +385,11 @@ struct InteractionRequestInfo {
 };
 
 // A single runtime event in the session event stream.
+struct ReplayWindowInfo {
+  uint64 omitted_turns;
+  uint64 omitted_through_sequence;
+};
+
 struct RuntimeEvent {
   // What kind of event this is.
   RuntimeEventKind kind;
@@ -421,6 +426,8 @@ struct RuntimeEvent {
   // text is always a generic safe message; raw credential diagnostics never
   // cross this interface.
   CredentialErrorCode? credential_error_code;
+  [MinVersion=1] uint64 sequence_start;
+  [MinVersion=1] ReplayWindowInfo? replay_window;
 };
 
 // Lifecycle status of a session.
@@ -549,6 +556,11 @@ struct RuntimeConfigInfo {
   string permission_tier;
   bool final_confirm;
   bool proactive_mode;
+  // Mail read consent, mirroring the maho.ai.mail_read_allowed pref. Carried
+  // here so the panel and chrome://maho-settings resolve Mail access from one
+  // source of truth. Mail writes are never granted by this flag; they keep
+  // their per-call typed approval in the Mail authorization table.
+  bool mail_read_allowed;
 };
 
 // ==========================================================================
@@ -556,6 +568,22 @@ struct RuntimeConfigInfo {
 // ==========================================================================
 
 // Used by the WebUI page to bootstrap bidirectional communication.
+enum ControlActivityState {
+  kIdle,
+  kReading,
+  kActing,
+  kWaitingApproval,
+  kPaused,
+  kDisconnected,
+  kFailed,
+};
+
+struct ControlActivitySnapshot {
+  string controller_name;
+  ControlActivityState state;
+  string target_title;
+};
+
 interface PageHandlerFactory {
   CreatePageHandler(pending_remote<Page> page,
                     pending_receiver<PageHandler> handler);
@@ -669,6 +697,12 @@ interface PageHandler {
   // Close the AI side panel hosting this WebUI.
   ClosePanel();
 
+  // Subscribe to external control activity (Maho CLI / remote MCP client
+  // driving a tab). The response carries the live session timeline (one entry
+  // per action, chronological); subsequent changes arrive via
+  // Page::OnControlActivityChanged.
+  WatchControlActivity() => (array<ControlActivitySnapshot> entries);
+
   // Open the settings page chrome://maho-settings/
   OpenSettings();
 
@@ -680,10 +714,13 @@ interface PageHandler {
   // chrome://maho-settings?pane=maho-ai.
   GetAISettings() => (AISettingsInfo info);
 
-  // Persist a validated provider, model, and reasoning selection. Returns
+  // Persist the global Default provider, model, and reasoning selection.
+  // Writes the maho.ai.provider + maho.ai.model pair directly: this is the
+  // same Default route that the Settings Models page's Chat & Agent — Default
+  // row and every task without an explicit override resolve through. Returns
   // false without changing prefs when any supplied option is invalid.
-  SetAISelection(string provider_id, string model_id,
-                 ReasoningEffort reasoning_effort) => (bool accepted);
+  SetDefaultAISelection(string provider_id, string model_id,
+                        ReasoningEffort reasoning_effort) => (bool accepted);
 
   // Get the active session's runtime configuration (permission tier and
   // autonomy flags). Returns broker defaults (guard/true/false) when no
@@ -806,6 +843,9 @@ interface Page {
   // saved a new provider in chrome://maho-settings?pane=maho-ai).
   OnAISettingsChanged(AISettingsInfo info);
 
+  // The durable runtime permissions changed in profile prefs.
+  OnRuntimeConfigChanged(RuntimeConfigInfo config);
+
   // --- Voice input push (desktop on-device STT) ---
 
   // An interim transcript for the in-progress utterance (may be revised).
@@ -819,4 +859,8 @@ interface Page {
 
   // Emitted when C++ accepts an Ask Maho request and creates a session for it.
   OnAskMahoSessionAccepted(string request_id, SessionInfo session);
+
+  // An external controller (Maho CLI / remote MCP client) activity changed.
+  // The array is the chronological action timeline of the live session.
+  OnControlActivityChanged(array<ControlActivitySnapshot> entries);
 };

@@ -29,6 +29,11 @@ pub struct Email {
     pub created_at: String,
     /// Timestamp when body was fetched from server; None if not yet fetched
     pub body_fetched_at: Option<String>,
+    /// Serialized compose attachments, including base64 data, for local drafts.
+    pub draft_attachments_json: Option<String>,
+    pub email_references: Option<String>,
+    /// Whether a local draft requests a receipt when sent.
+    pub read_receipt: Option<bool>,
     /// Email address requesting a read receipt (Disposition-Notification-To header)
     pub mdn_requested: Option<String>,
 }

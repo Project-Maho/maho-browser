@@ -16,8 +16,6 @@ bool IsDispositionEligible(PeekSeam seam,
              disposition ==
                  content::WindowOpenDisposition::NEW_BACKGROUND_TAB ||
              disposition == content::WindowOpenDisposition::NEW_WINDOW;
-    case PeekSeam::kSameTabThrottle:
-      return disposition == content::WindowOpenDisposition::CURRENT_TAB;
   }
 }
 
@@ -48,9 +46,8 @@ PeekRoute DecidePeekRoute(const PeekRouteInput& input) {
       if (!input.popup_routing_enabled) {
         return PeekRoute::kFallThrough;
       }
-      break;
+      return PeekRoute::kOpenInForegroundTab;
     case PeekSeam::kOpenUrlFromTab:
-    case PeekSeam::kSameTabThrottle:
       if (!input.link_routing_enabled || !input.is_user_initiated) {
         return PeekRoute::kFallThrough;
       }

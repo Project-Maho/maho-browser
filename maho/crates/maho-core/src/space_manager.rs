@@ -37,6 +37,62 @@ mod tests {
     };
 
     #[test]
+    fn normalize_space_icon_maps_names_and_keeps_glyphs() {
+        assert_eq!(normalize_space_icon("bulb").as_deref(), Some("💡"));
+        assert_eq!(normalize_space_icon(" Barbell ").as_deref(), Some("🏋️"));
+        assert_eq!(normalize_space_icon("star.fill").as_deref(), Some("⭐"));
+        assert_eq!(normalize_space_icon("light-bulb").as_deref(), Some("💡"));
+        assert_eq!(normalize_space_icon("🦀").as_deref(), Some("🦀"));
+        assert_eq!(normalize_space_icon("🇫🇷").as_deref(), Some("🇫🇷"));
+        assert_eq!(normalize_space_icon("A").as_deref(), Some("A"));
+        assert_eq!(normalize_space_icon("definitely-not-an-icon"), None);
+        assert_eq!(normalize_space_icon("   "), None);
+    }
+
+    #[test]
+    fn update_space_config_stores_icon_names_as_glyphs() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let applied = manager
+            .update_space_config(SpaceConfigUpdate {
+                space_id: space_id.clone(),
+                icon: Some(Some("bulb".to_string())),
+                ..Default::default()
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(applied.icon, Some(Some("💡".to_string())));
+        assert_eq!(
+            manager.get_space(&space_id).unwrap().icon.as_deref(),
+            Some("💡")
+        );
+
+        manager
+            .update_space_config(SpaceConfigUpdate {
+                space_id: space_id.clone(),
+                icon: Some(Some("no-such-icon".to_string())),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(manager.get_space(&space_id).unwrap().icon, None);
+    }
+
+    #[test]
+    fn restore_and_upsert_migrate_persisted_icon_names() {
+        let mut manager = SpaceManager::new();
+        let active = manager.get_active_space_id().clone();
+        let mut space = manager.get_space(&active).unwrap().clone();
+        space.icon = Some("bulb".to_string());
+        let id = space.id.clone();
+        manager.restore_spaces(vec![space.clone()], id.clone());
+        assert_eq!(manager.get_space(&id).unwrap().icon.as_deref(), Some("💡"));
+
+        space.icon = Some("layers".to_string());
+        manager.upsert_space(space);
+        assert_eq!(manager.get_space(&id).unwrap().icon.as_deref(), Some("🗂️"));
+    }
+
+    #[test]
     fn add_tab_to_space_ignores_duplicate_tab_ids() {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
@@ -336,6 +392,89 @@ mod tests {
         manager.delete_folder(&space_id, &vm.id);
 
         assert!(manager.get_root_order(&space_id).is_empty());
+    }
+
+    #[test]
+    fn delete_folder_promotes_tabs_to_root_at_folder_position() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let before = TabId::new("before");
+        let inside_a = TabId::new("inside-a");
+        let inside_b = TabId::new("inside-b");
+        let after = TabId::new("after");
+        manager.add_tab_to_space(&space_id, before.clone(), None);
+        let vm = manager
+            .create_folder(&space_id, "Work", false, None)
+            .unwrap();
+        for tab_id in [&inside_a, &inside_b, &after] {
+            manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        }
+        manager.add_tab_to_folder(&space_id, &vm.id, inside_a.clone());
+        manager.add_tab_to_folder(&space_id, &vm.id, inside_b.clone());
+
+        manager.delete_folder(&space_id, &vm.id);
+
+        assert_eq!(
+            manager.get_root_order(&space_id),
+            vec![
+                RootItem::Tab(before),
+                RootItem::Tab(inside_a),
+                RootItem::Tab(inside_b),
+                RootItem::Tab(after),
+            ]
+        );
+    }
+
+    #[test]
+    fn delete_folder_promotes_subfolder_and_tabs_into_parent() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let outer = manager
+            .create_folder(&space_id, "Outer", false, None)
+            .unwrap();
+        let middle = manager
+            .create_folder(&space_id, "Middle", false, Some(outer.id.clone()))
+            .unwrap();
+        let inner = manager
+            .create_folder(&space_id, "Inner", false, Some(middle.id.clone()))
+            .unwrap();
+        let tab_id = TabId::new("in-middle");
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        manager.add_tab_to_folder(&space_id, &middle.id, tab_id.clone());
+
+        manager.delete_folder(&space_id, &middle.id);
+
+        let space = manager.get_space(&space_id).unwrap();
+        let outer_folder = space.folders.iter().find(|f| f.id == outer.id).unwrap();
+        assert_eq!(outer_folder.tab_ids, vec![tab_id]);
+        let inner_folder = space.folders.iter().find(|f| f.id == inner.id).unwrap();
+        assert_eq!(inner_folder.parent_folder_id, Some(outer.id.clone()));
+        assert_eq!(
+            manager.get_root_order(&space_id),
+            vec![RootItem::Folder(outer.id)]
+        );
+    }
+
+    #[test]
+    fn delete_root_folder_promotes_subfolder_to_root() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let outer = manager
+            .create_folder(&space_id, "Outer", false, None)
+            .unwrap();
+        let inner = manager
+            .create_folder(&space_id, "Inner", false, Some(outer.id.clone()))
+            .unwrap();
+
+        manager.delete_folder(&space_id, &outer.id);
+
+        let space = manager.get_space(&space_id).unwrap();
+        let inner_folder = space.folders.iter().find(|f| f.id == inner.id).unwrap();
+        assert_eq!(inner_folder.parent_folder_id, None);
+        assert_eq!(
+            manager.get_root_order(&space_id),
+            vec![RootItem::Folder(inner.id)]
+        );
     }
 
     #[test]
@@ -1198,6 +1337,151 @@ mod tests {
             .contains(&RootItem::Folder(empty_folder.id)));
         assert!(space.root_order.contains(&RootItem::Folder(full_folder.id)));
     }
+
+    #[test]
+    fn get_all_atc_rules_respects_space_order_and_persists_across_reorder_and_restore() {
+        use maho_types::identifiers::ProfileId;
+        use maho_types::space::{ATCAction, ATCCondition, ATCRule, SpaceColor};
+
+        let mut manager = SpaceManager::new();
+        // Clear default space created by new() to have full control of space order.
+        let default_space_id = manager.get_active_space_id().clone();
+
+        let space_a = manager.create_space(
+            "Space A",
+            SpaceColor {
+                hue: 10.0,
+                saturation: 0.5,
+                brightness: 0.5,
+                grain: 0.0,
+            },
+            ProfileId::new("p1"),
+        );
+        let space_b = manager.create_space(
+            "Space B",
+            SpaceColor {
+                hue: 20.0,
+                saturation: 0.5,
+                brightness: 0.5,
+                grain: 0.0,
+            },
+            ProfileId::new("p1"),
+        );
+        let space_c = manager.create_space(
+            "Space C",
+            SpaceColor {
+                hue: 30.0,
+                saturation: 0.5,
+                brightness: 0.5,
+                grain: 0.0,
+            },
+            ProfileId::new("p1"),
+        );
+
+        let rule_a1 = ATCRule {
+            id: "a1".to_string(),
+            condition: ATCCondition::UrlContains {
+                text: "shared.com".to_string(),
+            },
+            action: ATCAction::Route {
+                space_id: space_a.id.clone(),
+            },
+            enabled: true,
+        };
+        let rule_a2 = ATCRule {
+            id: "a2".to_string(),
+            condition: ATCCondition::UrlContains {
+                text: "shared.com".to_string(),
+            },
+            action: ATCAction::Route {
+                space_id: space_c.id.clone(),
+            },
+            enabled: true,
+        };
+        let rule_b1 = ATCRule {
+            id: "b1".to_string(),
+            condition: ATCCondition::UrlContains {
+                text: "shared.com".to_string(),
+            },
+            action: ATCAction::Route {
+                space_id: space_b.id.clone(),
+            },
+            enabled: true,
+        };
+        let rule_c1 = ATCRule {
+            id: "c1".to_string(),
+            condition: ATCCondition::UrlContains {
+                text: "c-only.com".to_string(),
+            },
+            action: ATCAction::Route {
+                space_id: space_c.id.clone(),
+            },
+            enabled: true,
+        };
+
+        manager.spaces.get_mut(&space_a.id).unwrap().atc_rules =
+            vec![rule_a1.clone(), rule_a2.clone()];
+        manager.spaces.get_mut(&space_b.id).unwrap().atc_rules = vec![rule_b1.clone()];
+        manager.spaces.get_mut(&space_c.id).unwrap().atc_rules = vec![rule_c1.clone()];
+        manager.delete_space(&default_space_id);
+
+        // 1. Initial saved order: [A, B, C]
+        let rules = manager.get_all_atc_rules();
+        let space_ids: Vec<SpaceId> = rules.iter().map(|(id, _)| id.clone()).collect();
+        assert_eq!(space_ids, vec![space_a.id.clone(), space_b.id.clone(), space_c.id.clone()]);
+        let a_rule_ids: Vec<String> = rules[0].1.iter().map(|r| r.id.clone()).collect();
+        assert_eq!(a_rule_ids, vec![rule_a1.id.clone(), rule_a2.id.clone()]);
+
+        let atc = crate::atc_manager::ATCManager::new();
+        let dest = atc.route_url_by_space_rules("https://shared.com/login", &rules);
+        assert_eq!(dest, Some(space_a.id.clone()));
+
+        // 2. Reorder spaces: move Space B to index 0 -> [B, A, C]
+        manager.reorder_space(&space_b.id, 1, 0);
+        let rules_after_reorder = manager.get_all_atc_rules();
+        let space_ids_reordered: Vec<SpaceId> = rules_after_reorder.iter().map(|(id, _)| id.clone()).collect();
+        assert_eq!(
+            space_ids_reordered,
+            vec![space_b.id.clone(), space_a.id.clone(), space_c.id.clone()]
+        );
+        // Overlapping rule resolution now picks Space B first according to new saved order
+        let dest_reordered =
+            atc.route_url_by_space_rules("https://shared.com/login", &rules_after_reorder);
+        assert_eq!(dest_reordered, Some(space_b.id.clone()));
+
+        // 3. Restore spaces in arbitrary / new order: [C, B, A]
+        let space_a_obj = manager.get_space(&space_a.id).unwrap().clone();
+        let space_b_obj = manager.get_space(&space_b.id).unwrap().clone();
+        let space_c_obj = manager.get_space(&space_c.id).unwrap().clone();
+        manager.restore_spaces(
+            vec![space_c_obj, space_b_obj, space_a_obj],
+            space_c.id.clone(),
+        );
+
+        let rules_after_restore = manager.get_all_atc_rules();
+        let space_ids_restored: Vec<SpaceId> = rules_after_restore.iter().map(|(id, _)| id.clone()).collect();
+        assert_eq!(
+            space_ids_restored,
+            vec![space_c.id.clone(), space_b.id.clone(), space_a.id.clone()]
+        );
+        // Rule order within each space preserved
+        let restored_a_rule_ids: Vec<String> = rules_after_restore
+            .iter()
+            .find(|(id, _)| id == &space_a.id)
+            .unwrap()
+            .1
+            .iter()
+            .map(|r| r.id.clone())
+            .collect();
+        assert_eq!(
+            restored_a_rule_ids,
+            vec![rule_a1.id, rule_a2.id]
+        );
+        // Overlapping rule matches B before A under [C, B, A]
+        let dest_restored =
+            atc.route_url_by_space_rules("https://shared.com/login", &rules_after_restore);
+        assert_eq!(dest_restored, Some(space_b.id.clone()));
+    }
 }
 
 impl std::fmt::Display for SpaceUpdateError {
@@ -1223,6 +1507,85 @@ pub struct SpaceManager {
     space_order: Vec<SpaceId>,
     active_space_id: SpaceId,
     pub is_restoring: bool,
+}
+
+/// Canonicalizes a space icon to a renderable glyph.
+///
+/// Every shell (desktop sidebar, iOS, Android) draws `Space.icon` as text, so
+/// the stored value must be a glyph. Browser importers hand over icon *names*
+/// (Arc `iconType.icon`: "bulb", "barbell", ...), which then painted as literal
+/// words. Known names map to an equivalent emoji; unknown multi-letter ASCII
+/// names are dropped so shells fall back to the color dot; non-ASCII values
+/// (emoji, flags, CJK) and single-character monograms are kept verbatim.
+pub fn normalize_space_icon(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.is_ascii() || trimmed.chars().count() == 1 {
+        return Some(trimmed.to_string());
+    }
+    let key: String = trimmed
+        .to_ascii_lowercase()
+        .trim_end_matches(".fill")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    let emoji = match key.as_str() {
+        "bulb" | "lightbulb" | "idea" => "💡",
+        "barbell" | "dumbbell" | "fitness" | "gym" => "🏋️",
+        "flash" | "bolt" | "lightning" | "zap" => "⚡",
+        "layers" | "stack" | "squarestack" => "🗂️",
+        "star" => "⭐",
+        "video" | "film" | "movie" | "play" => "🎬",
+        "briefcase" | "work" => "💼",
+        "compass" | "explore" => "🧭",
+        "house" | "home" => "🏠",
+        "book" | "books" | "read" => "📚",
+        "music" | "musicnote" => "🎵",
+        "heart" | "love" => "❤️",
+        "code" | "laptop" | "computer" | "terminal" => "💻",
+        "globe" | "world" | "earth" => "🌐",
+        "rocket" => "🚀",
+        "palette" | "paintbrush" | "paint" | "art" | "design" => "🎨",
+        "game" | "games" | "gamecontroller" | "gamepad" => "🎮",
+        "cart" | "shopping" | "bag" | "shop" => "🛒",
+        "flag" => "🚩",
+        "leaf" | "plant" | "nature" => "🌿",
+        "sun" | "sunmax" => "☀️",
+        "moon" | "night" => "🌙",
+        "cloud" => "☁️",
+        "flame" | "fire" => "🔥",
+        "bell" => "🔔",
+        "gear" | "settings" | "cog" => "⚙️",
+        "person" | "user" | "profile" => "👤",
+        "people" | "users" | "team" | "group" => "👥",
+        "mail" | "envelope" | "email" | "inbox" => "✉️",
+        "calendar" => "📅",
+        "chart" | "graph" | "barchart" | "stats" => "📊",
+        "money" | "dollar" | "dollarsign" | "finance" => "💵",
+        "graduationcap" | "school" | "education" | "study" => "🎓",
+        "airplane" | "plane" | "travel" => "✈️",
+        "coffee" | "cup" | "mug" => "☕",
+        "pencil" | "pen" | "edit" | "write" => "✏️",
+        "sparkles" | "sparkle" | "magic" => "✨",
+        "trophy" => "🏆",
+        "target" => "🎯",
+        "key" => "🔑",
+        "lock" => "🔒",
+        "box" | "package" | "cube" => "📦",
+        "folder" => "📁",
+        "camera" | "photo" => "📷",
+        "paw" | "pet" | "pawprint" => "🐾",
+        "brain" => "🧠",
+        "search" | "magnifyingglass" => "🔍",
+        "news" | "newspaper" => "📰",
+        "doc" | "document" | "file" => "📄",
+        "shield" => "🛡️",
+        "wrench" | "tool" | "tools" | "hammer" => "🔧",
+        _ => return None,
+    };
+    Some(emoji.to_string())
 }
 
 impl Default for SpaceManager {
@@ -1409,6 +1772,8 @@ impl SpaceManager {
             if space.root_order.is_empty() {
                 space.root_order = Self::synthesize_root_order(&space);
             }
+            // Migrates icon names persisted by older importers ("bulb").
+            space.icon = space.icon.as_deref().and_then(normalize_space_icon);
             self.spaces.insert(space.id.clone(), space);
         }
         if self.spaces.contains_key(&active_space_id) {
@@ -1425,6 +1790,7 @@ impl SpaceManager {
         self.is_restoring = false;
     }
     pub fn upsert_space(&mut self, mut space: Space) {
+        space.icon = space.icon.as_deref().and_then(normalize_space_icon);
         if space.root_order.is_empty() {
             space.root_order = Self::synthesize_root_order(&space);
         }
@@ -1911,13 +2277,55 @@ impl SpaceManager {
         }
     }
 
+    /// Deletes the folder itself, never its contents: its tabs and subfolders
+    /// are promoted into the folder's parent (or into root_order at the
+    /// folder's position). The sidebar tree is built only from root_order and
+    /// folder membership, so contents left behind would stay open yet be
+    /// unreachable from the sidebar.
     pub fn delete_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId) {
-        if let Some(space) = self.spaces.get_mut(space_id) {
-            space.folders.retain(|f| f.id != *folder_id);
-            space
-                .root_order
-                .retain(|item| item != &RootItem::Folder(folder_id.clone()));
+        let Some(space) = self.spaces.get_mut(space_id) else {
+            return;
+        };
+        let Some(pos) = space.folders.iter().position(|f| f.id == *folder_id) else {
+            return;
+        };
+        let folder = space.folders.remove(pos);
+
+        let mut promoted_folders = Vec::new();
+        for child in space.folders.iter_mut() {
+            if child.parent_folder_id.as_ref() == Some(folder_id) {
+                child.parent_folder_id = folder.parent_folder_id.clone();
+                promoted_folders.push(child.id.clone());
+            }
         }
+
+        if let Some(ref parent_id) = folder.parent_folder_id {
+            if let Some(parent) = space.folders.iter_mut().find(|f| f.id == *parent_id) {
+                for tab_id in folder.tab_ids {
+                    if !parent.tab_ids.contains(&tab_id) {
+                        parent.tab_ids.push(tab_id);
+                    }
+                }
+            }
+            return;
+        }
+
+        let folder_item = RootItem::Folder(folder_id.clone());
+        let insert_at = space
+            .root_order
+            .iter()
+            .position(|item| item == &folder_item)
+            .unwrap_or(space.root_order.len());
+        space.root_order.retain(|item| item != &folder_item);
+        let promoted: Vec<RootItem> = folder
+            .tab_ids
+            .into_iter()
+            .map(RootItem::Tab)
+            .chain(promoted_folders.into_iter().map(RootItem::Folder))
+            .filter(|item| !space.root_order.contains(item))
+            .collect();
+        let insert_at = insert_at.min(space.root_order.len());
+        space.root_order.splice(insert_at..insert_at, promoted);
     }
 
     pub fn add_tab_to_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, tab_id: TabId) {
@@ -2379,8 +2787,9 @@ impl SpaceManager {
                 applied.color = Some(c.clone());
             }
             if let Some(ref i) = changes.icon {
-                space.icon = i.clone();
-                applied.icon = Some(i.clone());
+                let normalized = i.as_deref().and_then(normalize_space_icon);
+                space.icon = normalized.clone();
+                applied.icon = Some(normalized);
             }
             if let Some(ref profile_id) = changes.profile_id {
                 space.profile_id = profile_id.clone();
@@ -2422,9 +2831,13 @@ impl SpaceManager {
     }
 
     pub fn get_all_atc_rules(&self) -> Vec<(SpaceId, Vec<maho_types::space::ATCRule>)> {
-        self.spaces
-            .values()
-            .map(|s| (s.id.clone(), s.atc_rules.clone()))
+        self.space_order
+            .iter()
+            .filter_map(|id| {
+                self.spaces
+                    .get(id)
+                    .map(|s| (s.id.clone(), s.atc_rules.clone()))
+            })
             .collect()
     }
 

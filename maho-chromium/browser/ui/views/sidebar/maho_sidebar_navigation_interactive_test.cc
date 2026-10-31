@@ -11,13 +11,18 @@
 
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/test/browser_test.h"
+#include "build/build_config.h"
+#include "maho/browser/ui/views/command/maho_command_action_handler.h"
+#include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "base/time/time.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/json/string_escape.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -25,6 +30,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/bind.h"
 #include "base/test/run_until.h"
+#include "components/performance_manager/public/decorators/page_live_state_decorator.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
@@ -48,6 +54,7 @@
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/events/event.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_node_data.h"
@@ -58,6 +65,8 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
+#include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/view_utils.h"
@@ -90,14 +99,15 @@ std::string StartDownload(MahoCore* core,
                           const std::string& file_path = std::string(),
                           const std::string& mime_type = std::string()) {
   std::string json = base::StringPrintf(
-      R"({"filename":"%s","url":"%s","total_bytes":%llu)" ,
-      filename.c_str(), url.c_str(),
+      R"({"filename":%s,"url":%s,"total_bytes":%llu)",
+      base::GetQuotedJSONString(filename).c_str(),
+      base::GetQuotedJSONString(url).c_str(),
       static_cast<unsigned long long>(total_bytes));
   if (!file_path.empty()) {
-    json += base::StringPrintf(R"(,"file_path":"%s")", file_path.c_str());
+    json += R"(,"file_path":)" + base::GetQuotedJSONString(file_path);
   }
   if (!mime_type.empty()) {
-    json += base::StringPrintf(R"(,"mime_type":"%s")", mime_type.c_str());
+    json += R"(,"mime_type":)" + base::GetQuotedJSONString(mime_type);
   }
   json += "}";
   char* raw_id = maho_core_start_download(core, json.c_str());
@@ -184,7 +194,8 @@ std::vector<uint8_t> SnapshotImageBytes(const gfx::ImageSkia& image) {
       continue;
     }
     const uint8_t* pixels = static_cast<const uint8_t*>(bitmap.getPixels());
-    out.insert(out.end(), pixels, pixels + size);
+    auto span = UNSAFE_BUFFERS(base::span(pixels, size));
+    out.insert(out.end(), span.begin(), span.end());
   }
   return out;
 }
@@ -268,7 +279,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   ASSERT_GE(state.tab_list.normal_tree.size(), 2u);
 
   // Find a non-active tab in the tree.
-  int active_index = browser()->tab_strip_model()->active_index();
+  int active_index = browser()->GetTabStripModel()->active_index();
   std::string target_tab_id;
   for (const auto& node : state.tab_list.normal_tree) {
     if (node.kind == SidebarNodeKind::kTab && !node.is_active) {
@@ -296,7 +307,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   base::RunLoop().RunUntilIdle();
 
   // The active index should have changed.
-  EXPECT_NE(active_index, browser()->tab_strip_model()->active_index());
+  EXPECT_NE(active_index, browser()->GetTabStripModel()->active_index());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
@@ -547,7 +558,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   ResolveViews();
 
   content::WebContents* active =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   std::u16string title_before = active->GetTitle();
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -591,7 +602,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   base::RunLoop().RunUntilIdle();
 
   content::WebContents* active =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(active);
   auto* helper = MahoTabIdHelper::FromWebContents(active);
   ASSERT_TRUE(helper);
@@ -612,7 +623,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   // Close every live tab whose stable_tab_id matches the favorite.
   // After this, OnTilePressed must NOT find a live mapping and must
   // fall back to NEW_FOREGROUND_TAB.
-  TabStripModel* strip = browser()->tab_strip_model();
+  TabStripModel* strip = browser()->GetTabStripModel();
   for (int i = strip->count() - 1; i >= 0; --i) {
     content::WebContents* wc = strip->GetWebContentsAt(i);
     auto* helper = wc ? MahoTabIdHelper::FromWebContents(wc) : nullptr;
@@ -651,6 +662,55 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       FavoriteWakeTargetsPinnedUrl) {
+  SeedProfile(2);
+
+  auto state = GetViewState();
+  ASSERT_FALSE(state.favorites.items.empty());
+  const auto& first_fav = state.favorites.items[0];
+  ASSERT_FALSE(first_fav.tab_id.empty());
+
+  // Author a home (pinned) URL that differs from the page the tab is showing.
+  const GURL pinned_url("https://pinned-home.example.test/landing");
+  ASSERT_TRUE(pinned_url.is_valid());
+  ASSERT_NE(first_fav.url.spec(), pinned_url.spec());
+  ASSERT_TRUE(maho_core_set_tab_pinned_url(maho::GetCore(),
+                                           first_fav.tab_id.c_str(),
+                                           pinned_url.spec().c_str()));
+
+  // Close the live WebContents backing the favorite so a tile click takes the
+  // suspend/wake path instead of plain activation.
+  TabStripModel* strip = browser()->GetTabStripModel();
+  for (int i = strip->count() - 1; i >= 0; --i) {
+    content::WebContents* wc = strip->GetWebContentsAt(i);
+    auto* helper = wc ? MahoTabIdHelper::FromWebContents(wc) : nullptr;
+    if (helper && helper->stable_tab_id() == first_fav.tab_id) {
+      strip->CloseWebContentsAt(i, TabCloseTypes::CLOSE_USER_GESTURE);
+    }
+  }
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  views::View* tile = favorites_->GetTileForTesting(0);
+  ASSERT_TRUE(tile);
+  const gfx::Point center = tile->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  content::WebContents* active =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(active);
+  EXPECT_EQ(active->GetVisibleURL().spec(), pinned_url.spec())
+      << "waking a sleeping favorite must navigate to its pinned URL, not to "
+         "the last visited page";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
                        FavoriteClickAfterDragCancel) {
   SeedProfile(2);
 
@@ -683,7 +743,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   base::RunLoop().RunUntilIdle();
 
   content::WebContents* active =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(active);
   auto* helper = MahoTabIdHelper::FromWebContents(active);
   ASSERT_TRUE(helper);
@@ -734,16 +794,24 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
   SeedSidebarPrefs(/*layout_enabled=*/true, /*panel_expanded=*/false);
   ResolveViews();
-  base::RunLoop().RunUntilIdle();
+  // Collapsing a pinned sidebar slides it out; it hides when the slide ends.
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return !container->sidebar_view()->GetVisible(); }));
 
   EXPECT_TRUE(container->IsAutoHideMode());
   EXPECT_EQ(sidebar_layout::kCollapsedRailWidthDp,
             container->GetPreferredSize().width());
-  EXPECT_FALSE(container->sidebar_view()->GetVisible());
 
+  // The interactive harness moves the cursor but does not deliver synthetic
+  // mouse-enter/exit to the container, so invoke its real handlers with the
+  // cursor parked at the matching position.
+  const ui::MouseEvent enter_event(ui::EventType::kMouseEntered, gfx::Point(),
+                                   gfx::Point(), base::TimeTicks::Now(), 0, 0);
+  const ui::MouseEvent exit_event(ui::EventType::kMouseExited, gfx::Point(),
+                                  gfx::Point(), base::TimeTicks::Now(), 0, 0);
   const gfx::Point center = container->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
-  base::RunLoop().RunUntilIdle();
+  container->OnMouseEntered(enter_event);
 
   EXPECT_TRUE(container->sidebar_view()->GetVisible());
   EXPECT_TRUE(container->IsOverlayVisible());
@@ -752,10 +820,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   const gfx::Point outside(screen_bounds.right() + 50,
                            screen_bounds.CenterPoint().y());
   ASSERT_TRUE(ui_controls::SendMouseMove(outside.x(), outside.y()));
-  base::RunLoop().RunUntilIdle();
+  container->OnMouseExited(exit_event);
 
   ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
-  base::RunLoop().RunUntilIdle();
+  container->OnMouseEntered(enter_event);
 
   EXPECT_TRUE(container->sidebar_view()->GetVisible());
   EXPECT_TRUE(container->IsOverlayVisible());
@@ -989,7 +1057,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
   std::string real_id = StartDownload(core, "report.pdf",
                                       "https://example.org/report.pdf", 512,
-                                      real_path.value(), "application/pdf");
+                                      real_path.AsUTF8Unsafe(), "application/pdf");
   ASSERT_FALSE(real_id.empty());
   char* raw_complete = maho_core_complete_download(core, real_id.c_str());
   ASSERT_TRUE(raw_complete);
@@ -998,7 +1066,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
   std::string missing_id = StartDownload(
       core, "missing.pdf", "https://example.org/missing.pdf", 256,
-      missing_path.value(), "application/pdf");
+      missing_path.AsUTF8Unsafe(), "application/pdf");
   ASSERT_FALSE(missing_id.empty());
   raw_complete = maho_core_complete_download(core, missing_id.c_str());
   ASSERT_TRUE(raw_complete);
@@ -1032,7 +1100,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   ASSERT_TRUE(open_button);
   views::test::ButtonTestApi(open_button).NotifyClick(ui::test::TestEvent());
   ASSERT_EQ(1u, captured_actions.size());
-  EXPECT_EQ(real_path.value(), captured_actions[0].first);
+  EXPECT_EQ(real_path.AsUTF8Unsafe(), captured_actions[0].first);
   EXPECT_EQ(DownloadActionKind::kOpen, captured_actions[0].second);
 
   auto* reveal_button =
@@ -1040,7 +1108,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   ASSERT_TRUE(reveal_button);
   views::test::ButtonTestApi(reveal_button).NotifyClick(ui::test::TestEvent());
   ASSERT_EQ(2u, captured_actions.size());
-  EXPECT_EQ(real_path.value(), captured_actions[1].first);
+  EXPECT_EQ(real_path.AsUTF8Unsafe(), captured_actions[1].first);
   EXPECT_EQ(DownloadActionKind::kReveal, captured_actions[1].second);
 
   maho_core_free(core);
@@ -1134,11 +1202,11 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
   std::string audio_id = StartDownload(core, "track-a.mp3",
                                        "https://example.org/track-a.mp3",
-                                       1024, audio_path.value(), "audio/mpeg");
+                                       1024, audio_path.AsUTF8Unsafe(), "audio/mpeg");
   ASSERT_FALSE(audio_id.empty());
   std::string image_id = StartDownload(core, "cover.png",
                                        "https://example.org/cover.png",
-                                       2048, image_path.value(), "image/png");
+                                       2048, image_path.AsUTF8Unsafe(), "image/png");
   ASSERT_FALSE(image_id.empty());
 
   ResolveViews();
@@ -1180,7 +1248,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   ResolveViews();
 
   // Disable full viewport preference to test inline path
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       maho::sidebar_prefs::kSpacesFullViewport, false);
 
   auto* sidebar = GetSidebarView();
@@ -1228,7 +1296,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   ASSERT_TRUE(sidebar->is_library_mode_for_testing());
 
   // Confirm default is true (opens overlay)
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       maho::sidebar_prefs::kSpacesFullViewport, true);
 
   views::test::ButtonTestApi(spaces_button).NotifyClick(ui::test::TestEvent());
@@ -1266,7 +1334,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   ASSERT_TRUE(sidebar->is_library_mode_for_testing());
 
   // Enable overlay pref
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       maho::sidebar_prefs::kSpacesFullViewport, true);
 
   // Click Spaces to open overlay
@@ -1306,7 +1374,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   base::RunLoop().RunUntilIdle();
 
   // Enable overlay pref
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       maho::sidebar_prefs::kSpacesFullViewport, true);
 
   // Click Spaces to open overlay
@@ -1318,7 +1386,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_TRUE(container->IsSpacesOverlayVisible());
 
   // Simulate auto-hide transition by collapsing the panel (unpinning)
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       maho::sidebar_prefs::kSidebarPanelExpanded, false);
   base::RunLoop().RunUntilIdle();
 
@@ -1352,6 +1420,31 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_TRUE(GetTabListView()->GetVisible());
 }
 
+// The Archive entry point (Cmd+Shift+A) must land on the Archive even when the
+// library is already open on another category. Closing the library instead
+// would take the user further from what they asked for.
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       ToggleArchiveModeSwitchesFromAnotherLibraryCategory) {
+  ResolveViews();
+
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kDownloads);
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(sidebar->is_library_mode_for_testing());
+  ASSERT_EQ(MahoSidebarLibraryRailView::Category::kDownloads,
+            sidebar->active_library_category_for_testing());
+
+  sidebar->ToggleArchiveMode();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(sidebar->is_library_mode_for_testing());
+  EXPECT_TRUE(sidebar->is_archive_mode_for_testing());
+  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kArchivedTabs,
+            sidebar->active_library_category_for_testing());
+}
+
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
                        ArchiveFilterAccessibilityValueUpdates) {
   ResolveViews();
@@ -1383,10 +1476,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   views::test::ButtonTestApi(filter_button).NotifyClick(ui::test::TestEvent());
   ASSERT_TRUE(archive_view->filter_menu_model_for_testing());
   ASSERT_TRUE(ui_test_utils::SendKeyPressToWindowSync(
-      browser()->window()->GetNativeWindow(), ui::VKEY_DOWN,
+      browser()->GetWindow()->GetNativeWindow(), ui::VKEY_DOWN,
       false, false, false, false));
   ASSERT_TRUE(ui_test_utils::SendKeyPressToWindowSync(
-      browser()->window()->GetNativeWindow(), ui::VKEY_RETURN,
+      browser()->GetWindow()->GetNativeWindow(), ui::VKEY_RETURN,
       false, false, false, false));
   base::RunLoop().RunUntilIdle();
 
@@ -1732,16 +1825,16 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   views::test::ButtonTestApi(filter_button).NotifyClick(ui::test::TestEvent());
   ASSERT_TRUE(archive_view->filter_menu_model_for_testing());
   ASSERT_TRUE(ui_test_utils::SendKeyPressToWindowSync(
-      browser()->window()->GetNativeWindow(), ui::VKEY_DOWN,
+      browser()->GetWindow()->GetNativeWindow(), ui::VKEY_DOWN,
       false, false, false, false));
   ASSERT_TRUE(ui_test_utils::SendKeyPressToWindowSync(
-      browser()->window()->GetNativeWindow(), ui::VKEY_DOWN,
+      browser()->GetWindow()->GetNativeWindow(), ui::VKEY_DOWN,
       false, false, false, false));
   ASSERT_TRUE(ui_test_utils::SendKeyPressToWindowSync(
-      browser()->window()->GetNativeWindow(), ui::VKEY_DOWN,
+      browser()->GetWindow()->GetNativeWindow(), ui::VKEY_DOWN,
       false, false, false, false));
   ASSERT_TRUE(ui_test_utils::SendKeyPressToWindowSync(
-      browser()->window()->GetNativeWindow(), ui::VKEY_RETURN,
+      browser()->GetWindow()->GetNativeWindow(), ui::VKEY_RETURN,
       false, false, false, false));
   base::RunLoop().RunUntilIdle();
 
@@ -1964,6 +2057,168 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   auto* content_pane = sidebar->downloads_view_for_testing();
   ASSERT_TRUE(content_pane);
   EXPECT_GE(content_pane->width(), 171);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       ToggleSpacesOverlayKeyboardCommandOpensAndCloses) {
+  ResolveViews();
+  SeedProfile(2);
+
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(browser_view);
+
+#if BUILDFLAG(IS_MAC)
+  const int modifiers = ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN;
+#else
+  const int modifiers = ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN;
+#endif
+  const ui::Accelerator accelerator(ui::VKEY_S, modifiers);
+  const std::string action_id =
+      MahoShortcutInterceptor::ResolveActionForAccelerator(accelerator);
+  ASSERT_EQ("toggle_spaces_overlay", action_id);
+
+  auto* container = GetContainerView();
+  ASSERT_TRUE(container);
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+
+  EXPECT_FALSE(container->IsSpacesOverlayVisible());
+  EXPECT_FALSE(sidebar->is_library_mode_for_testing());
+
+  // Real accelerator path proof: dispatch directly through
+  // BrowserView::AcceleratorPressed (the Views accelerator target that Maho wires),
+  // which resolves via MahoShortcutInterceptor and dispatches ExecuteCommandAction.
+  // First invocation: opens the Spaces overlay and enters library mode.
+  EXPECT_TRUE(browser_view->AcceleratorPressed(accelerator));
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(container->IsSpacesOverlayVisible());
+  EXPECT_TRUE(sidebar->is_library_mode_for_testing());
+  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kSpaces,
+            sidebar->active_library_category_for_testing());
+
+  // Second invocation through accelerator dispatch closes the overlay and
+  // returns to tabs.
+  EXPECT_TRUE(browser_view->AcceleratorPressed(accelerator));
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_FALSE(container->IsSpacesOverlayVisible());
+  EXPECT_FALSE(sidebar->is_library_mode_for_testing());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       ToggleSpacesOverlaySwitchesFromAnotherLibraryCategory) {
+  ResolveViews();
+  SeedProfile(2);
+
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(browser_view);
+
+#if BUILDFLAG(IS_MAC)
+  const int modifiers = ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN;
+#else
+  const int modifiers = ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN;
+#endif
+  const ui::Accelerator accelerator(ui::VKEY_S, modifiers);
+  const std::string action_id =
+      MahoShortcutInterceptor::ResolveActionForAccelerator(accelerator);
+  ASSERT_EQ("toggle_spaces_overlay", action_id);
+
+  auto* container = GetContainerView();
+  ASSERT_TRUE(container);
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+
+  // Start with another library category open (Downloads).
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kDownloads);
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(sidebar->is_library_mode_for_testing());
+  ASSERT_EQ(MahoSidebarLibraryRailView::Category::kDownloads,
+            sidebar->active_library_category_for_testing());
+  ASSERT_FALSE(container->IsSpacesOverlayVisible());
+
+  // Invoking toggle_spaces_overlay through real accelerator dispatch must switch to
+  // Spaces and open the overlay rather than closing the library.
+  EXPECT_TRUE(browser_view->AcceleratorPressed(accelerator));
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(container->IsSpacesOverlayVisible());
+  EXPECT_TRUE(sidebar->is_library_mode_for_testing());
+  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kSpaces,
+            sidebar->active_library_category_for_testing());
+
+  // Invoking again through accelerator dispatch closes the overlay and exits
+  // library mode.
+  EXPECT_TRUE(browser_view->AcceleratorPressed(accelerator));
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_FALSE(container->IsSpacesOverlayVisible());
+  EXPECT_FALSE(sidebar->is_library_mode_for_testing());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       ToggleSpacesOverlayIgnoredInOffTheRecord) {
+  Browser* incognito = static_cast<Browser*>(CreateIncognitoBrowser());
+  ASSERT_TRUE(incognito);
+  ASSERT_TRUE(incognito->GetProfile()->IsOffTheRecord());
+
+  BrowserView* incognito_view = BrowserView::GetBrowserViewForBrowser(incognito);
+  ASSERT_TRUE(incognito_view);
+  auto* container = static_cast<MahoSidebarContainerView*>(
+      incognito_view->maho_sidebar_container());
+  ASSERT_TRUE(container);
+
+  EXPECT_FALSE(container->IsSpacesOverlayVisible());
+
+  // OTR windows must reject the Spaces overlay command through accelerator
+  // dispatch to preserve isolation (never opening regular spaces).
+#if BUILDFLAG(IS_MAC)
+  const int modifiers = ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN;
+#else
+  const int modifiers = ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN;
+#endif
+  const ui::Accelerator accelerator(ui::VKEY_S, modifiers);
+  const std::string action_id =
+      MahoShortcutInterceptor::ResolveActionForAccelerator(accelerator);
+  ASSERT_EQ("toggle_spaces_overlay", action_id);
+
+  // AcceleratorPressed handles the accelerator, but ExecuteCommandAction drops
+  // it due to the OTR isolation guard, so the overlay remains hidden.
+  EXPECT_TRUE(incognito_view->AcceleratorPressed(accelerator));
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_FALSE(container->IsSpacesOverlayVisible());
+}
+
+// Memory Saver (forced to Aggressive by Maho) treats chrome:// pages as
+// discardable. A discarded Mail tab reboots the SPA on return, so reopening
+// Mail showed a loading screen before the list. The Mail WebUI must opt out.
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       MailTabIsProtectedFromAutoDiscard) {
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      sidebar_prefs::kMahoMailEnabled, true);
+  // The Mail SPA keeps the page loading while its helper boots, so wait for the
+  // navigation to commit rather than for load stop.
+  ui_test_utils::NavigateToURLWithDisposition(
+      browser(), GURL("chrome://maho-mail/"),
+      WindowOpenDisposition::CURRENT_TAB, ui_test_utils::BROWSER_TEST_NO_WAIT);
+  content::WebContents* mail =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(mail);
+  ASSERT_TRUE(::base::test::RunUntil([mail] {
+    return mail->GetLastCommittedURL().host() == "maho-mail";
+  }));
+  EXPECT_TRUE(::base::test::RunUntil([mail] {
+    return !performance_manager::PageLiveStateDecorator::IsAutoDiscardable(
+        mail);
+  }));
+
+  // Ordinary pages keep the default so Memory Saver still reclaims them.
+  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
+      browser(), GURL("about:blank"), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
+  EXPECT_TRUE(performance_manager::PageLiveStateDecorator::IsAutoDiscardable(
+      browser()->GetTabStripModel()->GetActiveWebContents()));
 }
 
 }  // namespace

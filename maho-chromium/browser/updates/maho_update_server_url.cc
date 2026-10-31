@@ -8,6 +8,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
 #include "maho/browser/updates/maho_update_pref_names.h"
+#include "net/base/url_util.h"
+#include "url/gurl.h"
 
 namespace maho {
 namespace updates {
@@ -16,18 +18,21 @@ bool IsAcceptableUpdateServerUrl(const std::string& url) {
   if (url.empty()) {
     return false;
   }
-  if (base::StartsWith(url, "https://", base::CompareCase::INSENSITIVE_ASCII)) {
+  // Parse and inspect the real HOST. A StartsWith() prefix test accepts
+  // attacker-controlled remote hosts such as "http://localhost.attacker.com",
+  // "http://127.0.0.1.evil.com", and "http://localhost@evil.com", any of which
+  // would let a plain-HTTP update manifest be served or MITM'd.
+  const GURL parsed(url);
+  if (!parsed.is_valid() || !parsed.has_host()) {
+    return false;
+  }
+  if (parsed.SchemeIs(url::kHttpsScheme)) {
     return true;
   }
   // Plain http:// is only permitted for loopback (local development/testing).
   // Production/remote update servers must use https:// to prevent MITM
   // replay/downgrade of the (signed) update manifest.
-  if (base::StartsWith(url, "http://localhost",
-                       base::CompareCase::INSENSITIVE_ASCII) ||
-      base::StartsWith(url, "http://127.0.0.1",
-                       base::CompareCase::INSENSITIVE_ASCII) ||
-      base::StartsWith(url, "http://[::1]",
-                       base::CompareCase::INSENSITIVE_ASCII)) {
+  if (parsed.SchemeIs(url::kHttpScheme) && net::IsLocalhost(parsed)) {
     return true;
   }
   return false;

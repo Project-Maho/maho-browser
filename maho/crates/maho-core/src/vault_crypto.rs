@@ -8,7 +8,10 @@ mod metadata;
 mod validation;
 
 pub use envelope::{decrypt_record, encrypt_record, unwrap_vault_key, wrap_vault_key};
-pub use kdf::{derive_device_wrapping_key, derive_recovery_wrapping_key, derive_user_wrapping_key};
+pub use kdf::{
+    derive_account_wrapping_key, derive_device_wrapping_key, derive_recovery_wrapping_key,
+    derive_user_wrapping_key,
+};
 pub use keys::{VaultKey, VaultKeyring, WrappedVaultKeyEnvelope, WrappingDomain, WrappingKey};
 pub use metadata::{VaultKdfMetadata, VaultKdfParameters, VaultKdfVersion, VaultSalt};
 

@@ -1,5 +1,8 @@
 package dev.maho.browser
 
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -93,18 +96,31 @@ class SearchSheetTest {
         )
         waitForText("Search ma")
 
-        // Verify the suggestions list exists in the layout tree.
         composeTestRule.onNodeWithTag("searchSheetSuggestions", useUnmergedTree = true).assertExists()
+
+        // Section headers are real product surface (SuggestionsList emits
+        // "History".uppercase() / "Commands".uppercase()); assert they render
+        // and that the full primary -> history -> commands order holds.
+        waitForText("HISTORY")
+        waitForText("COMMANDS")
+
         val primaryTop = topOfText("Search ma")
         val historyHeaderTop = topOfText("HISTORY")
         val historyTop = topOfText("Example History")
         val commandsHeaderTop = topOfText("COMMANDS")
         val commandTop = topOfText("New Space")
 
-        assertTrue(primaryTop < historyHeaderTop)
-        assertTrue(historyHeaderTop < historyTop)
-        assertTrue(historyTop < commandsHeaderTop)
-        assertTrue(commandsHeaderTop < commandTop)
+        assertTrue("primary must precede HISTORY header", primaryTop < historyHeaderTop)
+        assertTrue("HISTORY header must precede its row", historyHeaderTop < historyTop)
+        assertTrue("history row must precede COMMANDS header", historyTop < commandsHeaderTop)
+        assertTrue("COMMANDS header must precede its row", commandsHeaderTop < commandTop)
+
+        // With only three suggestions the whole list fits, so every row and
+        // header must be visible, not merely present.
+        composeTestRule.onNodeWithText("HISTORY", useUnmergedTree = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("COMMANDS", useUnmergedTree = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("Example History", useUnmergedTree = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("New Space", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test
@@ -139,7 +155,36 @@ class SearchSheetTest {
         )
         waitForText("Search maho")
 
-        composeTestRule.onAllNodesWithTag("searchSheetBrowseForMeButton").assertCountEquals(2)
+        // showsBrowseForMe(): Search always qualifies, History qualifies while
+        // the query is non-empty, Action never does -- so exactly two of these
+        // three suggestions carry a pill.
+        waitForText("Settings")
+        composeTestRule.onAllNodesWithTag("searchSheetBrowseForMeButton")
+            .assertCountEquals(2)
+
+        // Each qualifying row is scrolled into view and asserted visible along
+        // with its pills, rather than asserting several rows at once while some
+        // may be off-screen. Both pills are clickable actions, not just present
+        // nodes.
+        assertRowVisible("Search maho")
+        assertRowVisible("Maho")
+
+        composeTestRule.onAllNodesWithTag("searchSheetBrowseForMeButton")[0]
+            .assertHasClickAction()
+        composeTestRule.onAllNodesWithTag("searchSheetBrowseForMeButton")[1]
+            .assertHasClickAction()
+
+        // The Action suggestion must never carry a pill: scrolling to it must
+        // not raise the pill count above the two qualifying rows.
+        assertRowVisible("Settings")
+        composeTestRule.onAllNodesWithTag("searchSheetBrowseForMeButton")
+            .assertCountEquals(2)
+    }
+
+    private fun assertRowVisible(rowTitle: String) {
+        composeTestRule.onNodeWithTag("searchSheetSuggestions", useUnmergedTree = true)
+            .performScrollToNode(hasText(rowTitle))
+        composeTestRule.onNodeWithText(rowTitle, useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test

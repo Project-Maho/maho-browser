@@ -100,6 +100,7 @@ private:
   int selected_index_ = 0;
 
   raw_ptr<views::View> breadcrumb_row_ = nullptr;
+  raw_ptr<views::LabelButton> back_button_ = nullptr;
   raw_ptr<views::Label> path_label_ = nullptr;
   raw_ptr<views::ImageView> search_icon_ = nullptr;
   raw_ptr<views::Textfield> search_field_ = nullptr;

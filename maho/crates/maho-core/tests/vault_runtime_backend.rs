@@ -42,6 +42,9 @@ fn unlocked_core(dir: &tempfile::TempDir) -> MahoCore {
 fn login(title: &str, origin: &str, username: &str) -> VaultLoginInput {
     VaultLoginInput {
         metadata: VaultItemPublicMetadata {
+            favorite: false,
+            trashed_at: None,
+            has_notes: false,
             title: title.to_string(),
             origins: vec![CredentialOrigin::try_from(origin).expect("valid test origin")],
             username_hint: String::new(),

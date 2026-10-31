@@ -416,8 +416,404 @@ def render_markdown_to_html(md_text: str) -> str:
     return "\n".join(html_parts)
 
 
+# Brand tokens for the standalone release-notes sheet, taken from
+# docs/brand/DESIGN.md (near-black canvas, a single violet accent, hairline
+# dark cards, squircle radii) so the in-app and web release notes read as Maho.
+# The families are system stacks: this file ships as a release asset and must
+# render with no network or font dependency.
+_NOTES_STYLESHEET = """
+    :root {
+      color-scheme: dark;
+      --canvas: #0a0a0a;
+      --sheet: #101012;
+      --card: #151517;
+      --ink: #fafafa;
+      --ink-muted: #a1a1aa;
+      --ink-faint: #71717a;
+      --hairline: #27272a;
+      --accent: #8b7ff5;
+      --accent-ink: #8b7ff5;
+      --accent-soft: rgba(139, 127, 245, 0.12);
+      --wash: rgba(250, 250, 250, 0.04);
+      --wash-strong: rgba(250, 250, 250, 0.07);
+      --dot: rgba(250, 250, 250, 0.22);
+      --radius-sm: 8px;
+      --radius-md: 11px;
+      --radius-lg: 17px;
+      --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-display: ui-serif, "New York", "Iowan Old Style", Palatino, Georgia, serif;
+      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --canvas: #fafaf9;
+        --sheet: #ffffff;
+        --card: #f7f7f6;
+        --ink: #18181b;
+        --ink-muted: #52525b;
+        --ink-faint: #8a8a93;
+        --hairline: #e4e4e7;
+        /* Same violet, one ramp step darker so 10px mono labels stay legible. */
+        --accent-ink: #6355d8;
+        --accent-soft: rgba(139, 127, 245, 0.10);
+        --wash: rgba(24, 24, 27, 0.03);
+        --wash-strong: rgba(24, 24, 27, 0.06);
+        --dot: rgba(24, 24, 27, 0.24);
+      }
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html {
+      -webkit-text-size-adjust: 100%;
+    }
+    body {
+      margin: 0;
+      padding: 32px 20px 48px;
+      background-color: var(--canvas);
+      background-image: radial-gradient(760px 340px at 10% -8%, var(--accent-soft), transparent 64%);
+      background-repeat: no-repeat;
+      color: var(--ink);
+      font-family: var(--font-sans);
+      font-size: 15px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    .sheet {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 28px 26px 30px;
+      background-color: var(--sheet);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-lg);
+      box-shadow: inset 0 1px 0 var(--wash-strong), 0 24px 60px -34px rgba(0, 0, 0, 0.95);
+    }
+    .eyebrow-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--accent-ink);
+    }
+    .channel {
+      padding: 3px 10px;
+      border: 1px solid var(--hairline);
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+      white-space: nowrap;
+    }
+    .release-version {
+      margin: 0 0 10px;
+      font-family: var(--font-display);
+      font-weight: 400;
+      font-size: clamp(2.15rem, 7.4vw, 2.9rem);
+      line-height: 1.02;
+      letter-spacing: -0.02em;
+      text-wrap: balance;
+    }
+    .release-date {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin: 0 0 20px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      font-variant-numeric: tabular-nums;
+    }
+    .release-lede {
+      margin: 0 0 20px;
+      max-width: 62ch;
+      font-size: 15.5px;
+      line-height: 1.68;
+      color: var(--ink-muted);
+      text-wrap: pretty;
+    }
+    .release-lede p {
+      margin: 0 0 10px;
+    }
+    .release-lede p:last-child {
+      margin-bottom: 0;
+    }
+    ul.glance {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1px;
+      margin: 0 0 26px;
+      padding: 0;
+      list-style: none;
+      background-color: var(--hairline);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+    .tally {
+      flex: 1 1 0;
+      min-width: 106px;
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      padding: 12px 14px;
+      background-color: var(--card);
+    }
+    .tally-glyph {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--ink-faint);
+    }
+    .tally-count {
+      font-family: var(--font-mono);
+      font-size: 17px;
+      font-variant-numeric: tabular-nums;
+      color: var(--ink);
+    }
+    .tally-label {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+    }
+    .section-label {
+      margin: 0 0 12px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 400;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+    }
+    .highlights {
+      margin: 0 0 26px;
+      padding: 18px 20px 16px;
+      background-color: var(--card);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
+    }
+    .highlights ol {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: highlight;
+    }
+    .highlights li {
+      position: relative;
+      padding-left: 30px;
+      margin-bottom: 10px;
+      font-size: 14.5px;
+      line-height: 1.55;
+      color: var(--ink);
+    }
+    .highlights li:last-child {
+      margin-bottom: 0;
+    }
+    .highlights li::before {
+      counter-increment: highlight;
+      content: counter(highlight, decimal-leading-zero);
+      position: absolute;
+      left: 0;
+      top: 2px;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      letter-spacing: 0.08em;
+      color: var(--ink-faint);
+    }
+    .changes {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+    @media (min-width: 760px) {
+      .changes {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+    .change-group {
+      padding: 15px 17px 14px;
+      background-color: var(--card);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
+    }
+    .change-header {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 11px;
+    }
+    .change-type {
+      padding: 3px 7px;
+      background-color: var(--wash-strong);
+      border-radius: var(--radius-sm);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+      white-space: nowrap;
+    }
+    .change-glyph {
+      margin-right: 5px;
+      color: var(--ink-faint);
+    }
+    .change-title {
+      margin: 0;
+      font-size: 14.5px;
+      font-weight: 600;
+      letter-spacing: -0.005em;
+      color: var(--ink);
+    }
+    .change-count {
+      margin-left: auto;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      color: var(--ink-faint);
+    }
+    .change-group ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .change-group li {
+      position: relative;
+      padding-left: 13px;
+      margin-bottom: 7px;
+      font-size: 13.5px;
+      line-height: 1.55;
+      color: var(--ink-muted);
+    }
+    .change-group li:last-child {
+      margin-bottom: 0;
+    }
+    .change-group li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 8px;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background-color: var(--dot);
+    }
+    .full-notes {
+      margin-top: 26px;
+      padding-top: 22px;
+      border-top: 1px solid var(--hairline);
+      color: var(--ink-muted);
+    }
+    .full-notes h1,
+    .full-notes h2,
+    .full-notes h3,
+    .full-notes h4 {
+      margin: 20px 0 8px;
+      font-family: var(--font-display);
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      color: var(--ink);
+    }
+    .full-notes h1 {
+      font-size: 1.6rem;
+    }
+    .full-notes h2 {
+      font-size: 1.3rem;
+    }
+    .full-notes h3 {
+      font-size: 1.1rem;
+    }
+    .full-notes p {
+      max-width: 66ch;
+      margin: 0 0 12px;
+    }
+    .full-notes ul {
+      margin: 0 0 12px;
+      padding-left: 20px;
+    }
+    .full-notes li {
+      margin-bottom: 5px;
+    }
+    code {
+      padding: 0.15em 0.36em;
+      background-color: var(--wash-strong);
+      border-radius: 5px;
+      font-family: var(--font-mono);
+      font-size: 0.88em;
+      color: var(--ink);
+    }
+    pre {
+      margin: 0 0 14px;
+      padding: 14px 16px;
+      background-color: var(--canvas);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
+      overflow-x: auto;
+    }
+    pre code {
+      padding: 0;
+      background-color: transparent;
+      font-size: 12.5px;
+    }
+    a {
+      color: var(--accent-ink);
+      text-decoration: none;
+      text-underline-offset: 3px;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    a:focus-visible {
+      outline: 2px solid var(--accent-ink);
+      outline-offset: 2px;
+      border-radius: 3px;
+    }
+    @media (max-width: 420px) {
+      body {
+        padding: 20px 12px 32px;
+      }
+      .sheet {
+        padding: 22px 18px 24px;
+      }
+    }
+    @media print {
+      body {
+        padding: 0;
+        background-image: none;
+      }
+      .sheet {
+        max-width: none;
+        border: 0;
+        box-shadow: none;
+      }
+      .change-group,
+      .highlights {
+        break-inside: avoid;
+      }
+    }
+"""
+
 def generate_notes_html(release: Dict[str, Any]) -> str:
-    """Renders a standalone HTML page with inline CSS for a single release."""
+    """Renders a standalone, self-contained HTML release-notes sheet.
+
+    The sheet is rendered in two places: inline in the macOS Sparkle update
+    dialog (a narrow WebView, roughly 560px wide) and standalone in a browser.
+    It is therefore a single compact column that only widens to a two-column
+    change grid when there is room. Everything is inline: the file ships as a
+    release asset with no network or font dependency.
+    """
     version = html.escape(str(release.get("version", "Unknown")))
     date = html.escape(str(release.get("date", "Unknown")))
     channel = html.escape(str(release.get("channel", "stable")))
@@ -425,51 +821,118 @@ def generate_notes_html(release: Dict[str, Any]) -> str:
     sections: List[Dict[str, Any]] = release.get("sections", [])
     body_markdown: str = release.get("body", "")
 
-    # Render highlights
+    # One glance row: the shape of a release (how much was added, fixed, ...)
+    # is legible before any prose is read. Glyphs carry the change type so the
+    # palette stays a single neutral ink ramp plus one violet accent.
+    type_glyphs = {
+        "added": "\u002b",
+        "fixed": "\u2713",
+        "changed": "\u223c",
+        "removed": "\u2212",
+    }
+    tallies: List[Tuple[str, int]] = []
+    for key in ("added", "fixed", "changed", "removed"):
+        count = sum(
+            len(sec.get("items", []))
+            for sec in sections
+            if str(sec.get("type", "")).lower() == key
+        )
+        if count:
+            tallies.append((key, count))
+    total_changes = sum(count for _, count in tallies)
+
+    glance_html = ""
+    if tallies:
+        cells_html = "".join(
+            '        <li class="tally">\n'
+            '          <span class="tally-glyph" aria-hidden="true">%s</span>\n'
+            '          <span class="tally-count">%d</span>\n'
+            '          <span class="tally-label">%s</span>\n'
+            '        </li>\n' % (type_glyphs[key], count, key)
+            for key, count in tallies
+        )
+        glance_html = (
+            '      <ul class="glance" aria-label="%d changes in this release">\n'
+            '%s'
+            '      </ul>\n' % (total_changes, cells_html)
+        )
+
+    # Highlights: the short "what changed for me" list, numbered so it can be
+    # scanned without reading every line.
     highlights_html = ""
     if highlights:
-        items_html = "".join(f"      <li>{_render_inline_markdown(str(h))}</li>\n" for h in highlights)
+        items_html = "".join(
+            "        <li>%s</li>\n" % _render_inline_markdown(str(h))
+            for h in highlights
+        )
         highlights_html = (
-            '    <section class="highlights-section">\n'
-            '      <h2>Key Highlights</h2>\n'
-            f'      <ul class="highlights-list">\n{items_html}      </ul>\n'
-            '    </section>\n'
+            '    <section class="highlights">\n'
+            '      <h2 class="section-label">In this release</h2>\n'
+            '      <ol>\n%s      </ol>\n'
+            '    </section>\n' % items_html
         )
 
-    # Render sections (added, fixed, changed, removed)
-    sections_html_parts: List[str] = []
+    # Changes, grouped by area, each card labelled with its type and size.
+    change_parts: List[str] = []
     for sec in sections:
-        sec_type = html.escape(str(sec.get("type", "changed")).lower())
+        sec_type = str(sec.get("type", "changed")).lower()
         sec_title = html.escape(str(sec.get("title", "Changes")))
         sec_items: List[str] = sec.get("items", [])
-        items_str = "".join(f"        <li>{_render_inline_markdown(str(item))}</li>\n" for item in sec_items)
-        sections_html_parts.append(
-            f'      <div class="change-group type-{sec_type}">\n'
-            f'        <div class="change-header">\n'
-            f'          <span class="badge badge-{sec_type}">{sec_type.upper()}</span>\n'
-            f'          <h3>{sec_title}</h3>\n'
-            f'        </div>\n'
-            f'        <ul>\n{items_str}        </ul>\n'
-            f'      </div>\n'
+        if not sec_items:
+            continue
+        glyph = type_glyphs.get(sec_type, "\u2022")
+        items_str = "".join(
+            "          <li>%s</li>\n" % _render_inline_markdown(str(item))
+            for item in sec_items
+        )
+        change_parts.append(
+            '      <article class="change-group">\n'
+            '        <div class="change-header">\n'
+            '          <span class="change-type"><span class="change-glyph" '
+            'aria-hidden="true">%s</span>%s</span>\n'
+            '          <h3 class="change-title">%s</h3>\n'
+            '          <span class="change-count" aria-label="%d changes">%d</span>\n'
+            '        </div>\n'
+            '        <ul>\n%s        </ul>\n'
+            '      </article>\n'
+            % (
+                glyph,
+                html.escape(sec_type.upper()),
+                sec_title,
+                len(sec_items),
+                len(sec_items),
+                items_str,
+            )
         )
 
-    sections_html = ""
-    if sections_html_parts:
-        sections_html = (
-            '    <section class="changelog-sections">\n'
-            '      <h2>Changelog</h2>\n'
-            + "".join(sections_html_parts)
-            + '    </section>\n'
+    changes_html = ""
+    if change_parts:
+        changes_html = (
+            '    <section class="changes-section">\n'
+            '      <h2 class="section-label">Changelog</h2>\n'
+            '      <div class="changes">\n%s      </div>\n'
+            '    </section>\n' % "".join(change_parts)
         )
 
-    # Render markdown body
-    body_html = ""
-    if body_markdown.strip():
-        rendered_body = render_markdown_to_html(body_markdown)
-        body_html = (
-            '    <section class="release-body">\n'
-            f'{rendered_body}\n'
-            '    </section>\n'
+    # The markdown body is either a short summary, rendered as the lede under
+    # the version headline, or a full write-up carrying its own headings, which
+    # renders as a "Full notes" section instead. Never both.
+    body_rendered = (
+        render_markdown_to_html(body_markdown) if body_markdown.strip() else ""
+    )
+    body_has_headings = bool(re.search(r"^#{1,6}\s", body_markdown, re.MULTILINE))
+    lede_html = ""
+    full_notes_html = ""
+    if body_rendered and body_has_headings:
+        full_notes_html = (
+            '    <section class="full-notes">\n'
+            '      <h2 class="section-label">Full notes</h2>\n'
+            '%s\n'
+            '    </section>\n' % body_rendered
+        )
+    elif body_rendered:
+        lede_html = (
+            '      <div class="release-lede">\n%s\n      </div>\n' % body_rendered
         )
 
     return f"""<!DOCTYPE html>
@@ -478,180 +941,19 @@ def generate_notes_html(release: Dict[str, Any]) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Maho {version} Release Notes</title>
-  <style>
-    :root {{
-      --bg: #0d1117;
-      --card-bg: #161b22;
-      --border: #30363d;
-      --text: #c9d1d9;
-      --heading: #f0f6fc;
-      --accent: #58a6ff;
-      --added: #2ea043;
-      --added-bg: rgba(46, 160, 67, 0.15);
-      --fixed: #388bfd;
-      --fixed-bg: rgba(56, 139, 253, 0.15);
-      --changed: #d29922;
-      --changed-bg: rgba(210, 153, 34, 0.15);
-      --removed: #f85149;
-      --removed-bg: rgba(248, 81, 73, 0.15);
-    }}
-    * {{
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }}
-    body {{
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background-color: var(--bg);
-      color: var(--text);
-      line-height: 1.6;
-      padding: 2.5rem 1.5rem;
-    }}
-    .container {{
-      max-width: 860px;
-      margin: 0 auto;
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 2.5rem;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-    }}
-    header.release-header {{
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 1.5rem;
-      margin-bottom: 2rem;
-    }}
-    .release-title-row {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 1rem;
-      margin-bottom: 0.5rem;
-    }}
-    h1 {{
-      font-size: 2rem;
-      color: var(--heading);
-      font-weight: 700;
-    }}
-    h2 {{
-      font-size: 1.35rem;
-      color: var(--heading);
-      margin: 1.5rem 0 1rem 0;
-      font-weight: 600;
-    }}
-    h3 {{
-      font-size: 1.1rem;
-      color: var(--heading);
-      font-weight: 600;
-    }}
-    p {{
-      margin-bottom: 1rem;
-    }}
-    .meta-bar {{
-      display: flex;
-      gap: 1.5rem;
-      font-size: 0.9rem;
-      color: #8b949e;
-      align-items: center;
-    }}
-    .badge {{
-      display: inline-block;
-      padding: 0.2rem 0.55rem;
-      border-radius: 4px;
-      font-size: 0.75rem;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }}
-    .badge-channel {{
-      background: rgba(88, 166, 255, 0.15);
-      color: var(--accent);
-      border: 1px solid var(--accent);
-    }}
-    .badge-added {{ background: var(--added-bg); color: var(--added); }}
-    .badge-fixed {{ background: var(--fixed-bg); color: var(--fixed); }}
-    .badge-changed {{ background: var(--changed-bg); color: var(--changed); }}
-    .badge-removed {{ background: var(--removed-bg); color: var(--removed); }}
-    .highlights-section {{
-      background: rgba(88, 166, 255, 0.05);
-      border-left: 4px solid var(--accent);
-      padding: 1.25rem 1.5rem;
-      border-radius: 0 6px 6px 0;
-      margin-bottom: 2rem;
-    }}
-    .highlights-section h2 {{
-      margin-top: 0;
-      font-size: 1.15rem;
-      color: var(--accent);
-    }}
-    ul {{
-      padding-left: 1.5rem;
-      margin-bottom: 1rem;
-    }}
-    li {{
-      margin-bottom: 0.4rem;
-    }}
-    .change-group {{
-      margin-bottom: 1.5rem;
-      padding: 1rem 1.25rem;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-    }}
-    .change-header {{
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      margin-bottom: 0.75rem;
-    }}
-    .release-body {{
-      margin-top: 2rem;
-      padding-top: 1.5rem;
-      border-top: 1px solid var(--border);
-    }}
-    code {{
-      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-      font-size: 0.875em;
-      background: rgba(110, 118, 129, 0.2);
-      padding: 0.15em 0.35em;
-      border-radius: 4px;
-    }}
-    pre {{
-      background: #0d1117;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 1rem;
-      overflow-x: auto;
-      margin-bottom: 1rem;
-    }}
-    pre code {{
-      background: transparent;
-      padding: 0;
-    }}
-    a {{
-      color: var(--accent);
-      text-decoration: none;
-    }}
-    a:hover {{
-      text-decoration: underline;
-    }}
-  </style>
+  <style>{_NOTES_STYLESHEET}</style>
 </head>
 <body>
-  <div class="container">
-    <header class="release-header">
-      <div class="release-title-row">
-        <h1>Maho Browser {version}</h1>
-        <span class="badge badge-channel">{channel}</span>
+  <main class="sheet">
+    <header class="sheet-head">
+      <div class="eyebrow-row">
+        <span class="eyebrow">Maho release notes</span>
+        <span class="channel">{channel}</span>
       </div>
-      <div class="meta-bar">
-        <span><strong>Released:</strong> {date}</span>
-      </div>
-    </header>
-
-{highlights_html}{sections_html}{body_html}
-  </div>
+      <h1 class="release-version">{version}</h1>
+      <p class="release-date">Released <time datetime="{date}">{date}</time></p>
+{lede_html}{glance_html}    </header>
+{highlights_html}{changes_html}{full_notes_html}  </main>
 </body>
 </html>
 """
@@ -781,7 +1083,7 @@ sections:
         self.assertIn("Maho 1.0.0 Release Notes", html_out)
         self.assertIn("&lt;marquee&gt;", html_out)
         self.assertIn("&lt;b&gt;tags&lt;/b&gt;", html_out)
-        self.assertIn("Key Highlights", html_out)
+        self.assertIn('class="highlights"', html_out)
         self.assertIn("New Features", html_out)
         self.assertIn("Narrative", html_out)
         self.assertNotIn("<link rel=", html_out)  # Inline CSS only

@@ -58,7 +58,7 @@ export function SnoozePicker({ isOpen, onClose, onSnooze }: SnoozePickerProps) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full p-1 text-muted-foreground hover:bg-card hover:text-muted-foreground"
+            className="mail-pressable flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <X size={14} />
           </button>
@@ -70,7 +70,7 @@ export function SnoozePicker({ isOpen, onClose, onSnooze }: SnoozePickerProps) {
               key={option.label}
               type="button"
               onClick={() => onSnooze(computeSnoozeDate(option))}
-              className="w-full rounded-lg px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+              className="flex min-h-10 w-full items-center rounded-lg px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             >
               {option.label}
             </button>
@@ -97,7 +97,7 @@ export function SnoozePicker({ isOpen, onClose, onSnooze }: SnoozePickerProps) {
             type="button"
             onClick={handleCustomSnooze}
             disabled={!customDate}
-            className="mt-2 w-full rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-primary/80 disabled:opacity-50"
+            className="mail-pressable mt-2 flex h-9 w-full items-center justify-center rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
             Snooze
           </button>

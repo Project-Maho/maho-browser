@@ -6,12 +6,15 @@ export interface TranslationStatusBarProps {
   onClose: () => void;
   error?: string | null;
   onOpenAiSettings?: () => void;
+  /** When provided, the target language becomes a picker instead of static text. */
+  languages?: ReadonlyArray<{ code: string; name: string }>;
+  onChangeToLang?: (code: string) => void;
 }
 
 const NEEDS_AI_CONFIG_PATTERN = /^(no ai provider|ai provider not configured|translation provider not yet configured)/i;
 
 export function TranslationStatusBar(props: TranslationStatusBarProps) {
-  const { fromLang, toLang, onClose, error, onOpenAiSettings } = props;
+  const { fromLang, toLang, onClose, error, onOpenAiSettings, languages, onChangeToLang } = props;
 
   const needsAiConfig = error ? NEEDS_AI_CONFIG_PATTERN.test(error) : false;
   const hasError = Boolean(error);
@@ -20,15 +23,34 @@ export function TranslationStatusBar(props: TranslationStatusBarProps) {
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-1.5 rounded-full border border-border bg-background/70 px-2.5 py-1 text-xs font-medium text-muted-foreground">
         <Languages size={12} className="text-primary" />
-        <span className="uppercase tracking-wide">
-          {fromLang} → {toLang}
-        </span>
+        {languages && onChangeToLang ? (
+          <>
+            <span className="uppercase tracking-wide">{fromLang} →</span>
+            <select
+              aria-label="Translate into"
+              title="Translate into"
+              value={toLang}
+              onChange={(e) => onChangeToLang(e.target.value)}
+              className="rounded bg-transparent text-xs font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              {languages.map((lang) => (
+                <option key={lang.code} value={lang.code}>
+                  {lang.name}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : (
+          <span className="uppercase tracking-wide">
+            {fromLang} → {toLang}
+          </span>
+        )}
         <button
           type="button"
           onClick={onClose}
           aria-label="Close translation"
           title="Close translation"
-          className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+          className="mail-pressable flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <X size={12} />
         </button>

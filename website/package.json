@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev --port 5555",
-    "build": "node scripts/sync-changelog.mjs && node scripts/generate-og-images.mjs && astro build",
+    "build": "node scripts/generate-og-images.mjs && astro build",
     "preview": "astro preview",
     "typecheck": "astro check",
     "test": "bun test",
-    "test:visual": "node ./node_modules/@playwright/test/cli.js test"
+    "test:visual": "playwright test",
+    "assets:generate": "node scripts/render-maho-features.mjs",
+    "assets:check": "node scripts/check-maho-features.mjs"
   },
   "dependencies": {
     "@astrojs/react": "^5.0.7",

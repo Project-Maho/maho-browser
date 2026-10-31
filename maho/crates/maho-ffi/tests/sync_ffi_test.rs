@@ -115,18 +115,10 @@ fn configure_sync_bootstrap_is_deterministic_and_fail_closed() {
     .unwrap();
 
     let origin_result = take_json(unsafe {
-        maho_ffi::maho_core_configure_sync_bootstrap(
-            origin,
-            url.as_ptr(),
-            bootstrap.as_ptr(),
-        )
+        maho_ffi::maho_core_configure_sync_bootstrap(origin, url.as_ptr(), bootstrap.as_ptr())
     });
     let joiner_result = take_json(unsafe {
-        maho_ffi::maho_core_configure_sync_bootstrap(
-            joiner,
-            url.as_ptr(),
-            bootstrap.as_ptr(),
-        )
+        maho_ffi::maho_core_configure_sync_bootstrap(joiner, url.as_ptr(), bootstrap.as_ptr())
     });
 
     assert_eq!(origin_result["success"], Value::Bool(true));
@@ -134,11 +126,7 @@ fn configure_sync_bootstrap_is_deterministic_and_fail_closed() {
 
     let malformed = CString::new("not-base64").unwrap();
     let rejected = take_json(unsafe {
-        maho_ffi::maho_core_configure_sync_bootstrap(
-            joiner,
-            url.as_ptr(),
-            malformed.as_ptr(),
-        )
+        maho_ffi::maho_core_configure_sync_bootstrap(joiner, url.as_ptr(), malformed.as_ptr())
     });
     assert_eq!(rejected["success"], Value::Bool(false));
     assert!(rejected["error"].is_string());

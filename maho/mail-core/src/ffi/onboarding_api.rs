@@ -306,15 +306,13 @@ pub extern "C" fn MahoMailImportMigrationArchive(
 
 #[no_mangle]
 pub extern "C" fn MahoMailOAuthCancel(state: *const c_char) -> bool {
-    let Ok(state_str) = non_empty(state, "state") else {
-        return false;
-    };
-    if crate::state::pending_pkce().contains(&state_str) {
-        crate::state::cancellation_store().cancel(state_str);
-        true
-    } else {
-        false
-    }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let Ok(state_str) = non_empty(state, "state") else {
+            return false;
+        };
+        crate::state::pending_pkce().cancel(&state_str)
+    }))
+    .unwrap_or(false)
 }
 
 // === [W-C.Additional] ===
@@ -363,7 +361,7 @@ pub extern "C" fn MahoMailGetAccount(
                     }
                 ).map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
 
-                serde_json::to_string(&row).map_err(MailFfiError::from)
+                Ok(row)
             })
         })
     })
@@ -535,3 +533,7 @@ pub extern "C" fn MahoMailRefreshOAuthToken(
 #[cfg(test)]
 #[path = "onboarding_api_tests.rs"]
 mod onboarding_api_tests;
+
+#[cfg(test)]
+#[path = "account_wire_tests.rs"]
+mod account_wire_tests;

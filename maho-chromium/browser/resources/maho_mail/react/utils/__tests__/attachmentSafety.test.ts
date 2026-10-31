@@ -105,6 +105,34 @@ describe("isDangerousAttachment", () => {
     });
   });
 
+  describe("whitespace and control character spoofing defense", () => {
+    it("flags report.exe with trailing space", () => {
+      expect(isDangerousAttachment({ filename: "report.exe " })).toBe(true);
+    });
+
+    it("flags report.exe with control characters and inner whitespace", () => {
+      expect(isDangerousAttachment({ filename: "report.exe\r" })).toBe(true);
+      expect(isDangerousAttachment({ filename: "report.exe\n" })).toBe(true);
+      expect(isDangerousAttachment({ filename: "report.exe\t" })).toBe(true);
+      expect(isDangerousAttachment({ filename: "report.exe .pdf" })).toBe(true);
+    });
+  });
+
+  describe("macro-enabled and package formats", () => {
+    it.each([
+      "invoice.DOCM",
+      "sheet.xlsm",
+      "presentation.pptm",
+      "template.dotm",
+      "addin.xlam",
+      "app.msix",
+      "installer.appx",
+      "troubleshoot.diagcab",
+    ])("flags %s as dangerous", (filename) => {
+      expect(isDangerousAttachment({ filename })).toBe(true);
+    });
+  });
+
   describe("safe filetypes (negative cases)", () => {
     it.each([
       "report.pdf",

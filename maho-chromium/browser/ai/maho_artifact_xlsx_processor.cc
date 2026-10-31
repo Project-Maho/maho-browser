@@ -284,13 +284,18 @@ bool ExtractZipEntry(const uint8_t* data, size_t size, const ZipEntry& entry, st
   if (entry.uncompressed_size > MahoArtifactXlsxProcessor::kMaxExtractedXmlBytes) {
     return false;
   }
-  if (entry.local_header_offset + 30 > size) return false;
-  const uint8_t* lh = data + entry.local_header_offset;
+  // `local_header_offset` is a uint32_t read straight from attacker-controlled
+  // zip bytes. Widen before adding: `uint32_t + 30` is evaluated in 32-bit and
+  // wraps (0xFFFFFFF8 + 30 == 22), passing this guard and leaving `lh` far
+  // outside the buffer.
+  const size_t header_offset = static_cast<size_t>(entry.local_header_offset);
+  if (header_offset + 30 > size) return false;
+  const uint8_t* lh = data + header_offset;
   if (lh[0] != 0x50 || lh[1] != 0x4b || lh[2] != 0x03 || lh[3] != 0x04) return false;
   uint16_t fn_len = lh[26] | (lh[27] << 8);
   uint16_t extra_len = lh[28] | (lh[29] << 8);
-  size_t data_off = entry.local_header_offset + 30 + fn_len + extra_len;
-  if (data_off + entry.compressed_size > size) return false;
+  size_t data_off = header_offset + 30 + fn_len + extra_len;
+  if (data_off > size || size - data_off < entry.compressed_size) return false;
 
   if (entry.method == 0) {  // Store (no compression)
     output->assign(reinterpret_cast<const char*>(data + data_off), entry.compressed_size);

@@ -9,16 +9,37 @@ use crate::grounding::{FindMatch, FindSource};
 ///
 /// Searches via OCR to find matching text blocks and their coordinates.
 pub fn find_text(text: &str, source: FindSource) -> Result<Vec<FindMatch>, PlatformError> {
+    find_text_with(
+        text,
+        source,
+        || crate::capture::capture_screen(None),
+        |path| crate::ocr::ocr_image(path, None),
+    )
+}
+
+fn find_text_with(
+    text: &str,
+    source: FindSource,
+    capture: impl FnOnce() -> Result<crate::grounding::CaptureInfo, PlatformError>,
+    ocr: impl FnOnce(&Path) -> Result<Vec<crate::grounding::TextBlock>, PlatformError>,
+) -> Result<Vec<FindMatch>, PlatformError> {
     if text.is_empty() {
         return Ok(Vec::new());
     }
 
     let blocks = match source {
         FindSource::Screen => {
-            let info = crate::capture::capture_screen(None)?;
-            crate::ocr::ocr_image(Path::new(&info.path), None)?
+            let info = capture()?;
+            let result = ocr(Path::new(&info.path));
+            std::fs::remove_file(&info.path).map_err(|error| {
+                PlatformError::Io(format!(
+                    "failed to remove screen capture: {error}; OCR error: {:?}",
+                    result.as_ref().err()
+                ))
+            })?;
+            result?
         }
-        FindSource::File(path) => crate::ocr::ocr_image(&path, None)?,
+        FindSource::File(path) => ocr(&path)?,
     };
 
     let query = text.to_lowercase();
@@ -42,6 +63,60 @@ pub fn find_text(text: &str, source: FindSource) -> Result<Vec<FindMatch>, Platf
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn screen_capture_is_deleted_after_success_and_ocr_failure() {
+        for fail in [false, true] {
+            let path = std::env::temp_dir().join(format!(
+                "maho-find-cleanup-{}-{fail}.png",
+                std::process::id()
+            ));
+            std::fs::write(&path, b"sensitive screen").unwrap();
+            let result = find_text_with(
+                "text",
+                FindSource::Screen,
+                || {
+                    Ok(crate::grounding::CaptureInfo {
+                        path: path.to_string_lossy().into_owned(),
+                        width: 1,
+                        height: 1,
+                    })
+                },
+                |input| {
+                    assert!(input.is_file());
+                    if fail {
+                        Err(PlatformError::Io("OCR failed".into()))
+                    } else {
+                        Ok(vec![])
+                    }
+                },
+            );
+            assert_eq!(result.is_err(), fail);
+            let leaked = path.exists();
+            if leaked {
+                std::fs::remove_file(&path).unwrap();
+            }
+            assert!(
+                !leaked,
+                "screen screenshot was retained after OCR (fail={fail})"
+            );
+        }
+    }
+
+    #[test]
+    fn caller_owned_image_is_retained() {
+        let path = std::env::temp_dir().join(format!("maho-find-owned-{}.png", std::process::id()));
+        std::fs::write(&path, b"caller image").unwrap();
+        find_text_with(
+            "text",
+            FindSource::File(path.clone()),
+            || panic!("must not capture"),
+            |_| Ok(vec![]),
+        )
+        .unwrap();
+        assert!(path.is_file());
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     #[cfg(target_os = "macos")]

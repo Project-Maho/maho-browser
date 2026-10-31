@@ -29,6 +29,9 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(ai_prefs::kUiThinModeEnabled, false);
   registry->RegisterStringPref(ai_prefs::kSessionListJson, std::string());
   registry->RegisterStringPref(ai_prefs::kApprovalPolicy, "prompt");
+  registry->RegisterStringPref(ai_prefs::kPermissionTier, "guard");
+  registry->RegisterBooleanPref(ai_prefs::kFinalConfirm, true);
+  registry->RegisterBooleanPref(ai_prefs::kProactiveMode, false);
   registry->RegisterBooleanPref(ai_prefs::kSessionPersistenceEnabled, true);
   registry->RegisterDictionaryPref(ai_prefs::kSessionEventLogs);
   registry->RegisterStringPref(ai_prefs::kAiViewMode, "sidebar");

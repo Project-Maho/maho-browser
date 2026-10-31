@@ -48,9 +48,13 @@
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"  // nogncheck
 #include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
+// maho_location_bar_views links into //chrome/browser:browser; a direct dep
+// would add the same command -> chrome/browser/ui cycle noted in BUILD.gn.
+#include "maho/browser/ui/views/location_bar/maho_dom_screenshot_handler.h"  // nogncheck
 #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"  // nogncheck
 #include "maho/browser/ui/views/peek/maho_peek_controller.h"  // nogncheck
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
@@ -151,7 +155,7 @@ BrowserWindowInterface* FindBrowserForHelperStableId(
     return nullptr;
   }
   Profile* origin_profile =
-      origin_browser ? origin_browser->profile() : nullptr;
+      origin_browser ? origin_browser->GetProfile() : nullptr;
   BrowserWindowInterface* match = nullptr;
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [&match, &stable_id, origin_profile](BrowserWindowInterface* candidate) {
@@ -212,7 +216,7 @@ void ToggleMahoAiPanel(Browser* browser) {
   }
 
   const bool ai_panel_showing =
-      side_panel_ui->GetCurrentEntryId(SidePanelType::kContent) ==
+      side_panel_ui->GetCurrentEntryId() ==
       SidePanelEntryId::kMahoAiPanel;
   LOG(WARNING) << kShortcutTracePrefix
                << " ai_panel toggle requested current_visible="
@@ -220,7 +224,7 @@ void ToggleMahoAiPanel(Browser* browser) {
 
   if (ai_panel_showing) {
     LOG(WARNING) << kShortcutTracePrefix << " ai_panel closing";
-    side_panel_ui->Close(SidePanelType::kContent,
+    side_panel_ui->Close(
                          SidePanelEntryHideReason::kSidePanelClosed,
                          /*suppress_animations=*/true);
     return;
@@ -232,8 +236,8 @@ void ToggleMahoAiPanel(Browser* browser) {
 }
 
 void ActivatePartnerSplitPane(Browser* browser) {
-  TabStripModel* model = browser ? browser->tab_strip_model() : nullptr;
-  if (!model || !model->IsActiveTabSplit()) {
+  TabStripModel* model = browser ? browser->GetTabStripModel() : nullptr;
+  if (!model) {
     return;
   }
   tabs::TabInterface* active_tab = model->GetActiveTab();
@@ -302,7 +306,7 @@ void ExecutePrivateCommandAction(Browser* browser,
   }
 
   content::WebContents* active =
-      browser->tab_strip_model()->GetActiveWebContents();
+      browser->GetTabStripModel()->GetActiveWebContents();
   MahoPrivateContextToken token(browser, active);
   if (!token.Revalidate(MahoPrivateCapability::kWindowLocalTabs)) {
     return;
@@ -350,9 +354,9 @@ void ExecutePrivateCommandAction(Browser* browser,
 
 void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   DCHECK(browser);
-  DCHECK(browser->tab_strip_model());
+  DCHECK(browser->GetTabStripModel());
 
-  const MahoPrivateContextClass klass = MahoClassifyProfile(browser->profile());
+  const MahoPrivateContextClass klass = MahoClassifyProfile(browser->GetProfile());
   if (klass == MahoPrivateContextClass::kPrimaryIncognito) {
     ExecutePrivateCommandAction(browser, action_id);
     return;
@@ -374,7 +378,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     }
   } else if (action_id == "archive_tab") {
     if (auto* web_contents =
-            browser->tab_strip_model()->GetActiveWebContents()) {
+            browser->GetTabStripModel()->GetActiveWebContents()) {
       if (auto* helper = MahoTabIdHelper::FromWebContents(web_contents);
           helper && !helper->stable_tab_id().empty()) {
         MahoTabRegistry::Get()->ArchiveTabsAndRemoveFromStrip(
@@ -382,7 +386,12 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       }
     }
   } else if (action_id == "close_tab") {
-    chrome::CloseTab(browser);
+    // Cmd+W reaches here via MahoShortcutInterceptor, bypassing IDC_CLOSE_TAB;
+    // honor the sidebar multi-selection the same way that command does.
+    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+    if (!browser_view || !browser_view->MaybeHandleMultiTabClose()) {
+      chrome::CloseTab(browser);
+    }
   } else if (action_id == "reload_tab") {
     chrome::Reload(browser, WindowOpenDisposition::CURRENT_TAB);
   } else if (action_id == "hard_reload") {
@@ -408,19 +417,17 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     chrome::Print(browser);
   } else if (action_id == "view_source") {
     if (auto* web_contents =
-            browser->tab_strip_model()->GetActiveWebContents()) {
+            browser->GetTabStripModel()->GetActiveWebContents()) {
       web_contents->GetPrimaryMainFrame()->ViewSource();
     }
   } else if (action_id == "settings") {
     maho::OpenMahoSettingsPane(browser, "");
   } else if (action_id == "open_history") {
     chrome::ShowHistory(browser);
-  } else if (action_id == "open_bookmarks") {
-    chrome::ShowBookmarkManager(browser);
   } else if (action_id == "open_downloads") {
     chrome::ShowDownloads(browser);
   } else if (action_id == "new_incognito") {
-    chrome::NewIncognitoWindow(browser->profile());
+    chrome::NewIncognitoWindow(browser->GetProfile());
   } else if (action_id == "focus_url_bar") {
     chrome::FocusLocationBar(browser);
   } else if (action_id == "add_split_view" ||
@@ -446,7 +453,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     MahoSplitViewController(browser).ToggleSplitOrientation();
   } else if (action_id == "toggle_sidebar") {
     maho::sidebar_prefs::ToggleSidebarPanelExpanded(
-        browser->profile()->GetPrefs());
+        browser->GetProfile()->GetPrefs());
   } else if (action_id == "navigate_back") {
     chrome::GoBack(browser, WindowOpenDisposition::CURRENT_TAB);
   } else if (action_id == "navigate_forward") {
@@ -456,7 +463,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   } else if (action_id == "fullscreen") {
     chrome::ToggleFullscreenMode(browser);
   } else if (action_id == "minimize") {
-    browser->window()->Minimize();
+    browser->GetWindow()->Minimize();
   } else if (action_id == "new_window") {
     chrome::NewWindow(browser);
   } else if (action_id == "close_window") {
@@ -501,7 +508,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       }
     }
   } else if (action_id == "js_console") {
-    auto* web_contents = browser->tab_strip_model()->GetActiveWebContents();
+    auto* web_contents = browser->GetTabStripModel()->GetActiveWebContents();
     if (web_contents) {
       DevToolsWindow::OpenDevToolsWindow(
           web_contents, DevToolsToggleAction::ShowConsolePanel(),
@@ -532,14 +539,14 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     }
   } else if (action_id == "copy_url") {
     if (auto* web_contents =
-            browser->tab_strip_model()->GetActiveWebContents()) {
+            browser->GetTabStripModel()->GetActiveWebContents()) {
       ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
       writer.WriteText(base::UTF8ToUTF16(web_contents->GetVisibleURL().spec()));
       ShowLinkCopiedToast(browser);
     }
   } else if (action_id == "copy_url_markdown") {
     if (auto* web_contents =
-            browser->tab_strip_model()->GetActiveWebContents()) {
+            browser->GetTabStripModel()->GetActiveWebContents()) {
       std::string url = web_contents->GetVisibleURL().spec();
       std::string title = base::UTF16ToUTF8(web_contents->GetTitle());
       std::string markdown = "[" + title + "](" + url + ")";
@@ -547,8 +554,8 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       writer.WriteText(base::UTF8ToUTF16(markdown));
       ShowLinkCopiedToast(browser);
     }
-  } else if (action_id == "command_bar") {
-    LOG(WARNING) << kShortcutTracePrefix << " execute action=command_bar";
+  } else if (action_id == "command_bar" || action_id == "command_bar_alt") {
+    LOG(WARNING) << kShortcutTracePrefix << " execute action=" << action_id;
     BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
     if (browser_view) {
       browser_view->ShowMahoCommandOverlayForCurrentTab();
@@ -567,19 +574,19 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   } else if (action_id == "maho_mini") {
     maho::MahoMiniRequest request;
     GURL active_url;
-    if (browser && browser->tab_strip_model() &&
-        browser->tab_strip_model()->GetActiveWebContents()) {
-      active_url = browser->tab_strip_model()
+    if (browser && browser->GetTabStripModel() &&
+        browser->GetTabStripModel()->GetActiveWebContents()) {
+      active_url = browser->GetTabStripModel()
                        ->GetActiveWebContents()
                        ->GetLastCommittedURL();
     }
     request.url = active_url;
-    maho::LaunchMahoMini(browser ? browser->profile() : nullptr, request);
+    maho::LaunchMahoMini(browser ? browser->GetProfile() : nullptr, request);
   } else if (action_id == "peek") {
     GURL active_url;
-    if (browser && browser->tab_strip_model() &&
-        browser->tab_strip_model()->GetActiveWebContents()) {
-      active_url = browser->tab_strip_model()
+    if (browser && browser->GetTabStripModel() &&
+        browser->GetTabStripModel()->GetActiveWebContents()) {
+      active_url = browser->GetTabStripModel()
                        ->GetActiveWebContents()
                        ->GetLastCommittedURL();
     }
@@ -688,10 +695,45 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
         sidebar->ToggleArchiveMode();
       }
     }
+  } else if (action_id == "toggle_spaces_overlay") {
+    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+    auto* container = browser_view ? static_cast<MahoSidebarContainerView*>(
+                                         browser_view->maho_sidebar_container())
+                                   : nullptr;
+    if (container) {
+      if (browser->GetProfile() && browser->GetProfile()->IsOffTheRecord()) {
+        return;
+      }
+      auto* sidebar =
+          views::AsViewClass<maho::MahoSidebarView>(container->sidebar_view());
+      const bool is_spaces_open =
+          container->IsSpacesOverlayVisible() ||
+          (sidebar && sidebar->IsInLibraryMode() &&
+           sidebar->GetActiveLibraryCategory() ==
+               MahoSidebarLibraryRailView::Category::kSpaces);
+      if (is_spaces_open) {
+        if (sidebar && sidebar->IsInLibraryMode()) {
+          sidebar->ExitLibraryToTabs();
+        }
+        if (container->IsSpacesOverlayVisible()) {
+          container->DismissSpacesOverlay();
+        }
+      } else if (sidebar) {
+        sidebar->OpenLibraryCategory(
+            MahoSidebarLibraryRailView::Category::kSpaces);
+      } else {
+        container->ToggleSpacesOverlay();
+      }
+    }
   } else if (action_id == "open_boost_editor") {
-    MahoBoostWindowController::GetForBrowser(browser, browser->profile())
+    MahoBoostWindowController::GetForBrowser(browser, browser->GetProfile())
         .ShowForActiveDomain(
-            browser->tab_strip_model()->GetActiveWebContents());
+            browser->GetTabStripModel()->GetActiveWebContents());
+  } else if (action_id == "capture_screenshot") {
+    if (auto* web_contents =
+            browser->GetTabStripModel()->GetActiveWebContents()) {
+      MahoDomScreenshotHandler::TriggerCapture(web_contents);
+    }
   } else if (action_id == "open_atc_rules") {
     // "maho-mini" is the pane that owns the URL routing rules (ATC). An empty
     // pane key is not targeted at all (see OpenMahoSettingsPane) and would drop
@@ -700,7 +742,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   } else if (const MahoMailCommand* mail_command =
                  FindMahoMailCommand(action_id)) {
     MahoMailService* mail_service =
-        MahoMailServiceFactory::GetForProfileIfExists(browser->profile());
+        MahoMailServiceFactory::GetForProfileIfExists(browser->GetProfile());
     constexpr bool kMailPlatformSupported =
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
         true;
@@ -716,7 +758,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     }
     const GURL mail_url(std::string(maho::kMahoMailURL) +
                         std::string(mail_command->path));
-    TabStripModel* tab_strip = browser->tab_strip_model();
+    TabStripModel* tab_strip = browser->GetTabStripModel();
     if (tab_strip) {
       for (int i = 0; i < tab_strip->count(); ++i) {
         content::WebContents* contents = tab_strip->GetWebContentsAt(i);
@@ -734,7 +776,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
     Navigate(&params);
   } else if (action_id == "clear_unpinned_tabs") {
-    TabStripModel* model = browser->tab_strip_model();
+    TabStripModel* model = browser->GetTabStripModel();
     if (model) {
       std::vector<int> indices;
       for (int i = model->count() - 1; i >= 0; --i) {
@@ -844,7 +886,7 @@ void OpenCommandSuggestion(Browser* browser,
     BrowserWindowInterface* target_browser =
         FindBrowserForHelperStableId(browser, suggestion.stable_tab_id);
     if (target_browser) {
-      if (target_browser->GetBrowserForMigrationOnly() != browser) {
+      if (target_browser != browser) {
         target_browser->GetWindow()->Show();
         target_browser->GetWindow()->Activate();
       }
@@ -858,7 +900,7 @@ void OpenCommandSuggestion(Browser* browser,
   }
 
   if (suggestion.tab_index >= 0) {
-    TabStripModel* model = browser->tab_strip_model();
+    TabStripModel* model = browser->GetTabStripModel();
     DCHECK(model);
     if (suggestion.tab_index < model->count()) {
       model->ActivateTabAt(suggestion.tab_index);
@@ -873,7 +915,7 @@ void OpenCommandSuggestion(Browser* browser,
     BrowserWindowInterface* live =
         FindBrowserForHelperStableId(browser, suggestion.tab_core_id);
     if (live) {
-      if (live->GetBrowserForMigrationOnly() != browser) {
+      if (live != browser) {
         live->GetWindow()->Show();
         live->GetWindow()->Activate();
       }
@@ -929,10 +971,10 @@ void OpenCommandSuggestion(Browser* browser,
     if (space_id.empty()) {
       return;
     }
-    if (browser->profile() && !maho::sidebar_prefs::IsSidebarPanelExpanded(
-                                  browser->profile()->GetPrefs())) {
+    if (browser->GetProfile() && !maho::sidebar_prefs::IsSidebarPanelExpanded(
+                                  browser->GetProfile()->GetPrefs())) {
       maho::sidebar_prefs::ToggleSidebarPanelExpanded(
-          browser->profile()->GetPrefs());
+          browser->GetProfile()->GetPrefs());
     }
     DispatchShellEvent(
         "toggle_folder_expanded",
@@ -953,7 +995,7 @@ bool MahoCommandActionHandler::OnQuerySubmitted(
   if (action != PaletteAction::kAskMaho || !browser) {
     return false;
   }
-  if (browser->profile()->IsOffTheRecord()) {
+  if (browser->GetProfile()->IsOffTheRecord()) {
     return false;
   }
   if (context_class != MahoPrivateContextClass::kRegular) {
@@ -984,7 +1026,7 @@ bool MahoCommandActionHandler::OnQuerySubmitted(
     auto* side_panel_ui = browser->GetFeatures().side_panel_ui();
     const bool ai_panel_showing =
         side_panel_ui &&
-        side_panel_ui->GetCurrentEntryId(SidePanelType::kContent) ==
+        side_panel_ui->GetCurrentEntryId() ==
             SidePanelEntryId::kMahoAiPanel;
     if (!ai_panel_showing && side_panel_ui) {
       side_panel_ui->Show(SidePanelEntryKey(SidePanelEntryId::kMahoAiPanel),

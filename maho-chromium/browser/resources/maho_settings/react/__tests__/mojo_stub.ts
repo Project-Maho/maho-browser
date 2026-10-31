@@ -151,6 +151,7 @@ export enum PasswordProviderKind {
 
 export enum SecretAction {
   kCopy = 0,
+  kReveal = 1,
 }
 
 export enum PasswordImportSourceFormat {
@@ -226,6 +227,53 @@ export interface VaultItem {
   lastUsedAt: string | null;
   hasTotp: boolean;
   hasPasskey: boolean;
+  favorite: boolean;
+  trashedAt: string | null;
+  hasNotes: boolean;
+}
+
+export interface VaultTotpCodeResult {
+  success: boolean;
+  code: string | null;
+  secondsRemaining: number;
+  period: number;
+  errorCode: string | null;
+}
+
+export interface PasswordGeneratorOptions {
+  mode?: string;
+  length?: number;
+  includeLowercase?: boolean;
+  includeUppercase?: boolean;
+  includeDigits?: boolean;
+  includeSymbols?: boolean;
+  useLowercase?: boolean;
+  useUppercase?: boolean;
+  useDigits?: boolean;
+  useSymbols?: boolean;
+  avoidAmbiguous?: boolean;
+  passphraseMode?: boolean;
+  wordCount?: number;
+  separator?: string;
+  capitalize?: boolean;
+  includeNumber?: boolean;
+}
+
+export interface GeneratedPasswordResult {
+  success: boolean;
+  password: string | null;
+  strengthScore: number;
+  entropyBits: number;
+}
+
+export interface VaultHealthReport {
+  success: boolean;
+  weakItemIds?: string[];
+  weak?: string[];
+  reusedGroups?: string[][];
+  reused?: string[][];
+  totalLogins: number;
+  errorCode: string | null;
 }
 
 export interface VaultStatus {

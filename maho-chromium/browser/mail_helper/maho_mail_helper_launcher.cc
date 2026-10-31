@@ -305,11 +305,25 @@ void MahoMailHelperLauncher::OnImport(const std::string& payload) {
   }
 }
 
+void MahoMailHelperLauncher::StartKeyInjectionDeadline() {
+  // Key injection is where the helper creates or opens the SQLCipher
+  // database: on a first run that derives a key and runs every migration,
+  // which takes far longer than the handshake this timer was sized for.
+  // Firing the handshake deadline in the middle of it kills the helper while
+  // the database header is half written, and that file can never be decrypted
+  // again - the crash loop this replaces.
+  startup_timer_.Start(
+      FROM_HERE, base::Seconds(60),
+      base::BindOnce(&MahoMailHelperLauncher::HandleFailureAndMaybeRelaunch,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
 void MahoMailHelperLauncher::ReinjectKeysIfPresent() {
   if (!has_keys_ || !helper_.is_bound() || !initialized_ || keys_sent_) {
     return;
   }
   keys_sent_ = true;
+  StartKeyInjectionDeadline();
   helper_->InjectKeys(
       sqlcipher_key_, credential_key_,
       base::BindOnce(&MahoMailHelperLauncher::OnKeysInjected,
@@ -349,6 +363,7 @@ void MahoMailHelperLauncher::InjectDatabaseKeys(
     return;
   }
   keys_sent_ = true;
+  StartKeyInjectionDeadline();
   helper_->InjectKeys(
       sqlcipher_key, credential_key,
       base::BindOnce(&MahoMailHelperLauncher::OnKeysInjected,

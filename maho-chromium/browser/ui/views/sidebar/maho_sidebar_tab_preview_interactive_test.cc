@@ -68,8 +68,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarTabPreviewInteractiveTest,
 
   EXPECT_NE(nullptr, GetTabListView()->tab_preview_widget_for_testing());
   EXPECT_FALSE(GetTabListView()->tab_preview_title_for_testing().empty());
-  EXPECT_EQ(base::UTF8ToUTF16(browser()
-                                  ->tab_strip_model()
+  EXPECT_EQ(base::UTF8ToUTF16(browser()->GetTabStripModel()
                                   ->GetWebContentsAt(row->live_tab_index_for_testing())
                                   ->GetVisibleURL()
                                   .spec()),
@@ -107,7 +106,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarTabPreviewInteractiveTest,
 
   // Switch to tab 0 (the initial NTP) whose stable_tab_id is guaranteed to be
   // populated; test-added tabs may not be registered yet.
-  browser()->tab_strip_model()->ActivateTabAt(0);
+  browser()->GetTabStripModel()->ActivateTabAt(0);
   base::RunLoop().RunUntilIdle();
 
   GetTabListView()->SetTabPreviewShowDelayForTesting(base::TimeDelta());

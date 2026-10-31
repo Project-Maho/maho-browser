@@ -12,6 +12,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_space_dot_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -46,10 +47,11 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
       click_loop.QuitClosure()));
   click_loop.Run();
 
-  base::RunLoop().RunUntilIdle();
-
-  EXPECT_TRUE(footer->command_overlay_controller_visible_for_testing())
-      << "Expected spaces action popover to be visible after clicking the plus button";
+  // The spaces action popover is presented asynchronously after the click
+  // lands; wait for it instead of racing a single synchronous check.
+  EXPECT_TRUE(::base::test::RunUntil([&]() {
+    return footer->command_overlay_controller_visible_for_testing();
+  })) << "Expected spaces action popover to be visible after clicking the plus button";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
@@ -62,9 +64,16 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   auto state_before = GetViewState();
   std::string space_id_before = state_before.tab_list.active_space_id;
 
-  views::View* second_dot = footer->GetSpaceDotForTesting(1);
-  ASSERT_TRUE(second_dot) << "Expected second space dot to exist for SeedProfile(2)";
+  // The footer picks up the seeded second space on its next async refresh.
+  views::View* second_dot = nullptr;
+  ASSERT_TRUE(BlockAndPollUntil([&]() {
+    second_dot = footer->GetSpaceDotForTesting(1);
+    return second_dot != nullptr;
+  })) << "Expected second space dot to exist for SeedProfile(2)";
 
+  // The dot was just added; lay it out before aiming the click at it.
+  ASSERT_TRUE(second_dot->GetWidget());
+  second_dot->GetWidget()->LayoutRootViewIfNecessary();
   const gfx::Point center = second_dot->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
   base::RunLoop click_loop;
@@ -72,17 +81,21 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
       click_loop.QuitClosure()));
   click_loop.Run();
-  base::RunLoop().RunUntilIdle();
 
-  ResolveViews();
+  // The space switch lands on the sidebar's async refresh.
+  ASSERT_TRUE(BlockAndPollUntil([&]() {
+    ResolveViews();
+    return GetViewState().tab_list.active_space_id != space_id_before;
+  }));
   auto state_after = GetViewState();
   EXPECT_NE(space_id_before, state_after.tab_list.active_space_id)
       << "Active space ID should change after clicking a different space dot";
-  auto* active_dot = views::AsViewClass<MahoSidebarSpaceDotView>(
-      footer->GetSpaceDotForTesting(1));
-  ASSERT_TRUE(active_dot);
-  EXPECT_TRUE(active_dot->is_active())
-      << "Clicked space dot should become the active footer dot";
+  // The footer re-marks its active dot when the refreshed model lands.
+  EXPECT_TRUE(BlockAndPollUntil([&]() {
+    auto* active_dot = views::AsViewClass<MahoSidebarSpaceDotView>(
+        footer->GetSpaceDotForTesting(1));
+    return active_dot && active_dot->is_active();
+  })) << "Clicked space dot should become the active footer dot";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
@@ -92,7 +105,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
   ASSERT_TRUE(bridge);
 
-  Browser* browser_b = CreateBrowser(browser()->profile());
+  Browser* browser_b = static_cast<Browser*>(CreateBrowser(browser()->GetProfile()));
   ASSERT_TRUE(browser_b);
 
   const std::string space_a = bridge->GetActiveSpaceId(browser());
@@ -108,7 +121,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   }
   ASSERT_FALSE(space_b.empty());
 
-  bridge->SwitchToSpace(browser(), space_b);
+  bridge->SwitchToSpace(static_cast<Browser*>(browser()), space_b);
   base::RunLoop().RunUntilIdle();
 
   BrowserView* bv_b = BrowserView::GetBrowserViewForBrowser(browser_b);

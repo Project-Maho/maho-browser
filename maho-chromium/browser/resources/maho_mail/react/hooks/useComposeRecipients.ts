@@ -70,11 +70,30 @@ function buildInitialCc(replyTo?: ReplyContext, accountEmail?: string): string {
  * Parse a recipient string into individual addresses.
  * Splits on comma or semicolon, trims whitespace, filters empty entries.
  */
-function parseRecipientsFn(value: string): string[] {
-  return value
-    .split(/[,;]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+export function parseRecipientsFn(value: string): string[] {
+  const recipients: string[] = [];
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  let angle = false;
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+    if (escaped) { escaped = false; continue; }
+    if (quoted && char === "\\") { escaped = true; continue; }
+    if (char === '"') quoted = !quoted;
+    if (!quoted) {
+      if (char === "<") angle = true;
+      if (char === ">") angle = false;
+      if (!angle && (char === "," || char === ";")) {
+        const token = value.slice(start, i).trim();
+        if (token) recipients.push(token);
+        start = i + 1;
+      }
+    }
+  }
+  const token = value.slice(start).trim();
+  if (token) recipients.push(token);
+  return recipients;
 }
 
 export function useComposeRecipients({

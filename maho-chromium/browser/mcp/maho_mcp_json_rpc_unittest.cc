@@ -212,5 +212,59 @@ TEST_F(MahoMcpJsonRpcTest, PartialBufferAccumulation) {
   EXPECT_EQ(msg->id.value(), base::Value(99));
 }
 
+TEST_F(MahoMcpJsonRpcTest, MemoryThreadFrameCapAndLinearScan) {
+  // Given: an incomplete frame delivered in independently bounded chunks.
+  const std::string chunk(4096, 'a');
+  constexpr size_t kInputBytes = 1024 * 1024 + 1;
+  // When: the peer exceeds the frame limit without ever sending a delimiter.
+  for (size_t i = 0; i < 256; ++i) {
+    framer_.AppendData(chunk);
+  }
+  framer_.AppendData("a");
+  // Then: rejection is immediate and work scales with appended bytes.
+  EXPECT_LE(framer_.buffered_bytes_for_testing(), 1024u * 1024u);
+  EXPECT_LE(framer_.scanned_bytes_for_testing(), 2 * kInputBytes);
+  auto response = framer_.TakeNextResponse();
+  ASSERT_TRUE(response.has_value());
+  auto parsed = base::JSONReader::Read(*response, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed && parsed->is_dict());
+  EXPECT_TRUE(parsed->GetDict().FindDict("error"));
+  EXPECT_FALSE(framer_.TakeNextParsedMessage());
+}
+
+TEST_F(MahoMcpJsonRpcTest, MemoryThreadDelimiterCountsTowardFrameLimit) {
+  // Given: valid JSON whose frame is exactly one byte over the delimiter-inclusive limit.
+  const std::string prefix = R"({"jsonrpc":"2.0","method":"ping","id":9,"params":{"text":")";
+  const std::string suffix = "\"}}\n";
+  const std::string frame = prefix +
+      std::string(1024 * 1024 + 1 - prefix.size() - suffix.size(), 'x') + suffix;
+  // When: the complete frame arrives at once.
+  framer_.AppendData(frame);
+  // Then: it is rejected rather than dispatched simply because it has a newline.
+  EXPECT_FALSE(framer_.TakeNextParsedMessage());
+  EXPECT_TRUE(framer_.TakeNextResponse());
+}
+
+TEST_F(MahoMcpJsonRpcTest, MemoryThreadExactLimitPreservesUtf8AndFollowingId) {
+  // Given: a legal 1 MiB frame followed by a separately correlated request.
+  const std::string prefix = R"({"jsonrpc":"2.0","method":"ping","id":10,"params":{"text":")";
+  const std::string suffix = "\"}}\n";
+  const std::string text = std::string(1024 * 1024 - prefix.size() - suffix.size() - 3, 'x') + "\xe2\x82\xac";
+  const std::string frame = prefix + text + suffix;
+  // When: delivery splits inside a multibyte character, then completes both frames.
+  framer_.AppendData(frame.substr(0, frame.size() - suffix.size() - 1));
+  framer_.AppendData(frame.substr(frame.size() - suffix.size() - 1) +
+                     R"({"jsonrpc":"2.0","method":"ping","id":11})" "\n");
+  // Then: the boundary does not truncate accepted UTF-8 or consume the next ID.
+  auto first = framer_.TakeNextParsedMessage();
+  ASSERT_TRUE(first && first->params && first->params->is_dict());
+  EXPECT_EQ(first->id, base::Value(10));
+  EXPECT_EQ(*first->params->GetDict().FindString("text"), text);
+  auto second = framer_.TakeNextParsedMessage();
+  ASSERT_TRUE(second);
+  EXPECT_EQ(second->id, base::Value(11));
+  EXPECT_FALSE(framer_.TakeNextResponse());
+}
+
 }  // namespace
 }  // namespace maho

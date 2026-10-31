@@ -8,6 +8,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/thumbnails/thumbnail_image.h"
 #include "chrome/browser/ui/thumbnails/thumbnail_tab_helper.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -159,7 +160,7 @@ void MahoCtrlTabSwitcherCardView::AttachThumbnail() {
   if (!wc) {
     return;
   }
-  auto* helper = ThumbnailTabHelper::FromWebContents(wc);
+  auto* helper = ThumbnailTabHelper::From(tabs::TabInterface::GetFromContents(wc));
   if (!helper) {
     return;
   }

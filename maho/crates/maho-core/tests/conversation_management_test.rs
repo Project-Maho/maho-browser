@@ -133,6 +133,7 @@ fn direct_delete_failure_preserves_turns_and_emits_no_tombstones() {
             size_bytes: 5,
             storage_rel_path: "c/artifact.txt".into(),
             created_at_ms: 1,
+            kind: None,
         })
         .unwrap();
     core.storage_ref()

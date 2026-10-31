@@ -3404,7 +3404,10 @@ fn test_boost_create_temp_produces_valid_boost() {
 
     assert_eq!(boost.domain, "example.com");
     assert!(!boost.id.0.as_str().is_empty());
-    assert!(!boost.color.color_boost_enabled);
+    // A new Boost starts in manual color mode with Auto off, per the Boost
+    // editor contract (`maho_boost/DESIGN.md`: new or reset Boosts get
+    // `colorBoostEnabled=true` and `magicTheme=false`).
+    assert!(boost.color.color_boost_enabled);
     assert!(!boost.color.magic_theme);
     assert_eq!(boost.typography.case_mode, CaseMode::None);
     assert_eq!(boost.typography.size_mode, SizeMode::K100);
@@ -3444,8 +3447,12 @@ fn test_boost_discard_removes_temp() {
     let boost = mgr.create_temp("example.com".to_string());
     let id = boost.id.clone();
 
+    // `discard_boost` returns `Some(previously_active_id)` when the unchanged
+    // temporary Boost was discarded, and `None` only when the discard was
+    // refused (change_was_made). Here nothing was active before, so the discard
+    // succeeds and reports "no previous active Boost to restore".
     let prev = mgr.discard_boost(&id);
-    assert!(prev.is_none());
+    assert_eq!(prev, Some(None));
     assert!(mgr.get_boost(&id).is_none());
     assert!(mgr.list_for_domain("example.com").is_empty());
 }

@@ -709,6 +709,7 @@ fn vault_state_malformed_metadata_hydrates_as_corruption_not_unlocked() {
         kdf_params: Some(b"{not valid json".to_vec()),
         wrapped_user_key: Some(b"garbage".to_vec()),
         wrapped_recovery_key: None,
+        wrapped_account_key: None,
     };
     assert!(matches!(
         manager.hydrate_locked(slots),
@@ -856,6 +857,7 @@ fn vault_state_hydrate_on_unlocked_manager_forces_fail_closed() {
         kdf_params: Some(b"{bad".to_vec()),
         wrapped_user_key: Some(b"bad".to_vec()),
         wrapped_recovery_key: Some(b"bad".to_vec()),
+        wrapped_account_key: None,
     };
     assert!(matches!(
         manager2.hydrate_locked(malformed),
@@ -873,6 +875,7 @@ fn vault_state_hydrate_partial_slots_is_corruption() {
         kdf_params: Some(b"{}".to_vec()),
         wrapped_user_key: Some(b"{}".to_vec()),
         wrapped_recovery_key: None,
+        wrapped_account_key: None,
     };
     assert!(matches!(
         manager.hydrate_locked(partial),

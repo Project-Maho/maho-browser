@@ -11,6 +11,7 @@ source_set("maho_boost_window") {
     "//base",
     "//chrome/browser/profiles:profile",
     "//content/public/browser",
+    "//maho/browser/ui/webui/maho_boost:mojo_bindings",
     "//maho/components/constants",
     "//net",
     "//ui/gfx",

@@ -1,5 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#include <utility>
+
 #include <memory>
 
 #include "base/command_line.h"
@@ -8,6 +10,9 @@
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -234,7 +239,7 @@ class LocationBarUtilityPanelInteractiveUiTest : public InProcessBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
     InProcessBrowserTest::SetUpOnMainThread();
 
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         maho::sidebar_prefs::kSidebarLayoutEnabled, false);
     auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
     ASSERT_TRUE(browser_view);
@@ -339,7 +344,7 @@ IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
   views::Widget::InitParams params(
       views::Widget::InitParams::CLIENT_OWNS_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-  params.context = browser()->window()->GetNativeWindow();
+  params.context = browser()->GetWindow()->GetNativeWindow();
   params.bounds = gfx::Rect(100, 200, 200, 120);
   host_widget->Init(std::move(params));
   host_widget->SetContentsView(std::make_unique<UtilityPanelHostView>());
@@ -500,7 +505,7 @@ IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
   ASSERT_TRUE(utility_icon);
 
   maho::MahoShieldBubbleCoordinator& shield_coordinator =
-      maho::MahoShieldBubbleCoordinator::GetForBrowser(browser());
+      maho::MahoShieldBubbleCoordinator::GetForBrowser(static_cast<Browser*>(browser()));
   EXPECT_FALSE(shield_coordinator.IsShowing());
 
   maho::MahoLocationBarUtilityPanelView* panel_view =
@@ -562,7 +567,7 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(utility_icon);
 
   maho::MahoShieldBubbleCoordinator& shield_coordinator =
-      maho::MahoShieldBubbleCoordinator::GetForBrowser(browser());
+      maho::MahoShieldBubbleCoordinator::GetForBrowser(static_cast<Browser*>(browser()));
   EXPECT_FALSE(shield_coordinator.IsShowing());
 
   maho::MahoLocationBarUtilityPanelView* panel_view =
@@ -604,7 +609,7 @@ IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
       browser(), embedded_test_server()->GetURL("/title1.html")));
   base::RunLoop().RunUntilIdle();
 
-  MahoAddressBarContextMenu menu(browser());
+  MahoAddressBarContextMenu menu(static_cast<Browser*>(browser()));
 
   EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_ADDR_COPY_URL))
       << "IDC_MAHO_ADDR_COPY_URL should be enabled when a page is loaded";

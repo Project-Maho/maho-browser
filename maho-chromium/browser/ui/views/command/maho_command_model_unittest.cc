@@ -14,6 +14,8 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -597,26 +599,23 @@ TEST_F(SearchEmptyQueryTest,
 }
 
 TEST_F(SearchEmptyQueryTest,
-       EmptyQueryInCurrentTabMode_CallbackFiredSynchronouslyWithEmptyResults) {
+       EmptyQueryInCurrentTabMode_CallbackNotFiredSynchronously) {
   MahoCommandModel model(/*browser=*/nullptr);
 
   int callback_count = 0;
-  std::vector<CommandSuggestion> received_results;
   auto cb = base::BindRepeating(
-      [](int* count, std::vector<CommandSuggestion>* out,
-         std::vector<CommandSuggestion> results) {
-        ++(*count);
-        *out = std::move(results);
-      },
-      &callback_count, &received_results);
+      [](int* count, std::vector<CommandSuggestion>) { ++(*count); },
+      &callback_count);
 
   model.Search("", CommandOverlayMode::kCurrentTab, cb);
 
-  EXPECT_EQ(1, callback_count)
-      << "kCurrentTab empty-query must fire the callback synchronously, "
-         "not via the debounce timer";
-  EXPECT_TRUE(received_results.empty())
-      << "kCurrentTab empty-query callback must deliver an empty result vector";
+  // Ctrl+L opens with the URL selected; clearing it must show the same
+  // debounced default suggestions as a new tab, not an empty list.
+  EXPECT_EQ(0, callback_count)
+      << "kCurrentTab empty-query must schedule a debounced FireSearch like "
+         "kNewTab instead of firing an empty result synchronously";
+
+  model.Cancel();
 }
 
 class MahoCommandModelCoreReadyTest : public ::testing::Test {
@@ -834,7 +833,9 @@ TEST_F(MahoCommandModelTask4Test, PrepareLocalCandidatesPreservesPolicyWithoutCa
       CommandOverlayMode::kSearch, "example.com/path");
   ASSERT_EQ(8u, navigation.size());
   EXPECT_EQ(CommandSuggestionType::kNavigation, navigation[0].type);
-  EXPECT_EQ("https://example.com/path", navigation[0].execution_payload);
+  // Scheme-less input canonicalizes to http:// like the omnibox; HTTPS-Upgrades
+  // upgrades it at navigation time with an http fallback.
+  EXPECT_EQ("http://example.com/path", navigation[0].execution_payload);
 
   navigation = MahoCommandModel::PrepareLocalCandidates(
       std::move(navigation), /*actions_only=*/false,
@@ -2291,12 +2292,78 @@ TEST_F(MahoCommandModelTest, PrivateSearchUsesTemplateUrlServiceReadOnly) {
   EXPECT_NE(std::string::npos, suggestion.title.find("ExampleSearch"));
 }
 
+TEST_F(MahoCommandModelTest, ClassifyTypedNavigationMatchesOmniboxRules) {
+  auto classify = [](const std::string& text) {
+    return MahoCommandModel::ClassifyTypedNavigation(text);
+  };
+  std::optional<MahoCommandModel::TypedNavigation> nav;
+
+  nav = classify("example.com");
+  ASSERT_TRUE(nav.has_value());
+  EXPECT_EQ("http://example.com/", nav->url.spec());
+  EXPECT_FALSE(nav->typed_http_scheme);
+
+  nav = classify("http://example.com");
+  ASSERT_TRUE(nav.has_value());
+  EXPECT_TRUE(nav->typed_http_scheme);
+
+  nav = classify("https://example.com/a");
+  ASSERT_TRUE(nav.has_value());
+  EXPECT_EQ("https://example.com/a", nav->url.spec());
+  EXPECT_FALSE(nav->typed_http_scheme);
+
+  nav = classify("localhost:3000");
+  ASSERT_TRUE(nav.has_value());
+  EXPECT_EQ("http://localhost:3000/", nav->url.spec());
+
+  nav = classify("192.168.0.1");
+  ASSERT_TRUE(nav.has_value());
+  EXPECT_EQ("http", nav->url.scheme());
+
+  nav = classify("chrome://settings");
+  ASSERT_TRUE(nav.has_value());
+  EXPECT_EQ("chrome://settings/", nav->url.spec());
+
+  EXPECT_TRUE(classify("file:///tmp/x").has_value());
+
+  // Plain words and multi-word queries are searches.
+  EXPECT_FALSE(classify("naver").has_value());
+  EXPECT_FALSE(classify("how to cook rice").has_value());
+  EXPECT_FALSE(classify("").has_value());
+  // Script schemes are never navigated from the palette.
+  EXPECT_FALSE(classify("javascript:alert(1)").has_value());
+}
+
+TEST_F(MahoCommandModelTest, ExpandSiteSearchTemplateEscapesQuery) {
+  // Spaces become '+', matching Chromium's {searchTerms} substitution.
+  EXPECT_EQ("https://www.youtube.com/results?search_query=cat+videos",
+            MahoCommandModel::ExpandSiteSearchTemplate(
+                "https://www.youtube.com/results?search_query={query}",
+                "cat videos")
+                .spec());
+  EXPECT_EQ("https://example.test/?q=a%26b",
+            MahoCommandModel::ExpandSiteSearchTemplate(
+                "https://example.test/?q={searchTerms}", "a&b")
+                .spec());
+  EXPECT_EQ("https://example.test/s?k=x",
+            MahoCommandModel::ExpandSiteSearchTemplate(
+                "https://example.test/s?k=%s", "x")
+                .spec());
+  // No placeholder or a non-web scheme yields an invalid URL.
+  EXPECT_FALSE(MahoCommandModel::ExpandSiteSearchTemplate(
+                   "https://example.test/", "x")
+                   .is_valid());
+  EXPECT_FALSE(MahoCommandModel::ExpandSiteSearchTemplate(
+                   "javascript:{query}", "x")
+                   .is_valid());
+}
+
 TEST_F(MahoCommandModelTest, BuildsNavigationSuggestionForWebAndMahoUrls) {
   std::optional<CommandSuggestion> web =
       MahoCommandModel::BuildNavigationSuggestionForQuery("example.com/path");
   ASSERT_TRUE(web.has_value());
   EXPECT_EQ(CommandSuggestionType::kNavigation, web->type);
-  EXPECT_EQ("https://example.com/path", web->execution_payload);
+  EXPECT_EQ("http://example.com/path", web->execution_payload);
 
   std::optional<CommandSuggestion> maho =
       MahoCommandModel::BuildNavigationSuggestionForQuery("maho://settings/");
@@ -2360,9 +2427,8 @@ TEST_F(MahoCommandModelTest, ParseSearchResultsJsonFiltersAiAnswer) {
     }
   ])";
 
-  std::vector<CommandSuggestion> bookmarks;
   std::vector<CommandSuggestion> results =
-      MahoCommandModel::ParseSearchResultsJson(json_str, bookmarks);
+      MahoCommandModel::ParseSearchResultsJson(json_str);
 
   ASSERT_EQ(2u, results.size())
       << "The parsed results must skip the 'aiAnswer' item, leaving exactly 2 items.";
@@ -2371,4 +2437,33 @@ TEST_F(MahoCommandModelTest, ParseSearchResultsJsonFiltersAiAnswer) {
 }
 
 }  // namespace
+
+class MahoCommandModelTabObserverTest : public BrowserWithTestWindowTest {
+ protected:
+  void BuildTabCache(MahoCommandModel& model) { model.BuildTabsJson(); }
+  bool IsTabCacheDirty(const MahoCommandModel& model) {
+    return model.tabs_cache_dirty_;
+  }
+};
+
+TEST_F(MahoCommandModelTabObserverTest, TabChangesInvalidateCachedTabs) {
+  AddTab(browser(), GURL("https://example.test/"));
+  MahoCommandModel model(browser());
+  TabStripModel* strip = browser()->GetTabStripModel();
+  auto* tab = strip->GetActiveTab();
+  ASSERT_NE(nullptr, tab);
+
+  for (TabChangeType change_type :
+       {TabChangeType::kAll, TabChangeType::kLoadingOnly,
+        TabChangeType::kAttentionOnly, TabChangeType::kBlockedOnly,
+        TabChangeType::kResourceUsageOnly}) {
+    BuildTabCache(model);
+    ASSERT_FALSE(IsTabCacheDirty(model));
+    // Dispatch through the actual observed model, using its real tab. The
+    // observer notification is synchronous, so no event-loop wait is needed.
+    strip->NotifyTabChanged(tab, change_type);
+    EXPECT_TRUE(IsTabCacheDirty(model));
+  }
+}
+
 }  // namespace maho

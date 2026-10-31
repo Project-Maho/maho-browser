@@ -5,15 +5,18 @@ use maho_types::vault::{TotpAlgorithm, VaultCiphertextEnvelope, VaultItemId, Vau
 use zeroize::Zeroizing;
 
 use crate::oscrypt::{VaultDeviceBinding, VaultDeviceProtector, VaultDeviceWrapBundle};
+use crate::vault_crypto::WrappedVaultKeyEnvelope;
 use crate::vault_manager::{
-    VaultHydrationOutcome, VaultHydrationSlots, VaultManager, VaultManagerError,
-    VaultPersistedSlots,
+    VaultAccountProvisionSlots, VaultHydrationOutcome, VaultHydrationSlots, VaultManager,
+    VaultManagerError, VaultPersistedSlots,
 };
 
+pub(crate) mod audit;
 mod backend_batch;
 mod crud_create;
 mod crud_mutate_use;
 mod crud_query;
+mod parity;
 pub(crate) mod repository;
 pub mod session;
 
@@ -88,6 +91,60 @@ impl VaultRuntime {
             }
             Ok(())
         })?
+    }
+
+    pub fn initialize_account_and_persist(
+        &self,
+        account_seed: &[u8],
+        now: DateTime<Utc>,
+        persist: impl FnOnce(&VaultAccountProvisionSlots) -> Result<(), VaultManagerError>,
+    ) -> Result<(), VaultManagerError> {
+        self.with_manager(|manager| {
+            let slots = manager.initialize_account(account_seed, now)?;
+            if let Err(error) = persist(&slots) {
+                manager.revert_uninitialized();
+                return Err(error);
+            }
+            Ok(())
+        })?
+    }
+
+    pub fn wrap_account_key_and_persist(
+        &self,
+        account_seed: &[u8],
+        persist: impl FnOnce(&WrappedVaultKeyEnvelope) -> Result<(), VaultManagerError>,
+    ) -> Result<(), VaultManagerError> {
+        self.with_manager(|manager| {
+            if manager.has_account_wrap() {
+                return Err(VaultManagerError::AlreadyInitialized);
+            }
+            let envelope = manager.wrap_active_key_for_account(account_seed)?;
+            if let Err(error) = persist(&envelope) {
+                manager.lock();
+                return Err(error);
+            }
+            manager.store_account_wrap(envelope);
+            Ok(())
+        })?
+    }
+
+    pub fn unlock_with_account(
+        &self,
+        account_seed: &[u8],
+        now: DateTime<Utc>,
+    ) -> Result<(), VaultManagerError> {
+        self.with_manager(|manager| manager.unlock_with_account(account_seed, now))?
+    }
+
+    pub fn wrap_active_key_for_account(
+        &self,
+        account_seed: &[u8],
+    ) -> Result<WrappedVaultKeyEnvelope, VaultManagerError> {
+        self.with_manager(|manager| manager.wrap_active_key_for_account(account_seed))?
+    }
+
+    pub fn has_account_wrap(&self) -> bool {
+        self.with_manager(|manager| manager.has_account_wrap()).unwrap_or(false)
     }
 
     pub fn initialize_with_device_and_persist(

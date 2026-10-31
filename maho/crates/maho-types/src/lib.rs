@@ -31,5 +31,6 @@ pub mod tab;
 pub mod tool;
 pub mod traits;
 pub mod vault;
+pub mod vault_generator;
 
 pub use events::shell_event_kind::ShellEventKind;

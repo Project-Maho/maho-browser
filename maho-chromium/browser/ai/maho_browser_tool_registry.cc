@@ -12,6 +12,7 @@
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/no_destructor.h"
+#include "base/uuid.h"
 #include "crypto/sha2.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
 #include "maho/browser/maho_core_holder.h"
@@ -330,7 +331,9 @@ base::DictValue BuildRoutineHistorySchema() {
 void AddOptionalTabId(base::DictValue &properties) {
   properties.Set(
       "tab_id",
-      BuildIntegerSchema("Browser tab id. Omit or pass 0 for the active tab."));
+      BuildIntegerSchema(
+          "Browser tab id. Mutations require it explicitly (-32013 without "
+          "it); read-only tools fall back to the active tab when omitted."));
 }
 
 base::DictValue BuildBrowserActionInputSchema(std::string_view tool_name,
@@ -375,7 +378,15 @@ base::DictValue BuildBrowserActionInputSchema(std::string_view tool_name,
     properties.Set(
         "ref", BuildIntegerSchema(
                    "Accessibility ref from browser_accessibility_snapshot."));
+    if (tool_name == "browser_click") {
+      properties.Set(
+          "force",
+          BuildBooleanSchema(
+              "Bypass occlusion check without untrusted wrong-target input."));
+    }
     required.Append("ref");
+  } else if (tool_name == "browser_history_back") {
+    required.Append("tab_id");
   } else if (tool_name == "browser_type") {
     properties.Set(
         "ref", BuildIntegerSchema(
@@ -395,6 +406,10 @@ base::DictValue BuildBrowserActionInputSchema(std::string_view tool_name,
   } else if (tool_name == "browser_file_upload_select") {
     properties.Set("path",
                    BuildStringSchema("Absolute path to the local file to select."));
+    properties.Set("selector",
+                   BuildStringSchema("Optional CSS selector for file input element."));
+    properties.Set("css",
+                   BuildStringSchema("Alias for the file input CSS selector."));
     required.Append("path");
   } else if (tool_name == "browser_select") {
     properties.Set(
@@ -442,7 +457,26 @@ base::DictValue BuildBrowserActionInputSchema(std::string_view tool_name,
                    BuildIntegerSchema("Optional accessibility ref of target element."));
     properties.Set("lease_epoch",
                    BuildIntegerSchema("Expected lease epoch."));
+    properties.Set("capture_id",
+                   BuildStringSchema("Optional capture id (alias for frame_token)."));
     required.Append("frame_token");
+  } else if (tool_name == "browser_request_help" ||
+             tool_name == "browser.request_help") {
+    properties.Set("prompt",
+                   BuildStringSchema("Prompt or question requesting human assistance."));
+    properties.Set("timeout_ms",
+                   BuildIntegerSchema("Optional timeout in milliseconds."));
+    properties.Set("request_id",
+                   BuildStringSchema("Optional request id; server-minted if omitted."));
+    required.Append("prompt");
+  } else if (tool_name == "browser_observe" ||
+             tool_name == "browser.observe") {
+    properties.Set("cursor",
+                   BuildStringSchema("Optional pagination cursor."));
+    properties.Set("max_tokens",
+                   BuildIntegerSchema("Optional maximum tokens to return."));
+    properties.Set("probe_hover",
+                   BuildBooleanSchema("Optional flag to probe hoverable elements."));
   }
 
   return BuildObjectSchema(std::move(properties), std::move(required));
@@ -800,6 +834,17 @@ BuildDesktopInputSchema(const CapabilityDescriptor &descriptor) {
   if (descriptor.tool_name == "browser_routines_history") {
     return BuildRoutineHistorySchema();
   }
+  if (descriptor.tool_name == "browser_request_help" ||
+      descriptor.tool_name == "browser.request_help") {
+    base::DictValue properties;
+    properties.Set("prompt",
+                   BuildStringSchema("Prompt or question requesting human assistance."));
+    properties.Set("timeout_ms",
+                   BuildIntegerSchema("Optional timeout in milliseconds."));
+    properties.Set("request_id",
+                   BuildStringSchema("Optional request id; server-minted if omitted."));
+    return BuildObjectSchema(std::move(properties), {"prompt"});
+  }
   return BuildNoArgSchema();
 }
 
@@ -818,9 +863,21 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
     return BuildNoArgSchema();
   }
   if (name == "browser_tab_get" || name == "browser_tab_close" ||
-      name == "browser_tab_switch" || name == "browser_adopt_tab" ||
-      name == "browser_release_tab" || name == "browser_release_lease") {
+      name == "browser_tab_switch" || name == "browser_history_back" ||
+      name == "browser_adopt_tab" ||
+      name == "browser_release_tab" || name == "browser_release_lease" ||
+      name == "browser_tab_return") {
     properties.Set("tab_id", BuildIntegerSchema("Browser tab id."));
+    return BuildObjectSchema(std::move(properties), {"tab_id"});
+  }
+  if (name == "browser_tab_borrow") {
+    properties.Set("tab_id", BuildIntegerSchema("Browser tab id."));
+    properties.Set("origin_space_id",
+                   BuildIntegerSchema("Source space id before borrowing."));
+    properties.Set("agent_space_id",
+                   BuildIntegerSchema("Destination agent space id."));
+    properties.Set("ttl_seconds",
+                   BuildIntegerSchema("Optional TTL in seconds (default 60)."));
     return BuildObjectSchema(std::move(properties), {"tab_id"});
   }
   if (name == "browser_tab_new") {
@@ -999,6 +1056,20 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
         BuildIntegerSchema("Lease duration in seconds; default 60."));
     return BuildObjectSchema(std::move(properties), {"tab_id"});
   }
+  if (name == "browser_release_lease" || name == "browser_tab_return") {
+    properties.Set("tab_id", BuildIntegerSchema("Browser tab id."));
+    return BuildObjectSchema(std::move(properties), {"tab_id"});
+  }
+  if (name == "browser_tab_borrow") {
+    properties.Set("tab_id", BuildIntegerSchema("Browser tab id."));
+    properties.Set("origin_space_id",
+                   BuildIntegerSchema("Source space id before borrowing."));
+    properties.Set("agent_space_id",
+                   BuildIntegerSchema("Destination agent space id."));
+    properties.Set("ttl_seconds",
+                   BuildIntegerSchema("Optional TTL in seconds (default 60)."));
+    return BuildObjectSchema(std::move(properties), {"tab_id"});
+  }
   if (name == "browser_grant_exact_origin" ||
       name == "browser_revoke_exact_origin") {
     properties.Set("origin", BuildStringSchema("Exact HTTP or HTTPS origin."));
@@ -1067,7 +1138,11 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
                 BuildStringSchema("Accessible name when using role+name lookup."));
     locator.Set("exact",
                 BuildBooleanSchema("Require an exact role+name match (default true)."));
+    locator.Set("force",
+                BuildBooleanSchema("Bypass occlusion check without untrusted wrong-target input."));
     properties.Set("locator", BuildObjectSchema(std::move(locator), {}));
+    properties.Set("force",
+                   BuildBooleanSchema("Bypass occlusion check without untrusted wrong-target input."));
     properties.Set("observe",
                    BuildStringSchema("Post-action observation: diff or none."));
     properties.Set("wait",
@@ -1121,6 +1196,27 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
     properties.Set("lease",
                    BuildStringSchema("Lease mode: scoped keeps steal/approval policy."));
     return BuildObjectSchema(std::move(properties), {"action"});
+  }
+
+  if (name == "browser_request_help" || name == "browser.request_help") {
+    properties.Set("prompt",
+                   BuildStringSchema("Prompt or question requesting human assistance."));
+    properties.Set("timeout_ms",
+                   BuildIntegerSchema("Optional timeout in milliseconds."));
+    properties.Set("request_id",
+                   BuildStringSchema("Optional request id; server-minted if omitted."));
+    return BuildObjectSchema(std::move(properties), {"prompt"});
+  }
+
+  if (name == "browser_observe" || name == "browser.observe") {
+    AddOptionalTabId(properties);
+    properties.Set("cursor",
+                   BuildStringSchema("Optional pagination cursor."));
+    properties.Set("max_tokens",
+                   BuildIntegerSchema("Optional maximum tokens to return."));
+    properties.Set("probe_hover",
+                   BuildBooleanSchema("Optional flag to probe hoverable elements."));
+    return BuildObjectSchema(std::move(properties), {});
   }
 
   return MissingCatalogInputSchema(name);
@@ -1815,3 +1911,33 @@ std::string MahoBrowserToolRegistry::ExecuteRoutineHistory(
   maho_string_free(json);
   return result;
 }
+
+// static
+base::DictValue MahoBrowserToolRegistry::ExecuteBrowserRequestHelp(
+    const base::DictValue& params,
+    std::string* error_out) {
+  const std::string* prompt = params.FindString("prompt");
+  if (!prompt || prompt->empty()) {
+    if (error_out) {
+      *error_out = "Missing or empty required argument 'prompt'";
+    }
+    return base::DictValue();
+  }
+
+  std::string request_id;
+  const std::string* req_id_param = params.FindString("request_id");
+  if (req_id_param && !req_id_param->empty()) {
+    request_id = *req_id_param;
+  } else {
+    request_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
+  }
+
+  // Note: No adapter reference exists in MahoBrowserToolRegistry.
+  // Dispatch returns a waiting status stub as consistent with sibling tools;
+  // full adapter FSM glue lands with the executor lane review.
+  base::DictValue result;
+  result.Set("request_id", std::move(request_id));
+  result.Set("status", "waiting");
+  return result;
+}
+

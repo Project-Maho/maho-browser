@@ -83,9 +83,6 @@ class MahoSidebarTopBarView
   views::ImageButton* sidebar_toggle_button_for_testing() {
     return sidebar_toggle_button_;
   }
-  views::ImageButton* back_button_for_testing() { return back_button_; }
-  views::ImageButton* forward_button_for_testing() { return forward_button_; }
-  views::ImageButton* reload_button_for_testing() { return reload_button_; }
   views::ImageButton* ai_button_for_testing() { return ai_button_; }
   views::ImageButton* mail_button_for_testing() { return mail_button_; }
   views::Label* mail_unread_badge_for_testing() { return mail_unread_badge_; }
@@ -111,9 +108,6 @@ class MahoSidebarTopBarView
                          bool enabled,
                          const gfx::VectorIcon& icon,
                          const std::u16string& tooltip);
-  void OnBackPressed(const ui::Event& event);
-  void OnForwardPressed(const ui::Event& event);
-  void OnReloadPressed(const ui::Event& event);
   void OnAiPressed(const ui::Event& event);
   void OnMailPressed(const ui::Event& event);
   // Shows/hides the Mail entry point from the canonical enabled pref while
@@ -135,9 +129,6 @@ class MahoSidebarTopBarView
   raw_ptr<views::View> nav_cluster_ = nullptr;
   raw_ptr<views::View> flex_spacer_ = nullptr;
   raw_ptr<views::ImageButton> sidebar_toggle_button_ = nullptr;
-  raw_ptr<views::ImageButton> back_button_ = nullptr;
-  raw_ptr<views::ImageButton> forward_button_ = nullptr;
-  raw_ptr<views::ImageButton> reload_button_ = nullptr;
   raw_ptr<views::ImageButton> ai_button_ = nullptr;
   raw_ptr<views::ImageButton> mail_button_ = nullptr;
   raw_ptr<views::Label> mail_unread_badge_ = nullptr;

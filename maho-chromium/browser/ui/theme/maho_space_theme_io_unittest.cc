@@ -21,6 +21,7 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
@@ -30,6 +31,7 @@
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_profile.h"
@@ -991,9 +993,10 @@ TEST_F(MahoSpaceThemeIoValidationTest, RejectsZenTypeWithInvalidHarmony) {
 class MahoSpaceThemeStateTest : public testing::Test {
  protected:
   Browser* CreateBrowserForProfile(Profile* profile) {
-    Browser::CreateParams params(profile, /*user_gesture=*/true);
+    BrowserWindowCreateParams params(profile, /*user_gesture=*/true);
+    params.window = new TestBrowserWindow();
     std::unique_ptr<Browser> owned_browser =
-        CreateBrowserWithTestWindowForParams(params);
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
     Browser* browser = owned_browser.get();
     browsers_.push_back(std::move(owned_browser));
     return browser;
@@ -1008,9 +1011,16 @@ class MahoSpaceThemeStateTest : public testing::Test {
     if (it == browsers_.end()) {
       return false;
     }
+    NotifyBrowserClosed(browser);
     browsers_.erase(it);
     task_environment_.RunUntilIdle();
     return true;
+  }
+
+  // Test browsers are destroyed directly, bypassing BrowserManagerService,
+  // so deliver the close notification the tab registry would otherwise get.
+  static void NotifyBrowserClosed(Browser* browser) {
+    maho::MahoTabRegistry::Get()->OnBrowserClosed(browser);
   }
 
   void SetUp() override {
@@ -1020,18 +1030,28 @@ class MahoSpaceThemeStateTest : public testing::Test {
     bridge->EnsureBrowserCollectionObservationForTesting();
     bridge->SetActiveSpaceId("");
     profile_ = TestingProfile::Builder().Build();
+    // The bridge only maps a browser to a space registered to its profile.
+    bridge->RegisterSpace("space-a", profile_->GetPath().BaseName());
+    bridge->RegisterSpace("space-b", profile_->GetPath().BaseName());
     browser_a_ = CreateBrowserForProfile(profile_.get());
     browser_b_ = CreateBrowserForProfile(profile_.get());
   }
 
   void TearDown() override {
     auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+    // Reset the bridge while the browsers are alive: SetActiveSpaceId()
+    // re-announces tabs by walking every observed browser's tab strip.
+    bridge->ClearBrowserActiveSpacesForTesting();
+    bridge->UnregisterSpace("space-a");
+    bridge->UnregisterSpace("space-b");
+    bridge->SetActiveSpaceId("");
+    for (const auto& browser : browsers_) {
+      NotifyBrowserClosed(browser.get());
+    }
     browsers_.clear();
     task_environment_.RunUntilIdle();
     browser_a_ = nullptr;
     browser_b_ = nullptr;
-    bridge->ClearBrowserActiveSpacesForTesting();
-    bridge->SetActiveSpaceId("");
     MahoSpaceThemeState::Clear();
     bridge->ResetBrowserCollectionObservationForTesting();
   }
@@ -1055,6 +1075,27 @@ class MahoSpaceThemeStateTest : public testing::Test {
   raw_ptr<Browser> browser_a_ = nullptr;
   raw_ptr<Browser> browser_b_ = nullptr;
 };
+
+TEST_F(MahoSpaceThemeStateTest,
+       BrowserRegistrationPublishesInitialActiveSpace) {
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  bridge->SetActiveSpaceId("space-a");
+  bridge->ClearBrowserActiveSpacesForTesting();
+
+  class Observer : public maho::MahoSpaceProfileBridge::Observer {
+   public:
+    void OnSpaceProfileBridgeChanged() override { ++changes; }
+    int changes = 0;
+  } observer;
+  bridge->AddObserver(&observer);
+  bridge->OnBrowserCreatedForTesting(browser_a_);
+  EXPECT_EQ(bridge->GetActiveSpaceId(browser_a_), "space-a");
+  EXPECT_EQ(observer.changes, 1);
+
+  bridge->OnBrowserCreatedForTesting(browser_a_);
+  EXPECT_EQ(observer.changes, 1);
+  bridge->RemoveObserver(&observer);
+}
 
 TEST_F(MahoSpaceThemeStateTest,
        ResolvesCommittedThemesByOwningBrowserActiveSpace) {
@@ -1085,6 +1126,10 @@ TEST_F(MahoSpaceThemeStateTest,
   auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
   Browser* other_profile_browser =
       CreateBrowserForProfile(CreateAdditionalProfile());
+  // No profile owns the spaces here, so no browser may be mapped to them.
+  bridge->ClearBrowserActiveSpacesForTesting();
+  bridge->UnregisterSpace("space-a");
+  bridge->UnregisterSpace("space-b");
   bridge->SetActiveSpaceId("space-a");
   MahoSpaceThemeState::UpdateFromSnapshotForTesting(
       TwoSpaceSnapshot(30.0, 210.0));

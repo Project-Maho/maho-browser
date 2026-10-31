@@ -111,9 +111,9 @@ class MahoSidebarActionsBrowserTest : public InProcessBrowserTest {
     space_id_ =
         MahoSpaceProfileBridge::GetInstance()->GetActiveSpaceId(browser());
     ASSERT_FALSE(space_id_.empty());
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         sidebar_prefs::kSidebarLayoutEnabled, true);
-    browser()->profile()->GetPrefs()->SetBoolean(
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
         sidebar_prefs::kSidebarPanelExpanded, true);
   }
 
@@ -162,7 +162,7 @@ class MahoSidebarActionsBrowserTest : public InProcessBrowserTest {
   }
 
   void CheckSourceBeforeSplitOrdering(bool insert_before_first) {
-    auto* model = browser()->tab_strip_model();
+    auto* model = browser()->GetTabStripModel();
     std::vector<content::WebContents*> original_tabs;
     for (int i = 0; i < model->count(); ++i) {
       original_tabs.push_back(model->GetWebContentsAt(i));
@@ -171,7 +171,7 @@ class MahoSidebarActionsBrowserTest : public InProcessBrowserTest {
     std::vector<content::WebContents*> created_tabs;
     for (int i = 0; i < 3; ++i) {
       auto contents = content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile()));
+          content::WebContents::CreateParams(browser()->GetProfile()));
       created_tabs.push_back(contents.get());
       model->InsertWebContentsAt(model->count(), std::move(contents),
                                  AddTabTypes::ADD_ACTIVE);
@@ -188,7 +188,7 @@ class MahoSidebarActionsBrowserTest : public InProcessBrowserTest {
     const auto split_id = model->AddToNewSplit(
         {model->GetIndexOfWebContents(pane_b)},
         split_tabs::SplitTabVisualData::CreateTwoPane(
-            split_tabs::SplitTabLayout::kVertical, 0.5),
+            split_tabs::SplitTabLayout::kSideBySide, 0.5),
         split_tabs::SplitTabCreatedSource::kDragAndDropTab);
     ASSERT_TRUE(model->ContainsSplit(split_id));
     auto* split_data = model->GetSplitData(split_id);
@@ -205,7 +205,7 @@ class MahoSidebarActionsBrowserTest : public InProcessBrowserTest {
     auto visual_data = *split_data->visual_data();
     ASSERT_TRUE(visual_data.InsertPaneAtLeaf(
         insert_before_first ? 0u : 1u,
-        split_tabs::SplitTabLayout::kVertical, 0.5,
+        split_tabs::SplitTabLayout::kSideBySide, 0.5,
         insert_before_first ? split_tabs::SplitPaneInsertionSide::kBefore
                             : split_tabs::SplitPaneInsertionSide::kAfter));
 
@@ -245,11 +245,11 @@ class MahoSidebarActionsBrowserTest : public InProcessBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarActionsBrowserTest,
                        ClearClosesLiveAndSuspendedTabsButPreservesPinnedTabs) {
-  auto* model = browser()->tab_strip_model();
+  auto* model = browser()->GetTabStripModel();
   model->InsertWebContentsAt(
       model->count(),
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile())),
+          content::WebContents::CreateParams(browser()->GetProfile())),
       AddTabTypes::ADD_ACTIVE);
   std::vector<std::string> pinned_ids;
   for (int i = 0; i < model->count(); ++i) {
@@ -277,7 +277,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsBrowserTest,
   model->InsertWebContentsAt(
       model->count(),
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile())),
+          content::WebContents::CreateParams(browser()->GetProfile())),
       AddTabTypes::ADD_ACTIVE);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL("/live")));
@@ -319,7 +319,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsBrowserTest,
       static_cast<int>(!HasTab(live_id)) +
       static_cast<int>(!HasTab(suspended_id));
   EXPECT_EQ(actual_closed_count, 2);
-  auto* overlay = MahoNotificationOverlay::FromBrowser(browser());
+  auto* overlay = MahoNotificationOverlay::FromBrowser(static_cast<Browser*>(browser()));
   ASSERT_TRUE(overlay);
   ASSERT_TRUE(overlay->toast_view_for_testing());
   EXPECT_EQ(overlay->toast_view_for_testing()
@@ -371,7 +371,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsBrowserTest,
       },
       response_body));
   ASSERT_TRUE(embedded_test_server()->Start());
-  auto* prefs = browser()->profile()->GetPrefs();
+  auto* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetString(ai_prefs::kProvider, "openai-compatible");
   prefs->SetString(ai_prefs::kBaseUrl,
                    embedded_test_server()->GetURL("/v1").spec());

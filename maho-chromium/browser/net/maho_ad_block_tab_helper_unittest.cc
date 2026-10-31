@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/net/maho_ad_block_tab_helper.h"
+#include "maho/browser/net/maho_ad_block_request_util.h"
 
 #include <memory>
 
@@ -11,10 +12,38 @@
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
 namespace {
+
+TEST(MahoAdBlockRequestUtilTest, CurrentWorkerDestinationsRemainScripts) {
+  for (const auto destination : {
+           network::mojom::RequestDestination::kScript,
+           network::mojom::RequestDestination::kWorker,
+           network::mojom::RequestDestination::kSharedWorker,
+           network::mojom::RequestDestination::kServiceWorker,
+           network::mojom::RequestDestination::kAudioWorklet,
+           network::mojom::RequestDestination::kPaintWorklet}) {
+    SCOPED_TRACE(static_cast<int>(destination));
+    EXPECT_STREQ("script", maho::MapRequestDestinationToFilterType(destination));
+  }
+}
+
+TEST(MahoAdBlockRequestUtilTest, FetchLikeOverridesDestinationAndKeepalive) {
+  network::ResourceRequest request;
+  request.destination = network::mojom::RequestDestination::kEmpty;
+  EXPECT_STREQ("other", maho::MapRequestToFilterType(request));
+  request.keepalive = true;
+  EXPECT_STREQ("ping", maho::MapRequestToFilterType(request));
+  request.is_fetch_like_api = true;
+  EXPECT_STREQ("xmlhttprequest", maho::MapRequestToFilterType(request));
+  request.destination = network::mojom::RequestDestination::kScript;
+  EXPECT_STREQ("xmlhttprequest", maho::MapRequestToFilterType(request));
+  request.is_fetch_like_api = false;
+  EXPECT_STREQ("script", maho::MapRequestToFilterType(request));
+}
 
 MahoBlockedRequestInfo MakeBlockedRequestInfo(
     content::GlobalRenderFrameHostId page_id,

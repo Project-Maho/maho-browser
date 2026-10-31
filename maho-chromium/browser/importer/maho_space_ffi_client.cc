@@ -19,18 +19,6 @@ namespace maho {
 
 namespace {
 
-std::string ValidateIcon(const std::string& icon) {
-  if (icon.empty()) {
-    return "compass";
-  }
-  for (char c : icon) {
-    if (!base::IsAsciiAlphaNumeric(c) && c != '-' && c != '_') {
-      return "compass";
-    }
-  }
-  return icon;
-}
-
 std::string ValidateColorHex(const std::string& hex) {
   if (hex.empty()) {
     return "#3b82f6"; // Default blue
@@ -147,10 +135,11 @@ std::string MahoSpaceFFIClient::CreateSpace(const std::string& name,
   if (!core) return "";
 
   std::string color_json = HexToMahoColorJson(theme_color_hex);
-  std::string validated_icon = ValidateIcon(icon);
-
-  char* svm = maho_core_create_space(core, name.c_str(),
-                                     color_json.c_str(), validated_icon.c_str());
+  // The 4th argument is the owning profile id, not an icon ("" = default
+  // profile, as the Rust import destination uses). The icon goes through the
+  // core's update_space_config seam below, which canonicalizes it.
+  char* svm = maho_core_create_space(core, name.c_str(), color_json.c_str(),
+                                     /*profile_id=*/"");
   if (!svm) return "";
 
   std::string svm_json(svm);
@@ -162,10 +151,13 @@ std::string MahoSpaceFFIClient::CreateSpace(const std::string& name,
   auto svm_parsed = base::JSONReader::Read(svm_json, base::JSON_PARSE_RFC);
   if (!svm_parsed || !svm_parsed->is_dict()) return "";
   const std::string* space_id = svm_parsed->GetDict().FindString("id");
-  if (space_id) {
-    return *space_id;
+  if (!space_id) {
+    return "";
   }
-  return "";
+  if (!icon.empty()) {
+    SetSpaceIcon(*space_id, icon);
+  }
+  return *space_id;
 }
 
 std::string MahoSpaceFFIClient::CreateTab(const std::string& space_id,
@@ -310,10 +302,12 @@ void MahoSpaceFFIClient::SetSpaceIcon(const std::string& space_id,
                                       const std::string& icon) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!maho::GetCore()) return;
+  base::DictValue changes;
+  changes.Set("spaceId", space_id);
+  changes.Set("icon", icon);
   base::DictValue event;
-  event.Set("kind", "set_space_icon");
-  event.Set("space_id", space_id);
-  event.Set("icon", icon);
+  event.Set("kind", "update_space_config");
+  event.Set("changes", std::move(changes));
   DispatchEvent(event);
 }
 

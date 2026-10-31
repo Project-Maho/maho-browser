@@ -37,6 +37,7 @@
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/base/class_property.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/ui_base_types.h"
@@ -45,6 +46,7 @@
 #include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -71,6 +73,9 @@ namespace maho {
 
 namespace {
 
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(MahoLocationBarUtilityPanelView,
+                                 kUtilityPanelDelegateKey)
+
 constexpr int kPanelCornerRadius = 18;
 constexpr int kPanelWidth = 304;
 constexpr int kPanelSectionSpacing = 14;
@@ -92,6 +97,8 @@ constexpr int kChipHeight = 30;
 constexpr int kChipCornerRadius = 10;
 constexpr int kChipHorizontalPadding = 10;
 constexpr int kAddChipWidth = 30;
+constexpr int kPinButtonSize = 16;
+constexpr int kPinIconSize = 10;
 constexpr int kSettingsRowHeight = 38;
 constexpr int kSettingsRowHorizontalPadding = 10;
 constexpr int kSettingsRowCornerRadius = 10;
@@ -165,7 +172,7 @@ class MahoLocationBarUtilityPanelActionView
     if (GetFocusBehavior() == FocusBehavior::ALWAYS) {
       views::FocusRing::Install(this);
     }
-    SetLayoutManager(std::make_unique<views::FillLayout>());
+    SetNotifyEnterExitOnChild(true);
     if (is_toolbar) {
       SetPreferredSize(gfx::Size(kToolbarRowHeight, kToolbarRowHeight));
     } else if (is_settings) {
@@ -197,6 +204,7 @@ class MahoLocationBarUtilityPanelActionView
         corner_radius));
 
     auto* content = AddChildView(std::make_unique<views::View>());
+    content_view_ = content;
     if (!has_inline_toggle) {
       content->SetCanProcessEventsWithinSubtree(false);
     }
@@ -230,7 +238,7 @@ class MahoLocationBarUtilityPanelActionView
     icon_image_view_ = icon_image;
 
     if (is_icon_chip && browser_ && !action_.extension_id.empty()) {
-      Profile* profile = browser_->profile();
+      Profile* profile = browser_->GetProfile();
       auto* registry = extensions::ExtensionRegistry::Get(profile);
       const extensions::Extension* extension =
           registry ? registry->GetInstalledExtension(action_.extension_id) : nullptr;
@@ -257,6 +265,17 @@ class MahoLocationBarUtilityPanelActionView
                                            ui::kColorSysOnSurfaceSubtle,
                                            icon_size)
           : ui::ImageModel());
+    }
+
+    if (is_icon_chip && action_.pin_enabled && !action_.pin_callback.is_null()) {
+      pin_button_ = AddChildView(std::make_unique<views::ImageButton>(
+          base::BindRepeating(
+              &MahoLocationBarUtilityPanelActionView::OnPinButtonPressed,
+              base::Unretained(this))));
+      pin_button_->SetInstallFocusRingOnFocus(false);
+      views::InkDrop::Get(pin_button_)->SetMode(
+          views::InkDropHost::InkDropMode::OFF);
+      UpdatePinButton();
     }
 
     if (!is_toolbar && !is_icon_chip) {
@@ -337,6 +356,20 @@ class MahoLocationBarUtilityPanelActionView
     gfx::Size preferred_size = views::View::CalculatePreferredSize(size_bounds);
     preferred_size.set_height(kChipHeight);
     return preferred_size;
+  }
+
+  void Layout(PassKey) override {
+    const gfx::Rect bounds = GetLocalBounds();
+    if (selection_background_) {
+      selection_background_->SetBoundsRect(bounds);
+    }
+    if (content_view_) {
+      content_view_->SetBoundsRect(bounds);
+    }
+    if (pin_button_) {
+      pin_button_->SetBounds(bounds.right() - kPinButtonSize - 1, 1,
+                             kPinButtonSize, kPinButtonSize);
+    }
   }
 
   void SetHighlighted(bool highlighted) { selection_background_->SetVisible(highlighted); }
@@ -491,6 +524,32 @@ class MahoLocationBarUtilityPanelActionView
     UpdateInlineTogglePresentation(effective_subtitle);
   }
 
+  void OnPinButtonPressed(const ui::Event& event) {
+    if (action_.pin_callback.is_null()) {
+      return;
+    }
+    action_.is_pinned = !action_.is_pinned;
+    action_.pin_callback.Run(action_.is_pinned);
+    UpdatePinButton();
+  }
+
+  void UpdatePinButton() {
+    if (!pin_button_) {
+      return;
+    }
+    pin_button_->SetTooltipText(action_.is_pinned ? u"Unpin extension"
+                                                   : u"Pin extension");
+    pin_button_->GetViewAccessibility().SetName(
+        action_.is_pinned ? u"Unpin extension" : u"Pin extension");
+    pin_button_->SetImageModel(
+        views::Button::STATE_NORMAL,
+        ui::ImageModel::FromVectorIcon(
+            maho_lucide_icons::kPinIcon,
+            action_.is_pinned ? ui::kColorSysPrimary
+                              : ui::kColorSysOnSurfaceSubtle,
+            kPinIconSize));
+  }
+
   void UpdateIconImage() {
     if (!icon_image_view_) {
       return;
@@ -499,7 +558,7 @@ class MahoLocationBarUtilityPanelActionView
     if (icon_factory_) {
       int tab_id = -1;
       if (browser_) {
-        if (auto* web_contents = browser_->tab_strip_model()->GetActiveWebContents()) {
+        if (auto* web_contents = browser_->GetTabStripModel()->GetActiveWebContents()) {
           SessionID session_id = sessions::SessionTabHelper::IdForTab(web_contents);
           if (session_id.is_valid()) {
             tab_id = session_id.id();
@@ -540,8 +599,10 @@ class MahoLocationBarUtilityPanelActionView
   MahoLocationBarUtilityPanelAction action_;
   DisplayMode display_mode_;
   raw_ptr<views::View> selection_background_ = nullptr;
+  raw_ptr<views::View> content_view_ = nullptr;
   raw_ptr<views::Label> subtitle_label_ = nullptr;
   raw_ptr<views::ToggleButton> toggle_button_ = nullptr;
+  raw_ptr<views::ImageButton> pin_button_ = nullptr;
   raw_ptr<views::ImageView> icon_image_view_ = nullptr;
   std::unique_ptr<extensions::ExtensionActionIconFactory> icon_factory_;
   std::unique_ptr<extensions::IconImage> icon_image_;
@@ -664,7 +725,7 @@ MahoLocationBarUtilityPanelView::MahoLocationBarUtilityPanelView(
 
   if (model_.owning_browser) {
     if (auto* bridge = MahoExtensionStateBridge::FromProfile(
-            model_.owning_browser->profile())) {
+            model_.owning_browser->GetProfile())) {
       bridge_observation_.Observe(bridge);
     }
   }
@@ -697,9 +758,12 @@ views::Widget* MahoLocationBarUtilityPanelView::Show(
 
   auto bubble = std::make_unique<MahoLocationBarUtilityPanelView>(
       anchor_view, std::move(model));
-  views::Widget* widget = views::BubbleDialogDelegate::CreateBubble(
-      std::move(bubble));
+  views::Widget* widget = views::BubbleDialogDelegate::CreateBubbleDeprecated(
+      bubble.get(), views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   if (widget) {
+    // Keep the delegate alive through Widget teardown, including CloseNow()
+    // and native-parent destruction, without a second deletion owner.
+    widget->SetProperty(kUtilityPanelDelegateKey, std::move(bubble));
     ApplyVibrancyToUtilityPanel(widget);
     widget->Show();
     widget->widget_delegate()->GetContentsView()->RequestFocus();
@@ -943,7 +1007,7 @@ void MahoLocationBarUtilityPanelView::AddFooterSummary() {
   bool has_cert = false;
   if (model_.owning_browser) {
     if (auto* web_contents =
-            model_.owning_browser->tab_strip_model()->GetActiveWebContents()) {
+            model_.owning_browser->GetTabStripModel()->GetActiveWebContents()) {
       if (auto* entry = web_contents->GetController().GetVisibleEntry()) {
         has_cert = entry->GetSSL().certificate != nullptr;
       }
@@ -988,7 +1052,7 @@ void MahoLocationBarUtilityPanelView::OnSecuritySummaryClicked() {
     return;
   }
   auto* web_contents =
-      model_.owning_browser->tab_strip_model()->GetActiveWebContents();
+      model_.owning_browser->GetTabStripModel()->GetActiveWebContents();
   if (!web_contents) {
     return;
   }

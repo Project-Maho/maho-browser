@@ -49,7 +49,7 @@ export function ProviderStep({ onSelect }: ProviderStepProps) {
           <button
             key={provider.id}
             onClick={() => onSelect(provider.id)}
-            className={`flex items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-border hover:bg-card/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:p-4 ${
+            className={`flex items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-foreground/20 hover:bg-surface-hover active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:p-4 ${
               provider.id === 'other' ? 'col-span-2' : ''
             }`}
           >
@@ -67,7 +67,7 @@ export function ProviderStep({ onSelect }: ProviderStepProps) {
             variant="ghost"
             size="sm"
             onClick={() => setShowAllProviders(true)}
-            className="col-span-2 h-auto rounded-lg border border-dashed border-border px-4 py-3 text-muted-foreground hover:bg-card/50 hover:text-foreground"
+            className="col-span-2 h-auto rounded-lg border border-dashed border-border px-4 py-3 text-muted-foreground hover:bg-surface-hover hover:text-foreground"
             aria-expanded={showAllProviders}
           >
             <ChevronDown size={16} />
@@ -81,7 +81,7 @@ export function ProviderStep({ onSelect }: ProviderStepProps) {
             variant="ghost"
             size="sm"
             onClick={() => setShowAllProviders(false)}
-            className="col-span-2 h-auto rounded-lg px-4 py-2 text-muted-foreground hover:bg-card/50 hover:text-foreground"
+            className="col-span-2 h-auto rounded-lg px-4 py-2 text-muted-foreground hover:bg-surface-hover hover:text-foreground"
             aria-expanded={showAllProviders}
           >
             <ChevronUp size={16} />

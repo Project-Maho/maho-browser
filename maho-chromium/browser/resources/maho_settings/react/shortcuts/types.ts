@@ -2,6 +2,7 @@ import {MojoKeyCombo, ShortcutBinding} from '../../mojo.js';
 
 export type ShortcutActionId =
   | 'command_bar'
+  | 'command_bar_alt'
   | 'focus_url_bar'
   | 'copy_url'
   | 'open_history'

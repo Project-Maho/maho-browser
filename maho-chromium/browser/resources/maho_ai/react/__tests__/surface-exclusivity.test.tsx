@@ -205,7 +205,12 @@ describe('MahoAiApp surface exclusivity', () => {
         expect(
             container.querySelector('main[aria-label="Empty conversation"]'))
             .toBeNull();
-      });
+      },
+      // This is the only test that boots the whole app (app.js import +
+      // store bootstrap + Radix menu), so it costs ~2.8s alone and ~5.8s
+      // under full-suite CPU contention. The 5s default made it pass by
+      // timing luck; the budget is raised, the assertions are unchanged.
+      20000);
 });
 
 describe('MahoAiApp boot error recovery', () => {

@@ -7,7 +7,9 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <utility>
 
+#include "base/functional/callback.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings.mojom.h"
 
 extern "C" {
@@ -108,6 +110,23 @@ maho_settings::mojom::VaultProviderStatusPtr BuildVaultProviderStatus(
 bool UpdateAutofillSettingsInCore(bool passwords_enabled,
                                   const std::string& mode);
 
+// Supported Vault auto-lock timeouts in minutes; 0 means never.
+bool IsSupportedVaultAutoLockMinutes(unsigned int minutes);
+
+// Reads the Vault auto-lock timeout from core settings. Returns std::nullopt
+// when core or the setting is unavailable.
+std::optional<unsigned int> ReadVaultAutoLockMinutesFromCore();
+
+// Writes the Vault auto-lock timeout. Unsupported values and a missing core
+// are rejected rather than coerced.
+bool UpdateVaultAutoLockMinutesInCore(unsigned int minutes);
+
+// Whether password operations must be device-reauthenticated (Touch ID).
+// Missing or unreadable core settings fail closed to `true`.
+bool ReadVaultDeviceAuthRequiredFromCore();
+
+bool UpdateVaultDeviceAuthRequiredInCore(bool required);
+
 std::string ReadPasswordProviderModeFromCore();
 
 bool ReadPasswordsEnabledFromCore();
@@ -159,7 +178,9 @@ maho_settings::mojom::VaultItemListResultPtr ListVaultItemsFromCore(
     const std::optional<maho_settings::mojom::PasswordProviderKind>& provider,
     const std::vector<maho_settings::mojom::VaultItemKind>& kinds,
     const std::optional<std::string>& cursor,
-    uint32_t limit);
+    uint32_t limit,
+    bool trash_only = false,
+    bool favorites_only = false);
 
 maho_settings::mojom::VaultItemListResultPtr SearchVaultItemsFromCore(
     const std::string& origin,
@@ -171,7 +192,8 @@ maho_settings::mojom::VaultOperationResultPtr AddVaultLoginInCore(
     const std::string& title,
     const std::vector<std::string>& origins,
     const std::string& username,
-    const std::string& password);
+    const std::string& password,
+    const std::optional<std::string>& notes = std::nullopt);
 
 maho_settings::mojom::VaultOperationResultPtr UpdateVaultLoginInCore(
     const std::string& authorization_profile_key,
@@ -180,7 +202,8 @@ maho_settings::mojom::VaultOperationResultPtr UpdateVaultLoginInCore(
     const std::string& title,
     const std::vector<std::string>& origins,
     const std::string& username,
-    const std::optional<std::string>& password);
+    const std::optional<std::string>& password,
+    const std::optional<std::string>& notes = std::nullopt);
 
 maho_settings::mojom::VaultOperationResultPtr DeleteVaultItemInCore(
     const std::string& authorization_profile_key,
@@ -191,7 +214,49 @@ maho_settings::mojom::VaultOperationResultPtr UseVaultSecretInCore(
     const std::string& authorization_profile_key,
     const std::string& item_id,
     uint64_t expected_revision,
-    maho_settings::mojom::SecretAction action);
+    maho_settings::mojom::SecretAction action,
+    base::OnceCallback<bool(const char*)> reveal = {});
+
+struct VaultNotesResult {
+  VaultNotesResult();
+  VaultNotesResult(const VaultNotesResult&);
+  VaultNotesResult& operator=(const VaultNotesResult&);
+  VaultNotesResult(VaultNotesResult&&);
+  VaultNotesResult& operator=(VaultNotesResult&&);
+  ~VaultNotesResult();
+
+  bool success = false;
+  std::optional<std::string> notes;
+  std::optional<std::string> error_code;
+  std::optional<std::string> username;
+};
+
+maho_settings::mojom::VaultOperationResultPtr TrashVaultItemInCore(
+    const std::string& profile_key, const std::string& id, uint64_t revision);
+maho_settings::mojom::VaultOperationResultPtr RestoreVaultItemInCore(
+    const std::string& profile_key, const std::string& id, uint64_t revision);
+maho_settings::mojom::VaultOperationResultPtr EmptyVaultTrashInCore(
+    const std::string& profile_key);
+maho_settings::mojom::VaultOperationResultPtr SetVaultItemFavoriteInCore(
+    const std::string& profile_key, const std::string& id, uint64_t revision,
+    bool favorite);
+maho_settings::mojom::VaultOperationResultPtr AddVaultSecureNoteInCore(
+    const std::string& profile_key, const std::string& title,
+    const std::string& notes);
+maho_settings::mojom::VaultOperationResultPtr UpdateVaultSecureNoteInCore(
+    const std::string& profile_key, const std::string& id, uint64_t revision,
+    const std::string& title, const std::string& notes);
+maho_settings::mojom::VaultOperationResultPtr SetVaultLoginTotpInCore(
+    const std::string& profile_key, const std::string& id, uint64_t revision,
+    const std::string& secret);
+VaultNotesResult GetVaultItemNotesFromCore(const std::string& id);
+maho_settings::mojom::VaultTotpCodeResultPtr GetVaultTotpCodeFromCore(
+    const std::string& id);
+maho_settings::mojom::GeneratedPasswordResultPtr GeneratePasswordInCore(
+    const maho_settings::mojom::PasswordGeneratorOptions& options);
+std::pair<uint32_t, double> EstimatePasswordStrengthInCore(
+    const std::string& password);
+maho_settings::mojom::VaultHealthReportPtr GetVaultHealthReportFromCore();
 
 maho_settings::mojom::VaultProviderStatusPtr BuildVaultProviderStatus();
 

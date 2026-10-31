@@ -14,6 +14,9 @@ pub(super) fn add_password(core: &mut MahoCore, entry: maho_import::PasswordEntr
     };
     let input = maho_core::vault_manager::VaultLoginInput {
         metadata: VaultItemPublicMetadata {
+            favorite: false,
+            trashed_at: None,
+            has_notes: false,
             title: entry.origin_url,
             origins: vec![origin],
             username_hint: entry.username.clone(),

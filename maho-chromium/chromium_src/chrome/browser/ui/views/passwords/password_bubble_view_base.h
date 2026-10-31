@@ -18,7 +18,7 @@
   MAHO_PASSWORD_BUBBLE_TESTING_API                                         \
   static PasswordBubbleViewBase* CreateBubble_ChromiumImpl
 
-#include "src/chrome/browser/ui/views/passwords/password_bubble_view_base.h"  // IWYU pragma: export
+#include "../src/chrome/browser/ui/views/passwords/password_bubble_view_base.h"  // IWYU pragma: export
 
 #undef CreateBubble
 #undef MAHO_PASSWORD_BUBBLE_TESTING_API

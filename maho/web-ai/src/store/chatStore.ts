@@ -149,6 +149,7 @@ export function chatStoreReducer(state: ChatStoreState, action: ChatStoreAction)
     case 'BOOT_START':
       return {
         ...state,
+        draft: '',
         booting: true,
         conversationId: null,
         conversationPersisted: false,

@@ -24,6 +24,16 @@ where
 pub struct VaultBackendSession {
     runtime: Weak<VaultRuntime>,
     profile_database_path: String,
+    profile_id: maho_types::identifiers::ProfileId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VaultBackendMatchType {
+    /// Stored realm/origin equals the requested one (or unfiltered discovery).
+    Exact,
+    /// Different https host under the same registrable domain (eTLD+1).
+    Psl,
 }
 
 #[derive(serde::Serialize)]
@@ -44,6 +54,8 @@ pub struct VaultBackendLoginCredential {
     /// which case the C++ adapter falls back to Chromium's own defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub form_details: Option<VaultCredentialFormDetails>,
+    /// Serialized as `matchType`: `"exact"` or `"psl"`.
+    pub match_type: VaultBackendMatchType,
 }
 
 #[derive(Clone, Copy, Debug, serde::Deserialize)]
@@ -66,10 +78,15 @@ pub enum VaultBackendSessionError {
 }
 
 impl VaultBackendSession {
-    pub(crate) fn new(runtime: Weak<VaultRuntime>, profile_database_path: &str) -> Self {
+    pub(crate) fn new(
+        runtime: Weak<VaultRuntime>,
+        profile_database_path: &str,
+        profile_id: maho_types::identifiers::ProfileId,
+    ) -> Self {
         Self {
             runtime,
             profile_database_path: profile_database_path.to_owned(),
+            profile_id,
         }
     }
 
@@ -92,6 +109,7 @@ impl VaultBackendSession {
     pub fn login_credentials(
         &self,
         origin: Option<&str>,
+        scheme: Option<u8>,
     ) -> Result<Vec<VaultBackendLoginCredential>, VaultBackendSessionError> {
         let runtime = self
             .runtime
@@ -101,7 +119,7 @@ impl VaultBackendSession {
         let storage = maho_storage::sqlite::SqliteStorage::open(&self.profile_database_path)
             .map_err(|error| VaultBackendSessionError::Storage(error.to_string()))?;
         runtime
-            .login_credentials(VaultRepository::new(&storage, false), origin)
+            .login_credentials(VaultRepository::new(&storage, false), origin, scheme)
             .map_err(VaultBackendSessionError::from)
     }
 
@@ -115,18 +133,27 @@ impl VaultBackendSession {
             .runtime
             .upgrade()
             .ok_or(VaultBackendSessionError::RuntimeUnavailable)?;
-        runtime.ensure_unlocked().map_err(VaultCrudError::from)?;
         let storage = maho_storage::sqlite::SqliteStorage::open(&self.profile_database_path)
             .map_err(|error| VaultBackendSessionError::Storage(error.to_string()))?;
-        match action {
-            VaultBackendSecretAction::Fill => runtime
-                .use_login_password_at_revision(
-                    &VaultRepository::new(&storage, false),
-                    item_id,
-                    expected_revision,
-                )
-                .map_err(VaultBackendSessionError::from),
-        }
+        let operation = match action {
+            VaultBackendSecretAction::Fill => maho_types::vault::VaultAuditOperation::Fill,
+        };
+        let audit_context = super::audit::AuditContext::new(self.profile_id.clone(), operation);
+
+        let result = if let Err(lock_err) = runtime.ensure_unlocked() {
+            Err(VaultCrudError::from(lock_err))
+        } else {
+            let repository =
+                VaultRepository::new(&storage, false).with_audit(audit_context.clone());
+            match action {
+                VaultBackendSecretAction::Fill => {
+                    runtime.use_login_password_at_revision(&repository, item_id, expected_revision)
+                }
+            }
+        };
+
+        let completed = super::audit::complete_operation_result(&storage, &audit_context, result);
+        completed.map_err(VaultBackendSessionError::from)
     }
 }
 
@@ -135,7 +162,7 @@ mod tests {
     use chrono::DateTime;
     use maho_types::vault::{VaultItemId, VaultRevision, VaultSchemaVersion};
 
-    use super::VaultBackendLoginCredential;
+    use super::{VaultBackendLoginCredential, VaultBackendMatchType};
 
     fn credential(revision: u64) -> VaultBackendLoginCredential {
         let timestamp = DateTime::from_timestamp(1_700_000_000, 0).expect("valid test timestamp");
@@ -149,6 +176,7 @@ mod tests {
             updated_at: timestamp,
             last_used_at: None,
             form_details: None,
+            match_type: VaultBackendMatchType::Exact,
         }
     }
 

@@ -11,7 +11,6 @@
 #include "base/task/thread_pool.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -324,7 +323,8 @@ MahoTabWakeHelper::MahoTabWakeHelper(content::WebContents* web_contents,
     }
   }
 
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+  Browser* browser = static_cast<Browser*>(
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents));
   if (browser) {
     BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
     if (browser_view && browser_view->contents_web_view()) {

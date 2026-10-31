@@ -30,6 +30,9 @@ fn unlocked_core(dir: &tempfile::TempDir) -> MahoCore {
 fn login(title: &str, origin: &str, username: &str) -> VaultLoginInput {
     VaultLoginInput {
         metadata: VaultItemPublicMetadata {
+            favorite: false,
+            trashed_at: None,
+            has_notes: false,
             title: title.to_string(),
             origins: vec![CredentialOrigin::try_from(origin).expect("valid test origin")],
             username_hint: String::new(),
@@ -101,7 +104,7 @@ fn vault_backend_session_discovers_secret_free_identity_and_revision() {
         .expect("create backend session");
 
     let credentials = session
-        .login_credentials(Some("https://discovery.example"))
+        .login_credentials(Some("https://discovery.example"), None)
         .expect("discover credentials");
     assert_eq!(1, credentials.len());
     assert_eq!(item.id, credentials[0].item_id);
@@ -247,7 +250,7 @@ fn vault_backend_session_round_trips_credential_form_details() {
         .create_vault_backend_session()
         .expect("create backend session");
     let credentials = session
-        .login_credentials(Some("https://detail.example"))
+        .login_credentials(Some("https://detail.example"), None)
         .expect("read credentials");
 
     assert_eq!(1, credentials.len());
@@ -291,13 +294,120 @@ fn vault_backend_session_reads_legacy_records_without_form_details() {
         .create_vault_backend_session()
         .expect("create backend session");
     let credentials = session
-        .login_credentials(Some("https://legacy.example"))
+        .login_credentials(Some("https://legacy.example"), None)
         .expect("read credentials");
 
     assert_eq!(1, credentials.len());
     assert!(credentials[0].form_details.is_none());
     // The legacy realm fallback (first canonical origin) still applies.
     assert_eq!("https://legacy.example", credentials[0].signon_realm);
+}
+
+#[test]
+fn vault_backend_session_matches_http_auth_realms_exactly_without_merging_origins() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let mut core = unlocked_core(&dir);
+    // Chromium PasswordForm::Scheme: kBasic = 1, kDigest = 2.
+    for (scheme, origin) in [(1, "http://basic.example"), (2, "https://digest.example")] {
+        let mut expected = Vec::new();
+        // LoginHandler::GetSignonRealm appends the challenge realm verbatim,
+        // so case, trailing slashes, and URL-like suffixes remain identity.
+        for suffix in ["Members", "members", "Members/", "Members?view=1#section"] {
+            let realm = format!("{origin}/{suffix}");
+            let mut input = login_with_realm("HTTP auth", origin, "auth-user", &realm);
+            input.form_details.as_mut().expect("form details").scheme = scheme;
+            let item = core
+                .vault_add_login(input)
+                .expect("add distinct auth realm");
+            expected.push((realm, item.id));
+        }
+        // An HTML record with identical form-detail text must not be mistaken
+        // for an HTTP auth credential just because its realm matches exactly.
+        let html = core
+            .vault_add_login(login_with_realm(
+                "HTML",
+                origin,
+                "html-user",
+                &expected[0].0,
+            ))
+            .expect("add HTML login");
+        let legacy = core
+            .vault_add_login(login("Legacy", origin, "legacy-user"))
+            .expect("add legacy login");
+        let session = core
+            .create_vault_backend_session()
+            .expect("create backend session");
+
+        for (realm, id) in expected {
+            let credentials = session
+                .login_credentials(Some(&realm), None)
+                .expect("discover exact HTTP auth realm");
+            assert_eq!(1, credentials.len(), "realm {realm}");
+            assert_eq!(id, credentials[0].item_id);
+            assert_eq!(realm, credentials[0].signon_realm);
+            assert_eq!(
+                scheme,
+                credentials[0]
+                    .form_details
+                    .as_ref()
+                    .expect("form details")
+                    .scheme
+            );
+        }
+        let canonical_query = if scheme == 1 {
+            "http://BASIC.example:80/"
+        } else {
+            "https://DIGEST.example:443/"
+        };
+        for query in [origin, canonical_query] {
+            let credentials = session
+                .login_credentials(Some(query), None)
+                .expect("discover canonical HTML origin");
+            assert_eq!(2, credentials.len());
+            assert!(credentials
+                .iter()
+                .any(|credential| credential.item_id == html.id));
+            assert!(credentials
+                .iter()
+                .any(|credential| credential.item_id == legacy.id));
+        }
+    }
+}
+
+#[test]
+fn vault_backend_session_matches_android_terminal_slash_without_normalizing_identity() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let mut core = unlocked_core(&dir);
+    let mut expected = Vec::new();
+    // Chromium affiliation_utils_unittest.cc::ValidAndroidFacetURIs accepts
+    // "android://hash@com.example.android/"; the stored signon realm stays exact.
+    for realm in [
+        ANDROID_REALM.to_string(),
+        format!("{ANDROID_REALM}/"),
+        format!("{OTHER_ANDROID_REALM}/"),
+    ] {
+        let mut input = login_with_realm("Android", "https://app.example", "android-user", &realm);
+        // Match the Chromium writer: Android credentials have no web origins.
+        input.metadata.origins.clear();
+        input.form_details.as_mut().expect("form details").url = realm.clone();
+        let item = core.vault_add_login(input).expect("add Android login");
+        expected.push((realm, item.id));
+    }
+    let session = core
+        .create_vault_backend_session()
+        .expect("create backend session");
+    for (realm, id) in expected {
+        let credentials = session
+            .login_credentials(Some(&realm), None)
+            .expect("discover exact Android realm");
+        assert_eq!(1, credentials.len(), "realm {realm}");
+        assert_eq!(id, credentials[0].item_id);
+        assert_eq!(realm, credentials[0].signon_realm);
+    }
+    assert!(session
+        .login_credentials(Some(OTHER_ANDROID_REALM), None)
+        .expect("query absent unslashed Android realm")
+        .is_empty());
 }
 
 #[test]
@@ -316,7 +426,7 @@ fn vault_backend_session_matches_exact_android_realm_from_encrypted_details() {
         .create_vault_backend_session()
         .expect("create backend session");
     let credentials = session
-        .login_credentials(Some(ANDROID_REALM))
+        .login_credentials(Some(ANDROID_REALM), None)
         .expect("read Android credential");
 
     assert_eq!(1, credentials.len());
@@ -347,7 +457,7 @@ fn vault_backend_session_rejects_distinct_android_realm() {
         .create_vault_backend_session()
         .expect("create backend session");
     let credentials = session
-        .login_credentials(Some(OTHER_ANDROID_REALM))
+        .login_credentials(Some(OTHER_ANDROID_REALM), None)
         .expect("query distinct Android realm");
 
     assert!(credentials.is_empty());
@@ -364,7 +474,7 @@ fn vault_backend_session_does_not_match_legacy_record_for_android_realm() {
         .create_vault_backend_session()
         .expect("create backend session");
     let credentials = session
-        .login_credentials(Some(ANDROID_REALM))
+        .login_credentials(Some(ANDROID_REALM), None)
         .expect("query Android realm");
 
     assert!(credentials.is_empty());
@@ -386,13 +496,13 @@ fn vault_backend_session_keeps_web_matching_metadata_origin_based() {
         .create_vault_backend_session()
         .expect("create backend session");
     let credentials = session
-        .login_credentials(Some("https://APP.example:443"))
+        .login_credentials(Some("https://APP.example:443"), None)
         .expect("query canonical web origin");
 
     assert_eq!(1, credentials.len());
     assert_eq!(ANDROID_REALM, credentials[0].signon_realm);
     assert!(session
-        .login_credentials(Some("https://other.example"))
+        .login_credentials(Some("https://other.example"), None)
         .expect("query other web origin")
         .is_empty());
 }
@@ -417,12 +527,26 @@ fn vault_backend_session_rejects_malformed_android_queries() {
         "android://",
         "android://@com.example.android",
         "android://aGFzaA@com.example.android",
-        "android://aGFzaA==@com.example.android/",
         "android://aGFzaA==@com.example.android/path",
+        "android://aGFzaA==@com.example.android/path/",
+        "android://aGFzaA==@com.example.android//",
+        "android://aGFzaA==@com.example.android/?",
+        "android://aGFzaA==@com.example.android/?query",
+        "android://aGFzaA==@com.example.android/#",
+        "android://aGFzaA==@com.example.android/#fragment",
     ] {
+        // Reject malformed queries even if encrypted form details contain an
+        // exact match; absence of a matching record is not validation coverage.
+        core.vault_add_login(login_with_realm(
+            "Malformed Android",
+            "https://app.example",
+            "malformed-user",
+            malformed,
+        ))
+        .expect("store malformed form details");
         assert!(
             session
-                .login_credentials(Some(malformed))
+                .login_credentials(Some(malformed), None)
                 .expect("malformed Android query must fail closed")
                 .is_empty(),
             "malformed realm {malformed} must not match"
@@ -452,7 +576,11 @@ fn vault_update_without_form_details_preserves_stored_details() {
             item.id,
             item.revision,
             VaultLoginUpdate {
+                notes: None,
                 metadata: VaultItemPublicMetadata {
+                    favorite: false,
+                    trashed_at: None,
+                    has_notes: false,
                     title: "Renamed".to_string(),
                     origins: vec![CredentialOrigin::try_from("https://preserve.example")
                         .expect("valid test origin")],
@@ -473,7 +601,7 @@ fn vault_update_without_form_details_preserves_stored_details() {
         .create_vault_backend_session()
         .expect("create backend session");
     let credentials = session
-        .login_credentials(Some("https://preserve.example"))
+        .login_credentials(Some("https://preserve.example"), None)
         .expect("read credentials");
     assert_eq!(1, credentials.len());
     assert_eq!(

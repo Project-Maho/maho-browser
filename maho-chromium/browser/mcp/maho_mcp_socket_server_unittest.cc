@@ -14,8 +14,10 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <utility>
 
 #include "base/containers/span.h"
+#include "base/check.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
@@ -24,14 +26,19 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "content/public/test/browser_task_environment.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
 #include "net/base/net_errors.h"
+#include "net/socket/socket_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
 namespace maho {
-namespace {
+
+// allow: SIZE_OK - Existing GN-linked transport TU; lane ownership forbids new
+// source registration. Keep regressions here rather than alter shared GN files.
 
 // ---------------------------------------------------------------------------
 // Authentication / socket-cleanup coverage (unchanged behavior).
@@ -53,7 +60,12 @@ class MahoMcpSocketServerTest : public testing::Test {
     server_ = std::make_unique<MahoMcpSocketServer>(core_dir);
   }
 
-  void TearDown() override { server_.reset(); }
+  using ActiveConnection = MahoMcpSocketServer::ActiveConnection;
+
+  base::RepeatingCallback<void(std::string)> GetDeferredCallback(uint64_t id) {
+    return base::BindRepeating(&MahoMcpSocketServer::OnDeferredResponse,
+                               GetWeakPtrForTesting(), id);
+  }
 
   int ConnectToSocket() {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -82,6 +94,28 @@ class MahoMcpSocketServerTest : public testing::Test {
       content::BrowserTaskEnvironment::IO_MAINLOOP};
   base::ScopedTempDir temp_dir_;
   std::unique_ptr<MahoMcpSocketServer> server_;
+
+  void TearDown() override {
+    server_.reset();
+    MahoMcpSession::SetBrowserDelegate(nullptr);
+  }
+
+  MahoMcpSocketServer::ActiveConnection* FindConnectionForTesting(
+      uint64_t id) {
+    return server_->FindConnection(id);
+  }
+  std::vector<MahoMcpSocketServer::ActiveConnection>& SessionsForTesting() {
+    return server_->sessions_;
+  }
+  void ReadFromConnectionForTesting(uint64_t id) {
+    server_->ReadFromConnection(id);
+  }
+  base::WeakPtr<MahoMcpSocketServer> GetWeakPtrForTesting() {
+    return server_->weak_factory_.GetWeakPtr();
+  }
+  MahoMcpLeaseRegistry* lease_registry_for_testing() {
+    return server_->lease_registry_.get();
+  }
 };
 
 TEST_F(MahoMcpSocketServerTest, AcceptsConnection) {
@@ -106,7 +140,7 @@ TEST_F(MahoMcpSocketServerTest, RejectsMalformedFrame) {
 
   // Send malformed JSON.
   std::string bad = "this is not json\n";
-  write(fd, bad.c_str(), bad.size());
+  ASSERT_NE(write(fd, bad.c_str(), bad.size()), -1);
 
   // Allow processing.
   base::RunLoop().RunUntilIdle();
@@ -214,7 +248,9 @@ class FakeScreenshotDelegate : public MahoMcpBrowserDelegate {
   // when (and in which order) each deferred response fires.
   void CaptureFullPagePngBase64(
       int tab_id,
-      base::OnceCallback<void(std::string)> callback) override {
+      base::OnceCallback<void(std::string,
+                              std::optional<MahoMcpCaptureMetrics>)>
+          callback) override {
     pending_.push_back(std::move(callback));
   }
 
@@ -296,23 +332,26 @@ class FakeScreenshotDelegate : public MahoMcpBrowserDelegate {
       ui::AXNodeID ax_id,
       base::OnceCallback<void(std::string)> callback) override {}
 
+  using ScreenshotCallback = base::OnceCallback<void(
+      std::string, std::optional<MahoMcpCaptureMetrics>)>;
+
   size_t pending_count() const { return pending_.size(); }
 
-  base::OnceCallback<void(std::string)> TakeFront() {
-    base::OnceCallback<void(std::string)> cb = std::move(pending_.front());
+  ScreenshotCallback TakeFront() {
+    ScreenshotCallback cb = std::move(pending_.front());
     pending_.pop_front();
     return cb;
   }
 
-  base::OnceCallback<void(std::string)> TakeBack() {
-    base::OnceCallback<void(std::string)> cb = std::move(pending_.back());
+  ScreenshotCallback TakeBack() {
+    ScreenshotCallback cb = std::move(pending_.back());
     pending_.pop_back();
     return cb;
   }
 
  private:
   std::vector<MahoMcpSession::TabInfo> tabs_;
-  std::deque<base::OnceCallback<void(std::string)>> pending_;
+  std::deque<ScreenshotCallback> pending_;
 };
 
 class MahoMcpSocketServerDeferredTest : public testing::Test {
@@ -486,12 +525,12 @@ TEST_F(MahoMcpSocketServerDeferredTest, TwoClientReverseOrderDeferredRouting) {
   const std::string payload_b = "PAYLOAD_B_bbbbbbbbbbbbbbbb";
 
   // Fire in REVERSE connection order: B (last connected) first, then A.
-  base::OnceCallback<void(std::string)> cb_b = delegate_->TakeBack();
-  std::move(cb_b).Run(payload_b);
+  FakeScreenshotDelegate::ScreenshotCallback cb_b = delegate_->TakeBack();
+  std::move(cb_b).Run(payload_b, std::nullopt);
   task_environment_.RunUntilIdle();
 
-  base::OnceCallback<void(std::string)> cb_a = delegate_->TakeBack();
-  std::move(cb_a).Run(payload_a);
+  FakeScreenshotDelegate::ScreenshotCallback cb_a = delegate_->TakeBack();
+  std::move(cb_a).Run(payload_a, std::nullopt);
   task_environment_.RunUntilIdle();
 
   std::string resp_a = ReadLine(a);
@@ -529,8 +568,8 @@ TEST_F(MahoMcpSocketServerDeferredTest,
   ASSERT_EQ(delegate_->pending_count(), 2u);
 
   // pending_ == [cbA, cbB]; take both before tearing A down.
-  base::OnceCallback<void(std::string)> cb_a = delegate_->TakeFront();
-  base::OnceCallback<void(std::string)> cb_b = delegate_->TakeFront();
+  FakeScreenshotDelegate::ScreenshotCallback cb_a = delegate_->TakeFront();
+  FakeScreenshotDelegate::ScreenshotCallback cb_b = delegate_->TakeFront();
 
   // Tear down connection A and let the server observe EOF + RemoveConnection.
   CloseClient(a);
@@ -538,12 +577,12 @@ TEST_F(MahoMcpSocketServerDeferredTest,
   ASSERT_EQ(server_->active_session_count(), 1u);
 
   // Late callback for the removed connection: must be dropped, no crash.
-  std::move(cb_a).Run("PAYLOAD_A_dropped");
+  std::move(cb_a).Run("PAYLOAD_A_dropped", std::nullopt);
   task_environment_.RunUntilIdle();
   EXPECT_EQ(server_->active_session_count(), 1u);
 
   // Surviving connection B still gets its own response.
-  std::move(cb_b).Run("PAYLOAD_B_survives");
+  std::move(cb_b).Run("PAYLOAD_B_survives", std::nullopt);
   task_environment_.RunUntilIdle();
   std::string resp_b = ReadLine(b);
   EXPECT_NE(resp_b.find("\"id\":202"), std::string::npos) << resp_b;
@@ -574,8 +613,8 @@ TEST_F(MahoMcpSocketServerDeferredTest, LargeDeferredPayloadDrainsFully) {
   payload.append(filler, 'A');
   payload.append(tail);
 
-  base::OnceCallback<void(std::string)> cb = delegate_->TakeFront();
-  std::move(cb).Run(payload);
+  FakeScreenshotDelegate::ScreenshotCallback cb = delegate_->TakeFront();
+  std::move(cb).Run(payload, std::nullopt);
 
   std::string line = ReadLine(a);
   EXPECT_NE(line.find(head), std::string::npos);
@@ -675,5 +714,300 @@ TEST_F(MahoMcpSocketServerSyncTest, LargeSyncResponseDrainsFully) {
   EXPECT_NE(line.find(page_text), std::string::npos);
 }
 
-}  // namespace
+// A controlled kernel boundary: reads require an armed buffer, writes retain
+// their actual IOBuffer until an explicit completion. No server queue is mocked.
+class MemoryThreadSocket : public net::MockClientSocket {
+ public:
+  MemoryThreadSocket() : MockClientSocket(net::NetLogWithSource()) {}
+  int Connect(net::CompletionOnceCallback callback) override { return net::OK; }
+  bool WasEverUsed() const override { return true; }
+  bool GetSSLInfo(net::SSLInfo* info) override { return false; }
+  int Read(net::IOBuffer* buffer, int length,
+           net::CompletionOnceCallback callback) override {
+    CHECK(!read_callback_);
+    read_buffer_ = buffer;
+    read_length_ = length;
+    read_callback_ = std::move(callback);
+    return net::ERR_IO_PENDING;
+  }
+  int Write(net::IOBuffer* buffer, int length,
+            net::CompletionOnceCallback callback,
+            const net::NetworkTrafficAnnotationTag& annotation) override {
+    CHECK(!write_callback_);
+    write_buffer_ = buffer;
+    write_length_ = length;
+    write_callback_ = std::move(callback);
+    return net::ERR_IO_PENDING;
+  }
+  void Feed(const std::string& bytes) {
+    CHECK(read_callback_);
+    CHECK_LE(bytes.size(), static_cast<size_t>(read_length_));
+    read_buffer_->span().first(bytes.size()).copy_from(base::as_byte_span(bytes));
+    read_buffer_.reset();
+    std::move(read_callback_).Run(static_cast<int>(bytes.size()));
+  }
+  void CompleteWrite(int maximum) {
+    CHECK(write_callback_);
+    const int count = std::min(maximum, write_length_);
+    wire_.append(write_buffer_->data(), count);
+    write_buffer_.reset();
+    std::move(write_callback_).Run(count);
+  }
+  void Drain() {
+    while (write_callback_) {
+      CompleteWrite(8192);
+    }
+  }
+  std::string TakeWire() { return std::exchange(wire_, {}); }
+
+ private:
+  scoped_refptr<net::IOBuffer> read_buffer_;
+  scoped_refptr<net::IOBuffer> write_buffer_;
+  int read_length_ = 0;
+  int write_length_ = 0;
+  net::CompletionOnceCallback read_callback_;
+  net::CompletionOnceCallback write_callback_;
+  std::string wire_;
+};
+
+class MemoryThreadFetchDelegate : public FakeScreenshotDelegate {
+ public:
+  PageContentResult GetPageContent(int tab_id) override {
+    PageContentResult result;
+    result.url = "https://example.com/";
+    return result;
+  }
+  void SameOriginFetch(int tab_id, const GURL& url, const std::string& method,
+                       const std::string& body, const std::string& headers,
+                       SameOriginFetchCallback callback) override {
+    pending_fetches.push_back(std::move(callback));
+  }
+  void CompleteFetch(std::string text) {
+    SameOriginFetchResult result;
+    result.success = true;
+    result.status = 200;
+    result.final_url = "https://example.com/mt";
+    result.text = std::move(text);
+    auto callback = std::move(pending_fetches.front());
+    pending_fetches.pop_front();
+    std::move(callback).Run(std::move(result));
+  }
+  std::deque<SameOriginFetchCallback> pending_fetches;
+};
+
+class MahoMcpSocketMemoryThreadTest : public MahoMcpSocketServerTest {};
+
+TEST_F(MahoMcpSocketServerTest, MemoryThreadSlowReaderAdmission) {
+  // Given: an initialized client with no response completion/read credit returned.
+  MemoryThreadFetchDelegate delegate;
+  MahoMcpSession::SetBrowserDelegate(&delegate);
+  ActiveConnection connection;
+  auto socket = std::make_unique<MemoryThreadSocket>();
+  auto* socket_ptr = socket.get();
+  connection.socket = std::move(socket);
+  connection.connection_id = 1;
+  connection.session = std::make_unique<MahoMcpSession>(
+      getuid(), lease_registry_for_testing());
+  connection.session->SetDeferredResponseSender(base::BindPostTask(
+      base::SequencedTaskRunner::GetCurrentDefault(),
+      GetDeferredCallback(1)));
+  SessionsForTesting().push_back(std::move(connection));
+  ReadFromConnectionForTesting(1);
+  socket_ptr->Feed(
+      R"({"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"memory-thread","version":"1"}}})"
+      "\n");
+  task_environment_.RunUntilIdle();
+  socket_ptr->Drain();
+  const auto init =
+      base::JSONReader::Read(socket_ptr->TakeWire(), base::JSON_PARSE_RFC);
+  ASSERT_TRUE(init && init->is_dict() && init->GetDict().FindDict("result"));
+
+  std::string batch;
+  for (int id = 100; id < 117; ++id) {
+    batch += base::StringPrintf(
+        R"({"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"browser_same_origin_fetch","arguments":{"tab_id":1,"url":"https://example.com/mt"}}})"
+        "\n",
+        id);
+  }
+  // When: one read contains 17 genuinely deferred ordinary requests.
+  socket_ptr->Feed(batch);
+  task_environment_.RunUntilIdle();
+  // Then: the real dispatch path cannot start the seventeenth producer.
+  ASSERT_GT(delegate.pending_fetches.size(), 0u);
+  EXPECT_LE(delegate.pending_fetches.size(), 16u);
+}
+
+TEST_F(MahoMcpSocketServerTest, MemoryThreadDeferredReservationAndPartialWrites) {
+  // Given: all ordinary request credits are held by deferred completions.
+  MemoryThreadFetchDelegate delegate;
+  MahoMcpSession::SetBrowserDelegate(&delegate);
+  ActiveConnection connection;
+  auto socket = std::make_unique<MemoryThreadSocket>();
+  auto* socket_ptr = socket.get();
+  connection.socket = std::move(socket);
+  connection.connection_id = 1;
+  connection.session = std::make_unique<MahoMcpSession>(
+      getuid(), lease_registry_for_testing());
+  connection.session->SetDeferredResponseSender(base::BindPostTask(
+      base::SequencedTaskRunner::GetCurrentDefault(),
+      GetDeferredCallback(1)));
+  SessionsForTesting().push_back(std::move(connection));
+  ReadFromConnectionForTesting(1);
+  socket_ptr->Feed(
+      R"({"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"memory-thread","version":"1"}}})"
+      "\n");
+  task_environment_.RunUntilIdle();
+  socket_ptr->Drain();
+  const auto init =
+      base::JSONReader::Read(socket_ptr->TakeWire(), base::JSON_PARSE_RFC);
+  ASSERT_TRUE(init && init->is_dict() && init->GetDict().FindDict("result"));
+
+  std::string batch;
+  for (int id = 200; id < 217; ++id) {
+    batch += base::StringPrintf(
+        R"({"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"browser_same_origin_fetch","arguments":{"tab_id":1,"url":"https://example.com/mt"}}})"
+        "\n",
+        id);
+  }
+  socket_ptr->Feed(batch);
+  task_environment_.RunUntilIdle();
+  ASSERT_GT(delegate.pending_fetches.size(), 0u);
+  const std::string text(900 * 1024, 'x');
+  delegate.CompleteFetch(text);
+  task_environment_.RunUntilIdle();
+  auto RetainedOutputBytes = [&]() -> size_t {
+    const auto* conn = FindConnectionForTesting(1);
+    if (!conn) {
+      return 0;
+    }
+    size_t bytes =
+        conn->current_write ? conn->current_write->BytesRemaining() : 0;
+    for (const auto& response : conn->write_queue) {
+      bytes += response.size();
+    }
+    return bytes;
+  };
+  const size_t before = RetainedOutputBytes();
+  ASSERT_GT(before, text.size());
+  socket_ptr->CompleteWrite(7);
+  ASSERT_EQ(RetainedOutputBytes(), before - 7);
+  // When: the first accepted response is only partly written while ingress remains buffered.
+  // Then: neither deferred completion nor a partial write releases its request credit.
+  EXPECT_LE(delegate.pending_fetches.size(), 15u);
+  socket_ptr->Drain();
+  auto response =
+      base::JSONReader::Read(socket_ptr->TakeWire(), base::JSON_PARSE_RFC);
+  ASSERT_TRUE(response && response->is_dict());
+  EXPECT_EQ(response->GetDict().FindInt("id"), 200);
+  const auto* delivered =
+      response->GetDict().FindStringByDottedPath("result.text");
+  ASSERT_TRUE(delivered);
+  EXPECT_EQ(*delivered, text);
+}
+
+TEST_F(MahoMcpSocketServerTest, MemoryThreadOrdinaryResponseTooLarge) {
+  // Given: an ordinary request admitted through real framing/authorization.
+  MemoryThreadFetchDelegate delegate;
+  MahoMcpSession::SetBrowserDelegate(&delegate);
+  ActiveConnection connection;
+  auto socket = std::make_unique<MemoryThreadSocket>();
+  auto* socket_ptr = socket.get();
+  connection.socket = std::move(socket);
+  connection.connection_id = 1;
+  connection.session = std::make_unique<MahoMcpSession>(
+      getuid(), lease_registry_for_testing());
+  connection.session->SetDeferredResponseSender(base::BindPostTask(
+      base::SequencedTaskRunner::GetCurrentDefault(),
+      GetDeferredCallback(1)));
+  SessionsForTesting().push_back(std::move(connection));
+  ReadFromConnectionForTesting(1);
+  socket_ptr->Feed(
+      R"({"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"memory-thread","version":"1"}}})"
+      "\n");
+  task_environment_.RunUntilIdle();
+  socket_ptr->Drain();
+  const auto init =
+      base::JSONReader::Read(socket_ptr->TakeWire(), base::JSON_PARSE_RFC);
+  ASSERT_TRUE(init && init->is_dict() && init->GetDict().FindDict("result"));
+
+  socket_ptr->Feed(base::StringPrintf(
+      R"({"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"browser_same_origin_fetch","arguments":{"tab_id":1,"url":"https://example.com/mt"}}})"
+      "\n",
+      300));
+  task_environment_.RunUntilIdle();
+  ASSERT_EQ(delegate.pending_fetches.size(), 1u);
+  // When: its asynchronous producer returns more than its ordinary response allowance.
+  delegate.CompleteFetch(std::string(2 * 1024 * 1024, 'x'));
+  task_environment_.RunUntilIdle();
+  auto RetainedOutputBytes = [&]() -> size_t {
+    const auto* conn = FindConnectionForTesting(1);
+    if (!conn) {
+      return 0;
+    }
+    size_t bytes =
+        conn->current_write ? conn->current_write->BytesRemaining() : 0;
+    for (const auto& response : conn->write_queue) {
+      bytes += response.size();
+    }
+    return bytes;
+  };
+  // Then: return a bounded error for the same ID, not silent loss or oversized success.
+  EXPECT_LE(RetainedOutputBytes(), 1024u * 1024u);
+  socket_ptr->Drain();
+  auto response =
+      base::JSONReader::Read(socket_ptr->TakeWire(), base::JSON_PARSE_RFC);
+  ASSERT_TRUE(response && response->is_dict());
+  EXPECT_EQ(response->GetDict().FindInt("id"), 300);
+  EXPECT_TRUE(response->GetDict().FindDict("error"));
+  EXPECT_FALSE(response->GetDict().FindDict("result"));
+}
+
+TEST_F(MahoMcpSocketServerTest, MemoryThreadLargeResultCompatibility) {
+  // Given: two screenshot requests in the same read; the large-result slot is exclusive.
+  FakeScreenshotDelegate screenshot_delegate;
+  MahoMcpSession::SetBrowserDelegate(&screenshot_delegate);
+  ActiveConnection connection;
+  auto socket = std::make_unique<MemoryThreadSocket>();
+  auto* socket_ptr = socket.get();
+  connection.socket = std::move(socket);
+  connection.connection_id = 1;
+  connection.session = std::make_unique<MahoMcpSession>(
+      getuid(), lease_registry_for_testing());
+  connection.session->SetDeferredResponseSender(base::BindPostTask(
+      base::SequencedTaskRunner::GetCurrentDefault(),
+      GetDeferredCallback(1)));
+  SessionsForTesting().push_back(std::move(connection));
+  ReadFromConnectionForTesting(1);
+  socket_ptr->Feed(
+      R"({"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"memory-thread","version":"1"}}})"
+      "\n");
+  task_environment_.RunUntilIdle();
+  socket_ptr->Drain();
+
+  const std::string request =
+      R"({"jsonrpc":"2.0","method":"tools/call","id":400,"params":{"name":"browser_screenshot_full","arguments":{"tab_id":1}}})"
+      "\n";
+  // When: the peer pipelines a second large producer before the first completes.
+  socket_ptr->Feed(
+      request +
+      R"({"jsonrpc":"2.0","method":"tools/call","id":401,"params":{"name":"browser_screenshot_full","arguments":{"tab_id":1}}})"
+      "\n");
+  task_environment_.RunUntilIdle();
+  // Then: the slot prevents concurrent production without shrinking a legal response.
+  ASSERT_GT(screenshot_delegate.pending_count(), 0u);
+  EXPECT_EQ(screenshot_delegate.pending_count(), 1u);
+  const std::string payload(2 * 1024 * 1024, 'A');
+  std::move(screenshot_delegate.TakeFront()).Run(payload, std::nullopt);
+  task_environment_.RunUntilIdle();
+  socket_ptr->CompleteWrite(7);
+  socket_ptr->Drain();
+  const std::string wire = socket_ptr->TakeWire();
+  auto response = base::JSONReader::Read(wire.substr(0, wire.find('\n')),
+                                         base::JSON_PARSE_RFC);
+  ASSERT_TRUE(response && response->is_dict());
+  EXPECT_EQ(response->GetDict().FindInt("id"), 400);
+  const auto* data = response->GetDict().FindStringByDottedPath("result.data");
+  ASSERT_TRUE(data);
+  EXPECT_EQ(*data, payload);
+}
 }  // namespace maho

@@ -95,6 +95,7 @@ export function RoutineWorkspace(
   const [statuses, setStatuses] = useState<RoutineRunStatus[]>([]);
   const [history, setHistory] = useState<RoutineRunRecord[]>([]);
   const [eligible, setEligible] = useState<boolean | null>(null);
+  const [eligibilityAttempt, setEligibilityAttempt] = useState(0);
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [triggerMode, setTriggerMode] = useState<TriggerMode>('manual');
@@ -102,6 +103,7 @@ export function RoutineWorkspace(
   const [trigger, setTrigger] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
   const clientGeneration = useRef(0);
   const refreshRequest = useRef(0);
 
@@ -164,7 +166,7 @@ export function RoutineWorkspace(
         ++refreshRequest.current;
       }
     };
-  }, [client, refresh]);
+  }, [client, refresh, eligibilityAttempt]);
 
   useEffect(() => {
     if (!client) {
@@ -182,13 +184,15 @@ export function RoutineWorkspace(
         void refresh(generation);
       }
     });
-  }, [client, refresh]);
+  }, [client, refresh, eligibilityAttempt]);
 
   const runMutation = useCallback(async (mutation: () => Promise<unknown>) => {
     const generation = clientGeneration.current;
     setBusy(true);
     try {
-      await mutation();
+      if (await mutation() === false) {
+        throw new Error('That action was not accepted. Try again.');
+      }
       await refresh(generation);
     } catch (reason) {
       if (generation === clientGeneration.current) {
@@ -224,9 +228,18 @@ export function RoutineWorkspace(
 
   if (eligible === null) {
     return (
-      <section aria-busy="true" aria-label="Routines" className="p-3.5">
+      <section aria-busy={!error} aria-label="Routines" className="p-3.5">
         {workspaceHeader}
-        <p className="mt-4 text-center text-xs text-muted-foreground">Loading routines...</p>
+        {error ? (
+          <div role="alert" data-routine-error className="text-xs text-destructive">
+            <p>{error}</p>
+            <Button data-routine-retry onClick={() => setEligibilityAttempt(attempt => attempt + 1)} type="button" variant="outline">
+              Retry
+            </Button>
+          </div>
+        ) : (
+          <p className="mt-4 text-center text-xs text-muted-foreground">Loading routines...</p>
+        )}
       </section>
     );
   }
@@ -308,8 +321,31 @@ export function RoutineWorkspace(
             setTrigger('');
           });
         }}>
-        <div className="border-b border-border pb-1">
+        <div className="flex items-center justify-between border-b border-border pb-1">
           <h3 className="text-xs font-semibold text-foreground">Create routine</h3>
+          {client && (
+            <Button
+              type="button"
+              size="sm"
+              variant={recording ? "destructive" : "outline"}
+              className="h-6 text-2xs px-2"
+              onClick={async () => {
+                if (recording) {
+                  const res = await client.stopTraceRecording();
+                  setRecording(false);
+                  if (res.traceJson) {
+                    setPrompt(prev => prev ? `${prev}\n\n${res.traceJson}` : res.traceJson);
+                  }
+                } else {
+                  const ok = await client.startTraceRecording(0n);
+                  if (ok) {
+                    setRecording(true);
+                  }
+                }
+              }}>
+              {recording ? "🔴 Stop Recording" : "Record Actions (Trace v3)"}
+            </Button>
+          )}
         </div>
         <Input
           aria-label="Routine name"

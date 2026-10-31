@@ -38,7 +38,7 @@ content::WebContents* GetActiveWebContents(Browser* browser) {
     return nullptr;
   }
 
-  TabStripModel* tab_strip = browser->tab_strip_model();
+  TabStripModel* tab_strip = browser->GetTabStripModel();
   return tab_strip ? tab_strip->GetActiveWebContents() : nullptr;
 }
 
@@ -69,7 +69,7 @@ MahoShieldBubbleCoordinator& MahoShieldBubbleCoordinator::GetForBrowser(
   if (it == map.end()) {
     auto coordinator = std::make_unique<MahoShieldBubbleCoordinator>();
     coordinator->browser_ = browser;
-    TabStripModel* tab_strip = browser->tab_strip_model();
+    TabStripModel* tab_strip = browser->GetTabStripModel();
     DCHECK(tab_strip);
     if (tab_strip) {
       coordinator->observed_tab_strip_ = tab_strip;

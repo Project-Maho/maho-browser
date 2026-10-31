@@ -90,6 +90,52 @@ fn subdomain_matches(stored: &CredentialOrigin, requested: &CredentialOrigin) ->
     }
 }
 
+/// Chromium-style public-suffix (PSL) affiliation: both origins are https,
+/// share a port, differ in host, and share a registrable domain (eTLD+1)
+/// under a known public suffix. IP literals, localhost, and hosts without a
+/// determinable registrable domain never match.
+pub(crate) fn public_suffix_matches(
+    stored: &CredentialOrigin,
+    requested: &CredentialOrigin,
+) -> bool {
+    let (Ok(stored_url), Ok(requested_url)) = (
+        reqwest::Url::parse(stored.as_str()),
+        reqwest::Url::parse(requested.as_str()),
+    ) else {
+        return false;
+    };
+    if stored_url.scheme() != "https" || requested_url.scheme() != "https" {
+        return false;
+    }
+    if stored_url.port_or_known_default() != requested_url.port_or_known_default() {
+        return false;
+    }
+    // `domain()` is `None` for IPv4/IPv6 literals.
+    let (Some(stored_host), Some(requested_host)) = (stored_url.domain(), requested_url.domain())
+    else {
+        return false;
+    };
+    if stored_host == requested_host || is_localhost(stored_host) || is_localhost(requested_host) {
+        return false;
+    }
+    match (
+        known_registrable_domain(stored_host),
+        known_registrable_domain(requested_host),
+    ) {
+        (Some(stored_domain), Some(requested_domain)) => stored_domain == requested_domain,
+        _ => false,
+    }
+}
+
+fn is_localhost(host: &str) -> bool {
+    host == "localhost" || host.ends_with(".localhost")
+}
+
+fn known_registrable_domain(host: &str) -> Option<&[u8]> {
+    let domain = psl::domain(host.as_bytes())?;
+    domain.suffix().is_known().then(|| domain.as_bytes())
+}
+
 fn is_label_boundary_child(parent_host: &str, child_host: &str) -> bool {
     child_host.len() > parent_host.len()
         && child_host.ends_with(parent_host)

@@ -139,7 +139,7 @@ void MahoNotificationOverlay::PostRemovalIfNeeded() {
 }
 
 void MahoNotificationOverlay::OnBrowserClosed(BrowserWindowInterface* browser) {
-  if (browser && browser->GetBrowserForMigrationOnly() == browser_) {
+  if (browser && browser == browser_) {
     PostRemovalIfNeeded();
   }
 }

@@ -234,7 +234,6 @@ executable("maho_mail_helper") {
     "//mojo/public/cpp/platform",
     "//mojo/public/cpp/system",
     "//maho/third_party/maho:maho_mail_ffi",
-    "//third_party/boringssl",
     "//third_party/crashpad/crashpad/client",
   ]
 

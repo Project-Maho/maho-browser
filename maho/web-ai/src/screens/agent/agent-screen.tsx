@@ -47,6 +47,14 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
   const submittedGoalRef = useRef(false);
   const cancelledTurnIdsRef = useRef<Set<string>>(new Set());
   const draftRef = useRef(state.draft);
+  // U13 SPA lifetime: monotonic generation captured at submit; invalidated on
+  // unmount, bridge change, and reset. Every await re-checks it before
+  // touching the handle, so a late create/config/send can never act on a dead
+  // generation and a late-created handle is freed exactly once.
+  const generationRef = useRef(0);
+  // Shared in-flight create promise within the live generation: two submits
+  // never create duplicate ownership.
+  const createInFlightRef = useRef<Promise<AgentHandle> | null>(null);
   const { forceBottom, onScroll, scrollRef } = useAgentAutoScroll(state.scrollRevision);
 
   handleRef.current = state.handle;
@@ -85,18 +93,46 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
       const prompt = rawPrompt.trim();
       if (!prompt) return;
 
+      const generation = generationRef.current;
+      const acknowledgeDraft = drafts.captureSend();
       const turnId = createId('turn');
       dispatch({ type: 'SUBMIT_PROMPT', createdAt: new Date(), messageId: createId('user'), prompt, turnId });
       // The optimistic clear only empties the in-memory composer; the persisted
       // draft survives until the native send is accepted.
       forceBottom();
 
-      try {
-        const handle = await ensureSessionHandle(bridge, handleRef.current, turnId, cancelledTurnIdsRef.current);
-        if (handle === null) return;
-        handleRef.current = handle;
-        dispatch({ type: 'SESSION_READY', handle });
+      const generationDead = (): boolean => generationRef.current !== generation;
 
+      try {
+        let handle: AgentHandle;
+        if (handleRef.current !== null) {
+          handle = handleRef.current;
+        } else {
+          // Shared in-flight create within the live generation prevents two
+          // submits from creating duplicate ownership.
+          if (createInFlightRef.current === null) {
+            const creating = bridge.agentCreateSession(createId('agent-session')).finally(() => {
+              if (createInFlightRef.current === creating) createInFlightRef.current = null;
+            });
+            createInFlightRef.current = creating;
+          }
+          const created = await createInFlightRef.current;
+          if (generationDead()) {
+            // A newly created handle that returns to a dead generation is
+            // freed once, never sent to, never stored in a dead ref.
+            freeSessionAfterTeardown(bridge, created);
+            return;
+          }
+          if (cancelledTurnIdsRef.current.has(turnId)) {
+            freeSessionAfterTeardown(bridge, created);
+            return;
+          }
+          handle = created;
+          handleRef.current = handle;
+          dispatch({ type: 'SESSION_READY', handle });
+        }
+
+        if (generationDead()) return;
         if (cancelledTurnIdsRef.current.has(turnId)) return;
         // Suggested-task flag dispatch (mobile parity of the desktop
         // startSuggestedTask flow): create → apply flags → send. A rejection
@@ -108,6 +144,7 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
             return;
           }
           const accepted = await bridge.agentSetRuntimeConfig(handle, runtimeConfig);
+          if (generationDead() || cancelledTurnIdsRef.current.has(turnId)) return;
           if (!accepted) {
             restoreUnsentDraft(prompt);
             dispatch({ type: 'AGENT_ERROR', message: 'The suggested task flags were rejected; the task was not started.' });
@@ -115,13 +152,19 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
           }
         }
         const sent = await bridge.agentSendMessage(handle, prompt);
+        if (generationDead()) {
+          // Late acknowledgement for a dead generation: never resurrect state
+          // and never restore the draft into a new screen.
+          return;
+        }
         if (!sent) {
           restoreUnsentDraft(prompt);
           dispatch({ type: 'AGENT_ERROR', message: 'Agent did not accept the message.' });
           return;
         }
-        void drafts.clear();
+        void acknowledgeDraft();
       } catch (error) {
+        if (generationDead()) return;
         restoreUnsentDraft(prompt);
         dispatch({ type: 'AGENT_ERROR', message: messageFromError(error, 'Failed to start agent session') });
       }
@@ -213,6 +256,10 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
 
   useEffect(() => {
     return () => {
+      // Unmount invalidates every in-flight submit generation; late creates
+      // are freed by their submit's generation check, and the live session —
+      // if one was already attached — is freed here.
+      generationRef.current += 1;
       const handle = handleRef.current;
       if (handle !== null) {
         freeSessionAfterTeardown(bridge, handle);
@@ -231,6 +278,11 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
     }
 
     const handle = handleRef.current;
+    if (handle === null) {
+      // The cancelled submit owns its late result and will free it; a retry
+      // must allocate independently rather than adopt that same handle.
+      createInFlightRef.current = null;
+    }
     if (handle !== null) {
       try {
         await bridge.agentCancel(handle);
@@ -243,7 +295,14 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
   }, [bridge, state.activeTurnId]);
 
   const handleNewSession = useCallback(async () => {
-    if (isRunActive(state.phase)) return;
+    // U13: reset is valid even while a session create is in flight — the
+    // generation bump makes the pending submit free its late handle exactly
+    // once instead of adopting it.
+    generationRef.current += 1;
+    createInFlightRef.current = null;
+    if (state.activeTurnId !== null) {
+      cancelledTurnIdsRef.current.add(state.activeTurnId);
+    }
     const handle = handleRef.current;
     if (handle !== null) {
       await freeSessionForReset(bridge, handle);
@@ -252,7 +311,7 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
     cancelledTurnIdsRef.current.clear();
     await drafts.clear();
     dispatch({ type: 'RESET' });
-  }, [bridge, drafts, state.phase]);
+  }, [bridge, drafts, state.activeTurnId]);
 
   const handleOpenSettings = useCallback(() => {
     window.location.hash = 'byok';
@@ -329,24 +388,6 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
       />
     </div>
   );
-}
-
-async function ensureSessionHandle(
-  bridge: MahoBridge,
-  existingHandle: AgentHandle | null,
-  turnId: string,
-  cancelledTurnIds: ReadonlySet<string>,
-): Promise<AgentHandle | null> {
-  if (existingHandle !== null) {
-    return existingHandle;
-  }
-
-  const handle = await bridge.agentCreateSession(createId('agent-session'));
-  if (cancelledTurnIds.has(turnId)) {
-    freeSessionAfterTeardown(bridge, handle);
-    return null;
-  }
-  return handle;
 }
 
 function messageFromError(error: unknown, fallback: string): string {

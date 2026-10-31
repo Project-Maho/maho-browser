@@ -14,19 +14,24 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "base/scoped_observation.h"
+#include "base/supports_user_data.h"
 #include "base/rand_util.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "maho/browser/ai/maho_control_activity_service.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
@@ -43,11 +48,14 @@
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/ai/maho_ai_llm_client.h"
+#include "maho/browser/ai/maho_ai_runtime_router.h"
 #include "maho/browser/ai/maho_ai_security_utils.h"
 #include "maho/browser/ai/maho_artifact_registry.h"
+#include "maho/browser/ai/maho_capability_broker.h"
 #include "maho/browser/ai/maho_credential_redaction.h"
 #include "maho/browser/ai/maho_extract_prompt_messages.h"
 #include "maho/browser/ai/maho_model_list_fetcher.h"
+#include "maho/browser/ai/maho_unified_agent_adapter.h"
 #include "maho/browser/maho_ai_popup_lifetime_tracker.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -60,12 +68,14 @@
 #include "maho/browser/ui/webui/maho_ai/maho_ai_runtime_event_persistence.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai_voice_session.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
+#include "maho/browser/ui/webui/maho_ai_provider_oauth.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_routines/maho_routines_page_handler.h"
 #include "maho/browser/ui/webui/maho_subscription_checkout.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "net/base/net_errors.h"
 #include "net/base/url_util.h"
 #include "net/http/http_response_headers.h"
@@ -85,7 +95,6 @@ namespace ai = maho::ai_prefs;
 
 static constexpr size_t kMaxPageContextChars = 8000;
 
-constexpr size_t kMaxPersistedEvents = 500;
 // Capped at 100 sessions to keep profile prefs loading fast on startup
 // while providing sufficient history size for regular usage.
 constexpr size_t kMaxPersistedSessions = 100;
@@ -122,12 +131,66 @@ bool AcceptsDynamicModel(const std::string& provider_id) {
   return false;
 }
 
+void AppendReplayEvent(
+    std::vector<maho_ai::mojom::RuntimeEventPtr>& events,
+    maho_ai::mojom::RuntimeEventPtr event) {
+  maho::ai::RuntimeReplayBudget budget;
+  maho::ai::NormalizeReplayWindow(events, budget);
+  maho::ai::AppendBoundedReplayEvent(events, budget, event);
+}
+
+bool IsProviderConfigured(const std::string& provider_id, PrefService* prefs) {
+  if (!prefs) {
+    return false;
+  }
+  if (provider_id == "maho-managed") {
+    return maho::auth::HasValidRelaySession(prefs);
+  }
+  if (provider_id == "openai") {
+    return !prefs->GetString(maho::ai_prefs::kByokOpenAIEncryptedB64).empty() ||
+           maho::ai_oauth::HasOAuthSession(prefs, "openai") ||
+           (prefs->GetString(maho::ai_prefs::kProvider) == "openai" &&
+            !prefs->GetString(maho::ai_prefs::kApiKey).empty());
+  }
+  if (provider_id == "anthropic") {
+    return !prefs->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64).empty() ||
+           maho::ai_oauth::HasOAuthSession(prefs, "anthropic") ||
+           (prefs->GetString(maho::ai_prefs::kProvider) == "anthropic" &&
+            !prefs->GetString(maho::ai_prefs::kApiKey).empty());
+  }
+  if (provider_id == "openai-compatible") {
+    return (prefs->GetString(maho::ai_prefs::kProvider) == "openai-compatible") &&
+           !prefs->GetString(maho::ai_prefs::kBaseUrl).empty();
+  }
+  if (provider_id == "local-server") {
+    return (prefs->GetString(maho::ai_prefs::kProvider) == "local-server") &&
+           !prefs->GetString(maho::ai_prefs::kBaseUrl).empty();
+  }
+  return false;
+}
+
 std::vector<std::string> GetSelectableModels(
     const std::string& provider_id,
     const std::string& active_provider_id,
-    const std::string& active_model_id) {
+    const std::string& active_model_id,
+    PrefService* prefs = nullptr) {
   std::vector<std::string> models =
       maho::ai::MahoModelListFetcher::GetHardcodedFallback(provider_id);
+  if (prefs) {
+    const auto& cache = prefs->GetDict(maho::ai_prefs::kModelCache);
+    if (const auto* provider_cache = cache.FindDict(provider_id)) {
+      if (const auto* list = provider_cache->FindList("models")) {
+        for (const auto& item : *list) {
+          if (item.is_string()) {
+            const std::string& name = item.GetString();
+            if (std::find(models.begin(), models.end(), name) == models.end()) {
+              models.push_back(name);
+            }
+          }
+        }
+      }
+    }
+  }
   if (provider_id == active_provider_id && !active_model_id.empty() &&
       std::find(models.begin(), models.end(), active_model_id) ==
           models.end()) {
@@ -139,13 +202,14 @@ std::vector<std::string> GetSelectableModels(
 bool IsSelectableModel(const std::string& provider_id,
                        const std::string& model_id,
                        const std::string& active_provider_id,
-                       const std::string& active_model_id) {
+                       const std::string& active_model_id,
+                       PrefService* prefs = nullptr) {
   if (model_id.empty()) {
     return false;
   }
 
   const std::vector<std::string> models =
-      GetSelectableModels(provider_id, active_provider_id, active_model_id);
+      GetSelectableModels(provider_id, active_provider_id, active_model_id, prefs);
   return AcceptsDynamicModel(provider_id) ||
          std::find(models.begin(), models.end(), model_id) != models.end();
 }
@@ -411,7 +475,15 @@ maho_ai::mojom::RuntimeEventPtr DictToRuntimeEvent(
   }
   event->sequence =
       static_cast<uint64_t>(dict.FindDouble("sequence").value_or(0));
+  event->sequence_start = static_cast<uint64_t>(
+      dict.FindDouble("sequence_start").value_or(event->sequence));
   event->timestamp = dict.FindDouble("timestamp").value_or(0);
+  if (const auto* window = dict.FindDict("replay_window")) {
+    event->replay_window = maho_ai::mojom::ReplayWindowInfo::New(
+        static_cast<uint64_t>(window->FindDouble("omitted_turns").value_or(0)),
+        static_cast<uint64_t>(
+            window->FindDouble("omitted_through_sequence").value_or(0)));
+  }
   const std::string* text = dict.FindString("text");
   if (text) {
     event->text = *text;
@@ -618,6 +690,8 @@ maho_ai::mojom::RuntimeEventKind InternalToMojoEventKind(
       return maho_ai::mojom::RuntimeEventKind::kArtifactCreated;
     case MahoAiRuntimeEventType::kInteractionRequest:
       return maho_ai::mojom::RuntimeEventKind::kInteractionRequest;
+    case MahoAiRuntimeEventType::kModelResolved:
+      return maho_ai::mojom::RuntimeEventKind::kSessionStatus;
     default:
       return maho_ai::mojom::RuntimeEventKind::kError;
   }
@@ -760,6 +834,218 @@ maho_ai::mojom::InteractionRequestInfoPtr InteractionRequestInfoFromPayload(
 
 }  // namespace
 
+class MahoAIEventLogPersistence : public base::SupportsUserData::Data,
+                                public ProfileObserver {
+ public:
+  using Snapshot = std::vector<maho_ai::mojom::RuntimeEventPtr>;
+  using ReplyGate = base::RepeatingCallback<void(base::OnceClosure)>;
+
+  static base::WeakPtr<MahoAIEventLogPersistence> Get(Profile* profile,
+                                                     PrefService* prefs) {
+    static const char key = 0;
+    auto* owner = static_cast<MahoAIEventLogPersistence*>(
+        profile->GetUserData(&key));
+    if (!owner) {
+      auto data = std::make_unique<MahoAIEventLogPersistence>(profile, prefs);
+      owner = data.get();
+      profile->SetUserData(&key, std::move(data));
+    }
+    return owner->weak_factory_.GetWeakPtr();
+  }
+
+  MahoAIEventLogPersistence(Profile* profile, PrefService* prefs)
+      : prefs_(prefs),
+        worker_(base::ThreadPool::CreateSequencedTaskRunner(
+            {base::MayBlock(), base::TaskPriority::BEST_EFFORT})) {
+    observation_.Observe(profile);
+    pref_changes_.Init(prefs);
+    pref_changes_.Add(
+        ai::kSessionPersistenceEnabled,
+        base::BindRepeating(
+            &MahoAIEventLogPersistence::OnPersistenceSettingChanged,
+            base::Unretained(this)));
+  }
+
+  bool IsCleared(const std::string& session_id) const {
+    return cleared_sessions_.contains(session_id);
+  }
+
+  std::shared_ptr<const Snapshot> Pending(const std::string& session_id) const {
+    auto it = pending_.find(session_id);
+    return it == pending_.end() ? nullptr : it->second.snapshot;
+  }
+
+  void Persist(const std::string& session_id,
+               const Snapshot& log,
+               ReplyGate gate,
+               base::OnceCallback<void(bool)> completed = {}) {
+    if (!prefs_ || !prefs_->GetBoolean(ai::kSessionPersistenceEnabled) ||
+        IsCleared(session_id)) {
+      if (completed) {
+        std::move(completed).Run(false);
+      }
+      return;
+    }
+    auto snapshot = std::make_shared<Snapshot>();
+    snapshot->reserve(log.size());
+    for (const auto& event : log) {
+      snapshot->push_back(event->Clone());
+    }
+    auto& pending = pending_[session_id];
+    pending.snapshot = std::move(snapshot);
+    pending.gate = std::move(gate);
+    if (completed) {
+      pending.receipts.push_back(std::move(completed));
+    }
+    if (!running_.contains(session_id)) {
+      Start(session_id);
+    }
+  }
+
+  void Clear(const std::string& session_id) {
+    cleared_sessions_.insert(session_id);
+    auto pending = pending_.extract(session_id);
+    running_.erase(session_id);
+    if (prefs_) {
+      ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
+      update->Remove(session_id);
+    }
+    if (!pending.empty()) {
+      for (auto& receipt : pending.mapped().receipts) {
+        std::move(receipt).Run(false);
+      }
+    }
+  }
+
+  void DetachReplyGate(const std::string& session_id) {
+    auto pending = pending_.find(session_id);
+    if (pending != pending_.end()) {
+      pending->second.gate.Reset();
+    }
+  }
+
+  void RetainSessions(const std::vector<std::string>& kept_ids) {
+    const std::set<std::string> kept(kept_ids.begin(), kept_ids.end());
+    std::vector<std::string> removed;
+    for (const auto& [session_id, write] : pending_) {
+      if (!kept.contains(session_id)) {
+        removed.push_back(session_id);
+      }
+    }
+    for (const auto& session_id : removed) {
+      Clear(session_id);
+    }
+  }
+
+  void OnProfileWillBeDestroyed(Profile* profile) override {
+    observation_.Reset();
+    pref_changes_.RemoveAll();
+    weak_factory_.InvalidateWeakPtrs();
+    prefs_ = nullptr;
+    CancelPending();
+  }
+
+ private:
+  struct PendingWrite {
+    std::shared_ptr<const Snapshot> snapshot;
+    ReplyGate gate;
+    std::vector<base::OnceCallback<void(bool)>> receipts;
+  };
+
+  void CancelPending() {
+    auto pending = std::move(pending_);
+    pending_.clear();
+    running_.clear();
+    for (auto& [session_id, write] : pending) {
+      for (auto& receipt : write.receipts) {
+        std::move(receipt).Run(false);
+      }
+    }
+  }
+
+  void OnPersistenceSettingChanged() {
+    if (!prefs_->GetBoolean(ai::kSessionPersistenceEnabled)) {
+      CancelPending();
+    }
+  }
+
+  void Start(const std::string& session_id) {
+    const auto& pending = pending_.at(session_id);
+    auto snapshot = pending.snapshot;
+    running_.insert_or_assign(session_id, snapshot);
+    const bool posted = worker_->PostTaskAndReplyWithResult(
+        FROM_HERE,
+        base::BindOnce(
+            [](std::shared_ptr<const Snapshot> snapshot) {
+              base::ListValue list;
+              for (const auto& event : *snapshot) {
+                list.Append(maho::ai::SerializeRuntimeEventForPersistence(*event));
+              }
+              return SerializeValueToJson(base::Value(std::move(list)));
+            },
+            snapshot),
+        base::BindOnce(
+            [](ReplyGate gate, base::OnceCallback<void(std::string)> commit,
+               std::string json) {
+              auto reply = base::BindOnce(std::move(commit), std::move(json));
+              if (gate) {
+                gate.Run(std::move(reply));
+              } else {
+                std::move(reply).Run();
+              }
+            },
+            pending.gate,
+            base::BindOnce(&MahoAIEventLogPersistence::Commit,
+                           weak_factory_.GetWeakPtr(), session_id, snapshot)));
+    if (!posted) {
+      auto rejected = pending_.extract(session_id);
+      running_.erase(session_id);
+      LOG(ERROR) << "AI event persistence worker rejected admitted write";
+      for (auto& receipt : rejected.mapped().receipts) {
+        std::move(receipt).Run(false);
+      }
+    }
+  }
+
+  void Commit(const std::string& session_id,
+              std::shared_ptr<const Snapshot> snapshot,
+              std::string json) {
+    auto running = running_.find(session_id);
+    if (running == running_.end() || running->second != snapshot) {
+      return;
+    }
+    running_.erase(running);
+    auto pending = pending_.find(session_id);
+    if (pending == pending_.end()) {
+      return;
+    }
+    if (pending->second.snapshot != snapshot) {
+      Start(session_id);
+      return;
+    }
+    auto receipts = std::move(pending->second.receipts);
+    pending_.erase(pending);
+    bool committed = false;
+    if (prefs_ && prefs_->GetBoolean(ai::kSessionPersistenceEnabled)) {
+      ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
+      update->Set(session_id, std::move(json));
+      committed = true;
+    }
+    for (auto& receipt : receipts) {
+      std::move(receipt).Run(committed);
+    }
+  }
+
+  raw_ptr<PrefService> prefs_;
+  scoped_refptr<base::SequencedTaskRunner> worker_;
+  std::map<std::string, PendingWrite> pending_;
+  std::map<std::string, std::shared_ptr<const Snapshot>> running_;
+  std::set<std::string> cleared_sessions_;
+  PrefChangeRegistrar pref_changes_;
+  base::ScopedObservation<Profile, ProfileObserver> observation_{this};
+  base::WeakPtrFactory<MahoAIEventLogPersistence> weak_factory_{this};
+};
+
 MahoAIPageHandler::AttachmentSlot::AttachmentSlot() = default;
 MahoAIPageHandler::AttachmentSlot::AttachmentSlot(AttachmentSlot&&) noexcept =
     default;
@@ -797,6 +1083,11 @@ MahoAIPageHandler::MahoAIPageHandler(
     return;
   }
 
+  if (browser_) {
+    event_log_persistence_ =
+        MahoAIEventLogPersistence::Get(browser_->GetProfile(), prefs_);
+  }
+
   pending_surface_->SetConsumer(base::BindRepeating(
       [](base::WeakPtr<MahoAIPageHandler> handler,
          maho_ai::mojom::SurfaceRequestPtr request) {
@@ -820,7 +1111,7 @@ MahoAIPageHandler::MahoAIPageHandler(
       std::make_unique<MahoAiPageContextExtractor>(browser, gate);
 
   if (prefs_->GetString(maho::ai_prefs::kAiViewMode) == "floating" &&
-      browser_ && !browser_->is_type_popup()) {
+      browser_ && !(browser_->GetType() == BrowserWindowInterface::TYPE_POPUP)) {
     prefs_->SetString(maho::ai_prefs::kAiViewMode, "sidebar");
   }
   LoadPersistedSessions();
@@ -828,11 +1119,28 @@ MahoAIPageHandler::MahoAIPageHandler(
   if (g_browser_process && g_browser_process->os_crypt_async()) {
     g_browser_process->os_crypt_async()->GetInstance(
         base::BindOnce(&MahoAIPageHandler::OnOsCryptReady,
-                       weak_factory_.GetWeakPtr()),
-        os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+                       weak_factory_.GetWeakPtr()));
   }
 
   pref_change_registrar_.Init(prefs_);
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kPermissionTier,
+      base::BindRepeating(&MahoAIPageHandler::OnRuntimeConfigPrefsChanged,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kFinalConfirm,
+      base::BindRepeating(&MahoAIPageHandler::OnRuntimeConfigPrefsChanged,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kProactiveMode,
+      base::BindRepeating(&MahoAIPageHandler::OnRuntimeConfigPrefsChanged,
+                          base::Unretained(this)));
+  // Mail read consent rides the same runtime-config push so toggling it in
+  // chrome://maho-settings live-updates the panel's permission sheet.
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kMailReadAllowed,
+      base::BindRepeating(&MahoAIPageHandler::OnRuntimeConfigPrefsChanged,
+                          base::Unretained(this)));
   pref_change_registrar_.Add(
       maho::ai_prefs::kProvider,
       base::BindRepeating(&MahoAIPageHandler::OnAISettingsPrefsChanged,
@@ -845,18 +1153,38 @@ MahoAIPageHandler::MahoAIPageHandler(
       maho::ai_prefs::kReasoningEffort,
       base::BindRepeating(&MahoAIPageHandler::OnAISettingsPrefsChanged,
                           base::Unretained(this)));
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kBaseUrl,
+      base::BindRepeating(&MahoAIPageHandler::OnAISettingsPrefsChanged,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kApiKey,
+      base::BindRepeating(&MahoAIPageHandler::OnAISettingsPrefsChanged,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kByokOpenAIEncryptedB64,
+      base::BindRepeating(&MahoAIPageHandler::OnAISettingsPrefsChanged,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kByokAnthropicEncryptedB64,
+      base::BindRepeating(&MahoAIPageHandler::OnAISettingsPrefsChanged,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kModelCache,
+      base::BindRepeating(&MahoAIPageHandler::OnAISettingsPrefsChanged,
+                          base::Unretained(this)));
 
   if (token_ && token_->context_class() == MahoPrivateContextClass::kRegular &&
       browser_) {
     maho::MahoAiIngressCoordinator::ConsumerType consumer_type =
         maho::MahoAiIngressCoordinator::ConsumerType::kSidebar;
     Browser* target_browser = browser_;
-    if (browser_->is_type_popup()) {
+    if ((browser_->GetType() == BrowserWindowInterface::TYPE_POPUP)) {
       consumer_type = maho::MahoAiIngressCoordinator::ConsumerType::kFloating;
       if (auto* opener_interface =
               maho::MahoAiPopupLifetimeTracker::Get()->GetOpenerForPopup(
                   browser_)) {
-        target_browser = opener_interface->GetBrowserForMigrationOnly();
+        target_browser = static_cast<Browser*>(opener_interface);
       }
     }
     if (target_browser) {
@@ -931,6 +1259,7 @@ void MahoAIPageHandler::PrepareForViewModeHandoff() {
   event_sequence_ = 0;
   tool_call_count_ = 0;
   session_event_log_.clear();
+  replay_budget_.Reset();
   active_ingress_request_id_.clear();
   active_ingress_delivery_id_ = 0;
 }
@@ -967,6 +1296,7 @@ void MahoAIPageHandler::RestoreViewModeHandoff(
   session_updated_at_ = session->updated_at.value_or(session_created_at_);
   tool_call_count_ = session->tool_call_count;
   session_event_log_ = std::move(handoff.replay_events);
+  maho::ai::NormalizeReplayWindow(session_event_log_, replay_budget_);
   event_sequence_ = 0;
   for (const auto& event : session_event_log_) {
     if (event->sequence > event_sequence_) {
@@ -980,10 +1310,21 @@ void MahoAIPageHandler::RestoreViewModeHandoff(
     return persisted->session_id == active_session_id_;
   });
   PersistSessionList(true);
+
+  MahoAiRuntimeAdapter* adapter =
+      runtime_adapter_for_testing_
+          ? runtime_adapter_for_testing_.get()
+          : (runtime_router_ ? runtime_router_->GetActiveAdapter() : nullptr);
+  if (adapter) {
+    adapter->StartSession(active_session_id_);
+  }
 }
 
 MahoAIPageHandler::~MahoAIPageHandler() {
   g_active_page_handlers->erase(this);
+  if (control_activity_service_) {
+    control_activity_service_->RemoveObserver(this);
+  }
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   ask_maho_registration_.Reset();
   page_.reset();
@@ -997,6 +1338,12 @@ MahoAIPageHandler::~MahoAIPageHandler() {
     }
     PersistEventLog(active_session_id_, /*synchronous=*/true);
     PersistSessionList(/*synchronous=*/true);
+  }
+  if (event_log_persistence_) {
+    event_log_persistence_->DetachReplyGate(active_session_id_);
+    for (const auto& session : persisted_sessions_) {
+      event_log_persistence_->DetachReplyGate(session->session_id);
+    }
   }
 }
 
@@ -1107,7 +1454,8 @@ void MahoAIPageHandler::GetRoutineRunStatuses(
 
 void MahoAIPageHandler::GetRoutineUserTier(
     GetRoutineUserTierCallback callback) {
-  routine_handler_remote_->GetUserTier(std::move(callback));
+  routine_handler_remote_->GetUserTier(
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback), 0));
 }
 
 void MahoAIPageHandler::RespondToRoutineApproval(
@@ -1161,6 +1509,11 @@ void MahoAIPageHandler::OnRuntimeEventForSession(
     return;
   }
 
+  if (event.type == MahoAiRuntimeEventType::kModelResolved) {
+    // Model resolution is internal runtime adapter metadata, not a WebUI event.
+    return;
+  }
+
   if (session_id == active_session_id_) {
     session_updated_at_ = base::Time::Now().InSecondsFSinceUnixEpoch();
 
@@ -1183,12 +1536,25 @@ void MahoAIPageHandler::OnRuntimeEventForSession(
     mojo_event->request_id = *request_id;
   }
 
-  if (page_) {
-    page_->OnRuntimeEvent(mojo_event->Clone());
-  }
-
   if (session_id == active_session_id_) {
-    session_event_log_.push_back(std::move(mojo_event));
+    const auto admission = maho::ai::AppendBoundedReplayEvent(
+        session_event_log_, replay_budget_, mojo_event);
+    if (admission == maho::ai::ReplayAdmission::kIgnored) {
+      return;
+    }
+    if (admission == maho::ai::ReplayAdmission::kExhausted) {
+      event.type = MahoAiRuntimeEventType::kError;
+      MahoAiRuntimeAdapter* adapter =
+          runtime_adapter_for_testing_
+              ? runtime_adapter_for_testing_.get()
+              : (runtime_router_ ? runtime_router_->GetActiveAdapter() : nullptr);
+      if (adapter) {
+        adapter->CancelCurrentTurn();
+      }
+    }
+    if (page_) {
+      page_->OnRuntimeEvent(mojo_event->Clone());
+    }
 
     switch (event.type) {
       case MahoAiRuntimeEventType::kTurnComplete:
@@ -1234,8 +1600,19 @@ void MahoAIPageHandler::OnRuntimeEventForSession(
     }
   } else {
     // Late event for non-active session
-    auto historical_log = LoadPersistedEventLog(session_id);
-    historical_log.push_back(mojo_event->Clone());
+    if (!event_log_persistence_ ||
+        event_log_persistence_->IsCleared(session_id)) {
+      return;
+    }
+    if (page_) {
+      page_->OnRuntimeEvent(mojo_event->Clone());
+    }
+    bool unavailable = false;
+    auto historical_log = LoadPersistedEventLog(session_id, &unavailable);
+    if (unavailable) {
+      return;
+    }
+    AppendReplayEvent(historical_log, mojo_event->Clone());
     PersistEventLogForSession(session_id, historical_log, /*synchronous=*/true);
 
     bool updated_metadata = false;
@@ -1520,10 +1897,20 @@ maho_ai::mojom::SessionInfoPtr MahoAIPageHandler::StartSessionInternal(
   event_sequence_ = 0;
   tool_call_count_ = 0;
   session_event_log_.clear();
+  replay_budget_.Reset();
   session_title_.clear();
   runtime_session_id_.clear();
   last_runtime_state_.clear();
   session_status_ = maho_ai::mojom::SessionStatus::kActive;
+
+  // Sync active session with runtime adapter
+  MahoAiRuntimeAdapter* adapter =
+      runtime_adapter_for_testing_
+          ? runtime_adapter_for_testing_.get()
+          : (runtime_router_ ? runtime_router_->GetActiveAdapter() : nullptr);
+  if (adapter) {
+    adapter->StartSession(active_session_id_);
+  }
 
   if (initial_prompt.has_value() && !initial_prompt->empty()) {
     UpdateSessionTitle(*initial_prompt);
@@ -1541,7 +1928,8 @@ maho_ai::mojom::SessionInfoPtr MahoAIPageHandler::StartSessionInternal(
   if (!active_ingress_request_id_.empty()) {
     status_event->request_id = active_ingress_request_id_;
   }
-  session_event_log_.push_back(status_event->Clone());
+  maho::ai::AppendBoundedReplayEvent(session_event_log_, replay_budget_,
+                                    status_event);
   if (page_) {
     page_->OnRuntimeEvent(std::move(status_event));
   }
@@ -1573,6 +1961,14 @@ void MahoAIPageHandler::ResumeSession(const std::string& session_id,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (session_id == active_session_id_ && !active_session_id_.empty()) {
+    MahoAiRuntimeAdapter* adapter =
+        runtime_adapter_for_testing_
+            ? runtime_adapter_for_testing_.get()
+            : (runtime_router_ ? runtime_router_->GetActiveAdapter() : nullptr);
+    if (adapter) {
+      adapter->StartSession(session_id);
+    }
+
     auto session_info = MakeActiveSessionInfo();
     std::vector<maho_ai::mojom::RuntimeEventPtr> replay;
     for (const auto& evt : session_event_log_) {
@@ -1618,12 +2014,12 @@ void MahoAIPageHandler::GetOpenTabs(GetOpenTabsCallback callback) {
     return;
   }
 
-  if (!maho::ai_security::IsProfileEligible(browser_->profile())) {
+  if (!maho::ai_security::IsProfileEligible(browser_->GetProfile())) {
     std::move(callback).Run(std::move(tabs));
     return;
   }
 
-  TabStripModel* tab_strip = browser_->tab_strip_model();
+  TabStripModel* tab_strip = browser_->GetTabStripModel();
   if (!tab_strip) {
     std::move(callback).Run(std::move(tabs));
     return;
@@ -1670,7 +2066,7 @@ void MahoAIPageHandler::SearchHistory(const std::string& query,
     return;
   }
 
-  if (browser_ && !maho::ai_security::IsProfileEligible(browser_->profile())) {
+  if (browser_ && !maho::ai_security::IsProfileEligible(browser_->GetProfile())) {
     std::move(callback).Run(std::move(items));
     return;
   }
@@ -1745,7 +2141,7 @@ void MahoAIPageHandler::SearchBookmarks(const std::string& query,
     return;
   }
 
-  if (browser_ && !maho::ai_security::IsProfileEligible(browser_->profile())) {
+  if (browser_ && !maho::ai_security::IsProfileEligible(browser_->GetProfile())) {
     std::move(callback).Run(std::move(items));
     return;
   }
@@ -1819,7 +2215,19 @@ void MahoAIPageHandler::SubmitPrompt(
     SubmitPromptCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   MahoCore* core = maho::GetCore();
-  if (!core || !IsAiAllowed() || session_id != active_session_id_) {
+  if (!core || !IsAiAllowed()) {
+    std::move(callback).Run(false);
+    return;
+  }
+  if (session_id != active_session_id_) {
+    auto event = maho_ai::mojom::RuntimeEvent::New();
+    event->kind = maho_ai::mojom::RuntimeEventKind::kError;
+    event->session_id = session_id;
+    event->sequence = ++event_sequence_;
+    event->timestamp = base::Time::Now().InSecondsFSinceUnixEpoch();
+    event->text =
+        "Your prompt could not be delivered because the session is no longer active.";
+    page_->OnRuntimeEvent(std::move(event));
     std::move(callback).Run(false);
     return;
   }
@@ -1932,9 +2340,18 @@ void MahoAIPageHandler::SubmitPromptInternal(
   if (correlation.request_id.has_value()) {
     prompt_event->request_id = *correlation.request_id;
   }
-  session_event_log_.push_back(prompt_event->Clone());
+  const auto admission = maho::ai::AppendBoundedReplayEvent(
+      session_event_log_, replay_budget_, prompt_event);
   if (page_) {
     page_->OnRuntimeEvent(std::move(prompt_event));
+  }
+  if (admission != maho::ai::ReplayAdmission::kAccepted) {
+    SetSessionStatus(maho_ai::mojom::SessionStatus::kError);
+    PersistEventLog(correlation.session_id);
+    if (dispatch_gate) {
+      std::move(dispatch_gate).Run(false);
+    }
+    return;
   }
 
   // Ensure session is active when a prompt is submitted.
@@ -1948,6 +2365,11 @@ void MahoAIPageHandler::SubmitPromptInternal(
       runtime_adapter_for_testing_
           ? runtime_adapter_for_testing_.get()
           : (runtime_router_ ? runtime_router_->GetActiveAdapter() : nullptr);
+
+  if (adapter && !correlation.session_id.empty() &&
+      adapter->GetRuntimeSessionId() != correlation.session_id) {
+    adapter->StartSession(correlation.session_id);
+  }
 
   if (!adapter || !adapter->IsAvailable()) {
     if (dispatch_gate) {
@@ -2403,14 +2825,116 @@ void MahoAIPageHandler::RespondToApproval(const std::string& session_id,
   }
 }
 
+void MahoAIPageHandler::WatchControlActivity(
+    WatchControlActivityCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  LOG(INFO) << "[maho-control-activity] WatchControlActivity called, browser="
+            << (browser_ ? "set" : "null");
+  auto* service = maho::ai::MahoControlActivityService::GetForProfile(
+      browser_ ? browser_->GetProfile() : nullptr);
+  if (!service) {
+    std::move(callback).Run({});
+    return;
+  }
+  if (!control_activity_watched_) {
+    control_activity_watched_ = true;
+    control_activity_service_ = service;
+    service->AddObserver(this);
+  }
+  std::move(callback).Run(BuildControlActivityTimeline());
+}
+
+void MahoAIPageHandler::OnControlActivityChanged(
+    const maho::ai::ControlActivity& activity) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!control_activity_watched_) {
+    return;
+  }
+  if (activity.control_plane != maho::ai::ControlPlane::kLocalAgent &&
+      activity.target.has_value() &&
+      (activity.state == maho::ai::ControlActivityState::kReading ||
+       activity.state == maho::ai::ControlActivityState::kActing)) {
+    external_controller_session_ = activity.controller_session_id;
+  }
+  if (external_controller_session_.empty() ||
+      activity.controller_session_id != external_controller_session_) {
+    return;
+  }
+  page_->OnControlActivityChanged(BuildControlActivityTimeline());
+}
+
+std::vector<maho_ai::mojom::ControlActivitySnapshotPtr>
+MahoAIPageHandler::BuildControlActivityTimeline() {
+  using State = maho::ai::ControlActivityState;
+  auto* service = maho::ai::MahoControlActivityService::GetForProfile(
+      browser_ ? browser_->GetProfile() : nullptr);
+  if (!service) {
+    return {};
+  }
+  std::vector<maho::ai::ControlActivity> session_activities;
+  for (const auto& activity : service->GetActivities()) {
+    if (external_controller_session_.empty() ||
+        activity.controller_session_id != external_controller_session_) {
+      continue;
+    }
+    session_activities.push_back(activity);
+  }
+  std::sort(session_activities.begin(), session_activities.end(),
+            [](const maho::ai::ControlActivity& a,
+               const maho::ai::ControlActivity& b) {
+              return a.created_at < b.created_at;
+            });
+  constexpr size_t kMaxTimelineEntries = 50;
+  if (session_activities.size() > kMaxTimelineEntries) {
+    session_activities.erase(
+        session_activities.begin(),
+        session_activities.end() - static_cast<long>(kMaxTimelineEntries));
+  }
+  std::vector<maho_ai::mojom::ControlActivitySnapshotPtr> entries;
+  entries.reserve(session_activities.size());
+  for (const auto& activity : session_activities) {
+    auto entry = maho_ai::mojom::ControlActivitySnapshot::New();
+    entry->controller_name = activity.controller_display_name;
+    switch (activity.state) {
+      case State::kReading:
+        entry->state = maho_ai::mojom::ControlActivityState::kReading;
+        break;
+      case State::kActing:
+        entry->state = maho_ai::mojom::ControlActivityState::kActing;
+        break;
+      case State::kWaitingApproval:
+        entry->state = maho_ai::mojom::ControlActivityState::kWaitingApproval;
+        break;
+      case State::kPaused:
+        entry->state = maho_ai::mojom::ControlActivityState::kPaused;
+        break;
+      case State::kDisconnected:
+        entry->state = maho_ai::mojom::ControlActivityState::kDisconnected;
+        break;
+      case State::kCompleted:
+        entry->state = maho_ai::mojom::ControlActivityState::kIdle;
+        break;
+      case State::kFailed:
+        entry->state = maho_ai::mojom::ControlActivityState::kFailed;
+        break;
+    }
+    entry->target_title =
+        activity.target
+            ? base::UTF16ToUTF8(activity.target->title)
+            : std::string();
+    entries.push_back(std::move(entry));
+  }
+  return entries;
+}
+
 void MahoAIPageHandler::ClosePanel() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!browser_) {
     return;
   }
 
-  if (browser_->is_type_popup()) {
-    browser_->window()->Close();
+  if ((browser_->GetType() == BrowserWindowInterface::TYPE_POPUP)) {
+    browser_->GetWindow()->Close();
     return;
   }
 
@@ -2419,12 +2943,12 @@ void MahoAIPageHandler::ClosePanel() {
     return;
   }
 
-  if (side_panel_ui->GetCurrentEntryId(SidePanelType::kContent) !=
+  if (side_panel_ui->GetCurrentEntryId() !=
       SidePanelEntryId::kMahoAiPanel) {
     return;
   }
 
-  side_panel_ui->Close(SidePanelType::kContent,
+  side_panel_ui->Close(
                        SidePanelEntryHideReason::kSidePanelClosed,
                        /*suppress_animations=*/true);
 }
@@ -2448,21 +2972,63 @@ void MahoAIPageHandler::OpenSettingsPane(const std::string& pane_key) {
 maho_ai::mojom::AISettingsInfoPtr MahoAIPageHandler::BuildAISettingsInfo()
     const {
   auto info = maho_ai::mojom::AISettingsInfo::New();
-  info->active_provider_id = prefs_->GetString(maho::ai_prefs::kProvider);
+  std::string active_provider = prefs_->GetString(maho::ai_prefs::kProvider);
+
+  // If active provider is empty or not configured, fall back to the first configured provider.
+  if (active_provider.empty() || !IsProviderConfigured(active_provider, prefs_)) {
+    active_provider.clear();
+    for (const auto& definition : kAIProviderOptions) {
+      if (IsProviderConfigured(definition.id, prefs_)) {
+        active_provider = definition.id;
+        break;
+      }
+    }
+  }
+
+  info->active_provider_id = active_provider;
   info->active_model_id = prefs_->GetString(maho::ai_prefs::kModel);
   info->active_reasoning_effort = ReasoningEffortFromPref(
       prefs_->GetString(maho::ai_prefs::kReasoningEffort));
+
   for (const auto& definition : kAIProviderOptions) {
+    if (!IsProviderConfigured(definition.id, prefs_)) {
+      continue;
+    }
     auto provider = maho_ai::mojom::AIProviderOption::New();
     provider->id = definition.id;
     provider->label = definition.label;
     for (const auto& model_id : GetSelectableModels(
-             definition.id, info->active_provider_id, info->active_model_id)) {
+             definition.id, info->active_provider_id, info->active_model_id, prefs_)) {
       provider->model_options.push_back(
           maho_ai::mojom::AIModelOption::New(model_id, model_id));
     }
     info->provider_options.push_back(std::move(provider));
   }
+
+  // If active_model_id does not belong to active_provider or active_provider changed,
+  // ensure active_model_id is valid for the active provider.
+  if (!info->provider_options.empty()) {
+    for (const auto& opt : info->provider_options) {
+      if (opt->id == info->active_provider_id && !opt->model_options.empty()) {
+        bool model_found = false;
+        for (const auto& model_opt : opt->model_options) {
+          if (model_opt->id == info->active_model_id) {
+            model_found = true;
+            break;
+          }
+        }
+        if (!model_found) {
+          info->active_model_id = opt->model_options[0]->id;
+        }
+        break;
+      }
+    }
+  } else {
+    // No providers configured: active_provider and active_model are empty
+    info->active_provider_id = "";
+    info->active_model_id = "";
+  }
+
   info->reasoning_options.push_back(maho_ai::mojom::ReasoningOption::New(
       maho_ai::mojom::ReasoningEffort::kLow, "Low"));
   info->reasoning_options.push_back(maho_ai::mojom::ReasoningOption::New(
@@ -2477,18 +3043,18 @@ void MahoAIPageHandler::GetAISettings(GetAISettingsCallback callback) {
   std::move(callback).Run(BuildAISettingsInfo());
 }
 
-void MahoAIPageHandler::SetAISelection(
+void MahoAIPageHandler::SetDefaultAISelection(
     const std::string& provider_id,
     const std::string& model_id,
     maho_ai::mojom::ReasoningEffort reasoning_effort,
-    SetAISelectionCallback callback) {
+    SetDefaultAISelectionCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const std::string active_provider_id =
       prefs_->GetString(maho::ai_prefs::kProvider);
   const std::string active_model_id = prefs_->GetString(maho::ai_prefs::kModel);
   if (!IsSelectableProvider(provider_id) ||
       !IsSelectableModel(provider_id, model_id, active_provider_id,
-                         active_model_id) ||
+                         active_model_id, prefs_) ||
       !IsValidReasoningEffort(reasoning_effort)) {
     std::move(callback).Run(false);
     return;
@@ -2498,27 +3064,39 @@ void MahoAIPageHandler::SetAISelection(
   prefs_->SetString(maho::ai_prefs::kModel, model_id);
   prefs_->SetString(maho::ai_prefs::kReasoningEffort,
                     ReasoningEffortToPref(reasoning_effort));
+  OnAISettingsPrefsChanged();
   std::move(callback).Run(true);
 }
+// Global Default switcher contract: SetDefaultAISelection writes the same
+// maho.ai.provider + maho.ai.model pair that the Settings Models page's
+// Chat & Agent — Default row edits, so inherited task routes move with it.
 
 void MahoAIPageHandler::GetRuntimeConfig(GetRuntimeConfigCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // Broker defaults (guard / true / false) whenever no session is active —
-  // the same triple CapabilityRequestContext defaults to.
   auto config = maho_ai::mojom::RuntimeConfigInfo::New();
-  config->permission_tier = "guard";
-  config->final_confirm = true;
-  config->proactive_mode = false;
+  config->permission_tier = maho::ai::ParseRuntimeConfigTier(
+      prefs_->GetString(maho::ai_prefs::kPermissionTier));
+  config->final_confirm = prefs_->GetBoolean(maho::ai_prefs::kFinalConfirm);
+  config->proactive_mode = prefs_->GetBoolean(maho::ai_prefs::kProactiveMode);
+  config->mail_read_allowed =
+      prefs_->GetBoolean(maho::ai_prefs::kMailReadAllowed);
 
   MahoAiRuntimeAdapter* adapter =
       runtime_adapter_for_testing_
           ? runtime_adapter_for_testing_.get()
           : (runtime_router_ ? runtime_router_->GetActiveAdapter() : nullptr);
   MahoAiRuntimeConfig stored;
-  if (adapter && adapter->GetRuntimeConfig(&stored)) {
-    config->permission_tier = stored.permission_tier;
-    config->final_confirm = stored.final_confirm;
-    config->proactive_mode = stored.proactive_mode;
+  if (adapter &&
+      (!adapter->GetRuntimeConfig(&stored) ||
+       stored.permission_tier != config->permission_tier ||
+       stored.final_confirm != config->final_confirm ||
+       stored.proactive_mode != config->proactive_mode)) {
+    // Reconcile the live cache without letting it override durable prefs or
+    // discarding session-only fields such as filesystem whitelist roots.
+    stored.permission_tier = config->permission_tier;
+    stored.final_confirm = config->final_confirm;
+    stored.proactive_mode = config->proactive_mode;
+    adapter->SetRuntimeConfig(stored);
   }
   std::move(callback).Run(std::move(config));
 }
@@ -2527,24 +3105,40 @@ void MahoAIPageHandler::SetRuntimeConfig(
     maho_ai::mojom::RuntimeConfigInfoPtr config,
     SetRuntimeConfigCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  MahoAiRuntimeAdapter* adapter =
-      runtime_adapter_for_testing_
-          ? runtime_adapter_for_testing_.get()
-          : (runtime_router_ ? runtime_router_->GetActiveAdapter() : nullptr);
-  if (!config || !adapter) {
+  if (!config) {
     std::move(callback).Run(false);
     return;
   }
-  MahoAiRuntimeConfig requested;
-  requested.permission_tier = config->permission_tier;
-  requested.final_confirm = config->final_confirm;
-  requested.proactive_mode = config->proactive_mode;
-  // Tier normalization/fail-closure happens adapter-side (ParseRuntimeConfigTier).
-  std::move(callback).Run(adapter->SetRuntimeConfig(requested));
+  prefs_->SetString(maho::ai_prefs::kPermissionTier,
+                    maho::ai::ParseRuntimeConfigTier(config->permission_tier));
+  prefs_->SetBoolean(maho::ai_prefs::kFinalConfirm, config->final_confirm);
+  prefs_->SetBoolean(maho::ai_prefs::kProactiveMode, config->proactive_mode);
+  // Mail read consent shares this pref with chrome://maho-settings, so both
+  // surfaces stay on one source of truth. Mail writes are unaffected: they
+  // keep their per-call typed approval in the Mail authorization table.
+  prefs_->SetBoolean(maho::ai_prefs::kMailReadAllowed,
+                     config->mail_read_allowed);
+  // Also reconcile when the values are unchanged and no pref observer fires.
+  // Acceptance means persisted; a session created later inherits these prefs.
+  OnRuntimeConfigPrefsChanged();
+  std::move(callback).Run(true);
+}
+
+void MahoAIPageHandler::OnRuntimeConfigPrefsChanged() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  GetRuntimeConfig(base::BindOnce(
+      [](MahoAIPageHandler* handler,
+         maho_ai::mojom::RuntimeConfigInfoPtr config) {
+        if (handler->page_.is_bound()) {
+          handler->page_->OnRuntimeConfigChanged(std::move(config));
+        }
+      },
+      base::Unretained(this)));
 }
 
 void MahoAIPageHandler::OnAISettingsPrefsChanged() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
   if (page_.is_bound()) {
     page_->OnAISettingsChanged(BuildAISettingsInfo());
   }
@@ -2571,13 +3165,13 @@ void MahoAIPageHandler::SetViewMode(maho_ai::mojom::ViewMode mode) {
   prefs_->SetString(maho::ai_prefs::kAiViewMode, new_pref);
 
   if (mode == maho_ai::mojom::ViewMode::kFloating) {
-    if (browser_ && !browser_->is_type_popup()) {
-      Browser::CreateParams popup_params(Browser::TYPE_POPUP,
-                                         browser_->profile(),
+    if (browser_ && !(browser_->GetType() == BrowserWindowInterface::TYPE_POPUP)) {
+      BrowserWindowCreateParams popup_params(Browser::TYPE_POPUP,
+                                         browser_->GetProfile(),
                                          /*user_gesture=*/true);
-      popup_params.trusted_source = true;
+      popup_params.is_trusted_source = true;
       popup_params.omit_from_session_restore = true;
-      Browser* popup = Browser::Create(popup_params);
+      Browser* popup = static_cast<Browser*>(CreateBrowserWindow(std::move(popup_params)));
       if (!popup) {
         return;
       }
@@ -2585,20 +3179,24 @@ void MahoAIPageHandler::SetViewMode(maho_ai::mojom::ViewMode mode) {
       chrome::AddTabAt(popup, GURL(maho::kMahoAIPublicURL),
                        /*index=*/-1, /*foreground=*/true);
       maho::MahoAiPopupLifetimeTracker::Get()->TrackPopup(browser_, popup);
-      popup->window()->Show();
+      popup->GetWindow()->Show();
       ClosePanel();
     }
   } else {
-    if (browser_ && browser_->is_type_popup()) {
-      Browser* tabbed_browser = chrome::FindTabbedBrowser(
-          browser_->profile(), /*match_original_profiles=*/false);
+    if (browser_ && (browser_->GetType() == BrowserWindowInterface::TYPE_POPUP)) {
+      ProfileBrowserCollection* collection =
+          ProfileBrowserCollection::GetForProfile(browser_->GetProfile());
+      BrowserWindowInterface* tabbed_bwi =
+          collection ? collection->FindTabbedBrowser(/*match_original_profiles=*/false)
+                     : nullptr;
+      Browser* tabbed_browser = static_cast<Browser*>(tabbed_bwi);
       if (tabbed_browser && tabbed_browser->GetFeatures().side_panel_ui()) {
         PrepareForViewModeHandoff();
         tabbed_browser->GetFeatures().side_panel_ui()->Show(
             SidePanelEntryId::kMahoAiPanel);
-        tabbed_browser->window()->Activate();
+        tabbed_browser->GetWindow()->Activate();
       }
-      browser_->window()->Close();
+      browser_->GetWindow()->Close();
     }
   }
 }
@@ -2609,7 +3207,7 @@ void MahoAIPageHandler::ListArtifacts(const std::string& session_id,
   std::vector<maho_ai::mojom::ArtifactInfoPtr> out;
   maho::ai::MahoArtifactRegistry* registry =
       browser_
-          ? maho::ai::MahoArtifactRegistry::GetForProfile(browser_->profile())
+          ? maho::ai::MahoArtifactRegistry::GetForProfile(browser_->GetProfile())
           : nullptr;
   if (registry) {
     for (const maho::ai::MahoArtifact& a :
@@ -2633,7 +3231,7 @@ void MahoAIPageHandler::RenameArtifact(const std::string& artifact_id,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   maho::ai::MahoArtifactRegistry* registry =
       browser_
-          ? maho::ai::MahoArtifactRegistry::GetForProfile(browser_->profile())
+          ? maho::ai::MahoArtifactRegistry::GetForProfile(browser_->GetProfile())
           : nullptr;
   if (!registry) {
     std::move(callback).Run(false, "registry unavailable");
@@ -2652,7 +3250,7 @@ void MahoAIPageHandler::DeleteArtifact(const std::string& artifact_id,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   maho::ai::MahoArtifactRegistry* registry =
       browser_
-          ? maho::ai::MahoArtifactRegistry::GetForProfile(browser_->profile())
+          ? maho::ai::MahoArtifactRegistry::GetForProfile(browser_->GetProfile())
           : nullptr;
   std::move(callback).Run(registry && registry->DeleteArtifact(artifact_id));
 }
@@ -2663,7 +3261,7 @@ void MahoAIPageHandler::GetArtifactPreviewUrl(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   maho::ai::MahoArtifactRegistry* registry =
       browser_
-          ? maho::ai::MahoArtifactRegistry::GetForProfile(browser_->profile())
+          ? maho::ai::MahoArtifactRegistry::GetForProfile(browser_->GetProfile())
           : nullptr;
   content::WebContents* web_contents =
       host_web_contents_ ? host_web_contents_.get()
@@ -2719,7 +3317,7 @@ void MahoAIPageHandler::GetArtifactExportUrl(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   maho::ai::MahoArtifactRegistry* registry =
       browser_
-          ? maho::ai::MahoArtifactRegistry::GetForProfile(browser_->profile())
+          ? maho::ai::MahoArtifactRegistry::GetForProfile(browser_->GetProfile())
           : nullptr;
   if (!registry) {
     std::move(callback).Run(std::nullopt);
@@ -2848,7 +3446,11 @@ void MahoAIPageHandler::SetSessionStatus(maho_ai::mojom::SessionStatus status) {
     if (!active_ingress_request_id_.empty()) {
       status_event->request_id = active_ingress_request_id_;
     }
-    session_event_log_.push_back(status_event->Clone());
+    const auto admission = maho::ai::AppendBoundedReplayEvent(
+        session_event_log_, replay_budget_, status_event);
+    if (admission == maho::ai::ReplayAdmission::kExhausted) {
+      session_status_ = maho_ai::mojom::SessionStatus::kError;
+    }
     if (page_) {
       page_->OnRuntimeEvent(std::move(status_event));
     }
@@ -2863,6 +3465,7 @@ void MahoAIPageHandler::PersistSessionList(bool synchronous) {
   if (!prefs_->GetBoolean(ai::kSessionPersistenceEnabled)) {
     return;
   }
+  session_list_weak_factory_.InvalidateWeakPtrs();
 
   // Trim `persisted_sessions_` in-memory to prevent unbounded growth.
   // The total number of sessions persisted on disk is capped at
@@ -2931,10 +3534,12 @@ void MahoAIPageHandler::PersistSessionList(bool synchronous) {
   }
 
   if (synchronous) {
-    event_log_weak_factory_.InvalidateWeakPtrs();
     std::string json = SerializeValueToJson(base::Value(std::move(list)));
     prefs_->SetString(ai::kSessionListJson, json);
 
+    if (event_log_persistence_) {
+      event_log_persistence_->RetainSessions(kept_ids);
+    }
     ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
     std::vector<std::string> orphans_to_remove;
     std::unordered_set<std::string> kept_set(kept_ids.begin(), kept_ids.end());
@@ -2947,7 +3552,6 @@ void MahoAIPageHandler::PersistSessionList(bool synchronous) {
       update->Remove(orphan);
     }
   } else {
-    session_list_weak_factory_.InvalidateWeakPtrs();
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
         base::BindOnce(&SerializeValueToJson, base::Value(std::move(list))),
@@ -2961,8 +3565,14 @@ void MahoAIPageHandler::OnSessionListSerialized(
     std::vector<std::string> kept_ids,
     std::string json) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!prefs_->GetBoolean(ai::kSessionPersistenceEnabled)) {
+    return;
+  }
   prefs_->SetString(ai::kSessionListJson, json);
 
+  if (event_log_persistence_) {
+    event_log_persistence_->RetainSessions(kept_ids);
+  }
   ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
   std::vector<std::string> orphans_to_remove;
   std::unordered_set<std::string> kept_set(kept_ids.begin(), kept_ids.end());
@@ -3091,9 +3701,10 @@ void MahoAIPageHandler::AdoptMostRecentPersistedSessionAsActive() {
     return;
   }
 
+  bool unavailable = false;
   std::vector<maho_ai::mojom::RuntimeEventPtr> replay =
-      LoadPersistedEventLog(newest->session_id);
-  if (replay.empty()) {
+      LoadPersistedEventLog(newest->session_id, &unavailable);
+  if (unavailable || replay.empty()) {
     // Nothing to continue: leave the panel on a genuinely empty conversation
     // so the empty-state quick actions remain available.
     return;
@@ -3102,8 +3713,17 @@ void MahoAIPageHandler::AdoptMostRecentPersistedSessionAsActive() {
   active_session_id_ = newest->session_id;
   session_created_at_ = newest->created_at;
   session_event_log_ = std::move(replay);
+  maho::ai::NormalizeReplayWindow(session_event_log_, replay_budget_);
   session_status_ = maho_ai::mojom::SessionStatus::kIdle;
   persisted_sessions_.erase(persisted_sessions_.begin());
+
+  MahoAiRuntimeAdapter* adapter =
+      runtime_adapter_for_testing_
+          ? runtime_adapter_for_testing_.get()
+          : (runtime_router_ ? runtime_router_->GetActiveAdapter() : nullptr);
+  if (adapter) {
+    adapter->StartSession(active_session_id_);
+  }
 }
 
 void MahoAIPageHandler::PersistEventLog(const std::string& session_id,
@@ -3113,62 +3733,59 @@ void MahoAIPageHandler::PersistEventLog(const std::string& session_id,
   }
 }
 
+void MahoAIPageHandler::PersistEventLogWithReplyForTesting(
+    const std::string& session_id,
+    base::OnceCallback<void(bool)> completed) {
+  if (!event_log_persistence_ || session_id != active_session_id_) {
+    std::move(completed).Run(false);
+    return;
+  }
+  event_log_persistence_->Persist(session_id, session_event_log_, {},
+                                   std::move(completed));
+}
+
 void MahoAIPageHandler::PersistEventLogForSession(
     const std::string& session_id,
     const std::vector<maho_ai::mojom::RuntimeEventPtr>& log,
     bool synchronous) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  if (session_id.empty() ||
-      !prefs_->GetBoolean(ai::kSessionPersistenceEnabled)) {
+  if (session_id.empty() || !event_log_persistence_) {
     return;
   }
-
-  base::ListValue list;
-  size_t start = 0;
-  if (log.size() > kMaxPersistedEvents) {
-    start = log.size() - kMaxPersistedEvents;
-  }
-  for (size_t i = start; i < log.size(); ++i) {
-    list.Append(maho::ai::SerializeRuntimeEventForPersistence(*log[i]));
-  }
-
-  if (synchronous) {
-    std::string json = SerializeValueToJson(base::Value(std::move(list)));
-    ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
-    update->Set(session_id, json);
-  } else {
-    event_log_weak_factory_.InvalidateWeakPtrs();
-    base::ThreadPool::PostTaskAndReplyWithResult(
-        FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-        base::BindOnce(&SerializeValueToJson, base::Value(std::move(list))),
-        base::BindOnce(&MahoAIPageHandler::OnEventLogSerialized,
-                       event_log_weak_factory_.GetWeakPtr(), session_id));
-  }
-}
-
-void MahoAIPageHandler::OnEventLogSerialized(const std::string& session_id,
-                                             std::string json) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  bool session_still_valid = (session_id == active_session_id_);
-  if (!session_still_valid) {
-    for (const auto& s : persisted_sessions_) {
-      if (s->session_id == session_id) {
-        session_still_valid = true;
-        break;
-      }
-    }
-  }
-  if (!session_still_valid) {
-    return;
-  }
-  ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
-  update->Set(session_id, json);
+  event_log_persistence_->Persist(
+      session_id, log, synchronous ? MahoAIEventLogPersistence::ReplyGate{}
+                                  : event_log_reply_gate_for_testing_);
 }
 
 std::vector<maho_ai::mojom::RuntimeEventPtr>
-MahoAIPageHandler::LoadPersistedEventLog(const std::string& session_id) {
+MahoAIPageHandler::LoadPersistedEventLog(const std::string& session_id,
+                                       bool* unavailable) {
+  if (unavailable) {
+    *unavailable = false;
+  }
   std::vector<maho_ai::mojom::RuntimeEventPtr> events;
+  auto reject = [&] {
+    if (unavailable) {
+      *unavailable = true;
+    }
+    auto error = maho_ai::mojom::RuntimeEvent::New();
+    error->kind = maho_ai::mojom::RuntimeEventKind::kError;
+    error->session_id = session_id;
+    error->text = "history_unavailable";
+    events.clear();
+    events.push_back(std::move(error));
+  };
+  maho::ai::RuntimeReplayBudget budget;
+  const auto pending = event_log_persistence_
+                           ? event_log_persistence_->Pending(session_id)
+                           : nullptr;
+  if (pending) {
+    for (const auto& item : *pending) {
+      auto event = item->Clone();
+      maho::ai::AppendBoundedReplayEvent(events, budget, event);
+    }
+    return events;
+  }
 
   const auto& dict = prefs_->GetDict(ai::kSessionEventLogs);
   const std::string* json = dict.FindString(session_id);
@@ -3176,8 +3793,13 @@ MahoAIPageHandler::LoadPersistedEventLog(const std::string& session_id) {
     return events;
   }
 
+  if (json->size() > maho::ai::kReplayBytes) {
+    reject();
+    return events;
+  }
   auto parsed = base::JSONReader::Read(*json, base::JSON_PARSE_RFC);
   if (!parsed || !parsed->is_list()) {
+    reject();
     return events;
   }
 
@@ -3187,7 +3809,7 @@ MahoAIPageHandler::LoadPersistedEventLog(const std::string& session_id) {
     }
     auto event = DictToRuntimeEvent(item.GetDict(), session_id);
     if (event) {
-      events.push_back(std::move(event));
+      maho::ai::AppendBoundedReplayEvent(events, budget, event);
     }
   }
   return events;
@@ -3195,9 +3817,8 @@ MahoAIPageHandler::LoadPersistedEventLog(const std::string& session_id) {
 
 void MahoAIPageHandler::ClearPersistedEventLog(const std::string& session_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!session_id.empty()) {
-    ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
-    update->Remove(session_id);
+  if (!session_id.empty() && event_log_persistence_) {
+    event_log_persistence_->Clear(session_id);
   }
 }
 
@@ -3320,7 +3941,7 @@ void MahoAIPageHandler::RequestTabTidy(
   }
 
   auto route_res = maho::ai::ResolveMahoAiModelRoute(
-      browser_->profile()->GetPrefs(), task);
+      browser_->GetProfile()->GetPrefs(), task);
   if (!route_res.is_ok()) {
     LOG(ERROR) << "MahoAIPageHandler::RequestTabTidy: No route for task "
                << TaskToString(task);
@@ -3329,18 +3950,21 @@ void MahoAIPageHandler::RequestTabTidy(
   }
 
   // Build and fire the LLM completion request.
-  auto* url_loader_factory = browser_->profile()
+  auto* url_loader_factory = browser_->GetProfile()
                                  ->GetDefaultStoragePartition()
                                  ->GetURLLoaderFactoryForBrowserProcess()
                                  .get();
   auto llm_client = std::make_unique<MahoAiLlmClient>(
-      browser_->profile()->GetPrefs(), url_loader_factory,
+      browser_->GetProfile()->GetPrefs(), url_loader_factory,
       encryptor_ ? &*encryptor_ : nullptr,
       /*provider_adapter_v2_enabled=*/false,
       base::BindRepeating(&MahoAIPageHandler::RevalidateAiThunk,
                           weak_factory_.GetWeakPtr()));
 
   MahoAiLlmClient::CompletionRequest request;
+  request.provider_id = route_res.route.provider_id;
+  request.endpoint = route_res.route.endpoint;
+  request.model = route_res.route.model_id;
   request.prompt_messages = base::ListValue(std::move(*prompt_messages));
 
   auto* raw_client = llm_client.get();
@@ -3526,7 +4150,7 @@ void MahoAIPageHandler::GetCreditBalance(GetCreditBalanceCallback callback) {
   std::string relay_url = maho::auth::GetRelayBaseUrl();
 
   std::string access_token;
-  if (encryptor_.has_value()) {
+  if (encryptor_) {
     access_token = maho::auth::GetRelayAccessToken(prefs_, *encryptor_);
   }
 
@@ -3562,7 +4186,7 @@ void MahoAIPageHandler::GetCreditBalance(GetCreditBalanceCallback callback) {
 
   scoped_refptr<network::SharedURLLoaderFactory> factory = url_loader_factory_;
   if (!factory && browser_) {
-    factory = browser_->profile()
+    factory = browser_->GetProfile()
                   ->GetDefaultStoragePartition()
                   ->GetURLLoaderFactoryForBrowserProcess();
   }
@@ -3966,7 +4590,8 @@ void MahoAIPageHandler::GetWorkspaceEffectiveTools(
   std::move(callback).Run(json);
 }
 
-void MahoAIPageHandler::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {
+void MahoAIPageHandler::OnOsCryptReady(
+    scoped_refptr<os_crypt_async::Encryptor> encryptor) {
   encryptor_ = std::move(encryptor);
 }
 
@@ -3978,7 +4603,7 @@ void MahoAIPageHandler::StartVoiceSession(StartVoiceSessionCallback callback) {
   }
   if (!voice_session_) {
     voice_session_ = std::make_unique<MahoAiVoiceSession>(
-        browser_->profile(), url_loader_factory_,
+        browser_->GetProfile(), url_loader_factory_,
         base::BindRepeating(&MahoAIPageHandler::OnVoiceFinalTranscript,
                             weak_factory_.GetWeakPtr()),
         base::BindRepeating(&MahoAIPageHandler::OnVoiceSessionError,

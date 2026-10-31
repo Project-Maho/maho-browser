@@ -18,7 +18,6 @@
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
-#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
@@ -26,6 +25,7 @@
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/class_property.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
@@ -52,6 +52,9 @@ namespace maho {
 
 namespace {
 
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(views::BubbleDialogDelegate,
+                                 kFolderPopupDelegateKey)
+
 constexpr int kPopupWidth = 260;
 constexpr int kMaxScrollHeight = 312;
 constexpr int kRowHeight = 40;
@@ -70,11 +73,11 @@ struct ItemRowDragData {
 };
 
 int ResolveTabStripIndex(Browser *browser, const std::string &tab_id) {
-  if (!browser || !browser->tab_strip_model() || tab_id.empty()) {
+  if (!browser || !browser->GetTabStripModel() || tab_id.empty()) {
     return -1;
   }
 
-  TabStripModel *strip = browser->tab_strip_model();
+  TabStripModel *strip = browser->GetTabStripModel();
   for (int i = 0; i < strip->count(); ++i) {
     content::WebContents *contents = strip->GetWebContentsAt(i);
     if (!contents) {
@@ -141,6 +144,7 @@ public:
     auto *label = contents->AddChildView(std::make_unique<views::Label>(
         title, views::style::CONTEXT_LABEL, views::style::STYLE_BODY_3));
     label->SetEnabledColor(palette.primary_text);
+    label->SetAutoColorReadabilityEnabled(false);
     label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     label->SetElideBehavior(gfx::ELIDE_TAIL);
     label->SetSubpixelRenderingEnabled(false);
@@ -276,11 +280,11 @@ BEGIN_METADATA(ItemRow)
 END_METADATA
 
 ui::ImageModel GetFaviconForTab(Browser *browser, const SidebarTreeNode &node) {
-  if (!browser || !browser->tab_strip_model()) {
+  if (!browser || !browser->GetTabStripModel()) {
     return ui::ImageModel();
   }
   int live_index = -1;
-  TabStripModel *strip = browser->tab_strip_model();
+  TabStripModel *strip = browser->GetTabStripModel();
   for (int i = 0; i < strip->count(); ++i) {
     auto *contents = strip->GetWebContentsAt(i);
     if (!contents) {
@@ -359,8 +363,10 @@ views::Widget *MahoSidebarFolderHoverPopupView::Show(
   delegate->SetContentsView(std::move(contents));
 
   views::Widget *widget =
-      views::BubbleDialogDelegate::CreateBubble(std::move(delegate));
+      views::BubbleDialogDelegate::CreateBubbleDeprecated(
+          delegate.get(), views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   if (widget) {
+    widget->SetProperty(kFolderPopupDelegateKey, std::move(delegate));
     widget->ShowInactive();
   }
   return widget;
@@ -398,19 +404,15 @@ void MahoSidebarFolderHoverPopupView::Init() {
                              const ui::Event &event) { view->PopLevel(); },
                           base::Unretained(this)),
       u"Back");
-  back_btn->SetImageModel(
-      views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(maho_lucide_icons::kChevronLeftIcon,
-                                     kMahoColorAccentBlue, 14));
-  back_btn->SetTextColor(views::Button::STATE_NORMAL, kMahoColorAccentBlue);
-  back_btn->SetTextColor(views::Button::STATE_HOVERED, kMahoColorAccentBlue);
+  // Glyph and text colors are bound in SetSidebarPalette().
   back_btn->SetBorder(nullptr);
-  breadcrumb_row_->AddChildView(std::move(back_btn));
+  back_button_ = breadcrumb_row_->AddChildView(std::move(back_btn));
 
   auto path_label = std::make_unique<views::Label>(
       u"", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5);
   path_label->SetElideBehavior(gfx::ELIDE_MIDDLE);
   path_label->SetSubpixelRenderingEnabled(false);
+  path_label->SetAutoColorReadabilityEnabled(false);
   path_label_ = breadcrumb_row_->AddChildView(std::move(path_label));
 
   breadcrumb_row_->SetVisible(false);
@@ -472,11 +474,23 @@ void MahoSidebarFolderHoverPopupView::SetSidebarPalette(
     separator_->SetBackground(views::CreateSolidBackground(palette_.outline));
   }
   if (search_field_) {
-    search_field_->SetTextColor(palette_.primary_text);
-    search_field_->set_placeholder_text_color(palette_.secondary_text);
+    search_field_->SetMahoResolvedTextColor(palette_.primary_text);
+    search_field_->SetMahoResolvedPlaceholderTextColor(palette_.secondary_text);
   }
   if (path_label_) {
     path_label_->SetEnabledColor(palette_.secondary_text);
+  }
+  if (back_button_) {
+    const ui::ImageModel chevron = ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kChevronLeftIcon, palette_.neutral_glyph, 14);
+    back_button_->SetImageModel(views::Button::STATE_NORMAL, chevron);
+    back_button_->SetImageModel(
+        views::Button::STATE_DISABLED,
+        ui::ImageModel::FromVectorIcon(maho_lucide_icons::kChevronLeftIcon,
+                                       palette_.disabled_text, 14));
+    back_button_->SetEnabledTextColors(palette_.primary_text);
+    back_button_->SetTextColor(views::Button::STATE_DISABLED,
+                               palette_.disabled_text);
   }
   RebuildResultRows();
 }
@@ -540,6 +554,7 @@ void MahoSidebarFolderHoverPopupView::RebuildResultRows() {
                              : u"No matching results",
             views::style::CONTEXT_LABEL, views::style::STYLE_BODY_3));
     empty_label->SetEnabledColor(palette_.secondary_text);
+    empty_label->SetAutoColorReadabilityEnabled(false);
     empty_label->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     empty_label->SetPreferredSize(
         gfx::Size(kPopupWidth - 2 * kRowHorizontalInset, kRowHeight));

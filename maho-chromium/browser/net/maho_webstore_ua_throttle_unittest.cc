@@ -6,7 +6,10 @@
 #include <vector>
 
 #include "net/http/http_request_headers.h"
+#include "net/url_request/redirect_info.h"
+#include "services/network/public/cpp/http_request_headers_update_params.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -72,6 +75,41 @@ TEST(MahoWebStoreUAThrottleTest, WillStartRequestDoesNotModifyUAForOtherSites) {
       request.headers.GetHeader(net::HttpRequestHeaders::kUserAgent);
   EXPECT_TRUE(modified_ua.has_value());
   EXPECT_EQ(*modified_ua, raw_ua);
+}
+
+TEST(MahoWebStoreUAThrottleTest, RedirectUpdatesOnlyOrdinaryUAForWebstore) {
+  MahoWebStoreUAThrottle throttle;
+  network::ResourceRequest request;
+  request.url = GURL("https://example.com/");
+  request.headers.SetHeader(net::HttpRequestHeaders::kUserAgent,
+                            "Chrome/154.0 Maho/1.0");
+  bool defer = false;
+  throttle.WillStartRequest(&request, &defer);
+
+  net::RedirectInfo redirect;
+  redirect.new_url = GURL("https://chromewebstore.google.com/");
+  network::HttpRequestHeadersUpdateParams updates;
+  updates.removed_headers.push_back("X-Remove");
+  updates.modified_headers.SetHeader("X-Keep", "ordinary");
+  updates.modified_cors_exempt_headers.SetHeader(
+      net::HttpRequestHeaders::kUserAgent, "cors-sentinel");
+  auto response = network::mojom::URLResponseHead::New();
+  throttle.WillRedirectRequest(&redirect, *response, &defer, &updates);
+
+  EXPECT_EQ(updates.modified_headers.GetHeader(net::HttpRequestHeaders::kUserAgent),
+            "Chrome/154.0");
+  EXPECT_EQ(updates.modified_headers.GetHeader("X-Keep"), "ordinary");
+  EXPECT_EQ(updates.modified_cors_exempt_headers.GetHeader(
+                net::HttpRequestHeaders::kUserAgent), "cors-sentinel");
+  EXPECT_EQ(updates.removed_headers, std::vector<std::string>({"X-Remove"}));
+  EXPECT_FALSE(defer);
+
+  redirect.new_url = GURL("https://example.org/");
+  updates.modified_headers.SetHeader(net::HttpRequestHeaders::kUserAgent,
+                                    "leave-unchanged");
+  throttle.WillRedirectRequest(&redirect, *response, &defer, &updates);
+  EXPECT_EQ(updates.modified_headers.GetHeader(net::HttpRequestHeaders::kUserAgent),
+            "leave-unchanged");
 }
 
 }  // namespace

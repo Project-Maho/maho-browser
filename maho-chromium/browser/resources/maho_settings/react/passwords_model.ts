@@ -188,6 +188,16 @@ export function getPasswordsEnabled(settings: readonly SettingValue[]): boolean 
   return item?.value !== 'false';
 }
 
+export function getVaultAutoLockMinutes(settings: readonly SettingValue[]): string {
+  const item = settings.find(setting => setting.key === 'autofill.vault_auto_lock_minutes');
+  return item?.value || '15';
+}
+
+export function getVaultDeviceAuthRequired(settings: readonly SettingValue[]): boolean {
+  const item = settings.find(setting => setting.key === 'autofill.vault_require_device_auth');
+  return item?.value !== 'false';
+}
+
 export function getPasswordProviderBackendValue(
     provider: PasswordProviderKind): PasswordProviderBackendValue {
   return PASSWORD_PROVIDER_BACKEND_VALUES[provider];

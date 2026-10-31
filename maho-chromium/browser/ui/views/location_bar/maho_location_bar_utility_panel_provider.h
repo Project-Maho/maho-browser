@@ -61,10 +61,12 @@ struct MahoLocationBarUtilityPanelAction {
   base::RepeatingCallback<void(bool, bool&, std::u16string&)> toggle_callback;
   bool close_after_activate = false;
 
-  // Extension Icon Grid Phase 3 updates
   std::string extension_id;
   base::RepeatingCallback<void(views::View* anchor)> context_menu_callback;
   bool context_menu_enabled = true;
+  bool is_pinned = false;
+  bool pin_enabled = false;
+  base::RepeatingCallback<void(bool)> pin_callback;
 };
 
 struct MahoLocationBarUtilityPanelFooter {

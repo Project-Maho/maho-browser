@@ -19,6 +19,7 @@ import dev.maho.browser.models.AppearanceSettingsUpdate
 import dev.maho.browser.models.Theme
 import dev.maho.browser.sync.CredentialManagerGoogleSource
 import dev.maho.browser.ui.theme.BrowserThemeController
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Handle to a configured web-ai [WebView] plus its RPC bridge, so hosts (the
@@ -28,8 +29,18 @@ class AiWebViewHost internal constructor(
     val webView: WebView,
     private val rpcBridge: WebViewBridge,
 ) {
+    private val destroyed = AtomicBoolean(false)
+
+    /**
+     * U01: idempotent host disposal. Closes the bridge's admission gates
+     * immediately (native sessions drain and free on the bridge's background
+     * teardown scope, so Main never waits for a parked borrow or create) and
+     * destroys the WebView. Safe to call repeatedly.
+     */
     fun destroy() {
+        if (!destroyed.compareAndSet(false, true)) return
         BrowserThemeController.unregisterWebView(webView)
+        rpcBridge.destroy()
         webView.destroy()
     }
 }

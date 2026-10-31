@@ -73,7 +73,7 @@ export function MiniCalendar({ value, onChange, events }: MiniCalendarProps) {
           <button
             type="button"
             onClick={handlePrevMonth}
-            className="p-1 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
+            className="mail-pressable flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Previous month"
           >
             <ChevronLeft size={14} />
@@ -81,7 +81,7 @@ export function MiniCalendar({ value, onChange, events }: MiniCalendarProps) {
           <button
             type="button"
             onClick={handleNextMonth}
-            className="p-1 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
+            className="mail-pressable flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Next month"
           >
             <ChevronRight size={14} />
@@ -112,8 +112,8 @@ export function MiniCalendar({ value, onChange, events }: MiniCalendarProps) {
                     selected
                       ? "bg-primary text-primary-foreground font-semibold"
                       : sameMonth
-                      ? "text-foreground hover:bg-muted"
-                      : "text-muted-foreground/45 hover:bg-muted/30"
+                      ? "text-foreground hover:bg-surface-hover"
+                      : "text-muted-foreground/45 hover:bg-surface-hover"
                   }`}
                 >
                   <span>{day.getDate()}</span>

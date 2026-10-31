@@ -62,6 +62,26 @@ describe('Composer keyboard and input interactions', () => {
     });
   }
 
+  it('leaves Enter in context search to form submission without attaching a page', async () => {
+    const handlers = createHandlers();
+    renderComposer(handlers);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Add context or start a new session"]')!.click());
+    const input = document.querySelector<HTMLInputElement>('input[type="search"]')!;
+    expect(input).not.toBeNull();
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'release notes');
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+    });
+    const enter = new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true});
+    await act(async () => {
+      // jsdom does not implement the browser's implicit Enter submission.
+      if (input.dispatchEvent(enter)) input.form!.requestSubmit();
+    });
+    expect.soft(enter.defaultPrevented).toBe(false);
+    expect.soft(handlers.onSearchHistory).toHaveBeenCalledWith('release notes');
+    expect.soft(handlers.onToggleBrowserContext).not.toHaveBeenCalled();
+  });
+
   it('flushes the draft through the textarea blur event', async () => {
     // Given
     const onComposerBlur = vi.fn();

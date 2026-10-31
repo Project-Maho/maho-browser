@@ -8,11 +8,18 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_themed_background.h"
 #include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_column_view.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_tab_row_view.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/gfx/canvas.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget.h"
@@ -228,6 +235,124 @@ TEST_F(MahoSpacesOverlayTabRowViewTest, ClickTabRowFiresCallback) {
 
   EXPECT_EQ("space1", clicked_space);
   EXPECT_EQ("tab1", clicked_tab);
+}
+
+// ---------------------------------------------------------------------------
+// Overlay view - palette paint-mode and theme-refresh contract
+//
+// The Spaces overlay is one of three surfaces that paint the sidebar palette
+// (docked rail, Downloads/Archive library overlay, Spaces overlay). It lives in
+// its own top-level widget, so it used to disagree with the rail in two ways:
+// it hardcoded "opaque" for its gradient regardless of the palette it was handed,
+// and its OnThemeChanged() only repainted from whatever snapshot it already had.
+// ---------------------------------------------------------------------------
+
+class MahoSpacesOverlayViewPaletteTest : public views::ViewsTestBase {
+ protected:
+  MahoSpacesOverlayViewPaletteTest() = default;
+  ~MahoSpacesOverlayViewPaletteTest() override = default;
+
+  MahoSpacesOverlayView* CreateOverlayView() {
+    host_widget_ = CreateTestWidget(
+        views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+        views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+    host_widget_->Show();
+
+    auto view = std::make_unique<MahoSpacesOverlayView>(
+        MahoSpacesOverlayView::ForTestingTag{}, MakeEmptyModel(),
+        base::DoNothing(), base::DoNothing());
+    auto* raw = view.get();
+    host_widget_->SetContentsView(std::move(view));
+    return raw;
+  }
+
+  void TearDown() override {
+    host_widget_.reset();
+    views::ViewsTestBase::TearDown();
+  }
+
+ private:
+  std::unique_ptr<views::Widget> host_widget_;
+};
+
+TEST_F(MahoSpacesOverlayViewPaletteTest,
+       PaintModeComesFromTheSnapshotNotAHardcode) {
+  auto* view = CreateOverlayView();
+
+  MahoSidebarPalette opaque_palette;
+  opaque_palette.opaque = true;
+  view->SetPalette(opaque_palette);
+  EXPECT_TRUE(view->palette_opaque_for_testing())
+      << "the rail's opaque decision must reach the overlay";
+
+  // While the overlay is up the rail resolves opaque, but the overlay must be
+  // able to represent and paint the translucent snapshot too instead of forcing
+  // opaque stops the rail never resolved.
+  MahoSidebarPalette translucent_palette;
+  translucent_palette.opaque = false;
+  view->SetPalette(translucent_palette);
+  EXPECT_FALSE(view->palette_opaque_for_testing());
+}
+
+TEST_F(MahoSpacesOverlayViewPaletteTest,
+       ThemeChangePullsTheRailSnapshotBeforeRepainting) {
+  auto* view = CreateOverlayView();
+
+  int refresh_calls = 0;
+  view->set_palette_refresh_callback(base::BindRepeating(
+      [](int* calls, MahoSpacesOverlayView* target) {
+        ++*calls;
+        MahoSidebarPalette pulled;
+        pulled.opaque = true;
+        pulled.primary_text = SkColorSetRGB(0x01, 0x02, 0x03);
+        target->SetPalette(pulled);
+      },
+      &refresh_calls, view));
+
+  view->OnThemeChanged();
+
+  EXPECT_EQ(refresh_calls, 1)
+      << "a theme change must pull the rail's authoritative snapshot";
+  EXPECT_TRUE(view->palette_opaque_for_testing());
+}
+
+// The shared span is what makes the rail, the library overlay, and this overlay
+// agree. Painting the same palette across two very different widths must put the
+// same color at the same offset from the top-left; the pre-fix per-surface spans
+// (the rail's own variable width vs the overlay's fixed column) stretched the
+// identical stops differently and read as two shades of one theme.
+TEST_F(MahoSpacesOverlayViewPaletteTest,
+       SharedGradientSpanRendersIdenticallyAcrossSurfaceWidths) {
+  // Three distinct opaque stops so any span difference is visible in the pixel.
+  MahoSidebarPalette palette;
+  palette.opaque = true;
+  palette.opaque_contrast_stops = {
+      SkColorSetRGB(0x10, 0x10, 0x10),
+      SkColorSetRGB(0x80, 0x80, 0x80),
+      SkColorSetRGB(0xF0, 0xF0, 0xF0),
+  };
+
+  const int rail_width = sidebar_layout::kDefaultRailWidthDp;
+  const int overlay_width = sidebar_layout::kLibraryOverlayContentWidthDp;
+  ASSERT_GT(overlay_width, rail_width);
+
+  const auto paint = [&palette](int width, int span) {
+    gfx::Canvas canvas(gfx::Size(width, 64), 1.0f, /*is_opaque=*/false);
+    const SkVector radii[4] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+    PaintMahoSidebarThemedBackground(
+        &canvas, palette, gfx::Rect(0, 0, width, 64), /*opaque=*/true, radii,
+        span);
+    return canvas.GetBitmap().getColor(4, 4);
+  };
+
+  EXPECT_EQ(paint(rail_width, sidebar_layout::kThemedBackgroundGradientSpanDp),
+            paint(overlay_width, sidebar_layout::kThemedBackgroundGradientSpanDp))
+      << "the shared span must resolve one tint across surface widths";
+
+  // Regression witness: with the old full-bounds span (0) the two widths land on
+  // different colors, which is exactly the reported rail/overlay mismatch.
+  EXPECT_NE(paint(rail_width, /*span=*/0), paint(overlay_width, /*span=*/0))
+      << "a per-surface span is the defect this token removes";
 }
 
 }  // namespace

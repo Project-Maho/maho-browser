@@ -15,7 +15,16 @@ use maho_types::content_blocking::{
 pub const MAX_LIST_BODY_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
 pub const MAX_FILTER_LISTS: usize = 64;
 pub const MAX_ENABLED_FILTER_BYTES: usize = 32 * 1024 * 1024;
-pub const MAX_ENABLED_FILTER_RULES: usize = 100_000;
+// Aggregate rule budget across every enabled list. The default seeded set
+// enables EasyList and EasyPrivacy, measured at ~81.7k and ~56.2k rules on
+// 2026-09-27 (~138k combined), so the budget must clear that with headroom for
+// list growth. At the previous 100k value the two defaults could never be
+// active at once: `validate_enabled_candidate_aggregate` rejected whichever
+// list lost the fetch race on every attempt, leaving it permanently at zero
+// rules. Profiles where EasyPrivacy won that race held no ad rules at all, so
+// ad blocking silently did nothing while the pane only reported a health
+// error.
+pub const MAX_ENABLED_FILTER_RULES: usize = 200_000;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -297,7 +306,8 @@ pub fn default_seeded_filter_lists() -> Vec<FilterListMetadata> {
 
 pub struct ContentBlocker {
     mode: ContentBlockingMode,
-    engine: Engine,
+    engine: std::cell::OnceCell<Engine>,
+    deferred_engine: Option<(Option<Vec<u8>>, CompileInputSnapshot)>,
     filter_lists: Vec<FilterListMetadata>,
     filter_list_contents: HashMap<String, String>,
     site_exceptions: HashMap<String, i64>,
@@ -321,7 +331,8 @@ impl ContentBlocker {
         let engine = Engine::from_filter_set(filter_set, true);
         let mut blocker = Self {
             mode: ContentBlockingMode::Native,
-            engine,
+            engine: std::cell::OnceCell::from(engine),
+            deferred_engine: None,
             filter_lists: lists,
             filter_list_contents: HashMap::new(),
             site_exceptions: HashMap::new(),
@@ -337,6 +348,26 @@ impl ContentBlocker {
 
     pub fn mode(&self) -> ContentBlockingMode {
         self.mode
+    }
+
+    pub fn defer_engine_restore(&mut self, cache: Option<Vec<u8>>, hash: String) {
+        let snapshot = self.create_compile_snapshot();
+        self.engine = std::cell::OnceCell::new();
+        self.deferred_engine = Some((cache, snapshot));
+        self.active_content_hash = Some(hash);
+    }
+
+    fn engine(&self) -> &Engine {
+        self.engine.get_or_init(|| {
+            let (cache, snapshot) = self.deferred_engine.as_ref().expect("deferred engine input");
+            if let Some(bytes) = cache {
+                let mut engine = Engine::from_filter_set(FilterSet::new(false), true);
+                if engine.deserialize(bytes).is_ok() {
+                    return engine;
+                }
+            }
+            compile_engine_snapshot(snapshot.clone()).engine
+        })
     }
 
     pub fn set_mode(&mut self, mode: ContentBlockingMode) {
@@ -456,7 +487,7 @@ impl ContentBlocker {
             Err(_) => return false,
         };
 
-        let result = self.engine.check_network_request(&request);
+        let result = self.engine().check_network_request(&request);
         result.matched
     }
 
@@ -474,7 +505,7 @@ impl ContentBlocker {
             Err(_) => return BlockResult::default(),
         };
 
-        let result = self.engine.check_network_request(&request);
+        let result = self.engine().check_network_request(&request);
         BlockResult {
             blocked: result.matched,
             redirect: result.redirect,
@@ -590,6 +621,21 @@ impl ContentBlocker {
         let now = chrono::Utc::now().timestamp();
 
         if resp.status_code == 304 {
+            // A 304 only confirms content we already hold. Without a stored body
+            // the validators are stale; drop them so the next fetch is
+            // unconditional instead of reporting a healthy list with 0 rules.
+            if !self.filter_list_contents.contains_key(&resp.list_id) {
+                if let Some(fl) = self.filter_lists.iter_mut().find(|f| f.id == resp.list_id) {
+                    fl.etag = None;
+                    fl.last_modified = None;
+                }
+                self.record_update_failure(
+                    &resp.list_id,
+                    304,
+                    "304 Not Modified without stored list content",
+                );
+                return Ok(FilterUpdateOutcome::Failed { status_code: 304 });
+            }
             if let Some(fl) = self.filter_lists.iter_mut().find(|f| f.id == resp.list_id) {
                 fl.last_attempt_timestamp = Some(now);
                 fl.last_success_timestamp = Some(now);
@@ -924,7 +970,8 @@ impl ContentBlocker {
         for id in promotion.candidate_ids {
             self.pending_candidates.remove(&id);
         }
-        self.engine = compiled.engine;
+        self.engine = std::cell::OnceCell::from(compiled.engine);
+        self.deferred_engine = None;
         self.active_content_hash = Some(promotion.content_hash);
         self.update_health();
         true
@@ -964,7 +1011,8 @@ impl ContentBlocker {
         generation: u64,
         content_hash: Option<&str>,
     ) -> Result<(), String> {
-        self.engine
+        self.engine();
+        self.engine.get_mut().expect("initialized engine")
             .deserialize(bytes)
             .map_err(|e| format!("{e:?}"))?;
         self.set_generation(generation);
@@ -978,7 +1026,7 @@ impl ContentBlocker {
         if !self.is_native() {
             return CosmeticResourcesResponse::default();
         }
-        let resources: UrlSpecificResources = self.engine.url_cosmetic_resources(url);
+        let resources: UrlSpecificResources = self.engine().url_cosmetic_resources(url);
         CosmeticResourcesResponse {
             hide_selectors: resources.hide_selectors.into_iter().collect(),
             injected_script: if resources.injected_script.is_empty() {
@@ -999,11 +1047,12 @@ impl ContentBlocker {
     }
 
     pub fn serialize_engine(&self) -> Vec<u8> {
-        self.engine.serialize()
+        self.engine().serialize()
     }
 
     pub fn deserialize_engine(&mut self, data: &[u8]) -> Result<(), String> {
-        self.engine
+        self.engine();
+        self.engine.get_mut().expect("initialized engine")
             .deserialize(data)
             .map_err(|e| format!("{e:?}"))?;
         let snapshot = self.create_compile_snapshot();

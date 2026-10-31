@@ -63,6 +63,17 @@ inline constexpr int kLibraryRailWidthDp = 92;
 // overlay widget is pinned to this width regardless of the sidebar's persisted
 // pref width, so the pane never resizes with the sidebar (Arc-style panel).
 inline constexpr int kLibraryOverlayContentWidthDp = 380;
+// Canonical diagonal span (dp) over which the sidebar palette's gradient stops
+// are laid out, shared by every surface that paints that palette: the docked
+// rail, the Downloads/Archive library overlay, and the full-viewport Spaces
+// overlay. With one span, one palette resolves to one tint at the same screen
+// position. A per-surface span (the rail's own variable width, the overlay's
+// 380dp column) stretches the identical stops differently and makes two
+// surfaces of the same Space theme read as different shades. Anchored at the
+// library-overlay content width, the narrowest surface that hosts full palette
+// content, so the rail's tint density matches the panel it opens into.
+inline constexpr int kThemedBackgroundGradientSpanDp =
+    kLibraryOverlayContentWidthDp;
 inline constexpr int kLibraryContentSeparatorThicknessDp = 1;
 inline constexpr int kLibraryRailTopInsetDp = 14;
 inline constexpr int kLibraryRailSideInsetDp = 0;

@@ -54,6 +54,8 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   bool SwitchToSpace(Browser* browser, const std::string& space_id);
 
   bool HydrateFromCore();
+  bool HydrateFromSnapshot(ProfileCatalogResult catalog,
+                           SpaceProfileHydrationState state);
   bool HydrateFromSerializedStateForTesting(
       std::string_view spaces_json,
       std::string_view active_space_id_json);
@@ -74,6 +76,7 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   // mapped lookup fails closed when a Browser has no explicit entry.
   const std::string& GetActiveSpaceId(Browser* browser) const;
   const std::string& GetActiveSpaceId(BrowserWindowInterface* browser) const;
+  bool IsSpaceRegistered(std::string_view space_id) const;
   size_t GetRegisteredSpaceCount() const;
   int GetActiveSpaceIndex() const;
   int GetActiveSpaceIndex(Browser* browser) const;
@@ -82,8 +85,15 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   std::vector<Browser*> GetBrowsersForSpaces(
       const std::vector<std::string>& space_ids) const;
   void ClearBrowserActiveSpacesForTesting();
+  void ReconcileExistingBrowsersActiveSpace();
   void EnsureBrowserCollectionObservationForTesting();
   void ResetBrowserCollectionObservationForTesting();
+  // Drives the BrowserCollectionObserver path without a real
+  // GlobalBrowserCollection notification. The override itself stays private so
+  // the bridge keeps owning when browser lifecycle events are processed.
+  void OnBrowserCreatedForTesting(BrowserWindowInterface* browser) {
+    OnBrowserCreated(browser);
+  }
 
   std::vector<std::string> GetSpaceIds() const;
   std::string GetSpaceIdForProfile(Profile* profile) const;
@@ -92,6 +102,7 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   bool ReconcileProfileRegistry(std::string_view profiles_json,
                                 std::string_view active_profile_id_json,
                                 std::string_view spaces_json);
+  bool ReconcileProfileRegistry(ProfileCatalogResult catalog);
   bool ReconcileProfileRegistryFromCore();
   void SetLocalStateForTesting(PrefService* local_state);
   const ProfileCatalogResult& GetProfileCatalog() const;

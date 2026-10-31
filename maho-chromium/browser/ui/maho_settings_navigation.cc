@@ -103,7 +103,7 @@ void OpenMahoSettingsPane(Browser* browser, const std::string& pane_key) {
   const GURL target_url = BuildSettingsUrl(pane_key);
 
   const SettingsTabLocation existing =
-      FindSettingsTabAcrossWindows(browser->profile());
+      FindSettingsTabAcrossWindows(browser->GetProfile());
   if (existing.browser_window) {
     existing.browser_window->GetWindow()->Activate();
     TabStripModel* existing_tab_strip =

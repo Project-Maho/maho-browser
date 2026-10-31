@@ -46,6 +46,8 @@ impl Fixture {
         let db = self.ctx.pool.get().unwrap();
         let payload = serde_json::json!({"attendee_email":"user@example.com", "organizer_email":"organizer@example.invalid", "subject":"Accepted: Replay", "ics_text":"BEGIN:VCALENDAR\r\nMETHOD:REPLY\r\nEND:VCALENDAR\r\n"}).to_string();
         maho_core::services::offline_queue::queue_calendar_mutation(&db, "acc1", kind, event, Some(&payload)).unwrap();
+        // DbPool is a single Mutex<Connection>; release it before rows() re-locks.
+        drop(db);
         self.rows().into_iter().find(|m| m.calendar_event_id.as_deref() == Some(event)).unwrap()
     }
     fn rows(&self) -> Vec<maho_core::services::offline_queue::PendingMutation> {

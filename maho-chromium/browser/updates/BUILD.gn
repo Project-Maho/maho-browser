@@ -38,6 +38,21 @@ source_set("maho_update_crypto_util") {
   ]
 }
 
+action("generate_maho_product_version") {
+  script = "//maho/build/scripts/generate_product_version.py"
+  depfile = "$target_gen_dir/maho_product_version.d"
+  inputs = [ "//../../maho/version.txt" ]
+  outputs = [ "$target_gen_dir/maho_product_version.h" ]
+  args = [
+    "--version-file",
+    rebase_path("//../../maho/version.txt", root_build_dir),
+    "--output",
+    rebase_path("$target_gen_dir/maho_product_version.h", root_build_dir),
+    "--depfile",
+    rebase_path(depfile, root_build_dir),
+  ]
+}
+
 source_set("maho_config_manager") {
   sources = [
     "maho_config_manager.cc",
@@ -61,12 +76,14 @@ source_set("maho_config_manager") {
 component("maho_updates_lib") {
   defines = [ "IS_MAHO_UPDATES_IMPL" ]
   sources = [
+    "$target_gen_dir/maho_product_version.h",
     "crash_loop_sentinel.cc",
     "crash_loop_sentinel.h",
     "linux_install_kind.cc",
     "linux_install_kind.h",
     "maho_update_manager.cc",
     "maho_update_manager.h",
+    "platform_updater_error_mapping.h",
     "maho_update_server_url.cc",
     "maho_update_server_url.h",
     "platform_updater_delegate.h",
@@ -92,6 +109,7 @@ component("maho_updates_lib") {
     ]
   }
   deps = [
+    ":generate_maho_product_version",
     ":maho_updates_prefs",
     ":maho_update_crypto_util",
     "//base",
@@ -125,6 +143,7 @@ source_set("maho_updates_unittests") {
     sources += [ "maho_update_delegate_linux_unittest.cc" ]
   }
   deps = [
+    ":generate_maho_product_version",
     ":maho_config_manager",
     ":maho_updates_lib",
     ":maho_updates_prefs",

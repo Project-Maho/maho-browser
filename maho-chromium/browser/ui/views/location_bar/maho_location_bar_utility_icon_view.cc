@@ -3,7 +3,6 @@
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 
 #include "base/functional/bind.h"
-#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -35,18 +34,12 @@ ui::ImageModel CreateUtilityButtonImage(ui::ColorVariant color) {
 
 void UpdateUtilityButtonImages(views::ToggleImageButton* button,
                                const MahoSidebarPalette& palette) {
-  const ui::ColorVariant normal_color =
-      palette.neutral_glyph != SK_ColorTRANSPARENT
-          ? ui::ColorVariant(palette.neutral_glyph)
-          : ui::ColorVariant(ui::kColorSysOnSurface);
-  const ui::ColorVariant active_color =
-      palette.primary_text != SK_ColorTRANSPARENT
-          ? ui::ColorVariant(palette.primary_text)
-          : ui::ColorVariant(ui::kColorSysOnSurface);
-  const ui::ColorVariant disabled_color =
-      palette.disabled_text != SK_ColorTRANSPARENT
-          ? ui::ColorVariant(palette.disabled_text)
-          : ui::ColorVariant(ui::kColorIconDisabled);
+  // The sidebar palette is the only color authority on the search pill; an
+  // OS-theme ColorId fallback would flash the wrong family before the first
+  // palette push and disagree with the Space-themed surface.
+  const ui::ColorVariant normal_color(palette.neutral_glyph);
+  const ui::ColorVariant active_color(palette.primary_text);
+  const ui::ColorVariant disabled_color(palette.disabled_text);
   button->SetImageModel(views::Button::STATE_NORMAL,
                         CreateUtilityButtonImage(normal_color));
   button->SetImageModel(views::Button::STATE_HOVERED,
@@ -135,15 +128,13 @@ void MahoLocationBarUtilityIconView::TogglePanel() {
 }
 
 void MahoLocationBarUtilityIconView::UpdateButtonChrome() {
-  const bool active = GetToggled() || GetState() == STATE_HOVERED ||
+  const bool active = GetToggled() || hover_visible_ || GetState() == STATE_HOVERED ||
                       GetState() == STATE_PRESSED;
   SetBorder(views::CreateEmptyBorder(gfx::Insets()));
-  const SkColor active_background =
-      palette_.row_active != SK_ColorTRANSPARENT
-          ? palette_.row_active
-          : kMahoColorTabRowActiveBackground;
+  // Previously fell back to a ui::ColorId implicitly converted to SkColor
+  // (an enum value, not a color).
   SetBackground(active ? views::CreateRoundedRectBackground(
-                             active_background, kUtilityButtonCornerRadius)
+                             palette_.row_active, kUtilityButtonCornerRadius)
                        : nullptr);
 }
 

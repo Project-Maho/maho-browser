@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -58,10 +60,12 @@ FILE_PLATFORMS: dict[str, frozenset[str]] = {
     "chrome/app/app-Info.plist": frozenset({"mac"}),
     "chrome/browser/app_controller_mac.h": frozenset({"mac"}),
     "chrome/browser/app_controller_mac.mm": frozenset({"mac"}),
+    "chrome/browser/ui/cocoa/main_menu_builder.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac_unittest.mm": frozenset({"mac"}),
     "ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm": frozenset({"mac"}),
     "ui/base/cocoa/command_dispatcher.mm": frozenset({"mac"}),
+    "build/toolchain/apple/linker_driver.py": frozenset({"mac"}),
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.cc": frozenset({"win"}),
     "chrome/browser/ui/views/frame/browser_caption_button_container_win.h": frozenset({"win"}),
     "chrome/browser/ui/views/frame/browser_frame_view_win.cc": frozenset({"win"}),
@@ -459,7 +463,174 @@ def is_revision_incompatible_target(relative_path: str, revision: str) -> bool:
     )
 
 
+# Sidebar rail layout block injected into BrowserViewTabbedLayoutImpl.
+# V1 only reserved width; an auto-hide sidebar (preferred width 0) was dropped
+# from layout entirely, leaving no view on screen to receive the hover that
+# reveals it again.
+_MAHO_SIDEBAR_RAIL_LAYOUT_V1 = (
+    "  // Maho: reserve the leading rail for the native sidebar before the\n"
+    "  // upstream pipeline consumes `params`. Upstream lays out the rest of\n"
+    "  // the browser inside the remaining area with no further changes.\n"
+    "  if (views().maho_sidebar_container &&\n"
+    "      views().maho_sidebar_container->GetVisible()) {\n"
+    "    const int maho_rail_width =\n"
+    "        views().maho_sidebar_container->GetPreferredSize().width();\n"
+    "    if (maho_rail_width > 0) {\n"
+    "      const gfx::Rect maho_rail_bounds(\n"
+    "          params.visual_client_area.x(), params.visual_client_area.y(),\n"
+    "          maho_rail_width, params.visual_client_area.height());\n"
+    "      layout.AddChild(views().maho_sidebar_container, maho_rail_bounds);\n"
+    "      params.InsetHorizontal(maho_rail_width, /*leading=*/true);\n"
+    "    }\n"
+    "  }\n"
+    "\n"
+    "  bool needs_exclusion = true;\n"
+)
+
+_MAHO_SIDEBAR_RAIL_LAYOUT = (
+    "  // Maho: reserve the leading rail for the native sidebar before the\n"
+    "  // upstream pipeline consumes `params`. Upstream lays out the rest of\n"
+    "  // the browser inside the remaining area with no further changes.\n"
+    "  if (views().maho_sidebar_container &&\n"
+    "      views().maho_sidebar_container->GetVisible()) {\n"
+    "    const int maho_rail_width =\n"
+    "        views().maho_sidebar_container->GetPreferredSize().width();\n"
+    "    if (maho_rail_width > 0) {\n"
+    "      const gfx::Rect maho_rail_bounds(\n"
+    "          params.visual_client_area.x(), params.visual_client_area.y(),\n"
+    "          maho_rail_width, params.visual_client_area.height());\n"
+    "      layout.AddChild(views().maho_sidebar_container, maho_rail_bounds);\n"
+    "      params.InsetHorizontal(maho_rail_width, /*leading=*/true);\n"
+    "    } else if (const auto* maho_floating_sidebar =\n"
+    "                   views::AsViewClass<maho::MahoSidebarContainerView>(\n"
+    "                       views().maho_sidebar_container)) {\n"
+    "      // Maho: an auto-hide sidebar reserves no width. It floats over the\n"
+    "      // contents as a hover strip, or as the full sidebar while revealed,\n"
+    "      // so the contents never relayout while it slides.\n"
+    "      layout.AddChild(\n"
+    "          views().maho_sidebar_container,\n"
+    "          gfx::Rect(params.visual_client_area.x(),\n"
+    "                    params.visual_client_area.y(),\n"
+    "                    maho_floating_sidebar->GetFloatingOverlayWidth(),\n"
+    "                    params.visual_client_area.height()));\n"
+    "    }\n"
+    "  }\n"
+    "\n"
+    "  bool needs_exclusion = true;\n"
+)
+
+
+# Tail of the BrowserView::ShowTranslateBubble suppression comment. Trees
+# patched while the sidebar search pill existed carry an older wording, which
+# the follow-up Replacement rewrites to this text.
+_MAHO_TRANSLATE_BUBBLE_COMMENT_TAIL: Final[str] = (
+    "  // via the per-pane contents header (MahoContentsHeaderView) and on-device\n"
+    "  // translation engine. The upstream TranslateBubbleView popup is suppressed\n"
+    "  // so it does not duplicate or overlay the header interface.\n"
+)
+
+
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    # ── Xcode 27 rejects Mach-O whose LINKEDIT string pool is misaligned ───────
+    # Chromium links with llvm-strip -x -S. When the indirect symbol count is
+    # odd, stroff ends up 4-byte aligned (e.g. Maho Framework at 0x0F9260CC), and
+    # Xcode 27's Apple ld then refuses to read the dylib:
+    #   ld: mis-aligned LINKEDIT string pool, fileOffset=0x0F9260CC
+    # Align the pool (8 bytes), fix LC_SYMTAB/__LINKEDIT, and re-sign ad-hoc; the
+    # strip output is re-signed anyway, but an unaligned pool breaks every later
+    # link and dyld rejects such dylibs at load time.
+    "build/toolchain/apple/linker_driver.py": [
+        Replacement(
+            old=(
+                "class LinkerDriver(object):\n"
+                "    def __init__(self, args):\n"
+            ),
+            new=(
+                "def _ensure_symtab_string_pool_aligned(filepath, alignment=8):\n"
+                '    """Keep the Mach-O LC_SYMTAB string pool 8-byte aligned.\n'
+                "\n"
+                "    llvm-strip -x -S can leave stroff unaligned when the indirect\n"
+                "    symbol count is odd; Xcode 27 ld then rejects the binary.\n"
+                '    """\n'
+                "    import struct\n"
+                "    if not os.path.exists(filepath):\n"
+                "        return\n"
+                "    try:\n"
+                '        with open(filepath, "rb") as f:\n'
+                "            data = bytearray(f.read())\n"
+                "        if len(data) < 32:\n"
+                "            return\n"
+                '        magic = struct.unpack_from("<I", data, 0)[0]\n'
+                "        if magic != 0xfeedfacf:\n"
+                "            return\n"
+                '        ncmds = struct.unpack_from("<I", data, 16)[0]\n'
+                "        offset = 32\n"
+                "        symtab_offset = None\n"
+                "        linkedit_offset = None\n"
+                "        for _ in range(ncmds):\n"
+                "            if offset + 8 > len(data):\n"
+                "                break\n"
+                '            cmd, cmdsize = struct.unpack_from("<II", data, offset)\n'
+                "            if cmd == 2:\n"
+                "                symtab_offset = offset\n"
+                "            elif cmd == 0x19:\n"
+                '                segname = data[offset + 8:offset + 24].split(b"\\x00")[0]\n'
+                '                if segname == b"__LINKEDIT":\n'
+                "                    linkedit_offset = offset\n"
+                "            offset += cmdsize\n"
+                "        if not symtab_offset:\n"
+                "            return\n"
+                "        symoff, nsyms, stroff, strsize = struct.unpack_from(\n"
+                '            "<IIII", data, symtab_offset + 8)\n'
+                "        rem = stroff % alignment\n"
+                "        if rem == 0:\n"
+                "            return\n"
+                "        pad = alignment - rem\n"
+                '        subprocess.run(["codesign", "--remove-signature", filepath],\n'
+                "                       capture_output=True)\n"
+                '        with open(filepath, "rb") as f:\n'
+                "            data = bytearray(f.read())\n"
+                '        data[stroff:stroff] = b"\\x00" * pad\n'
+                '        struct.pack_into("<I", data, symtab_offset + 16, stroff + pad)\n'
+                "        if linkedit_offset:\n"
+                "            vmaddr, vmsize, fileoff, filesize = struct.unpack_from(\n"
+                '                "<QQQQ", data, linkedit_offset + 24)\n'
+                '            struct.pack_into("<Q", data, linkedit_offset + 48,\n'
+                "                             filesize + pad)\n"
+                '        with open(filepath, "wb") as f:\n'
+                "            f.write(data)\n"
+                '        subprocess.run(["codesign", "-f", "-s", "-", filepath],\n'
+                "                       capture_output=True, check=True)\n"
+                "    except Exception:\n"
+                "        pass\n"
+                "\n"
+                "\n"
+                "class LinkerDriver(object):\n"
+                "    def __init__(self, args):\n"
+            ),
+            description=(
+                "Maho: align the stripped Mach-O LC_SYMTAB string pool for Xcode 27 ld"
+            ),
+            guard="def _ensure_symtab_string_pool_aligned",
+        ),
+        Replacement(
+            old=(
+                "        strip_command.append(self._get_linker_output())\n"
+                "        subprocess.check_call(strip_command)\n"
+                "        return []\n"
+            ),
+            new=(
+                "        strip_command.append(self._get_linker_output())\n"
+                "        subprocess.check_call(strip_command)\n"
+                "        _ensure_symtab_string_pool_aligned(self._get_linker_output())\n"
+                "        return []\n"
+            ),
+            description=(
+                "Maho: run the symbol-pool alignment after every linker-driver strip"
+            ),
+            guard="_ensure_symtab_string_pool_aligned(self._get_linker_output())",
+        ),
+    ],
     # ── Settings entry points land on Maho settings, never chrome://settings ──
     # On macOS the app-menu "Settings…" item and Cmd+, do NOT go through
     # IDC_OPTIONS in browser_command_controller: AppController intercepts the
@@ -505,6 +676,64 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "and Cmd+comma open chrome://maho-settings, not chrome://settings"
             ),
             guard="maho::OpenMahoSettingsPane(maho_browser, std::string());",
+        ),
+    ],
+    # ── macOS menu bar carries no Bookmarks menu ──
+    # Maho ships no bookmark surface (no manager, no bar, no star), so the
+    # upstream Bookmarks menu would open Chromium UI for a store Maho never
+    # writes. BuildMainMenu skips builders that return nil, so returning nil
+    # removes the whole menu bar entry, while keeping the symbol referenced
+    # (an unused static builder would fail -Wunused-function).
+    "chrome/browser/ui/cocoa/main_menu_builder.mm": [
+        Replacement(
+            old=(
+            "NSMenuItem* BuildBookmarksMenu(NSApplication* nsapp,\n"
+            "                               id app_delegate,\n"
+            "                               const std::u16string& product_name,\n"
+            "                               bool is_pwa,\n"
+            "                               bool is_rtl) {\n"
+            "  if (is_pwa) {\n"
+            "    return nil;\n"
+            "  }\n"
+            "\n"
+            "  // clang-format off\n"
+            "  NSMenuItem* item =\n"
+            "      Item(IDS_BOOKMARKS_MENU)\n"
+            "          .tag(IDC_BOOKMARKS_MENU)\n"
+            "          .submenu({\n"
+            "              Item(IDS_BOOKMARK_MANAGER)\n"
+            "                  .command_id(IDC_SHOW_BOOKMARK_MANAGER),\n"
+            "              Item().is_separator()\n"
+            "                  .tag(IDC_BOOKMARK_THIS_TAB),\n"
+            "              Item(IDS_BOOKMARK_THIS_TAB)\n"
+            "                  .command_id(IDC_BOOKMARK_THIS_TAB),\n"
+            "              Item(IDS_BOOKMARK_ALL_TABS)\n"
+            "                  .command_id(IDC_BOOKMARK_ALL_TABS),\n"
+            "              Item().is_separator()\n"
+            "                  .tag(IDC_BOOKMARK_THIS_TAB),\n"
+            "          })\n"
+            "          .Build();\n"
+            "  // clang-format on\n"
+            "  return item;\n"
+            "}\n"
+            ),
+            new=(
+            "NSMenuItem* BuildBookmarksMenu(NSApplication* nsapp,\n"
+            "                               id app_delegate,\n"
+            "                               const std::u16string& product_name,\n"
+            "                               bool is_pwa,\n"
+            "                               bool is_rtl) {\n"
+            "  // Maho: the browser exposes no bookmark surface (sidebar favorites and\n"
+            "  // spaces replace it), so the macOS Bookmarks menu is never built. The main\n"
+            "  // menu loop skips nil builders, so the menu bar entry disappears with it.\n"
+            "  return nil;\n"
+            "}\n"
+            ),
+            description=(
+                "Maho: never build the macOS Bookmarks menu; the browser has no "
+                "bookmark surface"
+            ),
+            guard="Maho: the browser exposes no bookmark surface",
         ),
     ],
     "third_party/blink/public/common/loader/url_loader_throttle.h": [
@@ -2491,6 +2720,20 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     "chrome/app/app-Info.plist": [
         Replacement(
             old=(
+                "\t<key>CFBundleDevelopmentRegion</key>\n"
+                "\t<string>en</string>\n"
+            ),
+            new=(
+                "\t<key>CFBundleDevelopmentRegion</key>\n"
+                "\t<string>en</string>\n"
+                "\t<key>NSBluetoothAlwaysUsageDescription</key>\n"
+                "\t<string>Maho uses Bluetooth to connect to a nearby phone when you sign in with a passkey.</string>\n"
+            ),
+            description="Declare Bluetooth access for cross-device passkey sign-in on macOS",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
                 "\t<key>LSFileQuarantineEnabled</key>\n"
                 "\t<true/>\n"
             ),
@@ -2498,7 +2741,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "\t<key>LSFileQuarantineEnabled</key>\n"
                 "\t<false/>\n"
                 "\t<key>SUFeedURL</key>\n"
-                "\t<string>https://github.com/Project-Maho/release/releases/latest/download/appcast.xml</string>\n"
+                "\t<string>https://github.com/Project-Maho/maho-browser/releases/latest/download/appcast.xml</string>\n"
                 "\t<key>SUPublicEDKey</key>\n"
                 "\t<string>iwdrdct4loEJl8WbHsfhhHMNcUygZ54N6uIveroNTbw=</string>\n"
                 "\t<key>SUEnableAutomaticChecks</key>\n"
@@ -2520,7 +2763,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "\t<key>LSFileQuarantineEnabled</key>\n"
                 "\t<false/>\n"
                 "\t<key>SUFeedURL</key>\n"
-                "\t<string>https://github.com/Project-Maho/release/releases/latest/download/appcast.xml</string>\n"
+                "\t<string>https://github.com/Project-Maho/maho-browser/releases/latest/download/appcast.xml</string>\n"
                 "\t<key>SUPublicEDKey</key>\n"
                 "\t<string>iwdrdct4loEJl8WbHsfhhHMNcUygZ54N6uIveroNTbw=</string>\n"
                 "\t<key>SUEnableAutomaticChecks</key>\n"
@@ -2566,7 +2809,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description=(
                 "Disable the standard-layout location-bar utility icon injection; "
-                "the panel is sidebar-only (MahoSidebarSearchView owns the coordinator)"
+                "the panel is owned by the per-pane contents header (MahoContentsHeaderView)"
             ),
             guard="location-bar icon injection is intentionally disabled",
             idempotent=True,
@@ -3716,6 +3959,67 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "IDC_NEW_TAB into that browser so Maho opens the command palette"
             ),
         ),
+        Replacement(
+            old=(
+                "  auto& entry = _profileBookmarkMenuBridgeMap[profile->GetPath()];\n"
+                "  if (!entry || !entry->GetProfile()) {\n"
+                "    // This creates a deep copy, but only the first 3 items in the root menu\n"
+                "    // are really wanted. This can probably be optimized, but lazy-loading of\n"
+                "    // the menu should reduce the impact in most flows.\n"
+                "    NSMenu* submenu = [bookmarkItem.submenu copy];\n"
+                "    submenu.delegate = nil;  // The delegate is also copied. Remove it.\n"
+                "\n"
+                "    // The original profile outlives the OTR profile. Always create the bridge\n"
+                "    // on the original profile, to prevent bugs WRT profile lifetime.\n"
+                "    entry = std::make_unique<BookmarkMenuBridge>(profile->GetOriginalProfile(),\n"
+                "                                                 submenu);\n"
+                "\n"
+                "    // Clear bookmarks from the old profile.\n"
+                "    entry->ClearBookmarkMenu();\n"
+                "  }\n"
+                "  _bookmarkMenuBridge = entry.get();\n"
+                "\n"
+                "  // No need to |BuildMenu| here.  It is done lazily upon menu access.\n"
+                "  bookmarkItem.submenu = _bookmarkMenuBridge->BookmarkMenu();\n"
+                "  bookmarkItem.hidden = hidden;\n"
+            ),
+            new=(
+                "  // Maho: the macOS Bookmarks menu is never built (BuildBookmarksMenu\n"
+                "  // returns nil), so |bookmarkItem| is nil. AppKit tolerates messaging nil,\n"
+                "  // but building a BookmarkMenuBridge without a root menu trips its\n"
+                "  // CHECK(menu_root_) and kills the browser at startup, so skip the whole\n"
+                "  // bridging step when the menu item is absent.\n"
+                "  if (bookmarkItem) {\n"
+                "    auto& entry = _profileBookmarkMenuBridgeMap[profile->GetPath()];\n"
+                "    if (!entry || !entry->GetProfile()) {\n"
+                "      // This creates a deep copy, but only the first 3 items in the root\n"
+                "      // menu are really wanted. This can probably be optimized, but\n"
+                "      // lazy-loading of the menu should reduce the impact in most flows.\n"
+                "      NSMenu* submenu = [bookmarkItem.submenu copy];\n"
+                "      submenu.delegate = nil;  // The delegate is also copied. Remove it.\n"
+                "\n"
+                "      // The original profile outlives the OTR profile. Always create the\n"
+                "      // bridge on the original profile, to prevent bugs WRT profile\n"
+                "      // lifetime.\n"
+                "      entry = std::make_unique<BookmarkMenuBridge>(\n"
+                "          profile->GetOriginalProfile(), submenu);\n"
+                "\n"
+                "      // Clear bookmarks from the old profile.\n"
+                "      entry->ClearBookmarkMenu();\n"
+                "    }\n"
+                "    _bookmarkMenuBridge = entry.get();\n"
+                "\n"
+                "    // No need to |BuildMenu| here.  It is done lazily upon menu access.\n"
+                "    bookmarkItem.submenu = _bookmarkMenuBridge->BookmarkMenu();\n"
+                "    bookmarkItem.hidden = hidden;\n"
+                "  }\n"
+            ),
+            description=(
+                "Maho: skip the macOS BookmarkMenuBridge setup when the Bookmarks "
+                "menu is absent, avoiding a CHECK(menu_root_) crash at startup"
+            ),
+            guard="Maho: the macOS Bookmarks menu is never built",
+        ),
     ],
     "chrome/browser/ui/browser_command_controller_unittest.cc": [
         Replacement(
@@ -4279,22 +4583,23 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard='"//maho/browser/extensions/api/maho_split_view_api.cc"',
         ),
+        # The sidebar search pill was removed in favor of the per-pane contents
+        # header; strip its retired source pair from trees that still carry it
+        # (MahoTranslatePopoverView stays registered via
+        # _CHROME_BROWSER_UI_SOURCES).
         Replacement(
             old=(
-                '      "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.cc",\n'
-                '      "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_'
+                'search_view.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_'
+                'search_view.h",\n'
             ),
-            new=(
-                '      "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.cc",\n'
-                '      "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.h",\n'
-                '      "//maho/browser/ui/views/sidebar/maho_translate_popover_view.cc",\n'
-                '      "//maho/browser/ui/views/sidebar/maho_translate_popover_view.h",\n'
-            ),
+            new="",
             description=(
-                "Compile MahoTranslatePopoverView into the chrome/browser/ui:ui "
-                "target beside the sidebar search view"
+                "Maho: strip the retired sidebar search pill sources from the "
+                "chrome/browser/ui:ui target"
             ),
-            guard='"//maho/browser/ui/views/sidebar/maho_translate_popover_view.cc"',
+            idempotent=True,
         ),
         Replacement(
             old=(
@@ -4350,6 +4655,8 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      "//maho/browser/ui/views/maho_action_marker_service.h",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.cc",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.h",\n'
+                '      "//maho/browser/ui/views/frame/maho_contents_header_view.cc",\n'
+                '      "//maho/browser/ui/views/frame/maho_contents_header_view.h",\n'
                 '      "//maho/browser/ai/maho_tab_tidy_orchestrator.cc",\n'
                 '      "//maho/browser/ai/maho_tab_tidy_orchestrator.h",\n'
             ),
@@ -5397,24 +5704,98 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
         Replacement(
             old=(
-                "    LOG(WARNING) << \"[maho-cmdl-trace] BrowserView::ShowMahoCommandOverlayForCurrentTab\"\n"
-                "                 << \" url=\" << url.spec()\n"
-                "                 << \" scheme=\" << url.scheme()\n"
-                "                 << \" is_http_https=\" << (url.SchemeIsHTTPOrHTTPS() ? \"true\" : \"false\")\n"
-                "                 << \" current_url_passed=\" << (current_url.empty() ? \"(empty)\" : current_url);\n"
-                "  } else {\n"
-                "    LOG(WARNING) << \"[maho-cmdl-trace] BrowserView::ShowMahoCommandOverlayForCurrentTab\"\n"
-                "                 << \" no_active_contents current_url_passed=(empty)\";\n"
+                "void BrowserView::ShowMahoCommandOverlayForCurrentTab() {\n"
+                "  auto* controller = GetOrCreateMahoCommandOverlayController();\n"
+                "  if (!controller) {\n"
+                "    return;\n"
                 "  }\n"
-                "  LOG(WARNING) << \"[maho-cmdl-trace] BrowserView::ShowMahoCommandOverlayForCurrentTab\"\n"
-                "               << \" calling Show mode=kCurrentTab select_initial_text=true\";\n"
+                "\n"
+                "  controller->Show(this, maho::CommandOverlayMode::kCurrentTab);\n"
+                "}\n"
             ),
             new=(
-                "  } else {\n"
+                "void BrowserView::ShowMahoCommandOverlayForCurrentTab() {\n"
+                "  auto* controller = GetOrCreateMahoCommandOverlayController();\n"
+                "  if (!controller) {\n"
+                "    return;\n"
                 "  }\n"
+                "\n"
+                "  std::string current_url;\n"
+                "  if (auto* contents = browser_->tab_strip_model()->GetActiveWebContents()) {\n"
+                "    const GURL& visible = contents->GetVisibleURL();\n"
+                "    const GURL& url =\n"
+                "        visible.is_empty() ? contents->GetLastCommittedURL() : visible;\n"
+                "    if (!url.is_empty() && !url.SchemeIs(\"javascript\") &&\n"
+                "        !url.SchemeIs(\"data\") && url.spec() != \"about:blank\") {\n"
+                "      current_url = url.spec();\n"
+                "    }\n"
+                "  }\n"
+                "\n"
+                "  controller->Show(this, maho::CommandOverlayMode::kCurrentTab, current_url,\n"
+                "                   /*select_initial_text=*/true);\n"
+                "}\n"
             ),
-            description="Remove [maho-cmdl-trace] LOG(WARNING) calls from ShowMahoCommandOverlayForCurrentTab",
+            description="Prefill active tab URL with select-all in ShowMahoCommandOverlayForCurrentTab",
             idempotent=True,
+            guard="visible.is_empty() ? contents->GetLastCommittedURL() : visible;",
+        ),
+        Replacement(
+            old=(
+                "void BrowserView::ShowMahoCommandOverlayForCurrentTab() {\n"
+                "  auto* controller = GetOrCreateMahoCommandOverlayController();\n"
+                "  if (!controller) {\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  std::string current_url;\n"
+                "  auto* active_contents = browser_->tab_strip_model()->GetActiveWebContents();\n"
+                "  if (active_contents) {\n"
+                "    // Prefer the visible URL so that pages where the last committed URL is\n"
+                "    // empty or stale (e.g. mid-load, error pages with a pending entry) still\n"
+                "    // seed the overlay correctly. Fall back to last-committed when the visible\n"
+                "    // URL is empty (e.g. initial blank tab before any navigation commits).\n"
+                "    const GURL& visible = active_contents->GetVisibleURL();\n"
+                "    const GURL& url =\n"
+                "        visible.is_empty() ? active_contents->GetLastCommittedURL() : visible;\n"
+                "    // Seed the textfield with the current URL for web pages only.\n"
+                "    // Exclude: javascript: (script injection risk), data: (opaque blobs\n"
+                "    // too long to be useful), and internal browser pages (chrome://, about:,\n"
+                "    // devtools://, etc.) which are suppressed by the shared display policy.\n"
+                "    if (!url.is_empty() &&\n"
+                "        !url.SchemeIs(\"javascript\") &&\n"
+                "        !url.SchemeIs(\"data\") &&\n"
+                "        !maho::MahoDisplayPolicy::IsInternalBrowserPage(url)) {\n"
+                "      current_url = url.spec();\n"
+                "    }\n"
+                "  }\n"
+                "  controller->Show(this, maho::CommandOverlayMode::kCurrentTab,\n"
+                "                   current_url, true);\n"
+                "}\n"
+            ),
+            new=(
+                "void BrowserView::ShowMahoCommandOverlayForCurrentTab() {\n"
+                "  auto* controller = GetOrCreateMahoCommandOverlayController();\n"
+                "  if (!controller) {\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  std::string current_url;\n"
+                "  if (auto* contents = browser_->tab_strip_model()->GetActiveWebContents()) {\n"
+                "    const GURL& visible = contents->GetVisibleURL();\n"
+                "    const GURL& url =\n"
+                "        visible.is_empty() ? contents->GetLastCommittedURL() : visible;\n"
+                "    if (!url.is_empty() && !url.SchemeIs(\"javascript\") &&\n"
+                "        !url.SchemeIs(\"data\") && url.spec() != \"about:blank\") {\n"
+                "      current_url = url.spec();\n"
+                "    }\n"
+                "  }\n"
+                "\n"
+                "  controller->Show(this, maho::CommandOverlayMode::kCurrentTab, current_url,\n"
+                "                   /*select_initial_text=*/true);\n"
+                "}\n"
+            ),
+            description="Migrate the intermediate ShowMahoCommandOverlayForCurrentTab prefill (active_contents + MahoDisplayPolicy) to the select-all prefill",
+            guard="visible.is_empty() ? contents->GetLastCommittedURL() : visible;",
         ),
         Replacement(
             old=(
@@ -6720,16 +7101,29 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             new=(
                 "  // Maho: in Maho's Arc-style layout, translation affordances are surfaced\n"
-                "  // via the sidebar search pill (MahoSidebarSearchView) and on-device\n"
-                "  // translation engine. The upstream TranslateBubbleView popup is suppressed\n"
-                "  // so it does not duplicate or overlay the sidebar interface.\n"
-                "  return ShowTranslateBubbleResult::kSuccess;\n"
+                + _MAHO_TRANSLATE_BUBBLE_COMMENT_TAIL
+                + "  return ShowTranslateBubbleResult::kSuccess;\n"
             ),
             description=(
                 "Maho: suppress upstream TranslateBubbleView in BrowserView::ShowTranslateBubble "
                 "so the native Google Translate bubble never overlays the sidebar search pill"
             ),
-            guard="// Maho: in Maho's Arc-style layout, translation affordances are surfaced\n  // via the sidebar search pill",
+            guard="// Maho: in Maho's Arc-style layout, translation affordances are surfaced\n",
+            idempotent=True,
+        ),
+        # Trees patched before the sidebar search pill was removed still name
+        # it in the suppression comment; point the comment at the header.
+        Replacement(
+            old=(
+                "  // via the sidebar search pill (MahoSidebar" "SearchView) and on-device\n"
+                "  // translation engine. The upstream TranslateBubbleView popup is suppressed\n"
+                "  // so it does not duplicate or overlay the sidebar interface.\n"
+            ),
+            new=_MAHO_TRANSLATE_BUBBLE_COMMENT_TAIL,
+            description=(
+                "Maho: retarget the translate bubble suppression comment from the "
+                "removed sidebar search pill to the contents header"
+            ),
             idempotent=True,
         ),
     ],
@@ -7795,33 +8189,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="ShowMahoColdStartPaletteWhenReady(browser->AsWeakPtr()",
         ),
-        Replacement(
-            old=(
-                "    browser = SessionRestore::RestoreSession(profile_, nullptr, restore_options,\n"
-                "                                             tabs);\n"
-                "    if (browser) {\n"
-                "      return browser;\n"
-                "    }\n"
-            ),
-            new=(
-                "    browser = SessionRestore::RestoreSession(profile_, nullptr, restore_options,\n"
-                "                                             tabs);\n"
-                "    if (browser) {\n"
-                "      static std::atomic<bool> g_maho_restore_palette_shown{false};\n"
-                "      if (!g_maho_restore_palette_shown.exchange(true)) {\n"
-                "        ShowMahoColdStartPaletteWhenReady(browser->AsWeakPtr(), 200);\n"
-                "      }\n"
-                "      return browser;\n"
-                "    }\n"
-            ),
-            description=(
-                "Maho cold-start: also auto-open the command palette once on the "
-                "session-restore startup path so returning users with restored tabs "
-                "get the palette at launch too (empty-|tabs| path handles cold empty "
-                "start; these two paths are mutually exclusive so it fires once)"
-            ),
-            guard="g_maho_restore_palette_shown",
-        ),
     ],
     # ── browser_commands.cc ──────────────────────────────────────────────────
     "chrome/browser/ui/browser_commands.cc": [
@@ -8305,6 +8672,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 '#include "chrome/browser/ui/webui/tab_search/tab_search_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_ai/maho_ai_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_boost/maho_boost_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_live_folders/maho_live_folders_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_mail/maho_mail_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"\n'
@@ -8333,6 +8701,29 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Maho: expose the Maho WebUI page-handler factories",
             guard="registry.ForWebUI<MahoWelcomeUI>()",
+        ),
+        Replacement(
+            old=(
+                "  RegisterWebUIControllerInterfaceBinder<comments::mojom::PageHandlerFactory,\n"
+                "                                         CommentsSidePanelUI>(map);\n"
+            ),
+            new=(
+                "  RegisterWebUIControllerInterfaceBinder<comments::mojom::PageHandlerFactory,\n"
+                "                                         CommentsSidePanelUI>(map);\n"
+                "  // Maho Boost is the only Maho WebUI served from chrome-untrusted://, so\n"
+                "  // its page-handler factory belongs in the frame binder map; the\n"
+                "  // trusted registry above never serves the untrusted editor frame.\n"
+                "  // Without this the editor renderer is killed with \"No binder found\n"
+                "  // for interface maho_boost.mojom.PageHandlerFactory\" and the Boost\n"
+                "  // window closes the instant it opens.\n"
+                "  RegisterWebUIControllerInterfaceBinder<\n"
+                "      maho_boost::mojom::PageHandlerFactory, MahoBoostUI>(map);\n"
+            ),
+            description=(
+                "Maho: register the Boost page-handler factory for the "
+                "untrusted editor frame"
+            ),
+            guard="maho_boost::mojom::PageHandlerFactory, MahoBoostUI>(map);",
         ),
     ],
     "chrome/chrome_paks.gni": [
@@ -8721,14 +9112,14 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 "  } else if (browser_view_->GetIsNormalType() ||\n"
                 "             browser_view_->GetIsWebAppType() ||\n"
-                "             browser_view_->browser()->is_maho_mini()) {\n"
+                "             (browser_view_->browser() && static_cast<Browser*>(browser_view_->browser())->is_maho_mini())) {\n"
                 "    params->window_class = remote_cocoa::mojom::WindowClass::kBrowser;\n"
                 "    params->style_mask |= NSWindowStyleMaskFullSizeContentView;\n"
                 "\n"
                 "    // Ensure tabstrip/profile button are visible.\n"
                 "    params->titlebar_appears_transparent = true;\n"
                 "\n"
-                "    if (browser_view_->browser()->is_maho_mini()) {\n"
+                "    if (browser_view_->browser() && static_cast<Browser*>(browser_view_->browser())->is_maho_mini()) {\n"
                 "      params->window_title_hidden = true;\n"
                 "    } else if (browser_view_->GetIsWebAppType()) {\n"
                 "      params->window_title_hidden = true;\n"
@@ -8736,7 +9127,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  } else {\n"
             ),
             description="Maho: Style Maho Mini window with transparent titlebar and full size content",
-            guard="browser_view_->browser()->is_maho_mini()",
+            guard="static_cast<Browser*>(browser_view_->browser())->is_maho_mini()",
         ),
         Replacement(
             old=(
@@ -8767,7 +9158,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    bool* override_titlebar_height,\n"
                 "    float* titlebar_height) {\n"
                 "  if (browser_view_ && browser_view_->browser() &&\n"
-                "      browser_view_->browser()->is_maho_mini()) {\n"
+                "      static_cast<Browser*>(browser_view_->browser())->is_maho_mini()) {\n"
                 "    // Maho: macOS centers the traffic lights within the titlebar\n"
                 "    // height reported here; report the 46dip Maho Mini top bar\n"
                 "    // height so they center on its midline, not near the top edge.\n"
@@ -9958,6 +10349,48 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard='if (id == IDC_MAHO_LINK_OPEN_MAHO_MINI) {',
             idempotent=True,
         ),
+        Replacement(
+            old=(
+                "    const WebContents* new_web_contents = source_web_contents_->OpenURL(\n"
+                "        params, /*navigation_handle_callback=*/{});\n"
+                "    const int new_tab_index =\n"
+                "        tab_strip_model->GetIndexOfWebContents(new_web_contents);\n"
+                "\n"
+                "    // Create split and activate new tab.\n"
+                "    tab_strip_model->AddToNewSplit(\n"
+                "        {new_tab_index}, split_tabs::SplitTabVisualData(),\n"
+                "        split_tabs::SplitTabCreatedSource::kLinkContextMenu);\n"
+                "    tab_strip_model->ActivateTabAt(\n"
+                "        tab_strip_model->GetIndexOfWebContents(new_web_contents));\n"
+            ),
+            new=(
+                "    const WebContents* new_web_contents = source_web_contents_->OpenURL(\n"
+                "        params, /*navigation_handle_callback=*/{});\n"
+                "    if (!new_web_contents) {\n"
+                "      return;\n"
+                "    }\n"
+                "    const int new_tab_index =\n"
+                "        tab_strip_model->GetIndexOfWebContents(new_web_contents);\n"
+                "    if (new_tab_index == TabStripModel::kNoTab) {\n"
+                "      return;\n"
+                "    }\n"
+                "\n"
+                "    // Create split and activate new tab.\n"
+                "    tab_strip_model->AddToNewSplit(\n"
+                "        {new_tab_index}, split_tabs::SplitTabVisualData(),\n"
+                "        split_tabs::SplitTabCreatedSource::kLinkContextMenu);\n"
+                "    const int post_split_index =\n"
+                "        tab_strip_model->GetIndexOfWebContents(new_web_contents);\n"
+                "    if (post_split_index != TabStripModel::kNoTab) {\n"
+                "      tab_strip_model->ActivateTabAt(post_split_index);\n"
+                "    }\n"
+            ),
+            description=(
+                "Maho: guard OpenLinkInSplitView against null WebContents or "
+                "kNoTab index before AddToNewSplit, and activate via post-split index"
+            ),
+            guard="const int post_split_index =",
+        ),
     ],
     "chrome/browser/ui/browser.h": [
         Replacement(
@@ -10033,31 +10466,31 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc": [
         Replacement(
-            old="  bool needs_exclusion = true;\n",
-            new=(
-                "  // Maho: reserve the leading rail for the native sidebar before the\n"
-                "  // upstream pipeline consumes `params`. Upstream lays out the rest of\n"
-                "  // the browser inside the remaining area with no further changes.\n"
-                "  if (views().maho_sidebar_container &&\n"
-                "      views().maho_sidebar_container->GetVisible()) {\n"
-                "    const int maho_rail_width =\n"
-                "        views().maho_sidebar_container->GetPreferredSize().width();\n"
-                "    if (maho_rail_width > 0) {\n"
-                "      const gfx::Rect maho_rail_bounds(\n"
-                "          params.visual_client_area.x(), params.visual_client_area.y(),\n"
-                "          maho_rail_width, params.visual_client_area.height());\n"
-                "      layout.AddChild(views().maho_sidebar_container, maho_rail_bounds);\n"
-                "      params.InsetHorizontal(maho_rail_width, /*leading=*/true);\n"
-                "    }\n"
-                "  }\n"
-                "\n"
-                "  bool needs_exclusion = true;\n"
+            old=_MAHO_SIDEBAR_RAIL_LAYOUT_V1,
+            new=_MAHO_SIDEBAR_RAIL_LAYOUT,
+            idempotent=True,
+            description=(
+                "Migrate the reserved-only sidebar rail layout to also float the "
+                "auto-hide sidebar over the contents"
             ),
+        ),
+        Replacement(
+            old="  bool needs_exclusion = true;\n",
+            new=_MAHO_SIDEBAR_RAIL_LAYOUT,
             description=(
                 "Maho: lay out the native sidebar rail on the leading edge and inset "
                 "the remaining browser area"
             ),
-            guard="Maho: reserve the leading rail for the native sidebar",
+            guard="Maho: an auto-hide sidebar reserves no width",
+        ),
+        Replacement(
+            old='#include "ui/views/view_utils.h"\n',
+            new=(
+                '#include "ui/views/view_utils.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
+            ),
+            description="Maho: include the sidebar container for floating layout",
+            guard='#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"',
         ),
         Replacement(
             old=(
@@ -11737,6 +12170,215 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def base_patch_dir(revision: str) -> Path | None:
+    """Per-revision whole-file Maho patches generated against pristine upstream.
+
+    A revision with a base-patch directory is rebuilt from an untouched
+    checkout: each ``<path>.patch`` owns that file entirely, so the anchor-based
+    REPLACEMENTS entries for the same path are not applied on top of it.
+    """
+    directory = repo_root() / "build" / "chromium_base_patches" / revision
+    return directory if directory.is_dir() else None
+
+
+def base_patch_targets(directory: Path) -> dict[str, Path]:
+    return {
+        patch.relative_to(directory).as_posix()[: -len(".patch")]: patch
+        for patch in sorted(directory.rglob("*.patch"))
+    }
+
+
+_UPDATED154_REVISION: Final = "f89f3a4363808e117c592adedcf9947882ac3b79"
+_UPDATED154_OLD_SHA256: Final[dict[str, str]] = {
+    "chrome/browser/ui/views/frame/contents_container_view.cc":
+        "feac31c0e4ef85de95c3ffbfecd830cef894374e00ec47a2f617791786e374af",
+    "chrome/browser/ui/views/frame/multi_contents_view.cc":
+        "f629ead6a06ad34c105292f0cbafe8fc0e2457074c250dc4db3327106160a03b",
+    "chrome/browser/ui/tabs/tab_strip_model.cc":
+        "b2710629acb805a4abf75d5faa8e22633022462131640847271c1b81b208b746",
+    "components/autofill/content/renderer/password_autofill_agent.cc":
+        "14f939bdca26a5eb9605c8466fe5d3cf802f54c03f05fc3c65e0391f8b50d2f5",
+    "chrome/browser/ui/views/frame/browser_caption_button_container_win.cc":
+        "7ca4b5007685ba33262323ade99a355caf6b938bc14d8ceb6feaa106bc293bfb",
+    "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc":
+        "d3e7ce754365df207440e37047299cd20f4489305d468b4bc378ad99a6fd353b",
+    "chrome/browser/ui/browser.cc":
+        "55d9d30b339364b54368aa77867729100cc6d4bdcfd5aff0c927b652c4db4041",
+    "chrome/browser/app_controller_mac.mm":
+        "199d9c5a88a9b7d4757cc58c73479d9b3a557bede44155f68e35c777567e766d",
+    "chrome/browser/ui/browser_actions.cc":
+        "bb2e3a21ae4675d0e99acdf35daba35ed15623306d5893eba173d4435c085798",
+    "chrome/browser/ui/browser_commands.cc":
+        "339e23168734a38e6e0a8449b5a458f0158273f4d7a7e5a331f31c3894828505",
+    "chrome/browser/ui/chrome_pages.cc":
+        "f116ecfe56750b094e4a9dc019787d1ecc54de8b3723a8d1cec03f2051a303f7",
+    "chrome/browser/ui/cocoa/browser_window_command_handler.mm":
+        "68153b84d898e10535900d0623a511575e126a3fb4d1a109f5596e68be3006b9",
+    "chrome/browser/ui/cocoa/chrome_command_dispatcher_delegate.mm":
+        "04753ec9aa46de68248d39a5e1265311dffd41f219806dbf457e38c68b1e4cf7",
+    "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc":
+        "82b784e7ed3bd93f9ff6d830c7eb67cb5253c0358e1ab2151f94feda2179a755",
+    "chrome/browser/sessions/session_restore.cc":
+        "6c647c1361bed87d8937915e56fcf0ab4daae977d473583d1f53f52509de28c5",
+    "chrome/browser/ui/browser_command_controller.cc":
+        "ab1f5239e9e29c23f9a833085c909c59a004a90aecb1c57e1d36b4d4584858c6",
+    "chrome/browser/ui/unload_controller.cc":
+        "1e2237d2c14dc8d75667d3a4b2ffe6de1776c87329ded3bfcd750d117f54322e",
+    "chrome/browser/ui/browser_command_controller_browsertest.cc":
+        "233676871a1aeb93e1d72c1dd54e10e2393b5a23a13bef57c7db750c87a976bc",
+    "chrome/browser/ui/views/location_bar/location_bar_view.cc":
+        "c9e374b82a73454f2686107d71f2e56772eefcfdd45e6d4f147ab110fa8f1d86",
+    "chrome/browser/ui/views/frame/browser_view.cc":
+        "30d12563a55ead3d381ec574038089f9eb2aeb60996c1cbc8fb39659c012a286",
+    "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc":
+        "a853bd90bacfb1dd4e6951293ac61f23800455487d0d31af993884e943a009b8",
+    "chrome/browser/ui/views/toolbar/toolbar_view.cc":
+        "4ddb98b7a89ca37b72ca9d51177d723a671a790d7e099b302bec2a0b7414a97d",
+    "chrome/browser/ui/startup/startup_browser_creator_impl.cc":
+        "d595ff2eb97d2f0a596a31815aa5b32c4557f56720dac12dbc8598f4bb3c4577",
+    "chrome/browser/ui/views/side_panel/side_panel.cc":
+        "7122ce6b00ed03da190d3d840de6ad404d229e799aa3818d23385b5582ceb44e",
+    "chrome/browser/device_reauth/chrome_device_authenticator_factory.cc":
+        "8099af6de9b39c325a4f196b3109748e31350d53b8866e890ddb78d8172d2b3d",
+}
+
+
+_UPDATED154_INCREMENTAL_SHA256: Final[dict[str, str]] = {
+    "chrome/browser/device_reauth/chrome_device_authenticator_factory.cc":
+        "6cd7dedbdeec35babaf2f62a7b489d7e159de75570741e07ecd3931f91397b98",
+    "components/autofill/content/renderer/password_autofill_agent.cc":
+        "7f82a720c05f01736581fc1db4d894347493d248f280f8085440a3911dcd878f",
+    "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc":
+        "42af9f599f429e69d2d19a1e5e272ded248cb190b756c07f4b095a70f137fce3",
+    "chrome/browser/ui/browser_command_controller.cc":
+        "8aea96cc899ed2b7123269b728324c396371719ee47b940ae04d11ea21389f89",
+    "chrome/browser/ui/views/frame/browser_view.cc":
+        "6a99e7d5f81bfb5df8cfbcdb2e4b06bdf7bbd01b1d922df7703a71255bbf41bc",
+    "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc":
+        "94139a8495e3e7e0dba0f500e901b773aca222716999aef629974eda9ef43144",
+    "chrome/browser/ui/chrome_pages.cc":
+        "37a293b3bddad0da14e11bdd573dbff956cb3ff29f514322ca25bd2622dda515",
+}
+
+
+_UPDATED154_FOCUS_SHA256: Final[dict[str, str]] = {
+    "chrome/browser/ui/browser_command_controller.cc":
+        "80a3f702a8fb0b26107372a5927eee7596c1b7f97fad4a45c8a630f2eac117f0",
+}
+
+
+_UPDATED154_LAYOUT_SHA256: Final[dict[str, str]] = {
+    "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc":
+        "575045f2c245f645b918c6cffd2e52b9c59cb5ba4d619151b903755b19cc7245",
+}
+
+# Trees already carrying the previous canonical result for a path whose base
+# patch changed again (e.g. the Ctrl+Tab routing hunks added to
+# browser_command_controller.cc). These are the states a builder tree sits in
+# after the last build, so they must migrate forward like any older state.
+_UPDATED154_REAPPLY_SHA256: Final[dict[str, str]] = {
+    "chrome/browser/ui/browser_command_controller.cc":
+        "a2a18c212978494b311f4a2b4f412b9d26d5a078677a31f72b3a62518aaf210c",
+}
+
+
+def apply_base_patch(
+    chromium_src: Path, relative_path: str, patch: Path, dry_run: bool
+) -> str:
+    """Apply one base patch; returns 'patched' or 'already'.
+
+    Raises RuntimeError when the file matches neither the pristine upstream
+    text nor the patched result, so drift is never silently skipped.
+    """
+    def git_apply(*extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(chromium_src), "apply", *extra, str(patch)],
+            capture_output=True,
+            text=True,
+        )
+
+    if git_apply("--reverse", "--check").returncode == 0:
+        return "already"
+    forward = git_apply("--check")
+    if forward.returncode != 0:
+        canonical = (repo_root() / "build" / "chromium_base_patches" /
+                     _UPDATED154_REVISION / f"{relative_path}.patch")
+        expected = _UPDATED154_OLD_SHA256.get(relative_path)
+        target = chromium_src / relative_path
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        migration_directory = "chromium_base_migrations"
+        incremental = _UPDATED154_INCREMENTAL_SHA256.get(relative_path)
+        if incremental is not None and digest == incremental:
+            expected = incremental
+            migration_directory = "chromium_base_incremental_migrations"
+        focus = _UPDATED154_FOCUS_SHA256.get(relative_path)
+        if focus is not None and digest == focus:
+            expected = focus
+            migration_directory = "chromium_base_focus_migrations"
+        layout = _UPDATED154_LAYOUT_SHA256.get(relative_path)
+        if layout is not None and digest == layout:
+            expected = layout
+            migration_directory = "chromium_base_layout_migrations"
+        reapply = _UPDATED154_REAPPLY_SHA256.get(relative_path)
+        if reapply is not None and digest == reapply:
+            expected = reapply
+            migration_directory = "chromium_base_reapply_migrations"
+        if (expected is not None and patch.resolve() == canonical.resolve() and
+                digest == expected):
+            migration = (repo_root() / "build" / migration_directory /
+                         _UPDATED154_REVISION / f"{relative_path}.patch")
+            # Validate the entire transition before touching the developer tree.
+            # Dry-run performs exactly the same checks in an isolated directory.
+            with tempfile.TemporaryDirectory(prefix="maho-base-migration-") as tmp:
+                staged = Path(tmp)
+                subprocess.run(
+                    ["git", "init", "--quiet", str(staged)],
+                    check=True, capture_output=True, text=True,
+                )
+                staged_target = staged / relative_path
+                staged_target.parent.mkdir(parents=True)
+                staged_target.write_bytes(target.read_bytes())
+                for arguments in (
+                    ["--check", str(migration)],
+                    [str(migration)],
+                    ["--reverse", "--check", str(patch)],
+                ):
+                    result = subprocess.run(
+                        ["git", "-C", str(staged), "apply", *arguments],
+                        capture_output=True, text=True,
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(
+                            f"base migration validation failed for {relative_path}: "
+                            f"{result.stderr.strip()}")
+                if not dry_run:
+                    # Refuse intervening edits rather than overwriting them.
+                    if hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+                        raise RuntimeError(f"base migration source changed: {relative_path}")
+                    for arguments in (["--check", str(migration)], [str(migration)]):
+                        result = subprocess.run(
+                            ["git", "-C", str(chromium_src), "apply", *arguments],
+                            capture_output=True, text=True,
+                        )
+                        if result.returncode != 0:
+                            raise RuntimeError(
+                                f"base migration failed for {relative_path}: "
+                                f"{result.stderr.strip()}")
+                    if git_apply("--reverse", "--check").returncode != 0:
+                        raise RuntimeError(f"base migration postcheck failed: {relative_path}")
+            return "patched"
+        raise RuntimeError(
+            f"base patch does not apply to {relative_path}: {forward.stderr.strip()}"
+        )
+    if not dry_run:
+        applied = git_apply()
+        if applied.returncode != 0:
+            raise RuntimeError(
+                f"base patch failed for {relative_path}: {applied.stderr.strip()}"
+            )
+    return "patched"
+
+
 def default_chromium_src() -> Path:
     if repo_root().parent.name == "src" and repo_root().parent.parent.name == "chromium":
         return repo_root().parent
@@ -11883,6 +12525,36 @@ def normalize_browser_widget_theme_override(text: str) -> tuple[str, int]:
     return text, normalized_count
 
 
+def normalize_startup_browser_creator_session_restore(
+    text: str,
+) -> tuple[str, int]:
+    """Revert the legacy g_maho_restore_palette_shown injection on the SessionRestore path.
+
+    Startup auto-show must not appear when the window opens with a startup URL or restored tabs.
+    """
+    legacy_block = (
+        "    browser = SessionRestore::RestoreSession(profile_, nullptr, restore_options,\n"
+        "                                             tabs);\n"
+        "    if (browser) {\n"
+        "      static std::atomic<bool> g_maho_restore_palette_shown{false};\n"
+        "      if (!g_maho_restore_palette_shown.exchange(true)) {\n"
+        "        ShowMahoColdStartPaletteWhenReady(browser->AsWeakPtr(), 200);\n"
+        "      }\n"
+        "      return browser;\n"
+        "    }\n"
+    )
+    clean_block = (
+        "    browser = SessionRestore::RestoreSession(profile_, nullptr, restore_options,\n"
+        "                                             tabs);\n"
+        "    if (browser) {\n"
+        "      return browser;\n"
+        "    }\n"
+    )
+    if legacy_block in text:
+        return text.replace(legacy_block, clean_block, 1), 1
+    return text, 0
+
+
 def normalize_gn_stale_deps(text: str, relative_path: str = "") -> tuple[str, int]:
     normalized_path = relative_path.replace("\\", "/")
     stale_deps: set[str] = set()
@@ -11992,14 +12664,16 @@ _CHROME_BROWSER_UI_SOURCES: Final[tuple[str, ...]] = (
     "//maho/browser/ui/webui/maho_live_folders/maho_live_folders_page_handler.h",
     "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.cc",
     "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.h",
+    "//maho/browser/ui/views/sidebar/maho_favorite_edit_dialog.cc",
+    "//maho/browser/ui/views/sidebar/maho_favorite_edit_dialog.h",
     "//maho/browser/ui/views/sidebar/maho_sidebar_container_view.cc",
     "//maho/browser/ui/views/sidebar/maho_sidebar_container_view.h",
     "//maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.cc",
     "//maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h",
     "//maho/browser/ui/views/sidebar/maho_sidebar_footer_view.cc",
     "//maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h",
-    "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.cc",
-    "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_scroll_bar.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_scroll_bar.h",
     "//maho/browser/ui/views/sidebar/maho_sidebar_space_dot_view.cc",
     "//maho/browser/ui/views/sidebar/maho_sidebar_space_dot_view.h",
     "//maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.cc",
@@ -12038,6 +12712,10 @@ _CHROME_BROWSER_UI_SOURCES: Final[tuple[str, ...]] = (
     "//maho/browser/ui/views/sidebar/maho_sidebar_view.h",
     "//maho/browser/ui/views/sidebar/maho_translate_popover_view.cc",
     "//maho/browser/ui/views/sidebar/maho_translate_popover_view.h",
+    "//maho/browser/ui/views/frame/maho_contents_header_view.cc",
+    "//maho/browser/ui/views/frame/maho_contents_header_view.h",
+    "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.cc",
+    "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.h",
     "//maho/browser/ui/views/sidebar/maho_sidebar_prefs.cc",
     "//maho/browser/ui/views/sidebar/maho_sidebar_prefs.h",
     "//maho/browser/ui/views/command/maho_command_overlay_controller.cc",
@@ -12125,6 +12803,16 @@ def normalize_chrome_browser_ui_build(text: str) -> tuple[str, int]:
     retired = (
         '    "//maho/browser/ui/views/maho_mini/maho_mini_window_stub.cc",\n',
     )
+    # Sidebar search pill, replaced by the per-pane contents header. Trees list
+    # it at either 4- or 6-space indent, so drop the whole line.
+    text, pill_removed = re.subn(
+        r'^[ \t]*"//maho/browser/ui/views/sidebar/maho_sidebar_'
+        r'search_view\.(?:cc|h)",\n',
+        '',
+        text,
+        flags=re.MULTILINE,
+    )
+    retired_removed += pill_removed
     if host_platform() != "mac":
         retired += (
             '    "//maho/browser/ui/views/location_bar/maho_utility_panel_vibrancy_mac.mm",\n',
@@ -12237,73 +12925,10 @@ def normalize_peek_open_url_routing(text: str) -> tuple[str, int]:
         ui::PageTransitionCoreTypeIs(params.transition,
                                      ui::PAGE_TRANSITION_LINK);
 #endif
-    const bool is_peek_disposition =
-        params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
-        params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
-        params.disposition == WindowOpenDisposition::NEW_WINDOW;
-    if (!is_top_level || !is_user_initiated || is_maho_mini_gesture ||
-        (!maho::MahoAtcState::HasEnabledRules() && !is_peek_disposition)) {
-      // Preserve the original path when neither ATC nor Peek can apply.
-    } else {
-    auto route_after_atc = base::BindOnce(
-        [](base::WeakPtr<Browser> browser,
-           base::WeakPtr<Profile> profile,
-           base::WeakPtr<content::WebContents> source,
-           content::OpenURLParams params,
-           base::OnceCallback<void(content::NavigationHandle&)>
-               navigation_handle_callback) {
-          if (!browser || !profile) {
-            return;
-          }
-          BrowserView* browser_view =
-              BrowserView::GetBrowserViewForBrowser(browser.get());
-          maho::MahoPeekController* peek_controller =
-              browser_view
-                  ? browser_view->GetOrCreateMahoPeekController()
-                  : nullptr;
-          const maho::PeekRoute route = maho::DecidePeekRoute({
-              .master_enabled = profile->GetPrefs()->GetBoolean(
-                  maho::sidebar_prefs::kPeekEnabled),
-              .popup_routing_enabled = false,
-              .link_routing_enabled = profile->GetPrefs()->GetBoolean(
-                  maho::sidebar_prefs::kPeekLinkRoutingEnabled),
-              .seam = maho::PeekSeam::kOpenUrlFromTab,
-              .disposition = params.disposition,
-              .source_role =
-                  maho::MahoSidebarContainerView::GetPeekSourceRole(
-                      browser.get(), source.get()),
-              .is_user_initiated = true,
-              .force_tab = params.is_renderer_initiated &&
-                  params.disposition ==
-                      WindowOpenDisposition::NEW_BACKGROUND_TAB,
-              .force_peek = params.is_renderer_initiated &&
-                  params.disposition ==
-                      WindowOpenDisposition::NEW_WINDOW,
-              .is_maho_mini_gesture = false,
-              .atc_has_cross_space_target = false,
-              .peek_slot_state =
-                  peek_controller && peek_controller->SlotBusy()
-                      ? maho::PeekSlotState::kBusy
-                      : maho::PeekSlotState::kClosed,
-          });
-          if (route == maho::PeekRoute::kOpenInPeek && peek_controller &&
-              peek_controller->ShowUrl(source.get(), params.url)) {
-            return;
-          }
-          if (route == maho::PeekRoute::kOpenInForegroundTab) {
-            params.disposition =
-                WindowOpenDisposition::NEW_FOREGROUND_TAB;
-          }
-          AtcBypassState::SetBypass(browser.get(), true);
-          browser->OpenURL(params, std::move(navigation_handle_callback));
-          AtcBypassState::SetBypass(browser.get(), false);
-        },
-        AsWeakPtr(), profile()->GetWeakPtr(),
-        source ? source->GetWeakPtr() : nullptr, params,
-        std::move(navigation_handle_callback));
-
 #if BUILDFLAG(IS_MAC)
-    if (is_top_level && is_user_initiated && !is_maho_mini_gesture &&
+    if (is_top_level && is_user_initiated &&
+        !is_maho_mini_gesture &&
+        !params.started_from_context_menu &&
         maho::MahoAtcState::HasEnabledRules()) {
       std::string current_space_id;
       maho::MahoSpaceProfileBridge* bridge =
@@ -12311,39 +12936,146 @@ def normalize_peek_open_url_routing(text: str) -> tuple[str, int]:
       if (bridge) {
         current_space_id = bridge->GetActiveSpaceId(this);
       }
+      base::WeakPtr<Browser> weak_browser = AsWeakPtr();
+      Profile* prof = profile();
+      base::WeakPtr<Profile> weak_profile =
+          prof ? prof->GetWeakPtr() : nullptr;
+      base::WeakPtr<content::WebContents> weak_source =
+          source ? source->GetWeakPtr() : nullptr;
+
       maho::DecideLinkDestination(
           params.url, /*is_external=*/false,
           base::BindOnce(
               [](base::WeakPtr<Browser> browser,
+                 base::WeakPtr<Profile> profile,
+                 base::WeakPtr<content::WebContents> source,
                  std::string current_space_id,
                  content::OpenURLParams params,
-                 base::OnceClosure no_cross_space,
+                 base::OnceCallback<void(content::NavigationHandle&)>
+                     navigation_handle_callback,
                  maho::LinkDestinationResult result) {
-                if (!browser) {
+                if (!browser || !profile) {
                   return;
                 }
-                if (result.type == maho::LinkDestinationType::kSpace &&
+
+                if (result.type ==
+                        maho::LinkDestinationType::kSpace &&
                     !result.space_id.empty() &&
                     result.space_id != current_space_id) {
                   maho::MahoSpaceProfileBridge* bridge =
                       maho::MahoSpaceProfileBridge::GetInstance();
-                  if (bridge && bridge->SwitchToSpace(browser.get(),
-                                                      result.space_id)) {
+                  if (bridge && bridge->SwitchToSpace(
+                                    browser.get(), result.space_id)) {
                     chrome::AddSelectedTabWithURL(
                         browser.get(), params.url, params.transition);
                     return;
                   }
                 }
-                std::move(no_cross_space).Run();
+
+                BrowserView* browser_view =
+                    BrowserView::GetBrowserViewForBrowser(browser.get());
+                maho::MahoPeekController* peek_controller =
+                    browser_view
+                        ? browser_view->GetOrCreateMahoPeekController()
+                        : nullptr;
+                const maho::PeekRoute route = maho::DecidePeekRoute({
+                    .master_enabled = profile->GetPrefs()->GetBoolean(
+                        maho::sidebar_prefs::kPeekEnabled),
+                    .popup_routing_enabled = false,
+                    .link_routing_enabled =
+                        profile->GetPrefs()->GetBoolean(
+                            maho::sidebar_prefs::kPeekLinkRoutingEnabled),
+                    .seam = maho::PeekSeam::kOpenUrlFromTab,
+                    .disposition = params.disposition,
+                    .source_role =
+                        maho::MahoSidebarContainerView::GetPeekSourceRole(
+                            browser.get(), source.get()),
+                    .is_user_initiated = true,
+                    .force_tab = params.is_renderer_initiated &&
+                        params.disposition ==
+                            WindowOpenDisposition::NEW_BACKGROUND_TAB,
+                    .force_peek = params.is_renderer_initiated &&
+                        params.disposition ==
+                            WindowOpenDisposition::NEW_WINDOW,
+                    .is_maho_mini_gesture = false,
+                    .atc_has_cross_space_target = false,
+                    .peek_slot_state =
+                        peek_controller && peek_controller->SlotBusy()
+                            ? maho::PeekSlotState::kBusy
+                            : maho::PeekSlotState::kClosed,
+                });
+                if (route == maho::PeekRoute::kOpenInPeek &&
+                    peek_controller &&
+                    peek_controller->ShowUrl(source.get(), params.url)) {
+                  return;
+                }
+                if (route ==
+                    maho::PeekRoute::kOpenInForegroundTab) {
+                  params.disposition =
+                      WindowOpenDisposition::NEW_FOREGROUND_TAB;
+                }
+                AtcBypassState::SetBypass(browser.get(), true);
+                browser->OpenURL(
+                    params, std::move(navigation_handle_callback));
+                AtcBypassState::SetBypass(browser.get(), false);
               },
-              AsWeakPtr(), current_space_id, params,
-              std::move(route_after_atc)));
+              weak_browser, weak_profile, weak_source, current_space_id,
+              params, std::move(navigation_handle_callback)));
       return nullptr;
     }
 #endif
 
-    std::move(route_after_atc).Run();
-    return nullptr;
+    if (is_top_level && is_user_initiated &&
+        !is_maho_mini_gesture &&
+        !params.started_from_context_menu &&
+        !maho::MahoAtcState::HasEnabledRules()) {
+      BrowserView* browser_view =
+          BrowserView::GetBrowserViewForBrowser(this);
+      maho::MahoPeekController* peek_controller =
+          browser_view
+              ? browser_view->GetOrCreateMahoPeekController()
+              : nullptr;
+      const maho::PeekRoute route = maho::DecidePeekRoute({
+          .master_enabled = profile()->GetPrefs()->GetBoolean(
+              maho::sidebar_prefs::kPeekEnabled),
+          .popup_routing_enabled = false,
+          .link_routing_enabled = profile()->GetPrefs()->GetBoolean(
+              maho::sidebar_prefs::kPeekLinkRoutingEnabled),
+          .seam = maho::PeekSeam::kOpenUrlFromTab,
+          .disposition = params.disposition,
+          .source_role =
+              maho::MahoSidebarContainerView::GetPeekSourceRole(
+                  this, source),
+          .is_user_initiated = true,
+          .force_tab = params.is_renderer_initiated &&
+              params.disposition ==
+                  WindowOpenDisposition::NEW_BACKGROUND_TAB,
+          .force_peek = params.is_renderer_initiated &&
+              params.disposition ==
+                  WindowOpenDisposition::NEW_WINDOW,
+          .is_maho_mini_gesture = false,
+          .atc_has_cross_space_target = false,
+          .peek_slot_state =
+              peek_controller && peek_controller->SlotBusy()
+                  ? maho::PeekSlotState::kBusy
+                  : maho::PeekSlotState::kClosed,
+      });
+      if (route == maho::PeekRoute::kOpenInPeek &&
+          peek_controller &&
+          peek_controller->ShowUrl(source, params.url)) {
+        return nullptr;
+      }
+      if (route == maho::PeekRoute::kOpenInForegroundTab) {
+        content::OpenURLParams foreground_params = params;
+        foreground_params.disposition =
+            WindowOpenDisposition::NEW_FOREGROUND_TAB;
+        AtcBypassState::SetBypass(this, true);
+        content::WebContents* result = OpenURLFromTab(
+            source, foreground_params,
+            std::move(navigation_handle_callback));
+        AtcBypassState::SetBypass(this, false);
+        return result;
+      }
     }
   }
 """
@@ -12630,6 +13362,14 @@ def apply_replacements(
                 "patched: Detach BrowserWidget color mode from global Space theme"
             )
 
+    if target_file.name == "startup_browser_creator_impl.cc":
+        text, normalized_count = normalize_startup_browser_creator_session_restore(text)
+        if normalized_count:
+            changed = True
+            applied.append(
+                "patched: Revert SessionRestore startup command overlay auto-show"
+            )
+
     if target_file.name == "chrome_content_browser_client.cc":
         text, normalized_count = normalize_atc_peek_throttle_registration(text)
         if normalized_count:
@@ -12744,13 +13484,347 @@ def apply_replacements(
     return changed, applied
 
 
+
+# Maho Arc layout: BrowserView owns MahoToolbarButtonProvider (bubble anchors
+# on the active pane header). Upstream ToolbarView already holds the browser's
+# ToolbarButtonProvider user-data slot, so the Maho provider is reached through
+# BrowserView::toolbar_button_provider() instead of a second registration.
+_MAHO_TOOLBAR_PROVIDER_INCLUDE: Final[str] = (
+    '#include "maho/browser/ui/views/sidebar/maho_toolbar_button_provider.h"\n'
+)
+_MAHO_TOOLBAR_PROVIDER_INIT: Final[str] = (
+    "  // Maho: the Arc layout anchors page bubbles to the active pane header.\n"
+    "  // ToolbarView keeps the browser's ToolbarButtonProvider user-data slot, so\n"
+    "  // BrowserView owns the Maho provider and returns it from\n"
+    "  // toolbar_button_provider().\n"
+    "  if (!maho_toolbar_button_provider_ && IsMahoArcLayoutActive()) {\n"
+    "    maho_toolbar_button_provider_ =\n"
+    "        std::make_unique<maho::MahoToolbarButtonProvider>(\n"
+    "            browser_.get(), this);\n"
+    "  }\n"
+    "\n"
+)
+# Revision markers: ee4bd9e9 keeps a raw toolbar_button_provider_ set through
+# SetToolbarButtonProvider(); 72f18f12 replaced it with
+# ToolbarButtonProvider::From(browser_) user data. Each shape's replacements
+# are guarded on the other shape's marker so they skip instead of raising.
+_BROWSER_VIEW_EE4BD9E9_PROVIDER_MARKER: Final[str] = (
+    "  if (!toolbar_button_provider_) {\n"
+)
+_BROWSER_VIEW_72F18F12_PROVIDER_MARKER: Final[str] = (
+    "ToolbarButtonProvider::From(browser_)"
+)
+_MAHO_SIDEBAR_PREFS_INCLUDE: Final[str] = (
+    '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+)
+_BROWSER_VIEW_EE4BD9E9_PROVIDER_INIT: Final[str] = (
+    "  // This browser view may already have a custom button provider set (e.g the\n"
+    "  // hosted app frame).\n"
+    "  if (!toolbar_button_provider_) {\n"
+    "    SetToolbarButtonProvider(toolbar_);\n"
+    "  }\n"
+)
+_MAHO_LEGACY_SEARCH_VIEW_PROVIDER_INIT: Final[str] = (
+    "  if (!maho_toolbar_button_provider_ &&\n"
+    "      !ToolbarButtonProvider::From(browser_.get()) &&\n"
+    "      IsMahoArcLayoutActive()) {\n"
+    "    // Resolve search_view opportunistically; MahoToolbarButtonProvider\n"
+    "    // null-checks it internally and falls back to LastResortAnchor(), so\n"
+    "    // construction must not be gated on a non-null search_view.\n"
+    # The retired pill class/accessor names are split so repository greps for
+    # live references stay clean; the joined text matches the old block.
+    "    maho::MahoSidebar" "SearchView* search_view = nullptr;\n"
+    "    if (auto* container = static_cast<maho::MahoSidebarContainerView*>(\n"
+    "            maho_sidebar_container_)) {\n"
+    "      if (auto* sidebar =\n"
+    "              static_cast<maho::MahoSidebarView*>(container->sidebar_view())) {\n"
+    "        search_view = sidebar->search_view_" "for_testing();\n"
+    "      }\n"
+    "    }\n"
+    "    maho_toolbar_button_provider_ =\n"
+    "        std::make_unique<maho::MahoToolbarButtonProvider>(\n"
+    "            browser_.get(), this, search_view);\n"
+    "  }\n"
+    "\n"
+)
+REPLACEMENTS["chrome/browser/ui/views/frame/browser_view.cc"].extend([
+    Replacement(
+        old=(
+            "#include \"maho/browser/ui/views/command/maho_command_overlay_controller.h\"\n"
+        ),
+        new=(
+            "#include \"maho/browser/ui/views/command/maho_command_overlay_controller.h\"\n"
+            + _MAHO_TOOLBAR_PROVIDER_INCLUDE
+        ),
+        description="Include MahoToolbarButtonProvider in browser_view.cc",
+        guard=_MAHO_TOOLBAR_PROVIDER_INCLUDE,
+    ),
+    # ee4bd9e9 has no IsMahoArcLayoutActive(); its Arc gate reads the sidebar
+    # layout pref directly (72f18f12 trees already include this header).
+    Replacement(
+        old=(
+            "#include \"maho/browser/ui/views/command/maho_command_overlay_controller.h\"\n"
+        ),
+        new=(
+            "#include \"maho/browser/ui/views/command/maho_command_overlay_controller.h\"\n"
+            + _MAHO_SIDEBAR_PREFS_INCLUDE
+        ),
+        description="Include maho_sidebar_prefs.h in browser_view.cc",
+        guard=_MAHO_SIDEBAR_PREFS_INCLUDE,
+    ),
+    # ee4bd9e9: clear the raw toolbar_button_provider_ (which points at the
+    # Maho provider in Arc layout) before the owning unique_ptr dies. Runs
+    # before the 72f18f12 entry below, whose guard then reports already.
+    Replacement(
+        old="  toolbar_button_provider_ = nullptr;\n",
+        new=(
+            "  toolbar_button_provider_ = nullptr;\n"
+            "  // Maho: toolbar_button_provider_ may point at the Maho provider, and\n"
+            "  // the provider holds a raw_ptr to toolbar_, so drop it after the raw\n"
+            "  // pointer and before RemoveAllChildViews() destroys the toolbar.\n"
+            "  maho_toolbar_button_provider_.reset();\n"
+        ),
+        description=(
+            "Destroy MahoToolbarButtonProvider after toolbar_button_provider_ "
+            "is cleared (ee4bd9e9)"
+        ),
+        guard=_BROWSER_VIEW_72F18F12_PROVIDER_MARKER,
+    ),
+    Replacement(
+        old=(
+            "  autofill_bubble_handler_.reset();\n"
+            "\n"
+            "  // These are raw pointers to child views, so they need to be set to null\n"
+        ),
+        new=(
+            "  autofill_bubble_handler_.reset();\n"
+            "\n"
+            "  // Maho: the provider holds a raw_ptr to toolbar_, so drop it before\n"
+            "  // RemoveAllChildViews() destroys the toolbar.\n"
+            "  maho_toolbar_button_provider_.reset();\n"
+            "\n"
+            "  // These are raw pointers to child views, so they need to be set to null\n"
+        ),
+        description=(
+            "Destroy MahoToolbarButtonProvider after the autofill bubble "
+            "handler and before BrowserView child views"
+        ),
+        guard="  maho_toolbar_button_provider_.reset();\n",
+    ),
+    Replacement(
+        old=(
+            "ToolbarButtonProvider* BrowserView::toolbar_button_provider() {\n"
+            "  return ToolbarButtonProvider::From(browser_);\n"
+            "}\n"
+        ),
+        new=(
+            "ToolbarButtonProvider* BrowserView::toolbar_button_provider() {\n"
+            "  if (maho_toolbar_button_provider_) {\n"
+            "    return maho_toolbar_button_provider_.get();\n"
+            "  }\n"
+            "  return ToolbarButtonProvider::From(browser_);\n"
+            "}\n"
+        ),
+        description=(
+            "Return the Maho Arc-layout provider from "
+            "BrowserView::toolbar_button_provider()"
+        ),
+        # 72f18f12 only; ee4bd9e9 keeps the inline accessor in browser_view.h.
+        guard=_BROWSER_VIEW_EE4BD9E9_PROVIDER_MARKER,
+    ),
+    # Migration first: builder trees still carry the retired search_view
+    # construction (its guard never fired because ToolbarView registers first).
+    Replacement(
+        old=_MAHO_LEGACY_SEARCH_VIEW_PROVIDER_INIT,
+        new="",
+        description=(
+            "Remove the retired search_view MahoToolbarButtonProvider "
+            "construction block"
+        ),
+        idempotent=True,
+    ),
+    Replacement(
+        old=(
+            "  // At this point a ToolbarButtonProvider must have been set. It is set only\n"
+            "  // once per browser instance.\n"
+            "  auto* toolbar_button_provider = ToolbarButtonProvider::From(browser_);\n"
+        ),
+        new=(
+            _MAHO_TOOLBAR_PROVIDER_INIT
+            + "  // At this point a ToolbarButtonProvider must have been set. It is set only\n"
+            "  // once per browser instance.\n"
+            "  auto* toolbar_button_provider =\n"
+            "      BrowserView::toolbar_button_provider();\n"
+        ),
+        description=(
+            "Construct MahoToolbarButtonProvider in Arc layout before the "
+            "ToolbarButtonProvider CHECK and hand it to the autofill handler"
+        ),
+        # 72f18f12 only; ee4bd9e9 installs the provider below.
+        guard=_BROWSER_VIEW_EE4BD9E9_PROVIDER_MARKER,
+    ),
+    Replacement(
+        old=_BROWSER_VIEW_EE4BD9E9_PROVIDER_INIT,
+        new=(
+            "  // This browser view may already have a custom button provider set (e.g the\n"
+            "  // hosted app frame).\n"
+            "  if (!toolbar_button_provider_) {\n"
+            "    // Maho: in the Arc layout page bubbles anchor to the active pane\n"
+            "    // header, so BrowserView owns the Maho provider and installs it in\n"
+            "    // place of toolbar_.\n"
+            "    if (browser_->is_type_normal() &&\n"
+            "        maho::sidebar_prefs::IsSidebarLayoutEnabled(\n"
+            "            browser_->profile()->GetPrefs())) {\n"
+            "      maho_toolbar_button_provider_ =\n"
+            "          std::make_unique<maho::MahoToolbarButtonProvider>(\n"
+            "              browser_.get(), this);\n"
+            "      SetToolbarButtonProvider(maho_toolbar_button_provider_.get());\n"
+            "    } else {\n"
+            "      SetToolbarButtonProvider(toolbar_);\n"
+            "    }\n"
+            "  }\n"
+        ),
+        description=(
+            "Install MahoToolbarButtonProvider through SetToolbarButtonProvider "
+            "in Arc layout (ee4bd9e9)"
+        ),
+        guard=_BROWSER_VIEW_72F18F12_PROVIDER_MARKER,
+    ),
+])
+REPLACEMENTS["chrome/browser/ui/views/frame/browser_view.h"].extend([
+    Replacement(
+        old="class MahoSpacesOverlayController;\n",
+        new=(
+            "class MahoSpacesOverlayController;\n"
+            "class MahoToolbarButtonProvider;\n"
+        ),
+        description="Forward-declare MahoToolbarButtonProvider",
+        guard="class MahoToolbarButtonProvider;",
+    ),
+    Replacement(
+        old="  raw_ptr<views::View> maho_create_space_blank_view_ = nullptr;\n",
+        new=(
+            "  raw_ptr<views::View> maho_create_space_blank_view_ = nullptr;\n"
+            "\n"
+            "  // Maho Arc layout: bubble-anchor provider returned by\n"
+            "  // toolbar_button_provider().\n"
+            "  std::unique_ptr<maho::MahoToolbarButtonProvider>\n"
+            "      maho_toolbar_button_provider_;\n"
+        ),
+        description="Own MahoToolbarButtonProvider on BrowserView",
+        guard="      maho_toolbar_button_provider_;\n",
+    ),
+])
+
+
+# Desktop OTP autofill: Chromium only wires an Android SMS backend into the
+# OneTimeTokenService, so OTP fields never got suggestions on desktop. Maho
+# supplies a Messages + Maho Mail backend and enables OTP field heuristics.
+REPLACEMENTS.setdefault("chrome/browser/autofill/one_time_token_service_factory.cc", []).extend([
+    Replacement(
+        old='#include "content/public/browser/browser_context.h"\n',
+        new=(
+            '#include "content/public/browser/browser_context.h"\n'
+            '#include "maho/browser/autofill/maho_otp_backend.h"\n'
+            '#include "maho/browser/mail_helper/maho_mail_service_factory.h"\n'
+        ),
+        description="Maho: include the desktop OTP backend in OneTimeTokenServiceFactory",
+        guard='#include "maho/browser/autofill/maho_otp_backend.h"\n',
+    ),
+    Replacement(
+        old="  DependsOn(GmailOtpBackendFactory::GetInstance());\n}",
+        new=(
+            "  DependsOn(GmailOtpBackendFactory::GetInstance());\n"
+            "  DependsOn(maho::MahoMailServiceFactory::GetInstance());\n"
+            "}"
+        ),
+        description="Maho: OneTimeTokenService outlives-order after MahoMailService",
+        guard="  DependsOn(maho::MahoMailServiceFactory::GetInstance());\n",
+    ),
+    Replacement(
+        old=(
+            "  return std::make_unique<OneTimeTokenServiceImpl>(sms_otp_backend,\n"
+            "                                                   gmail_otp_backend);\n"
+        ),
+        new=(
+            "  return maho::autofill::BuildMahoOneTimeTokenService(\n"
+            "      Profile::FromBrowserContext(context), sms_otp_backend,\n"
+            "      gmail_otp_backend);\n"
+        ),
+        description="Maho: attach the Messages/Maho Mail OTP backend on desktop",
+        guard="maho::autofill::BuildMahoOneTimeTokenService(",
+    ),
+])
+REPLACEMENTS.setdefault("chrome/browser/autofill/BUILD.gn", []).append(
+    Replacement(
+        old=(
+            "  deps = [\n"
+            "    \"//chrome/browser:browser_process\",\n"
+            "    \"//chrome/browser/account_settings\",\n"
+        ),
+        new=(
+            "  deps = [\n"
+            "    \"//maho/browser:maho_otp_backend\",\n"
+            "    \"//maho/browser/mail_helper:maho_mail_service_factory\",\n"
+            "    \"//chrome/browser:browser_process\",\n"
+            "    \"//chrome/browser/account_settings\",\n"
+        ),
+        description="Maho: link chrome/browser/autofill against the desktop OTP backend",
+        guard='    "//maho/browser:maho_otp_backend",\n',
+    )
+)
+REPLACEMENTS.setdefault("components/autofill/core/common/autofill_features.cc", []).append(
+    Replacement(
+        old=(
+            "BASE_FEATURE(kAutofillEnableOneTimeCodeHeuristics,\n"
+            "             base::FEATURE_DISABLED_BY_DEFAULT);"
+        ),
+        new=(
+            "BASE_FEATURE(kAutofillEnableOneTimeCodeHeuristics,\n"
+            "             base::FEATURE_ENABLED_BY_DEFAULT);"
+        ),
+        description="Maho: detect one-time-code fields so OTP suggestions appear",
+        guard=(
+            "BASE_FEATURE(kAutofillEnableOneTimeCodeHeuristics,\n"
+            "             base::FEATURE_ENABLED_BY_DEFAULT);"
+        ),
+    )
+)
+
+
+REPLACEMENTS.setdefault("v8/BUILD.gn", []).append(
+    Replacement(
+        old='        "--abort-on-bad-builtin-profile-data",\n',
+        new='        "--warn-about-builtin-profile-data",\n',
+        description="Warn instead of abort on bad builtin PGO profile data for mksnapshot",
+        guard='        "--warn-about-builtin-profile-data",\n',
+    )
+)
+
+
+# Per-(path, index) guard overrides for SPLIT_VIEW_REPLACEMENTS hunks whose
+# inserted text can already be present in a tree patched by an older
+# REPLACEMENTS entry before this hunk existed (e.g. omarchy's live tree
+# already carried ContentsContainerView::SetMahoAiPanelAdjacent from an
+# earlier, unrelated REPLACEMENTS guard at a different anchor). Without an
+# explicit guard, the anchor line used in `old` (boilerplate that is NOT the
+# inserted text itself, e.g. the following function's signature) is still
+# present, so the generic "already applied" checks in apply_replacements()
+# don't fire and the hunk re-inserts a duplicate definition/declaration.
+_SPLIT_VIEW_HUNK_GUARDS: dict[tuple[str, int], str] = {
+    ("chrome/browser/ui/tabs/tab_strip_model.cc", 1):
+        "bool TabStripModel::AddToExistingSplit(",
+    ("chrome/browser/ui/views/frame/contents_container_view.h", 3):
+        "  void SetMahoAiPanelAdjacent(bool adjacent);\n",
+    ("chrome/browser/ui/views/frame/contents_container_view.cc", 7):
+        "void ContentsContainerView::SetMahoAiPanelAdjacent(bool adjacent) {\n",
+}
+
 SPLIT_VIEW_REPLACEMENTS: dict[str, list[Replacement]] = {
     path: [
         Replacement(
             old, new, f"Maho split topology: {path} hunk {index}",
-            guard="bool TabStripModel::AddToExistingSplit("
-            if path == "chrome/browser/ui/tabs/tab_strip_model.cc" and index == 1
-            else None,
+            guard=_SPLIT_VIEW_HUNK_GUARDS.get((path, index)),
         )
         for index, (old, new) in enumerate(hunks, start=1)
     ]
@@ -12773,6 +13847,115 @@ MAHO_SCHEMA_FILE_COPIES: dict[str, str] = {
     "components/password_manager/core/browser/password_manager_driver.cc":
         "chromium_src/components/password_manager/core/browser/password_manager_driver.cc",
 }
+
+# ---------------------------------------------------------------------------
+# Maho intercepted-key binding gate
+# ---------------------------------------------------------------------------
+# Every key Maho's dispatch claims to intercept must, in the applied tree, be
+# bound by the platform accelerator table to a command id Maho routes into its
+# handler. Binding is keyed by the physical key, not the command id, so an
+# upstream command-id rename fails the gate instead of silently bypassing Maho:
+# Chromium 154 renamed the macOS Ctrl+Tab command from IDC_SELECT_NEXT_TAB to
+# IDC_CYCLE_TO_NEXT_TAB and the MRU overlay stopped appearing. This runs inside
+# main(), so every build (build_maho.py invokes this script with check=True)
+# fails closed on a regression rather than shipping it.
+# (platform, label, modifier flags, virtual key)
+_MAHO_INTERCEPTED_KEYS: Final = (
+    ("mac", "Ctrl+Tab", ("EF_CONTROL_DOWN",), "VKEY_TAB"),
+    ("mac", "Ctrl+Shift+Tab", ("EF_CONTROL_DOWN", "EF_SHIFT_DOWN"), "VKEY_TAB"),
+    ("win", "Ctrl+Tab", ("EF_CONTROL_DOWN",), "VKEY_TAB"),
+    ("win", "Ctrl+Shift+Tab", ("EF_CONTROL_DOWN", "EF_SHIFT_DOWN"), "VKEY_TAB"),
+    ("linux", "Ctrl+Tab", ("EF_CONTROL_DOWN",), "VKEY_TAB"),
+    ("linux", "Ctrl+Shift+Tab", ("EF_CONTROL_DOWN", "EF_SHIFT_DOWN"), "VKEY_TAB"),
+)
+
+# platform -> (accelerator table relative path, command-id field order)
+_MAHO_ACCELERATOR_TABLES: Final = {
+    "mac": ("chrome/browser/ui/cocoa/accelerators_cocoa.mm", "command_first"),
+    "win": ("chrome/browser/ui/accelerator_table.cc", "key_first"),
+    "linux": ("chrome/browser/ui/accelerator_table.cc", "key_first"),
+}
+
+_MAHO_DISPATCH_HANDLER: Final = "MaybeHandleMruTabSwitch"
+
+
+def _maho_modifier_flags(expression: str) -> frozenset[str]:
+    return frozenset(re.findall(r"EF_\w+", expression))
+
+
+def _maho_accelerator_bindings(
+    text: str, order: str
+) -> dict[tuple[frozenset[str], str], set[str]]:
+    # command_first: {IDC_.., <modifiers>, ui::VKEY_..};
+    # key_first:     {ui::VKEY_.., <modifiers>, IDC_..}.
+    pattern = (
+        r"\{\s*(IDC_\w+)\s*,\s*([^,{}]+?)\s*,\s*(ui::VKEY_\w+)\s*\}"
+        if order == "command_first"
+        else r"\{\s*(ui::VKEY_\w+)\s*,\s*([^,{}]+?)\s*,\s*(IDC_\w+)\s*\}"
+    )
+    bindings: dict[tuple[frozenset[str], str], set[str]] = {}
+    for match in re.finditer(pattern, text, re.DOTALL):
+        if order == "command_first":
+            command, modifiers, vkey = match.groups()
+        else:
+            vkey, modifiers, command = match.groups()
+        key = (_maho_modifier_flags(modifiers), vkey.removeprefix("ui::"))
+        bindings.setdefault(key, set()).add(command)
+    return bindings
+
+
+def _maho_handler_command_ids(dispatch_text: str) -> set[str]:
+    handled: set[str] = set()
+    # re.split on case labels yields [prefix, id1, body1, id2, body2, ...];
+    # each body runs to the next case label and owns its handler call.
+    parts = re.split(r"\bcase (IDC_\w+):", dispatch_text)
+    for index in range(1, len(parts), 2):
+        if _MAHO_DISPATCH_HANDLER in parts[index + 1]:
+            handled.add(parts[index])
+    return handled
+
+
+def verify_maho_intercepted_bindings(chromium_src: Path) -> list[str]:
+    """Return violations of the intercepted-key binding contract (empty = ok)."""
+    dispatch_path = (
+        chromium_src / "chrome/browser/ui/browser_command_controller.cc"
+    )
+    if not dispatch_path.is_file():
+        return []
+    handled = _maho_handler_command_ids(dispatch_path.read_text())
+    if not handled:
+        return [
+            "chrome/browser/ui/browser_command_controller.cc: no dispatch case "
+            f"calls {_MAHO_DISPATCH_HANDLER}; the interceptor contract cannot "
+            "be verified"
+        ]
+    violations: list[str] = []
+    for platform, (relative_path, order) in _MAHO_ACCELERATOR_TABLES.items():
+        table_path = chromium_src / relative_path
+        if not table_path.is_file():
+            violations.append(
+                f"{platform}: accelerator table {relative_path} is missing; "
+                "Maho's intercepted-key bindings cannot be verified"
+            )
+            continue
+        bindings = _maho_accelerator_bindings(table_path.read_text(), order)
+        for entry_platform, label, flags, vkey in _MAHO_INTERCEPTED_KEYS:
+            if entry_platform != platform:
+                continue
+            bound = bindings.get((frozenset(flags), vkey))
+            if not bound:
+                violations.append(
+                    f"{platform}: {relative_path} no longer binds {label}; "
+                    "Maho's interceptor expects it (renamed, moved or dropped "
+                    "upstream)"
+                )
+            elif not (bound & handled):
+                violations.append(
+                    f"{platform}: {label} binds {sorted(bound)}, but Maho's "
+                    f"dispatch routes none of them into "
+                    f"{_MAHO_DISPATCH_HANDLER} (handled: {sorted(handled)})"
+                )
+    return violations
 
 
 def main() -> int:
@@ -12823,7 +14006,26 @@ def main() -> int:
         return 1
 
     any_changed = False
-    for relative_path, replacements in REPLACEMENTS.items():
+    base_targets: dict[str, Path] = {}
+    base_dir = base_patch_dir(revision)
+    if base_dir is not None:
+        base_targets = base_patch_targets(base_dir)
+        for relative_path, patch in base_targets.items():
+            try:
+                state = apply_base_patch(
+                    chromium_src, relative_path, patch, args.dry_run
+                )
+            except RuntimeError as error:
+                print(error, file=sys.stderr)
+                return 1
+            any_changed = any_changed or state == "patched"
+            print(f"{relative_path}\n  - {state}: Maho base patch [{revision[:12]}]")
+
+    # A revision with base patches is rebuilt from pristine upstream by those
+    # patches alone; anchor-based REPLACEMENTS target older trees.
+    for relative_path, replacements in (
+        {} if base_dir is not None else REPLACEMENTS
+    ).items():
         if is_revision_incompatible_target(relative_path, revision):
             replacements = SPLIT_VIEW_REPLACEMENTS.get(relative_path, [])
             if not replacements:
@@ -12881,6 +14083,19 @@ def main() -> int:
         print(f"  - copied from {src}")
 
     print("result: changed" if any_changed else "result: no-op")
+
+    if not args.dry_run:
+        violations = verify_maho_intercepted_bindings(chromium_src)
+        if violations:
+            print(
+                "Maho intercepted-key binding gate FAILED (Ctrl+Tab and "
+                "friends would bypass their Maho handler):",
+                file=sys.stderr,
+            )
+            for violation in violations:
+                print(f"  - {violation}", file=sys.stderr)
+            return 1
+
     return 0
 
 

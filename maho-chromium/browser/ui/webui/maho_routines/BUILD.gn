@@ -9,6 +9,8 @@ source_set("routine_page_handler") {
   sources = [
     "maho_routines_page_handler.cc",
     "maho_routines_page_handler.h",
+    "maho_trace_recorder_client.cc",
+    "maho_trace_recorder_client.h",
   ]
 
   public_deps = [

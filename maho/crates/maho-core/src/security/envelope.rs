@@ -145,9 +145,27 @@ mod tests {
 
     #[test]
     fn test_build_envelope_aad_uniqueness() {
-        let aad1 = build_envelope_aad("prof1", "dev1", DeviceKeyPurpose::DatabaseRoot, 3, &[1, 2, 3]);
-        let aad2 = build_envelope_aad("prof2", "dev1", DeviceKeyPurpose::DatabaseRoot, 3, &[1, 2, 3]);
-        let aad3 = build_envelope_aad("prof1", "dev1", DeviceKeyPurpose::VaultDeviceWrap, 3, &[1, 2, 3]);
+        let aad1 = build_envelope_aad(
+            "prof1",
+            "dev1",
+            DeviceKeyPurpose::DatabaseRoot,
+            3,
+            &[1, 2, 3],
+        );
+        let aad2 = build_envelope_aad(
+            "prof2",
+            "dev1",
+            DeviceKeyPurpose::DatabaseRoot,
+            3,
+            &[1, 2, 3],
+        );
+        let aad3 = build_envelope_aad(
+            "prof1",
+            "dev1",
+            DeviceKeyPurpose::VaultDeviceWrap,
+            3,
+            &[1, 2, 3],
+        );
         assert_ne!(aad1, aad2);
         assert_ne!(aad1, aad3);
     }
@@ -158,7 +176,13 @@ mod tests {
         let policy2 = DeviceKeyPolicy::database_root();
         let policy3 = DeviceKeyPolicy::vault_device_wrap();
 
-        assert_eq!(compute_policy_digest(&policy1), compute_policy_digest(&policy2));
-        assert_ne!(compute_policy_digest(&policy1), compute_policy_digest(&policy3));
+        assert_eq!(
+            compute_policy_digest(&policy1),
+            compute_policy_digest(&policy2)
+        );
+        assert_ne!(
+            compute_policy_digest(&policy1),
+            compute_policy_digest(&policy3)
+        );
     }
 }

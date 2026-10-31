@@ -86,9 +86,6 @@ constexpr int kDotSpacing = 4;
 constexpr int kFadeWidth = 8;
 constexpr int kDotTrackHeight = 14;
 
-constexpr float kFooterButtonEnabledOpacity = 0.58f;
-constexpr float kFooterButtonDisabledOpacity = 0.28f;
-
 const gfx::Insets kFooterInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kUpdatePillInsets = gfx::Insets::TLBR(3, 10, 3, 10);
 const gfx::Insets kFooterRowInsets = gfx::Insets::TLBR(1, 8, 1, 8);
@@ -141,14 +138,14 @@ class MahoFooterIconButton : public views::MdTextButton {
     if (!icon_) {
       return;
     }
-    const SkColor color = palette_.neutral_glyph != SK_ColorTRANSPARENT
-                              ? palette_.neutral_glyph
-                              : SK_ColorTRANSPARENT;
-    if (color != SK_ColorTRANSPARENT) {
-      SetImageModel(views::Button::STATE_NORMAL,
-                    ui::ImageModel::FromVectorIcon(*icon_, color,
-                                                   kFooterButtonIconSize));
-    }
+    // The footer is hidden in private windows, so a resolved palette is
+    // always present here. macOS paints STATE_DISABLED in inactive windows.
+    SetImageModel(views::Button::STATE_NORMAL,
+                  ui::ImageModel::FromVectorIcon(*icon_, palette_.neutral_glyph,
+                                                 kFooterButtonIconSize));
+    SetImageModel(views::Button::STATE_DISABLED,
+                  ui::ImageModel::FromVectorIcon(*icon_, palette_.disabled_text,
+                                                 kFooterButtonIconSize));
   }
 
   void UpdateHoverBackground() {
@@ -182,11 +179,8 @@ views::MdTextButton* CreateRoundActionButton(
   button->SetCornerRadius(kFooterControlCornerRadius);
   button->SetMinSize(gfx::Size(kFooterControlSize, kFooterControlSize));
   button->SetMaxSize(gfx::Size(kFooterControlSize, kFooterControlSize));
-  button->SetImageModel(
-      views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(icon, ui::kColorSysOnSurfaceSubtle,
-                                     kFooterButtonIconSize));
-  button->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
+  // Icon and text colors are bound from the palette in
+  // UpdateFooterChromeAppearance().
   button->SetTooltipText(tooltip);
   button->SetAccessibleName(tooltip);
   button->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
@@ -298,22 +292,15 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
           views::BoxLayout::Orientation::kHorizontal, kUpdatePillInsets, 6));
   update_pill_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  update_pill_->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface1, kUpdatePillCornerRadius));
-  update_pill_->SetBorder(views::CreateRoundedRectBorder(
-      1, kUpdatePillCornerRadius, ui::kColorSysSurfaceVariant));
 
   update_pill_indicator_ =
       update_pill_->AddChildView(std::make_unique<views::View>());
   update_pill_indicator_->SetPreferredSize(
       gfx::Size(kUpdateIndicatorSize, kUpdateIndicatorSize));
-  update_pill_indicator_->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysPrimary, kUpdateIndicatorSize / 2));
 
   update_pill_label_ = update_pill_->AddChildView(
       std::make_unique<views::Label>(u"Maho is up to date"));
   update_pill_label_->SetAutoColorReadabilityEnabled(false);
-  update_pill_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
   update_pill_label_->SetTextStyle(views::style::STYLE_BODY_5);
   update_pill_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 
@@ -384,7 +371,7 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
       footer_region_,
       base::BindRepeating(&MahoSidebarFooterView::OnPlusPressed,
                           weak_factory_.GetWeakPtr()),
-      vector_icons::kAddIcon, u"Create space");
+      vector_icons::kAddOldIcon, u"Create space");
 
   UpdateFooterChromeAppearance();
   UpdateUpdatePill(MahoSidebarFooterUpdatePillModel());
@@ -672,28 +659,36 @@ void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
     button->SetPaintToLayer();
     button->layer()->SetFillsBoundsOpaquely(false);
     button->SetTextSubpixelRenderingEnabled(false);
-    button->layer()->SetOpacity(button->GetEnabled()
-                                     ? kFooterButtonEnabledOpacity
-                                     : kFooterButtonDisabledOpacity);
+    // No layer dimming: neutral_glyph / disabled_text already carry the
+    // palette's contrast guarantee, and layer opacity would re-blend them
+    // below the 3:1 glyph threshold.
     auto* footer_button = static_cast<MahoFooterIconButton*>(button);
     footer_button->SetSidebarPalette(palette_, icon);
   };
   style_button(archive_button_, GetMahoSidebarArchiveboxIcon());
-  style_button(plus_button_, vector_icons::kAddIcon);
+  style_button(plus_button_, vector_icons::kAddOldIcon);
 
-  if (archive_button_) {
-    if (palette_.neutral_glyph != SK_ColorTRANSPARENT) {
-      archive_button_->SetEnabledTextColors(palette_.neutral_glyph);
-    } else {
-      archive_button_->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
+  for (views::MdTextButton* button : {archive_button_.get(),
+                                      plus_button_.get()}) {
+    if (button) {
+      button->SetEnabledTextColors(palette_.neutral_glyph);
+      button->SetTextColor(views::Button::STATE_DISABLED,
+                           palette_.disabled_text);
     }
   }
-  if (plus_button_) {
-    if (palette_.neutral_glyph != SK_ColorTRANSPARENT) {
-      plus_button_->SetEnabledTextColors(palette_.neutral_glyph);
-    } else {
-      plus_button_->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
-    }
+
+  if (update_pill_) {
+    update_pill_->SetBackground(views::CreateRoundedRectBackground(
+        palette_.row_hover, kUpdatePillCornerRadius));
+    update_pill_->SetBorder(views::CreateRoundedRectBorder(
+        1, kUpdatePillCornerRadius, palette_.outline));
+  }
+  if (update_pill_indicator_) {
+    update_pill_indicator_->SetBackground(views::CreateRoundedRectBackground(
+        palette_.focus_ring, kUpdateIndicatorSize / 2));
+  }
+  if (update_pill_label_) {
+    update_pill_label_->SetEnabledColor(palette_.secondary_text);
   }
 }
 
@@ -885,7 +880,7 @@ void MahoSidebarFooterView::ShowDropIndicator(int target_index) {
   if (!drop_indicator_) {
     auto indicator = std::make_unique<views::View>();
     indicator->SetBackground(views::CreateRoundedRectBackground(
-        ui::kColorSysPrimary, kIndicatorRadius));
+        palette_.focus_ring, kIndicatorRadius));
     indicator->SetPaintToLayer();
     indicator->layer()->SetFillsBoundsOpaquely(false);
     drop_indicator_ = spaces_cluster_->AddChildView(std::move(indicator));

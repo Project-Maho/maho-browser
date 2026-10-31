@@ -208,7 +208,8 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
                          (GetState() == STATE_HOVERED ||
                           GetState() == STATE_PRESSED);
     const SkColor foreground =
-        selected_ || hovered
+        !enabled ? palette_.disabled_text
+        : selected_ || hovered
             ? palette_.primary_text
             : GetRailItemForegroundColor(palette_, selected_);
     if (enabled && selected_) {
@@ -488,7 +489,7 @@ void MahoSidebarLibraryRailView::UpdateBackButtonAppearance() {
   back_button_->SetBorder(nullptr);
 
   const SkColor back_color =
-      enabled ? palette_.primary_text : palette_.secondary_text;
+      enabled ? palette_.primary_text : palette_.disabled_text;
   back_button_->SetImageModel(
       views::Button::STATE_NORMAL,
       ui::ImageModel::FromVectorIcon(maho_lucide_icons::kArrowLeftIcon,

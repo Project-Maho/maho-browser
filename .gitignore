@@ -100,3 +100,8 @@ target_check/
 /roadmap-snapshot.md
 /normal-playwright-accessibility.md
 /.build-lock-out_*
+
+# Blog image derivatives. website/scripts/optimize-blog-images.mjs regenerates
+# these from the committed PNGs on every build; the PNG stays the source of truth.
+/website/public/assets/blog/**/*.avif
+/website/public/assets/blog/**/*.webp

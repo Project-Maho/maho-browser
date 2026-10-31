@@ -160,6 +160,22 @@ source_set("maho_password_store_backend") {
   ]
 }
 
+source_set("maho_otp_backend") {
+  sources = [
+    "autofill/maho_otp_backend.cc",
+    "autofill/maho_otp_backend.h",
+  ]
+  public_deps = [
+    "//base",
+    "//components/one_time_tokens/core/browser",
+  ]
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//components/keyed_service/core",
+    "//maho/browser/mail_helper:maho_mail_service_factory",
+  ]
+}
+
 source_set("maho_ai_client") {
   sources = [
     "ai/maho_ai_llm_client.cc",
@@ -366,6 +382,8 @@ source_set("maho_browser_ai_tools") {
     "ai/maho_capability_types.cc",
     "ai/maho_capability_types.h",
     "ai/maho_mail_tool_authorization.h",
+    "ai/maho_vom_extractor.cc",
+    "ai/maho_vom_extractor.h",
   ]
   deps = [
     ":maho_browser_tool_registry",
@@ -400,6 +418,7 @@ source_set("maho_browser_tool_executor_unittests") {
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
     "ai/maho_capability_broker_unittest.cc",
+    "ai/maho_vom_extractor_unittest.cc",
   ]
   deps = [
     ":maho_browser_ai_tools",
@@ -420,6 +439,7 @@ test("maho_browser_tool_executor_test") {
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
     "ai/maho_capability_broker_unittest.cc",
+    "ai/maho_vom_extractor_unittest.cc",
     "ai/maho_browser_tool_test_main.cc",
   ]
   deps = [
@@ -476,6 +496,20 @@ source_set("maho_action_marker_headers") {
   ]
 }
 
+source_set("maho_agent_views") {
+  sources = [
+    "ui/views/agent/maho_agent_help_bar.cc",
+    "ui/views/agent/maho_agent_help_bar.h",
+    "ui/views/agent/maho_tab_borrow_chip.cc",
+    "ui/views/agent/maho_tab_borrow_chip.h",
+  ]
+  deps = [
+    "//base",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
 test("maho_action_marker_test") {
   sources = [
     "ai/maho_browser_tool_test_main.cc",
@@ -488,6 +522,34 @@ test("maho_action_marker_test") {
     "//chrome/browser/ui",
     "//testing/gtest",
     "//ui/gfx",
+  ]
+}
+
+test("maho_agent_help_bar_test") {
+  sources = [
+    "ai/maho_browser_tool_test_main.cc",
+    "ui/views/agent/maho_agent_help_bar_unittest.cc",
+  ]
+  deps = [
+    ":maho_agent_views",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//ui/views",
+  ]
+}
+
+test("maho_tab_borrow_chip_test") {
+  sources = [
+    "ai/maho_browser_tool_test_main.cc",
+    "ui/views/agent/maho_tab_borrow_chip_unittest.cc",
+  ]
+  deps = [
+    ":maho_agent_views",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//ui/views",
   ]
 }
 
@@ -1429,6 +1491,24 @@ source_set("maho_context_menus_unittests") {
   ]
 }
 
+source_set("maho_contents_header_unittests") {
+  testonly = true
+  sources = [
+    "ui/views/frame/maho_contents_header_view_unittest.cc",
+    "ui/views/sidebar/maho_toolbar_button_provider_unittest.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//testing/gtest",
+    "//ui/events:test_support",
+    "//ui/views:test_support",
+  ]
+}
+
 source_set("maho_theme_io_unittests") {
   testonly = true
   sources = [
@@ -1488,6 +1568,22 @@ test("maho_context_menus_test") {
   ]
 }
 
+test("maho_contents_header_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_contents_header_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+    "//ui/menus",
+    "//ui/views:test_support",
+  ]
+}
+
 test("maho_theme_io_test") {
   sources = [ "run_all_maho_unittests_main.cc" ]
   deps = [
@@ -1495,6 +1591,9 @@ test("maho_theme_io_test") {
     ":maho_theme_io_unittests",
     "//maho/browser/updates:maho_updates_unittests",
     "//maho/browser/ui/views/changelog:unit_tests",
+    "//maho/browser/ui/views/sidebar:unit_tests",
+    "//maho/browser/ui/views/spaces_overlay:unit_tests",
+    "//maho/browser/ui/tabs:view_unit_tests",
     "//base",
     "//base/test:test_support",
     "//chrome/browser:browser",

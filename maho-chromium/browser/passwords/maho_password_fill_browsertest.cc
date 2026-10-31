@@ -23,6 +23,9 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/ui/browser.h"
+
+// These desktop fixtures use CreateBrowserWindow, whose non-Android factory
+// creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -31,9 +34,11 @@
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
 #include "components/password_manager/core/browser/password_form_digest.h"
 #include "components/password_manager/core/browser/password_form_manager.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
 #include "components/password_manager/core/browser/password_manager_interface.h"
 #include "components/password_manager/core/browser/password_store/password_store.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_backend.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/prefs/pref_service.h"
@@ -105,7 +110,7 @@ BuildMahoPasswordStore(bool enabled, content::BrowserContext *context) {
       new password_manager::PasswordStore(
           std::make_unique<MahoPasswordStoreBackend>(enabled,
                                                      ProfileKey(profile)));
-  store->Init(/*affiliated_match_helper=*/nullptr);
+  store->Init();
   return store;
 }
 
@@ -156,7 +161,7 @@ protected:
         p = g_browser_process->profile_manager()->GetLastUsedProfile();
       }
       if (p) {
-        Browser *b = CreateBrowser(p);
+        Browser *b = static_cast<Browser*>(CreateBrowser(p));
         SetBrowser(b);
       }
     }
@@ -165,7 +170,7 @@ protected:
 
     core_ = maho::GetCore();
     ASSERT_NE(nullptr, core_);
-    ASSERT_EQ(browser()->profile(), maho::GetCoreOwnerProfile());
+    ASSERT_EQ(browser()->GetProfile(), maho::GetCoreOwnerProfile());
     ASSERT_TRUE(EnsureVaultUnlocked());
 
     PrefService *local_state = g_browser_process->local_state();
@@ -176,21 +181,21 @@ protected:
 
     maho_core_set_installed_extensions(core_, "[]");
     maho_core_set_installed_extensions_for_profile(
-        core_, ProfileKey(browser()->profile()).c_str(), "[]");
+        core_, ProfileKey(browser()->GetProfile()).c_str(), "[]");
     maho_core_update_settings(
         core_,
         R"({"autofill":{"passwordsEnabled":true,"passwordProvider":"maho_native"}})");
     ASSERT_EQ(EffectivePasswordProvider::kMahoNative,
               GetEffectivePasswordProviderForProfileKey(
-                  ProfileKey(browser()->profile())));
+                  ProfileKey(browser()->GetProfile())));
 
     authorization_service()->ResetForTesting();
     authorization_service()->SetVaultLockedForTesting(false);
     authorization_service()->SetInteractiveAuthorizationEnabledForTesting(false);
     maho::NotifyVaultLockStateChanged(/*locked=*/false);
 
-    GrantReadAll(browser()->profile());
-    PasswordManagerBrowserTestBase::WaitForPasswordStore(browser());
+    GrantReadAll(browser()->GetProfile());
+    PasswordManagerBrowserTestBase::WaitForPasswordStore(static_cast<Browser*>(browser()));
   }
 
   void TearDownOnMainThread() override {
@@ -274,11 +279,11 @@ protected:
     // Maho's session helper may close the startup tab on a fresh test
     // profile ("Restored 0 tabs"), leaving the strip empty before the test
     // body runs. Guarantee an active WebContents before navigating.
-    if (target_browser->tab_strip_model()->empty()) {
+    if (target_browser->GetTabStripModel()->empty()) {
       AddBlankTabAndShow(target_browser);
     }
     content::WebContents *web_contents =
-        target_browser->tab_strip_model()->GetActiveWebContents();
+        target_browser->GetTabStripModel()->GetActiveWebContents();
     ASSERT_NE(nullptr, web_contents);
     PasswordsNavigationObserver navigation_observer(web_contents);
     ASSERT_TRUE(ui_test_utils::NavigateToURL(target_browser, url));
@@ -287,11 +292,11 @@ protected:
   }
 
   void ReloadPasswordForm(Browser *target_browser) {
-    if (target_browser->tab_strip_model()->empty()) {
+    if (target_browser->GetTabStripModel()->empty()) {
       AddBlankTabAndShow(target_browser);
     }
     content::WebContents *web_contents =
-        target_browser->tab_strip_model()->GetActiveWebContents();
+        target_browser->GetTabStripModel()->GetActiveWebContents();
     ASSERT_NE(nullptr, web_contents);
     PasswordsNavigationObserver navigation_observer(web_contents);
     web_contents->GetController().Reload(content::ReloadType::NORMAL,
@@ -329,7 +334,7 @@ protected:
                              const std::string &username,
                              const std::string &password) {
     content::WebContents *web_contents =
-        target_browser->tab_strip_model()->GetActiveWebContents();
+        target_browser->GetTabStripModel()->GetActiveWebContents();
     ASSERT_NE(nullptr, web_contents);
     EXPECT_EQ(std::make_pair(username, password),
               ReadFields(web_contents->GetPrimaryMainFrame(), "username_field",
@@ -338,7 +343,7 @@ protected:
 
   void ExpectMainFrameEmpty(Browser *target_browser) {
     content::WebContents *web_contents =
-        target_browser->tab_strip_model()->GetActiveWebContents();
+        target_browser->GetTabStripModel()->GetActiveWebContents();
     ASSERT_NE(nullptr, web_contents);
     EXPECT_EQ(std::make_pair(std::string(), std::string()),
               ReadFields(web_contents->GetPrimaryMainFrame(), "username_field",
@@ -360,7 +365,8 @@ protected:
     credential.username_element = u"username_field";
     credential.password_element = u"password_field";
     credential.username_value = base::UTF8ToUTF16(username);
-    credential.password_value = base::UTF8ToUTF16(password);
+    credential.password_value =
+        password_manager::PasswordString(base::UTF8ToUTF16(password));
     credential.date_created = base::Time::Now();
     credential.in_store = password_manager::PasswordForm::Store::kProfileStore;
 
@@ -368,7 +374,7 @@ protected:
     base::RunLoop loop;
     bool success = false;
     backend->AddLoginAsync(
-        std::move(credential),
+        password_manager::FromPasswordForm(std::move(credential)),
         base::BindOnce(
             [](base::RunLoop *loop, bool *success,
                password_manager::PasswordChangesOrError result) {
@@ -393,7 +399,7 @@ protected:
     base::RunLoop loop;
     bool success = false;
     backend->UpdateLoginAsync(
-        std::move(credential),
+        password_manager::FromPasswordForm(std::move(credential)),
         base::BindOnce(
             [](base::RunLoop *loop, bool *success,
                password_manager::PasswordChangesOrError result) {
@@ -540,7 +546,7 @@ protected:
   void SaveCredentialFromPage(const GURL &form_url, const std::string &username,
                               const std::string &password) {
     ASSERT_TRUE(
-        AddCredential(browser()->profile(), form_url, username, password));
+        AddCredential(browser()->GetProfile(), form_url, username, password));
   }
 
   virtual int TestServerPort() const { return 0; }
@@ -568,64 +574,64 @@ IN_PROC_BROWSER_TEST_F(
   const GURL form_url = PasswordFormUrl(kRestartStableHost);
   const std::string origin = OriginFor(form_url);
 
-  NavigateToPasswordForm(browser(), form_url);
+  NavigateToPasswordForm(static_cast<Browser*>(browser()), form_url);
   content::RenderFrameHost *frame = browser()
-                                        ->tab_strip_model()
+                                        ->GetTabStripModel()
                                         ->GetActiveWebContents()
                                         ->GetPrimaryMainFrame();
   auto *driver = DriverFor(frame);
   ASSERT_NE(nullptr, driver);
   const password_manager::PasswordFillRequestContext context =
       driver->GetPasswordFillRequestContext();
-  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->profile());
+  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->GetProfile());
   ASSERT_NE(nullptr, backend);
 
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill, origin);
   std::optional<password_manager::PasswordFillSelection> selection =
       DiscoverSelection(*backend, form_url, context);
   ASSERT_TRUE(selection.has_value());
   ASSERT_TRUE(PrepareRendererFill(*driver));
   ASSERT_TRUE(
       ResolveAndDispatch(*backend, *driver, context, *selection, kUsername));
-  ExpectMainFrameFilled(browser(), kUsername, kPassword);
+  ExpectMainFrameFilled(static_cast<Browser*>(browser()), kUsername, kPassword);
 
-  ReloadPasswordForm(browser());
+  ReloadPasswordForm(static_cast<Browser*>(browser()));
   frame = browser()
-              ->tab_strip_model()
+              ->GetTabStripModel()
               ->GetActiveWebContents()
               ->GetPrimaryMainFrame();
   driver = DriverFor(frame);
   ASSERT_NE(nullptr, driver);
   const password_manager::PasswordFillRequestContext reloaded_context =
       driver->GetPasswordFillRequestContext();
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill, origin);
   selection = DiscoverSelection(*backend, form_url, reloaded_context);
   ASSERT_TRUE(selection.has_value());
   ASSERT_TRUE(PrepareRendererFill(*driver));
   ASSERT_TRUE(ResolveAndDispatch(*backend, *driver, reloaded_context,
                                  *selection, kUsername));
-  ExpectMainFrameFilled(browser(), kUsername, kPassword);
+  ExpectMainFrameFilled(static_cast<Browser*>(browser()), kUsername, kPassword);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
                        DeniedDeviceReauthLeavesUnlockedVaultAndRendererEmpty) {
   const GURL form_url = PasswordFormUrl("denied-auth.test");
-  NavigateToPasswordForm(browser(), form_url);
+  NavigateToPasswordForm(static_cast<Browser*>(browser()), form_url);
   ASSERT_TRUE(
-      AddCredential(browser()->profile(), form_url, kUsername, kPassword));
+      AddCredential(browser()->GetProfile(), form_url, kUsername, kPassword));
   ASSERT_EQ(std::optional<std::string>("unlocked"), VaultLockState(core_));
 
   content::RenderFrameHost *frame = browser()
-                                        ->tab_strip_model()
+                                        ->GetTabStripModel()
                                         ->GetActiveWebContents()
                                         ->GetPrimaryMainFrame();
   auto *driver = DriverFor(frame);
   ASSERT_NE(nullptr, driver);
   const password_manager::PasswordFillRequestContext context =
       driver->GetPasswordFillRequestContext();
-  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->profile());
+  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->GetProfile());
   ASSERT_NE(nullptr, backend);
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill,
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill,
         OriginFor(form_url));
   std::optional<password_manager::PasswordFillSelection> selection =
       DiscoverSelection(*backend, form_url, context);
@@ -644,7 +650,7 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
 
   bool authorized = true;
   authorization_service()->Authorize(
-      ProfileKey(browser()->profile()), OriginFor(form_url),
+      ProfileKey(browser()->GetProfile()), OriginFor(form_url),
       PasswordAuthorizationAction::kFill, std::move(authenticator),
       u"Fill password",
       base::BindOnce([](bool *authorized, bool success) {
@@ -656,7 +662,7 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   EXPECT_EQ(std::optional<std::string>("unlocked"), VaultLockState(core_));
   EXPECT_FALSE(
       ResolveAndDispatch(*backend, *driver, context, *selection, kUsername));
-  ExpectMainFrameEmpty(browser());
+  ExpectMainFrameEmpty(static_cast<Browser*>(browser()));
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
@@ -664,46 +670,46 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   const GURL saved_url = PasswordFormUrl("saved-origin.test");
   const GURL wrong_url = PasswordFormUrl("wrong-origin.test");
   ASSERT_TRUE(
-      AddCredential(browser()->profile(), saved_url, kUsername, kPassword));
-  NavigateToPasswordForm(browser(), saved_url);
+      AddCredential(browser()->GetProfile(), saved_url, kUsername, kPassword));
+  NavigateToPasswordForm(static_cast<Browser*>(browser()), saved_url);
 
   content::WebContents *saved_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   auto *saved_driver = DriverFor(saved_contents->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, saved_driver);
   const password_manager::PasswordFillRequestContext saved_context =
       saved_driver->GetPasswordFillRequestContext();
-  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->profile());
+  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->GetProfile());
   ASSERT_NE(nullptr, backend);
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill,
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill,
         OriginFor(saved_url));
   std::optional<password_manager::PasswordFillSelection> selection =
       DiscoverSelection(*backend, saved_url, saved_context);
   ASSERT_TRUE(selection.has_value());
 
-  NavigateToPasswordForm(browser(), wrong_url);
+  NavigateToPasswordForm(static_cast<Browser*>(browser()), wrong_url);
   auto *wrong_driver = DriverFor(browser()
-                                     ->tab_strip_model()
+                                     ->GetTabStripModel()
                                      ->GetActiveWebContents()
                                      ->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, wrong_driver);
   const password_manager::PasswordFillRequestContext wrong_context =
       wrong_driver->GetPasswordFillRequestContext();
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill,
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill,
         OriginFor(wrong_url));
   EXPECT_FALSE(ResolveAndDispatch(*backend, *wrong_driver, wrong_context,
                                   *selection, kUsername));
-  ExpectMainFrameEmpty(browser());
+  ExpectMainFrameEmpty(static_cast<Browser*>(browser()));
 
-  NavigateToPasswordForm(browser(), saved_url);
+  NavigateToPasswordForm(static_cast<Browser*>(browser()), saved_url);
   auto *current_driver = DriverFor(browser()
-                                       ->tab_strip_model()
+                                       ->GetTabStripModel()
                                        ->GetActiveWebContents()
                                        ->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, current_driver);
   const password_manager::PasswordFillRequestContext current_context =
       current_driver->GetPasswordFillRequestContext();
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill,
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill,
         OriginFor(saved_url));
   std::optional<password_manager::PasswordFillSelection> current_selection =
       DiscoverSelection(*backend, saved_url, current_context);
@@ -711,7 +717,7 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   ASSERT_TRUE(PrepareRendererFill(*current_driver));
   ASSERT_TRUE(ResolveAndDispatch(*backend, *current_driver, current_context,
                                  *current_selection, kUsername));
-  ExpectMainFrameFilled(browser(), kUsername, kPassword);
+  ExpectMainFrameFilled(static_cast<Browser*>(browser()), kUsername, kPassword);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
@@ -719,21 +725,21 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   const GURL form_url = PasswordFormUrl("stale-revision.test");
   const std::string origin = OriginFor(form_url);
   ASSERT_TRUE(
-      AddCredential(browser()->profile(), form_url, kUsername, kPassword));
-  NavigateToPasswordForm(browser(), form_url);
+      AddCredential(browser()->GetProfile(), form_url, kUsername, kPassword));
+  NavigateToPasswordForm(static_cast<Browser*>(browser()), form_url);
 
   content::RenderFrameHost *frame = browser()
-                                        ->tab_strip_model()
+                                        ->GetTabStripModel()
                                         ->GetActiveWebContents()
                                         ->GetPrimaryMainFrame();
   auto *driver = DriverFor(frame);
   ASSERT_NE(nullptr, driver);
   const password_manager::PasswordFillRequestContext context =
       driver->GetPasswordFillRequestContext();
-  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->profile());
+  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->GetProfile());
   ASSERT_NE(nullptr, backend);
 
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill, origin);
   std::optional<password_manager::PasswordFillSelection> stale_selection =
       DiscoverSelection(*backend, form_url, context);
   ASSERT_TRUE(stale_selection.has_value());
@@ -741,16 +747,18 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   MatchingResult initial = ReadMatching(*backend, form_url);
   ASSERT_TRUE(initial.success);
   ASSERT_EQ(1u, initial.forms.size());
-  password_manager::PasswordForm current = initial.forms[0];
-  current.password_value = u"S3NTINEL-current-revision-6B2F";
-  ASSERT_TRUE(UpdateCredential(browser()->profile(), std::move(current)));
+  password_manager::PasswordForm current =
+      password_manager::ToPasswordForm(initial.forms[0]);
+  current.password_value = password_manager::PasswordString(
+      std::u16string(u"S3NTINEL-current-revision-6B2F"));
+  ASSERT_TRUE(UpdateCredential(browser()->GetProfile(), std::move(current)));
 
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill, origin);
   EXPECT_FALSE(ResolveAndDispatch(*backend, *driver, context,
                                   *stale_selection, kUsername));
-  ExpectMainFrameEmpty(browser());
+  ExpectMainFrameEmpty(static_cast<Browser*>(browser()));
 
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill, origin);
   std::optional<password_manager::PasswordFillSelection> current_selection =
       DiscoverSelection(*backend, form_url, context);
   ASSERT_TRUE(current_selection.has_value());
@@ -759,7 +767,7 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   ASSERT_TRUE(PrepareRendererFill(*driver));
   ASSERT_TRUE(ResolveAndDispatch(*backend, *driver, context,
                                  *current_selection, kUsername));
-  ExpectMainFrameFilled(browser(), kUsername, kFreshPassword);
+  ExpectMainFrameFilled(static_cast<Browser*>(browser()), kUsername, kFreshPassword);
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -768,33 +776,33 @@ IN_PROC_BROWSER_TEST_F(
   const GURL form_url = PasswordFormUrl("document-target.test");
   const GURL cross_origin_url = PasswordFormUrl("document-cross-origin.test");
   ASSERT_TRUE(
-      AddCredential(browser()->profile(), form_url, kUsername, kPassword));
-  NavigateToPasswordForm(browser(), form_url);
+      AddCredential(browser()->GetProfile(), form_url, kUsername, kPassword));
+  NavigateToPasswordForm(static_cast<Browser*>(browser()), form_url);
 
   content::WebContents *target_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   auto *target_driver = DriverFor(target_contents->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, target_driver);
   const password_manager::PasswordFillRequestContext target_context =
       target_driver->GetPasswordFillRequestContext();
 
   content::WebContents *sibling_contents = chrome::AddSelectedTabWithURL(
-      browser(), form_url, ui::PAGE_TRANSITION_LINK);
+      static_cast<Browser*>(browser()), form_url, ui::PAGE_TRANSITION_LINK);
   ASSERT_NE(nullptr, sibling_contents);
   ASSERT_TRUE(content::WaitForLoadStop(sibling_contents));
   auto *sibling_driver = DriverFor(sibling_contents->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, sibling_driver);
 
   content::WebContents *cross_contents = chrome::AddSelectedTabWithURL(
-      browser(), cross_origin_url, ui::PAGE_TRANSITION_LINK);
+      static_cast<Browser*>(browser()), cross_origin_url, ui::PAGE_TRANSITION_LINK);
   ASSERT_NE(nullptr, cross_contents);
   ASSERT_TRUE(content::WaitForLoadStop(cross_contents));
   auto *cross_origin_driver = DriverFor(cross_contents->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, cross_origin_driver);
 
-  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->profile());
+  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->GetProfile());
   ASSERT_NE(nullptr, backend);
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill,
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill,
         OriginFor(form_url));
   std::optional<password_manager::PasswordFillSelection> selection =
       DiscoverSelection(*backend, form_url, target_context);
@@ -804,24 +812,24 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_FALSE(ResolveAndDispatch(*backend, *cross_origin_driver,
                                   target_context, *selection, kUsername));
 
-  browser()->tab_strip_model()->ActivateTabAt(0);
-  ReloadPasswordForm(browser());
-  target_driver = DriverFor(browser()->tab_strip_model()->GetActiveWebContents()->GetPrimaryMainFrame());
+  browser()->GetTabStripModel()->ActivateTabAt(0);
+  ReloadPasswordForm(static_cast<Browser*>(browser()));
+  target_driver = DriverFor(browser()->GetTabStripModel()->GetActiveWebContents()->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, target_driver);
   EXPECT_FALSE(ResolveAndDispatch(*backend, *target_driver, target_context,
                                   *selection, kUsername));
-  ExpectMainFrameEmpty(browser());
+  ExpectMainFrameEmpty(static_cast<Browser*>(browser()));
   ASSERT_NE(nullptr, target_driver);
   const password_manager::PasswordFillRequestContext current_context =
       target_driver->GetPasswordFillRequestContext();
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill,
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill,
         OriginFor(form_url));
   selection = DiscoverSelection(*backend, form_url, current_context);
   ASSERT_TRUE(selection.has_value());
   ASSERT_TRUE(PrepareRendererFill(*target_driver));
   ASSERT_TRUE(ResolveAndDispatch(*backend, *target_driver, current_context,
                                  *selection, kUsername));
-  ExpectMainFrameFilled(browser(), kUsername, kPassword);
+  ExpectMainFrameFilled(static_cast<Browser*>(browser()), kUsername, kPassword);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
@@ -829,19 +837,19 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   const GURL form_url = PasswordFormUrl("cross-profile.test");
   const std::string origin = OriginFor(form_url);
   ASSERT_TRUE(
-      AddCredential(browser()->profile(), form_url, kUsername, kPassword));
-  NavigateToPasswordForm(browser(), form_url);
+      AddCredential(browser()->GetProfile(), form_url, kUsername, kPassword));
+  NavigateToPasswordForm(static_cast<Browser*>(browser()), form_url);
   auto *owner_driver = DriverFor(browser()
-                                     ->tab_strip_model()
+                                     ->GetTabStripModel()
                                      ->GetActiveWebContents()
                                      ->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, owner_driver);
   const password_manager::PasswordFillRequestContext owner_context =
       owner_driver->GetPasswordFillRequestContext();
   MahoPasswordStoreBackend *owner_backend =
-      BackendForProfile(browser()->profile());
+      BackendForProfile(browser()->GetProfile());
   ASSERT_NE(nullptr, owner_backend);
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill, origin);
   std::optional<password_manager::PasswordFillSelection> selection =
       DiscoverSelection(*owner_backend, form_url, owner_context);
   ASSERT_TRUE(selection.has_value());
@@ -852,7 +860,7 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
       profile_manager, profile_manager->user_data_dir().AppendASCII(
                            "MahoPasswordFillOtherProfile"));
   ASSERT_FALSE(maho::IsPasswordManagerAllowedForProfile(&other_profile));
-  Browser *other_browser = CreateBrowser(&other_profile);
+  Browser *other_browser = static_cast<Browser*>(CreateBrowser(&other_profile));
   ASSERT_NE(nullptr, other_browser);
 
   NavigateToPasswordForm(other_browser, form_url);
@@ -860,7 +868,7 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   ASSERT_NE(nullptr, other_backend);
   EXPECT_EQ(password_manager::ActionableError::kInactionable,
             other_backend->GetError());
-  auto *other_driver = DriverFor(other_browser->tab_strip_model()
+  auto *other_driver = DriverFor(other_browser->GetTabStripModel()
                                      ->GetActiveWebContents()
                                      ->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, other_driver);
@@ -869,11 +877,11 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
                                   *selection, kUsername));
   ExpectMainFrameEmpty(other_browser);
 
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill, origin);
   ASSERT_TRUE(PrepareRendererFill(*owner_driver));
   ASSERT_TRUE(ResolveAndDispatch(*owner_backend, *owner_driver, owner_context,
                                  *selection, kUsername));
-  ExpectMainFrameFilled(browser(), kUsername, kPassword);
+  ExpectMainFrameFilled(static_cast<Browser*>(browser()), kUsername, kPassword);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
@@ -881,18 +889,18 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   const GURL form_url = PasswordFormUrl("locked-vault.test");
   const std::string origin = OriginFor(form_url);
   ASSERT_TRUE(
-      AddCredential(browser()->profile(), form_url, kUsername, kPassword));
-  NavigateToPasswordForm(browser(), form_url);
+      AddCredential(browser()->GetProfile(), form_url, kUsername, kPassword));
+  NavigateToPasswordForm(static_cast<Browser*>(browser()), form_url);
   auto *driver = DriverFor(browser()
-                               ->tab_strip_model()
+                               ->GetTabStripModel()
                                ->GetActiveWebContents()
                                ->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, driver);
   const password_manager::PasswordFillRequestContext context =
       driver->GetPasswordFillRequestContext();
-  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->profile());
+  MahoPasswordStoreBackend *backend = BackendForProfile(browser()->GetProfile());
   ASSERT_NE(nullptr, backend);
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill, origin);
   std::optional<password_manager::PasswordFillSelection> selection =
       DiscoverSelection(*backend, form_url, context);
   ASSERT_TRUE(selection.has_value());
@@ -901,17 +909,17 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   ASSERT_EQ(std::optional<std::string>("locked"), VaultLockState(core_));
   EXPECT_FALSE(
       ResolveAndDispatch(*backend, *driver, context, *selection, kUsername));
-  ExpectMainFrameEmpty(browser());
+  ExpectMainFrameEmpty(static_cast<Browser*>(browser()));
 
   ASSERT_TRUE(UnlockVault());
   ASSERT_EQ(std::optional<std::string>("unlocked"), VaultLockState(core_));
   authorization_service()->SetVaultLockedForTesting(false);
   maho::NotifyVaultLockStateChanged(/*locked=*/false);
-  Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
+  Grant(browser()->GetProfile(), PasswordAuthorizationAction::kFill, origin);
   ASSERT_TRUE(PrepareRendererFill(*driver));
   ASSERT_TRUE(
       ResolveAndDispatch(*backend, *driver, context, *selection, kUsername));
-  ExpectMainFrameFilled(browser(), kUsername, kPassword);
+  ExpectMainFrameFilled(static_cast<Browser*>(browser()), kUsername, kPassword);
 }
 
 } // namespace passwords

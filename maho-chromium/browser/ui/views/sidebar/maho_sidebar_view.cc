@@ -44,6 +44,7 @@
 #include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/contents_container_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
 #include "components/translate/content/browser/content_translate_driver.h"
@@ -51,6 +52,7 @@
 #include "content/public/common/referrer.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/maho_tab_registry.h"
+#include "maho/browser/ui/views/frame/maho_contents_header_view.h"
 #include "maho/browser/ui/views/frame/maho_tab_controlled_banner_overlay.h"
 #include "url/gurl.h"
 #include "ui/base/page_transition_types.h"
@@ -67,7 +69,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/controls/scroll_view.h"
-#include "ui/views/controls/scrollbar/overlay_scroll_bar.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_scroll_bar.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/view_class_properties.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.h"
@@ -79,7 +81,6 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_update_notification_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
@@ -181,9 +182,9 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
   // BuildUi() so the first ApplySidebarBackground() paints the private surface
   // instead of the general branch (SetPrivateAppearance() otherwise arrives a
   // frame later). Presentation-only; the OTR data gate is is_otr_ below.
-  is_private_ = browser_ && browser_->profile() &&
-                 browser_->profile()->IsIncognitoProfile() &&
-                 browser_->profile()->IsPrimaryOTRProfile();
+  is_private_ = browser_ && browser_->GetProfile() &&
+                 browser_->GetProfile()->IsIncognitoProfile() &&
+                 browser_->GetProfile()->IsPrimaryOTRProfile();
   BuildUi();
   palette_host_.SetApplyCallback(base::BindRepeating(
       &MahoSidebarView::ApplyPaletteSnapshot, base::Unretained(this)));
@@ -200,8 +201,8 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
   // R-11: OTR (Incognito/Guest/system) sidebar reads only the current
   // window's TabStripModel. Never touch MahoCore, SpaceBridge, favorites
   // FFI, ScheduleRefreshAll, or the live-folder warmer for any OTR profile.
-  is_otr_ = browser_ && browser_->profile() &&
-            browser_->profile()->IsOffTheRecord();
+  is_otr_ = browser_ && browser_->GetProfile() &&
+            browser_->GetProfile()->IsOffTheRecord();
   if (!is_otr_) {
     if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
       bridge->AddObserver(this);
@@ -226,7 +227,7 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
 
     // Warm the live folder item cache so expanded live folders show children
     // inline immediately, without requiring the user to open the WebUI first.
-    LiveFolderCacheWarmer::WarmCache(browser_->profile());
+    LiveFolderCacheWarmer::WarmCache(browser_->GetProfile());
   } else {
     // R-11: Populate the private rail from the window-local strip only.
     RefreshPrivateSidebar();
@@ -262,7 +263,6 @@ MahoSidebarView::~MahoSidebarView() {
   spaces_view_ = nullptr;
   library_rail_view_ = nullptr;
   top_bar_view_ = nullptr;
-  search_view_ = nullptr;
   favorites_view_ = nullptr;
   tab_list_view_ = nullptr;
   space_header_view_ = nullptr;
@@ -331,10 +331,12 @@ bool MahoSidebarView::ShouldUseOpaqueSidebarBackground() const {
     return true;
   }
   // The Spaces full-viewport overlay is an opaque occluder too; match it so the
-  // docked rail is not a translucent-over-vibrancy mismatch beside it.
+  // docked rail is not a translucent-over-vibrancy mismatch beside it. An
+  // auto-hide sidebar floating over the web contents must be opaque as well,
+  // or the page shows through it.
   if (const auto* container =
           views::AsViewClass<MahoSidebarContainerView>(parent())) {
-    if (container->IsSpacesOverlayVisible()) {
+    if (container->IsSpacesOverlayVisible() || container->IsOverlayVisible()) {
       return true;
     }
   }
@@ -357,15 +359,14 @@ void MahoSidebarView::OnThemeChanged() {
 
   auto model = state_adapter_.BuildViewStateModel(browser_);
   UpdateTopBar(model.top_bar);
-  UpdateSearch(model.search);
   UpdateFavorites(model.favorites);
   UpdateFooter(model.footer);
 }
 
 void MahoSidebarView::OnPaintBackground(gfx::Canvas* canvas) {
-  // Honor any explicitly installed Background (private appearance, or the opaque
-  // docked-rail fill during a library overlay); only themed windows that clear
-  // it via SetBackground(nullptr) fall through to the gradient paint below.
+  // Honor any explicitly installed Background (private appearance); themed
+  // windows clear it via SetBackground(nullptr) and fall through to the gradient
+  // paint below.
   if (GetBackground()) {
     views::View::OnPaintBackground(canvas);
     return;
@@ -387,27 +388,24 @@ void MahoSidebarView::OnPaintBackground(gfx::Canvas* canvas) {
       {radius, radius},  // lower-left
   };
 
-  // Force an opaque themed gradient while a fixed-width overlay (Downloads/
-  // Archive library, or the Spaces full-viewport overlay) is active so the
-  // docked rail matches the opaque overlay content; otherwise keep the native
-  // (translucent) alpha for the glass-frame vibrancy look.
+  // Paint mode and gradient span both come from the palette snapshot itself, so
+  // the docked rail can never disagree with an overlay painting that same
+  // snapshot: `opaque` is stamped by the palette host from
+  // ShouldUseOpaqueSidebarBackground() (true on Linux, and while a fixed-width
+  // library overlay or the Spaces overlay is up), and the span is the shared
+  // sidebar-layout token. `browser_bounds` only widens the gradient's anchor box
+  // under the glass frame; the span keeps the tint density identical to the
+  // overlays regardless of window size.
   gfx::Rect browser_bounds = bounds;
   if (shared_browser_glass_active_ && GetWidget()) {
     browser_bounds = views::View::ConvertRectToTarget(
         GetWidget()->GetRootView(), this,
         GetWidget()->GetRootView()->GetLocalBounds());
   }
-#if BUILDFLAG(IS_LINUX)
-  // Linux has no vibrancy behind the shared glass; painting the translucent
-  // surface stops across the extended browser bounds shows the desktop
-  // wallpaper through the whole window. Force the opaque stops on Linux.
-  const bool paint_opaque = ShouldUseOpaqueSidebarBackground();
-#else
-  const bool paint_opaque = palette_host_.opaque();
-#endif
-  PaintMahoSidebarThemedBackground(canvas, palette_host_.palette(), bounds,
-                                   paint_opaque, radii,
-                                   /*gradient_span_dp=*/0, &browser_bounds);
+  const MahoSidebarPalette& palette = palette_host_.palette();
+  PaintMahoSidebarThemedBackground(
+      canvas, palette, bounds, palette.opaque, radii,
+      sidebar_layout::kThemedBackgroundGradientSpanDp, &browser_bounds);
 }
 
 void MahoSidebarView::SetSharedBrowserGlassActive(bool active) {
@@ -451,6 +449,10 @@ void MahoSidebarView::ApplyPaletteSnapshot(
   }
   if (tab_list_view_) {
     tab_list_view_->OnSidebarPaletteChanged(palette);
+  }
+  if (tab_scroll_bar_) {
+    tab_scroll_bar_->SetNeutralColor(palette.neutral_glyph,
+                                     palette.forced_colors);
   }
   SetSidebarSpaceHeaderRowPalette(space_header_view_, palette);
   palette_changed_callbacks_.Notify(palette);
@@ -589,8 +591,6 @@ void MahoSidebarView::BuildUi() {
   top_region->SetBorder(nullptr);
   top_region->SetProperty(views::kMarginsKey, gfx::Insets());
 
-  search_view_ =
-      top_region->AddChildView(std::make_unique<MahoSidebarSearchView>(browser_));
   favorites_view_ =
       top_region->AddChildView(std::make_unique<MahoSidebarFavoritesGridView>(browser_));
   space_header_view_ =
@@ -603,12 +603,15 @@ void MahoSidebarView::BuildUi() {
       views::ScrollView::ScrollBarMode::kDisabled);
   scroll->SetVerticalScrollBarMode(
       views::ScrollView::ScrollBarMode::kEnabled);
-  // Arc-style thin, auto-hiding OVERLAY scrollbar: fades in during scroll and
-  // out when idle, slim rounded thumb, no track chrome, and overlays the
-  // content (reserves no layout width). Scroll extent still derives from the
-  // spacer-based content height, so GetMaxPosition() stays correct.
-  scroll->SetVerticalScrollBar(std::make_unique<views::OverlayScrollBar>(
-      views::ScrollBar::Orientation::kVertical));
+  // Arc-style thin, auto-hiding overlay scrollbar with the macOS pill look:
+  // one fully rounded translucent thumb tinted from MahoSidebarPalette, no
+  // track chrome, overlaying the content (reserves no layout width). Scroll
+  // extent still derives from the spacer-based content height, so
+  // GetMaxPosition() stays correct.
+  auto tab_scroll_bar = std::make_unique<MahoSidebarScrollBar>(
+      views::ScrollBar::Orientation::kVertical);
+  tab_scroll_bar_ = tab_scroll_bar.get();
+  scroll->SetVerticalScrollBar(std::move(tab_scroll_bar));
   scroll->SetDrawOverflowIndicator(false);
   // Use (0, 0) so ScrollView reports preferred height = 0 and accepts whatever
   // height the parent BoxLayout flex assigns. (0, INT_MAX) would make preferred
@@ -645,6 +648,22 @@ void MahoSidebarView::BuildUi() {
   tab_scroll_subscription_ = tab_scroll_view_->AddContentsScrolledCallback(
       base::BindRepeating(&MahoSidebarView::OnTabListScrolled,
                           base::Unretained(this)));
+
+  // A ScrollView layout pass can move the viewport WITHOUT firing the
+  // contents-scrolled callback above: ScrollView::Layout() clamps the offset
+  // through ConstrainScrollToBounds(), which sets bounds / the layer scroll
+  // offset directly and never calls OnScrolled(). After RebuildRows() resizes
+  // the content extent that clamp is exactly what happens, leaving the realized
+  // row window parked off-viewport with only skeleton spacers on screen. This
+  // post-layout hook reports the settled viewport; the tab list re-syncs its
+  // window in a posted task, after its own rows have been laid out.
+  tab_scroll_view_->RegisterPostLayoutCallback(base::BindRepeating(
+      [](base::WeakPtr<MahoSidebarTabListView> tab_list, views::ScrollView*) {
+        if (tab_list) {
+          tab_list->SchedulePostLayoutSync();
+        }
+      },
+      tab_list_view_->GetWeakPtr()));
 
   library_container_ =
       content_host_->AddChildView(std::make_unique<views::View>());
@@ -706,9 +725,6 @@ void MahoSidebarView::BuildUi() {
   top_bar_palette_subscription_ = AddSidebarPaletteChangedCallback(
       base::BindRepeating(&MahoSidebarTopBarView::OnSidebarPaletteChanged,
                           base::Unretained(top_bar_view_)));
-  search_palette_subscription_ = AddSidebarPaletteChangedCallback(
-      base::BindRepeating(&MahoSidebarSearchView::OnSidebarPaletteChanged,
-                          base::Unretained(search_view_)));
   favorites_palette_subscription_ = AddSidebarPaletteChangedCallback(
       base::BindRepeating(&MahoSidebarFavoritesGridView::OnSidebarPaletteChanged,
                           base::Unretained(favorites_view_)));
@@ -839,8 +855,19 @@ void MahoSidebarView::RestoreLastFocusedBodyView() {
 
   last_focused_body_view_tracker_->SetView(nullptr);
 
-  if (search_view_ && search_view_->GetVisible()) {
-    search_view_->FocusVisibleControl();
+  // The sidebar has no address surface; fall back to the active pane's
+  // contents header host button, the keyboard entry point for editing the
+  // address.
+  if (BrowserView* browser_view =
+          BrowserView::GetBrowserViewForBrowser(browser_)) {
+    if (auto* multi_contents_view = browser_view->multi_contents_view()) {
+      if (auto* active_container =
+              multi_contents_view->GetActiveContentsContainerView()) {
+        if (auto* header = active_container->maho_contents_header()) {
+          header->FocusHostButton();
+        }
+      }
+    }
   }
 }
 
@@ -858,7 +885,7 @@ void MahoSidebarView::HandleLibraryCategorySelected(
   if (!library_rail_view_) {
     return;
   }
-  PrefService* prefs = browser_->profile()->GetPrefs();
+  PrefService* prefs = browser_->GetProfile()->GetPrefs();
   const bool use_overlay =
       prefs->GetBoolean(sidebar_prefs::kSpacesFullViewport);
   auto* container = views::AsViewClass<MahoSidebarContainerView>(parent());
@@ -1051,15 +1078,15 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
             SpacesBoardRenderMode::kEmbedded,
             BuildSpacesBoardModel(),
             base::BindRepeating(
-                [](base::WeakPtr<Browser> browser,
+                [](base::WeakPtr<MahoSidebarView> sidebar,
                    const std::string& space_id) {
-                  if (!browser) {
+                  if (!sidebar) {
                     return;
                   }
-                  MahoSidebarView::ActivateSpaceAndTab(browser.get(), space_id);
-
+                  MahoSidebarView::ActivateSpaceAndTab(sidebar->browser_,
+                                                     space_id);
                 },
-                browser_->AsWeakPtr()));
+                weak_factory_.GetWeakPtr()));
         spaces_view_ = library_content_host_->AddChildView(std::move(view));
         spaces_view_->SetVisible(false);
       }
@@ -1187,7 +1214,7 @@ bool MahoSidebarView::ActivateSpaceAndTab(Browser* browser, const std::string& s
         // Implement split-view teardown policy (T5)
         MahoSplitViewController split_controller(browser);
         if (split_controller.IsSplitActive()) {
-          TabStripModel* model = browser->tab_strip_model();
+          TabStripModel* model = browser->GetTabStripModel();
           if (model) {
             int active_index = model->active_index();
             bool target_is_in_split = false;
@@ -1279,7 +1306,14 @@ void MahoSidebarView::RestoreArchivedTabAndActivate(const std::string& tab_id,
 }
 
 void MahoSidebarView::ToggleArchiveMode() {
-  if (current_body_mode_ == MahoSidebarBodyMode::kLibrary) {
+  // Closes only when the Archive itself is what's showing. Keying off library
+  // mode alone would make the shortcut dismiss an open Downloads/Media pane
+  // instead of taking the user to the Archive they asked for.
+  const bool archive_is_showing =
+      current_body_mode_ == MahoSidebarBodyMode::kLibrary &&
+      active_library_category_ ==
+          MahoSidebarLibraryRailView::Category::kArchivedTabs;
+  if (archive_is_showing) {
     SetBodyMode(MahoSidebarBodyMode::kTabs);
   } else {
     OpenLibraryCategory(MahoSidebarLibraryRailView::Category::kArchivedTabs);
@@ -1316,7 +1350,7 @@ void MahoSidebarView::ScheduleRefreshAll() {
 }
 
 void MahoSidebarView::RefreshSpaceThemeForBrowser(Browser* browser) {
-  if (!browser || !browser->profile() || browser->profile()->IsOffTheRecord()) {
+  if (!browser || !browser->GetProfile() || browser->GetProfile()->IsOffTheRecord()) {
     return;
   }
   auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
@@ -1386,10 +1420,9 @@ void MahoSidebarView::RefreshFavoritesSynchronouslyAfterDrop() {
 void MahoSidebarView::RefreshPrivateSidebar() {
   // R-11: Window-local, MahoCore/Space-free rebuild. BuildTabListModel reads
   // only browser_->tab_strip_model() when no v2 FFI tree is cached (which the
-  // private path never populates); BuildSearchModel/BuildTopBarModel read only
-  // the active WebContents. No favorites/folders/footer/library sources.
+  // private path never populates); BuildTopBarModel reads no Space state.
+  // No favorites/folders/footer/library sources.
   UpdateTabList(state_adapter_.BuildTabListModel(browser_));
-  UpdateSearch(state_adapter_.BuildSearchModel(browser_));
   UpdateTopBar(state_adapter_.BuildTopBarModel(browser_));
 }
 
@@ -1485,7 +1518,6 @@ void MahoSidebarView::ApplyViewState(MahoSidebarViewStateModel model) {
   }
 
   UpdateTopBar(model.top_bar);
-  UpdateSearch(model.search);
   UpdateFavorites(model.favorites);
   UpdateTabList(std::move(model.tab_list));
   UpdateFooter(model.footer);
@@ -1591,12 +1623,6 @@ void MahoSidebarView::FinishSpaceSlide() {
 void MahoSidebarView::UpdateTopBar(const MahoSidebarTopBarModel& model) {
   if (top_bar_view_) {
     top_bar_view_->Update(model);
-  }
-}
-
-void MahoSidebarView::UpdateSearch(const MahoSidebarSearchModel& model) {
-  if (search_view_) {
-    search_view_->Update(model);
   }
 }
 
@@ -1708,7 +1734,7 @@ void MahoSidebarView::PositionNowPlayingView() {
 }
 
 TabStripModel* MahoSidebarView::tab_strip_model() const {
-  return browser_ ? browser_->tab_strip_model() : nullptr;
+  return browser_ ? browser_->GetTabStripModel() : nullptr;
 }
 
 void MahoSidebarView::OnTabStripModelChanged(
@@ -1758,16 +1784,12 @@ void MahoSidebarView::OnTabStripModelChanged(
   }
 
   // The fast paths below skip the full RefreshAll (RebuildRows on 870+ rows),
-  // but the search pill and top bar mirror the ACTIVE tab's live state
-  // (URL/host, display mode, back/forward/reload). A plain tab activation —
-  // sidebar row click, Ctrl+Tab, or focusing the other pane of a split
+  // but the top bar follows the ACTIVE tab. A plain tab activation — sidebar
+  // row click, Ctrl+Tab, or focusing the other pane of a split
   // (MultiContentsView::OnWebContentsFocused → ActivateTabAt, kSelectionOnly)
-  // — produces no follow-up event for an idle tab, so without this the pill
-  // keeps showing the previous tab's address (and Copy URL copies it). Both
-  // builders only read the active WebContents (no FFI), so they are cheap
-  // enough for the fast path.
+  // — produces no follow-up event for an idle tab, so refresh it here. The
+  // builder reads no FFI, so it is cheap enough for the fast path.
   auto refresh_active_tab_chrome = [&]() {
-    UpdateSearch(state_adapter_.BuildSearchModel(browser_));
     UpdateTopBar(state_adapter_.BuildTopBarModel(browser_));
   };
 
@@ -1880,9 +1902,9 @@ void MahoSidebarView::OnSplitTabChanged(const SplitTabChange& change) {
 }
 
 void MahoSidebarView::OnTabChangedAt(tabs::TabInterface* tab,
-                                     int index,
                                      TabChangeType change_type) {
-  TabStripModel* strip = browser_ ? browser_->tab_strip_model() : nullptr;
+  TabStripModel* strip = browser_ ? browser_->GetTabStripModel() : nullptr;
+  const int index = strip ? strip->GetIndexOfTab(tab) : TabStripModel::kNoTab;
   if (change_type == TabChangeType::kAll) {
     if (strip && index != strip->active_index() &&
         (!tab_list_view_ || !tab_list_view_->IsTabRowRealizedAt(index))) {
@@ -1971,7 +1993,7 @@ void MahoSidebarView::OnTabPinnedStateChanged(tabs::TabInterface* tab,
                   if (!self->browser_ || !self->tab_list_view_ || !web_contents) {
                     return;
                   }
-                  TabStripModel* model = self->browser_->tab_strip_model();
+                  TabStripModel* model = self->browser_->GetTabStripModel();
                   if (!model) {
                     return;
                   }

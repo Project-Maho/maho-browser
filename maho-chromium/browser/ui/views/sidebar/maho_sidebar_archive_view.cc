@@ -154,10 +154,12 @@ const gfx::Insets kArchiveInsets = gfx::Insets();
 const gfx::Insets kHeaderInsets = gfx::Insets::TLBR(16, 16, 12, 16);
 const gfx::Insets kListInsets = gfx::Insets::TLBR(0, 10, 10, 18);
 
+// Callers pass resolved palette colors; taking ui::ColorId (an int) here
+// silently turned those SkColors into meaningless color ids.
 ui::ImageModel CreateArchivePaneIcon(const gfx::VectorIcon& icon,
-                                     ui::ColorId color_id,
+                                     SkColor color,
                                      int size) {
-  return ui::ImageModel::FromVectorIcon(icon, color_id, size);
+  return ui::ImageModel::FromVectorIcon(icon, color, size);
 }
 
 base::Time ParseArchivedAt(const std::string& date_str) {
@@ -741,8 +743,8 @@ void MahoSidebarArchiveView::SetSidebarPalette(
         kSearchFieldIconSize));
   }
   if (search_field_) {
-    search_field_->SetTextColor(palette_.primary_text);
-    search_field_->set_placeholder_text_color(palette_.secondary_text);
+    search_field_->SetMahoResolvedTextColor(palette_.primary_text);
+    search_field_->SetMahoResolvedPlaceholderTextColor(palette_.secondary_text);
   }
   if (empty_state_view_) {
     static_cast<ArchiveEmptyStateView*>(empty_state_view_.get())
@@ -820,7 +822,7 @@ void MahoSidebarArchiveView::BuildUi() {
   search_field_->SetPreferredSize(gfx::Size(0, kSearchFieldHeight));
   search_field_->SetBackgroundColor(SK_ColorTRANSPARENT);
   search_field_->SetBorder(nullptr);
-  search_field_->SetTextColor(palette_.primary_text);
+  search_field_->SetMahoResolvedTextColor(palette_.primary_text);
   search_field_->SetAccessibleName(u"Search Archive");
   search_layout->SetFlexForView(search_field_, 1);
 

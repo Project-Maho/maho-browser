@@ -51,10 +51,10 @@ size_t ClampMaxVisible(int raw) {
 
 PrefService* GetPrefsFor(BrowserView* browser_view) {
   if (!browser_view || !browser_view->browser() ||
-      !browser_view->browser()->profile()) {
+      !browser_view->browser()->GetProfile()) {
     return nullptr;
   }
-  return browser_view->browser()->profile()->GetPrefs();
+  return browser_view->browser()->GetProfile()->GetPrefs();
 }
 
 bool ReadMruOrderPref(BrowserView* browser_view) {
@@ -107,8 +107,8 @@ MahoCtrlTabSwitcherController::MahoCtrlTabSwitcherController(
 
 MahoCtrlTabSwitcherController::~MahoCtrlTabSwitcherController() {
   if (browser_view_ && browser_view_->browser() &&
-      browser_view_->browser()->tab_strip_model()) {
-    browser_view_->browser()->tab_strip_model()->RemoveObserver(this);
+      browser_view_->browser()->GetTabStripModel()) {
+    browser_view_->browser()->GetTabStripModel()->RemoveObserver(this);
   }
   StopObservingParentWidget();
   RemoveEventMonitor();
@@ -127,7 +127,7 @@ bool MahoCtrlTabSwitcherController::HandleAdvance(bool forward) {
   }
 
   TabStripModel* active_strip =
-      browser_view_->browser() ? browser_view_->browser()->tab_strip_model()
+      browser_view_->browser() ? browser_view_->browser()->GetTabStripModel()
                                 : nullptr;
   const int active_index =
       active_strip ? active_strip->active_index() : TabStripModel::kNoTab;
@@ -432,7 +432,7 @@ void MahoCtrlTabSwitcherController::CommitCurrent() {
     return;
   }
   TabStripModel* strip =
-      view->browser() ? view->browser()->tab_strip_model() : nullptr;
+      view->browser() ? view->browser()->GetTabStripModel() : nullptr;
   if (!strip) {
     return;
   }
@@ -462,8 +462,8 @@ void MahoCtrlTabSwitcherController::CloseOverlay() {
 
 void MahoCtrlTabSwitcherController::Reset() {
   if (browser_view_ && browser_view_->browser() &&
-      browser_view_->browser()->tab_strip_model()) {
-    browser_view_->browser()->tab_strip_model()->RemoveObserver(this);
+      browser_view_->browser()->GetTabStripModel()) {
+    browser_view_->browser()->GetTabStripModel()->RemoveObserver(this);
   }
   RemoveEventMonitor();
   weak_factory_.InvalidateWeakPtrs();

@@ -323,8 +323,8 @@ pub struct HistorySearchResult {
 /// A bookmark entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Bookmark {
-    /// Bookmark ID.
-    pub id: i64,
+    /// Bookmark ID, as stored by maho-core (a string uuid).
+    pub id: String,
     /// Bookmark title.
     pub title: String,
     /// Bookmark URL.
@@ -820,7 +820,7 @@ mod tests {
     #[test]
     fn bookmark_roundtrip() {
         let bm = Bookmark {
-            id: 10,
+            id: "bm-10".into(),
             title: "Docs".into(),
             url: "https://docs.rs".into(),
             folder: Some("Dev".into()),

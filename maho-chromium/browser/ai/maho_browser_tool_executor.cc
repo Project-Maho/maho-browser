@@ -106,6 +106,7 @@ bool ScreenshotCuaApproved(const base::DictValue& arguments) {
 
 std::string FallbackActionClassForToolName(const std::string& tool_name) {
   if (tool_name == "browser_navigate" ||
+      tool_name == "browser_history_back" ||
       tool_name == "browser_wait_for_navigation") {
     return "navigation";
   }
@@ -115,7 +116,8 @@ std::string FallbackActionClassForToolName(const std::string& tool_name) {
   if (tool_name == "browser_accessibility_snapshot" ||
       tool_name == "page_query_selector" || tool_name == "page_get_text" ||
       tool_name == "page_get_attribute" ||
-      tool_name == "page_wait_for_selector") {
+      tool_name == "page_wait_for_selector" ||
+      tool_name == "browser_observe") {
     return "page_read";
   }
   return "element_action";
@@ -127,7 +129,9 @@ MahoBrowserToolExecutor::FallbackTier InferFallbackTier(
   if (RequestsScreenshotCua(tool_name, arguments)) {
     return MahoBrowserToolExecutor::FallbackTier::kScreenshotCua;
   }
-  if (tool_name == "browser_navigate" || tool_name == "browser_key_press") {
+  if (tool_name == "browser_navigate" ||
+      tool_name == "browser_history_back" ||
+      tool_name == "browser_key_press") {
     return MahoBrowserToolExecutor::FallbackTier::kTypedDomainApi;
   }
   if (tool_name == "page_query_selector" || tool_name == "page_get_text" ||
@@ -136,13 +140,15 @@ MahoBrowserToolExecutor::FallbackTier InferFallbackTier(
       tool_name == "browser_wait_for_navigation") {
     return MahoBrowserToolExecutor::FallbackTier::kDomRefLocator;
   }
-  if (tool_name == "browser_accessibility_snapshot") {
+  if (tool_name == "browser_accessibility_snapshot" ||
+      tool_name == "browser_observe") {
     return MahoBrowserToolExecutor::FallbackTier::kAccessibilitySnapshot;
   }
   if (tool_name == "browser_scroll" && !arguments.FindInt("ref").has_value()) {
     return MahoBrowserToolExecutor::FallbackTier::kTypedDomainApi;
   }
-  if (arguments.FindString("selector") || arguments.FindString("ref_id")) {
+  if (arguments.Find("selector") || arguments.Find("css") ||
+      arguments.FindString("ref_id")) {
     return MahoBrowserToolExecutor::FallbackTier::kDomRefLocator;
   }
   return MahoBrowserToolExecutor::FallbackTier::kAccessibilitySnapshot;
@@ -480,7 +486,7 @@ MahoBrowserToolExecutor::GetMailAuthorizationContext() const {
     return delegate ? delegate->GetMailAuthorizationContext() : context;
   }
 
-  PrefService* prefs = browser_->profile()->GetPrefs();
+  PrefService* prefs = browser_->GetProfile()->GetPrefs();
   context.feature_enabled = maho::sidebar_prefs::IsMahoMailEnabled(prefs);
   context.read_allowed = prefs->GetBoolean(maho::ai_prefs::kMailReadAllowed);
   const std::string policy = prefs->GetString(maho::ai_prefs::kApprovalPolicy);
@@ -489,7 +495,7 @@ MahoBrowserToolExecutor::GetMailAuthorizationContext() const {
       : policy == "allow" ? maho::ai::MailGlobalPolicy::kAllow
                           : maho::ai::MailGlobalPolicy::kPrompt;
   maho::MahoMailService* service =
-      maho::MahoMailServiceFactory::GetForProfile(browser_->profile());
+      maho::MahoMailServiceFactory::GetForProfile(browser_->GetProfile());
   if (service) {
     const auto helper_state = service->lifecycle_state();
     context.helper_ready =
@@ -680,6 +686,21 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
 
   std::string resolve_error;
   const int requested_tab_id = arguments.FindInt("tab_id").value_or(0);
+  // Tab-binding contract (parity with the MCP session gate): page mutations
+  // must name their target tab. Without an explicit tab_id the request would
+  // otherwise land on whichever tab the user currently has focused; concurrent
+  // automation sessions must not race into that shared state. Control-plane
+  // asks (browser_request_help) carry no page target and are exempt; read-only
+  // tools keep the active-tab fallback.
+  const bool requires_tab_binding =
+      contract.kind == maho::ai::BrowserActionKind::kAction &&
+      contract.tool_name != "browser_request_help";
+  if (requested_tab_id == 0 && requires_tab_binding) {
+    std::move(callback).Run(BuildBrowserActionErrorResult(
+        std::string(contract.tool_name), kActionFailedError,
+        "Tab binding required for browser action: pass an explicit tab_id"));
+    return;
+  }
   maho::MahoMcpTargetResolution target_resolution =
       delegate->ResolveTabTarget(requested_tab_id);
   std::optional<int> maybe_tab_id;
@@ -835,6 +856,13 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
     return;
   }
 
+  if (tool_name == "browser_observe") {
+    ExecuteBrowserObserve(arguments, tab_id, delegate,
+                          std::move(fallback_decision), contract,
+                          std::move(callback));
+    return;
+  }
+
   if (tool_name == "page_query_selector") {
     const std::string* selector = arguments.FindString("selector");
     if (!selector) {
@@ -973,6 +1001,14 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
   } else if (tool_name == "browser_key_press") {
     action_result = maho::MahoMcpBrowserActionHandler::HandleKeyPress(
         delegate, tab_id, &arguments);
+  } else if (tool_name == "browser_history_back") {
+    action_result = maho::MahoMcpBrowserActionHandler::HandleHistoryBack(
+        delegate, tab_id);
+    if (!action_result.error.has_value()) {
+      browser_action_refs_.clear();
+      browser_action_refs_tab_id_ = 0;
+      browser_action_refs_origin_.clear();
+    }
   } else if (tool_name == "browser_file_upload_select") {
     const std::string* path_str = arguments.FindString("path");
     if (!path_str || path_str->empty()) {
@@ -982,32 +1018,64 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
       std::move(callback).Run(std::move(err));
       return;
     }
-    delegate->SelectFileForPendingChooserAsync(
-        tab_id, *path_str,
-        base::BindOnce(
-            [](base::WeakPtr<MahoBrowserToolExecutor> self, std::string tool,
-               ToolResultCallback cb, BrowserActionFallbackDecision fallback,
-               maho::ai::BrowserActionContract cont, bool success) {
-              if (!success) {
-                base::DictValue result = BuildBrowserActionErrorResult(
-                    tool, kActionFailedError,
-                    "Action failed: file upload could not be dispatched");
-                AttachFallbackDecision(result, fallback);
-                std::move(cb).Run(std::move(result));
-                return;
-              }
-              base::DictValue res;
-              res.Set("file_selected", true);
-              base::DictValue success_dict =
-                  BuildBrowserActionSuccessResult(tool, std::move(res));
-              AttachFallbackDecision(success_dict, fallback);
-              if (self) {
-                self->RecordBrowserActionFallbackSuccess(cont, fallback);
-              }
-              std::move(cb).Run(std::move(success_dict));
-            },
-            weak_factory_.GetWeakPtr(), tool_name, std::move(callback),
-            std::move(fallback_decision), contract));
+
+    const base::Value* selector_val = arguments.Find("selector");
+    if (!selector_val) {
+      selector_val = arguments.Find("css");
+    }
+    const std::string* selector_str = nullptr;
+    if (selector_val) {
+      if (!selector_val->is_string()) {
+        base::DictValue err = BuildBrowserActionErrorResult(
+            tool_name, kInvalidParamsError,
+            "Invalid params: selector must be a string");
+        AttachFallbackDecision(err, fallback_decision);
+        std::move(callback).Run(std::move(err));
+        return;
+      }
+      selector_str = &selector_val->GetString();
+      if (selector_str->empty()) {
+        base::DictValue err = BuildBrowserActionErrorResult(
+            tool_name, kInvalidParamsError,
+            "Invalid params: selector cannot be empty");
+        AttachFallbackDecision(err, fallback_decision);
+        std::move(callback).Run(std::move(err));
+        return;
+      }
+    }
+
+    auto completion_cb = base::BindOnce(
+        [](base::WeakPtr<MahoBrowserToolExecutor> self, std::string tool,
+           ToolResultCallback cb, BrowserActionFallbackDecision fallback,
+           maho::ai::BrowserActionContract cont, bool success) {
+          if (!success) {
+            base::DictValue result = BuildBrowserActionErrorResult(
+                tool, kActionFailedError,
+                "Action failed: file upload could not be dispatched");
+            AttachFallbackDecision(result, fallback);
+            std::move(cb).Run(std::move(result));
+            return;
+          }
+          base::DictValue res;
+          res.Set("file_selected", true);
+          base::DictValue success_dict =
+              BuildBrowserActionSuccessResult(tool, std::move(res));
+          AttachFallbackDecision(success_dict, fallback);
+          if (self) {
+            self->RecordBrowserActionFallbackSuccess(cont, fallback);
+          }
+          std::move(cb).Run(std::move(success_dict));
+        },
+        weak_factory_.GetWeakPtr(), tool_name, std::move(callback),
+        std::move(fallback_decision), contract);
+
+    if (selector_str) {
+      delegate->SelectFileForInputAsync(tab_id, *selector_str, *path_str,
+                                        std::move(completion_cb));
+    } else {
+      delegate->SelectFileForPendingChooserAsync(tab_id, *path_str,
+                                                 std::move(completion_cb));
+    }
     return;
   } else {
     std::move(callback).Run(BuildBrowserActionErrorResult(
@@ -1129,7 +1197,8 @@ void MahoBrowserToolExecutor::ExecuteScreenshotProof(
   delegate->CaptureFullPagePngBase64(
       tab_id,
       base::BindOnce(
-          [](std::string tool_name, ToolResultCallback cb, std::string b64) {
+          [](std::string tool_name, ToolResultCallback cb, std::string b64,
+             std::optional<maho::MahoMcpCaptureMetrics> /*metrics*/) {
             base::DictValue result;
             result.Set("content_type", "image/png");
             result.Set("data", std::move(b64));
@@ -1138,6 +1207,51 @@ void MahoBrowserToolExecutor::ExecuteScreenshotProof(
             std::move(cb).Run(std::move(success));
           },
           tool_name, std::move(callback)));
+}
+
+void MahoBrowserToolExecutor::ExecuteBrowserObserve(
+    const base::DictValue& arguments,
+    ToolResultCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  const auto* contract = maho::ai::FindBrowserActionContract("browser_observe");
+  if (contract) {
+    ExecuteBrowserAction(*contract, arguments, std::move(callback));
+  } else {
+    std::move(callback).Run(BuildErrorResult(
+        "browser_observe", "browser_observe contract is missing."));
+  }
+}
+
+void MahoBrowserToolExecutor::ExecuteBrowserObserve(
+    const base::DictValue& arguments,
+    int tab_id,
+    maho::MahoMcpBrowserDelegate* delegate,
+    BrowserActionFallbackDecision fallback_decision,
+    const maho::ai::BrowserActionContract& contract,
+    ToolResultCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  browser_action_refs_.clear();
+  browser_action_refs_tab_id_ = tab_id;
+  browser_action_refs_origin_ =
+      GetActiveTabOrigin(delegate, tab_id).value_or(std::string());
+
+  delegate->GetAccessibilitySnapshot(tab_id, &browser_action_refs_);
+  std::string page_text = delegate->GetPageText(tab_id);
+
+  base::DictValue result;
+  result.Set("text", std::move(page_text));
+  const std::string* cursor = arguments.FindString("cursor");
+  if (cursor && !cursor->empty()) {
+    result.Set("next_cursor", *cursor);
+  }
+  result.Set("ref_count", static_cast<int>(browser_action_refs_.size()));
+
+  base::DictValue success =
+      BuildBrowserActionSuccessResult("browser_observe", std::move(result));
+  AttachFallbackDecision(success, fallback_decision);
+  RecordBrowserActionFallbackSuccess(contract, fallback_decision);
+  std::move(callback).Run(std::move(success));
 }
 
 void MahoBrowserToolExecutor::OnReadCurrentPageContext(
@@ -1206,13 +1320,13 @@ base::DictValue MahoBrowserToolExecutor::BuildActiveTabResult(Browser* browser) 
   result.Set("tool", "get_active_tab");
   result.Set("context_scope", "active_tab");
 
-  if (!browser || !browser->tab_strip_model()) {
+  if (!browser || !browser->GetTabStripModel()) {
     result.Set("ok", false);
     result.Set("error", "No active browser tab is available.");
     return result;
   }
 
-  content::WebContents* web_contents = browser->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* web_contents = browser->GetTabStripModel()->GetActiveWebContents();
   if (!web_contents) {
     result.Set("ok", false);
     result.Set("error", "No active browser tab is available.");
@@ -1222,8 +1336,8 @@ base::DictValue MahoBrowserToolExecutor::BuildActiveTabResult(Browser* browser) 
   result.Set("ok", true);
   result.Set("title", base::UTF16ToUTF8(web_contents->GetTitle()));
   result.Set("url", web_contents->GetVisibleURL().spec());
-  result.Set("active_index", browser->tab_strip_model()->active_index());
-  result.Set("tab_count", browser->tab_strip_model()->count());
+  result.Set("active_index", browser->GetTabStripModel()->active_index());
+  result.Set("tab_count", browser->GetTabStripModel()->count());
   return result;
 }
 
@@ -1455,10 +1569,10 @@ void MahoBrowserToolExecutor::RecordBrowserActionFallbackSuccess(
 }
 
 content::WebContents* MahoBrowserToolExecutor::GetActiveWebContents() const {
-  if (!browser_ || !browser_->tab_strip_model()) {
+  if (!browser_ || !browser_->GetTabStripModel()) {
     return nullptr;
   }
-  return browser_->tab_strip_model()->GetActiveWebContents();
+  return browser_->GetTabStripModel()->GetActiveWebContents();
 }
 
 maho::MahoMcpBrowserDelegate*

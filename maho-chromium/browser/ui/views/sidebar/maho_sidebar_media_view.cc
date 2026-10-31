@@ -338,6 +338,10 @@ class MediaRowView : public views::View {
     button->SetMaxSize(gfx::Size(0, 32));
     button->SetRequestFocusOnPress(false);
     button->SetAccessibleName(label);
+    // MdTextButton otherwise resolves text from OS-theme ColorIds, and macOS
+    // paints STATE_DISABLED for every button in an inactive window.
+    button->SetEnabledTextColors(palette_.primary_text);
+    button->SetTextColor(views::Button::STATE_DISABLED, palette_.disabled_text);
     action_buttons_.push_back(button);
   }
 
@@ -376,7 +380,8 @@ void MahoSidebarMediaView::SetSidebarPalette(
     const MahoSidebarPalette& palette) {
   palette_ = palette;
   UpdateAppearance();
-  ReloadMedia();
+  // Re-applies the chip palette; also reloads the rows with the new palette.
+  SetActiveFilter(active_filter_);
 }
 
 void MahoSidebarMediaView::BuildUi() {
@@ -510,8 +515,8 @@ void MahoSidebarMediaView::UpdateAppearance() {
         vector_icons::kSearchIcon, palette_.secondary_text, 14));
   }
   if (search_field_) {
-    search_field_->SetTextColor(palette_.primary_text);
-    search_field_->set_placeholder_text_color(palette_.secondary_text);
+    search_field_->SetMahoResolvedTextColor(palette_.primary_text);
+    search_field_->SetMahoResolvedPlaceholderTextColor(palette_.secondary_text);
   }
   if (empty_state_view_) {
     empty_state_view_->SetEnabledColor(palette_.secondary_text);
@@ -674,11 +679,19 @@ void MahoSidebarMediaView::SetActiveFilter(std::optional<MediaKind> filter) {
 
     for (size_t i = 0; i < filters_container_->children().size(); ++i) {
       auto* button = static_cast<views::MdTextButton*>(filters_container_->children()[i]);
-      if (i == active_idx) {
-        button->SetStyle(ui::ButtonStyle::kProminent);
-      } else {
-        button->SetStyle(ui::ButtonStyle::kText);
-      }
+      const bool active = i == active_idx;
+      button->SetStyle(active ? ui::ButtonStyle::kProminent
+                              : ui::ButtonStyle::kText);
+      // Chip colors come from the Space palette, not the OS theme.
+      button->SetEnabledTextColors(active ? palette_.primary_text
+                                          : palette_.secondary_text);
+      button->SetTextColor(views::Button::STATE_DISABLED,
+                           palette_.disabled_text);
+      button->SetBgColorOverrideDeprecated(
+          active ? std::optional<SkColor>(palette_.row_selected)
+                 : std::nullopt);
+      button->SetStrokeColorOverrideDeprecated(
+          active ? std::optional<SkColor>(palette_.outline) : std::nullopt);
     }
   }
 

@@ -270,6 +270,9 @@ fn parse_eml_bytes(
         raw_size,
         created_at: now.clone(),
         body_fetched_at: Some(now),
+        draft_attachments_json: None,
+        email_references: None,
+        read_receipt: None,
         mdn_requested: None,
     })
 }

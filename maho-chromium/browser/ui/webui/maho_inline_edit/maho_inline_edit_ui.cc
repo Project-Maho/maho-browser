@@ -11,14 +11,14 @@
 #include "maho/browser/ui/webui/maho_inline_edit/maho_inline_edit_handler.h"
 
 MahoInlineEditController::MahoInlineEditController(Browser* browser) {
-  Profile* profile = browser->profile();
+  Profile* profile = browser->GetProfile();
   auto url_loader_factory =
       profile->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess();
 
   content::WebContents* active_wc =
-      browser->tab_strip_model()
-          ? browser->tab_strip_model()->GetActiveWebContents()
+      browser->GetTabStripModel()
+          ? browser->GetTabStripModel()->GetActiveWebContents()
           : nullptr;
   auto token =
       std::make_unique<MahoPrivateContextToken>(browser, active_wc);

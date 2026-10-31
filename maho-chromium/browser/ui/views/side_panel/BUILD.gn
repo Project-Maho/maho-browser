@@ -1,7 +1,12 @@
 # Copyright 2026 Maho Browser. All rights reserved.
 
 source_set("side_panel") {
-  sources = []
+  sources = [
+    "maho_ai_side_panel_coordinator.cc",
+    "maho_ai_side_panel_coordinator.h",
+    "maho_ai_side_panel_web_view.cc",
+    "maho_ai_side_panel_web_view.h",
+  ]
 
   deps = [
     "//base",

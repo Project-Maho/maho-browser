@@ -133,13 +133,15 @@
   },
   "listRequest": {
     "cursor": null,
+    "favoritesOnly": false,
     "kinds": [
       "login",
       "passkey"
     ],
     "limit": 50,
     "provider": "maho_native",
-    "schemaVersion": 1
+    "schemaVersion": 1,
+    "trash": "exclude"
   },
   "passkey": {
     "backupEligible": true,
@@ -219,6 +221,8 @@
   },
   "publicItem": {
     "createdAt": "2026-07-22T00:00:00Z",
+    "favorite": false,
+    "hasNotes": false,
     "id": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6c",
     "itemKind": "login",
     "lastUsedAt": null,
@@ -261,6 +265,8 @@
     "usernameHint": "u***@example.com"
   },
   "publicMetadata": {
+    "favorite": false,
+    "hasNotes": false,
     "itemKind": "login",
     "origins": [
       "https://example.com"
@@ -305,6 +311,7 @@
     "schemaVersion": 1
   },
   "status": {
+    "accountEscrowed": false,
     "agentPolicyDefault": "deny",
     "autoLockMinutes": 15,
     "effectiveProvider": "maho_native",
@@ -346,6 +353,8 @@
     "expectedRevision": 3,
     "id": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6c",
     "publicMetadata": {
+      "favorite": false,
+      "hasNotes": false,
       "itemKind": "login",
       "origins": [
         "https://example.com"

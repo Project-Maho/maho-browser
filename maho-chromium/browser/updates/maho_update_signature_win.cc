@@ -9,6 +9,7 @@
 
 #include "maho/browser/updates/maho_update_signature_win.h"
 
+#include <stdint.h>
 #include <windows.h>
 #include <wintrust.h>
 #include <softpub.h>

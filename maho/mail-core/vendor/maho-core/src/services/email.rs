@@ -3,13 +3,34 @@ use crate::models::attachment::Attachment;
 use crate::models::email::{Email, EmailSummary};
 use rusqlite::params;
 
+/// Interpret existing envelope dates and local database timestamps as UTC instants.
+/// Unknown dates have no instant; date-filtered searches exclude them.
+pub(super) fn email_date_instant(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if let Ok(date) = chrono::DateTime::parse_from_rfc3339(value)
+        .or_else(|_| chrono::DateTime::parse_from_rfc2822(value))
+    {
+        return Some(date.with_timezone(&chrono::Utc));
+    }
+    for format in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S%.f"] {
+        if let Ok(date) = chrono::NaiveDateTime::parse_from_str(value, format) {
+            return Some(date.and_utc());
+        }
+    }
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .ok()?
+        .and_hms_opt(0, 0, 0)
+        .map(|date| date.and_utc())
+}
+
 pub fn row_to_email_summary(row: &rusqlite::Row) -> Result<EmailSummary, rusqlite::Error> {
     Ok(EmailSummary {
         id: row.get("id")?,
         account_id: row.get("account_id")?,
         folder_id: row.get("folder_id")?,
         uid: row.get("uid")?,
-        message_id: row.get("message_id")?,
+        message_id: row
+            .get::<_, Option<String>>("message_id")?
+            .unwrap_or_default(),
         subject: row.get("subject")?,
         from_address: row.get("from_address")?,
         from_name: row.get("from_name")?,
@@ -34,6 +55,7 @@ pub fn list_emails(
                 date, snippet, is_read, is_starred, is_draft, has_attachments
          FROM emails
          WHERE account_id = ?1 AND folder_id = ?2
+           AND (snoozed_until IS NULL OR julianday(snoozed_until) <= julianday('now'))
          ORDER BY uid DESC
          LIMIT ?3 OFFSET ?4",
     )?;
@@ -77,13 +99,62 @@ pub fn list_thread_emails(
             AND (
              message_id IN (SELECT message_id FROM thread)
              OR in_reply_to IN (SELECT message_id FROM thread)
-           )
-         ORDER BY date ASC",
+           )",
     )?;
-    let emails = stmt
+    let mut emails = stmt
         .query_map(params![account_id, message_id], row_to_email_summary)?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(emails)
+    emails.sort_by_cached_key(|email| (email_date_instant(&email.date), email.id.clone()));
+    collapse_folder_copies(conn, emails)
+}
+
+/// Gmail exposes one message under every label folder (INBOX, All Mail,
+/// Important, ...), so the local store holds one row per folder copy. Views
+/// that span folders must show each message once; keep the copy from the
+/// most specific folder so row actions target the folder the user expects.
+pub(crate) fn collapse_folder_copies(
+    conn: &rusqlite::Connection,
+    emails: Vec<EmailSummary>,
+) -> Result<Vec<EmailSummary>, AppError> {
+    let mut folder_rank = std::collections::HashMap::new();
+    let mut stmt = conn.prepare("SELECT id, folder_type FROM folders")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (id, folder_type) = row?;
+        let rank = match folder_type.as_str() {
+            "inbox" => 0,
+            "archive" => 2,
+            "spam" | "trash" => 3,
+            _ => 1,
+        };
+        folder_rank.insert(id, rank);
+    }
+    let rank_of = |email: &EmailSummary| folder_rank.get(&email.folder_id).copied().unwrap_or(1);
+
+    let mut seen: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+    let mut collapsed: Vec<EmailSummary> = Vec::with_capacity(emails.len());
+    for email in emails {
+        if email.message_id.is_empty() {
+            collapsed.push(email);
+            continue;
+        }
+        let key = (email.account_id.clone(), email.message_id.clone());
+        match seen.get(&key) {
+            Some(&index) => {
+                if rank_of(&email) < rank_of(&collapsed[index]) {
+                    collapsed[index] = email;
+                }
+            }
+            None => {
+                seen.insert(key, collapsed.len());
+                collapsed.push(email);
+            }
+        }
+    }
+    Ok(collapsed)
 }
 
 pub fn get_email_from_db(
@@ -95,7 +166,8 @@ pub fn get_email_from_db(
             "SELECT id, account_id, folder_id, uid, message_id, in_reply_to, subject,
                 from_address, from_name, to_addresses, cc_addresses, bcc_addresses,
                 date, snippet, is_read, is_starred, is_draft, has_attachments,
-                body_text, body_html, raw_size, created_at, body_fetched_at, mdn_requested
+                body_text, body_html, raw_size, created_at, body_fetched_at, mdn_requested,
+                draft_attachments_json, email_references, read_receipt
          FROM emails WHERE id = ?1",
             [email_id],
             |row| {
@@ -104,7 +176,9 @@ pub fn get_email_from_db(
                     account_id: row.get("account_id")?,
                     folder_id: row.get("folder_id")?,
                     uid: row.get("uid")?,
-                    message_id: row.get("message_id")?,
+                    message_id: row
+                        .get::<_, Option<String>>("message_id")?
+                        .unwrap_or_default(),
                     in_reply_to: row.get("in_reply_to")?,
                     subject: row.get("subject")?,
                     from_address: row.get("from_address")?,
@@ -123,6 +197,9 @@ pub fn get_email_from_db(
                     raw_size: row.get("raw_size")?,
                     created_at: row.get("created_at")?,
                     body_fetched_at: row.get("body_fetched_at")?,
+                    draft_attachments_json: row.get("draft_attachments_json")?,
+                    email_references: row.get("email_references")?,
+                    read_receipt: row.get("read_receipt")?,
                     mdn_requested: row.get("mdn_requested")?,
                 })
             },
@@ -217,6 +294,8 @@ pub fn mark_read(conn: &rusqlite::Connection, email_id: &str) -> Result<(), AppE
         return Err(AppError::NotFound(format!("Email {email_id} not found")));
     }
     super::folder::update_folder_unread_count(conn, email_id)?;
+    conn.execute("UPDATE folders SET reconciliation_version=reconciliation_version+1
+        WHERE id=(SELECT folder_id FROM emails WHERE id=?1)", [email_id])?;
     Ok(())
 }
 
@@ -226,6 +305,8 @@ pub fn mark_unread(conn: &rusqlite::Connection, email_id: &str) -> Result<(), Ap
         return Err(AppError::NotFound(format!("Email {email_id} not found")));
     }
     super::folder::update_folder_unread_count(conn, email_id)?;
+    conn.execute("UPDATE folders SET reconciliation_version=reconciliation_version+1
+        WHERE id=(SELECT folder_id FROM emails WHERE id=?1)", [email_id])?;
     Ok(())
 }
 
@@ -237,6 +318,8 @@ pub fn toggle_star(conn: &rusqlite::Connection, email_id: &str) -> Result<(), Ap
     if changed == 0 {
         return Err(AppError::NotFound(format!("Email {email_id} not found")));
     }
+    conn.execute("UPDATE folders SET reconciliation_version=reconciliation_version+1
+        WHERE id=(SELECT folder_id FROM emails WHERE id=?1)", [email_id])?;
     Ok(())
 }
 
@@ -275,10 +358,17 @@ pub fn move_email(
         )
         .map_err(|_| AppError::NotFound(format!("Email {email_id} not found")))?;
 
-    conn.execute(
-        "UPDATE emails SET folder_id = ?1 WHERE id = ?2",
+    let moved = conn.execute(
+        "UPDATE emails SET uid = CASE WHEN folder_id = ?1 THEN uid ELSE -rowid END,
+             folder_id = ?1 WHERE id = ?2
+         AND account_id = (SELECT account_id FROM folders WHERE id = ?1)",
         params![target_folder_id, email_id],
     )?;
+    if moved == 0 {
+        return Err(AppError::Validation(
+            "Target folder must belong to the message account".to_string(),
+        ));
+    }
 
     for fid in &[&old_folder_id, &target_folder_id.to_string()] {
         conn.execute(
@@ -302,8 +392,9 @@ pub fn get_emails_needing_body_fetch(
     let mut stmt = conn.prepare(
         "SELECT e.id, f.path, e.uid
          FROM emails e
-         JOIN folders f ON e.folder_id = f.id
+         JOIN folders f ON e.folder_id = f.id AND e.account_id = f.account_id
          WHERE e.account_id = ?1 AND e.body_fetched_at IS NULL
+           AND e.uid BETWEEN 1 AND 4294967295 AND e.is_draft = 0
          ORDER BY e.date DESC
          LIMIT ?2",
     )?;
@@ -418,6 +509,28 @@ mod tests {
         assert_eq!(emails.len(), 2);
         assert_eq!(emails[0].id, "em1");
         assert_eq!(emails[1].id, "em2");
+    }
+
+    #[test]
+    fn test_list_thread_emails_collapses_gmail_label_copies() {
+        let conn = setup_test_db();
+        seed_test_data(&conn);
+        conn.execute(
+            "INSERT INTO folders (id, account_id, name, path, folder_type) VALUES ('allmail', 'acc1', 'All Mail', '[Gmail]/All Mail', 'archive')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO emails (id, account_id, folder_id, uid, message_id, subject, from_address, date, snippet, is_read, is_starred, is_draft, has_attachments)
+             SELECT 'em1-allmail', account_id, 'allmail', 901, message_id, subject, from_address, date, snippet, is_read, is_starred, is_draft, has_attachments FROM emails WHERE id = 'em1'",
+            [],
+        )
+        .unwrap();
+
+        let emails = list_thread_emails(&conn, "acc1", "<msg1@example.com>").unwrap();
+
+        let ids: Vec<&str> = emails.iter().map(|email| email.id.as_str()).collect();
+        assert_eq!(ids, vec!["em1", "em2"]);
     }
 
     #[test]

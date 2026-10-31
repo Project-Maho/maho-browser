@@ -17,12 +17,35 @@ class MahoApplication : Application() {
         super.onCreate()
         val storagePath = File(filesDir, "MahoData").also { it.mkdirs() }.absolutePath
         MahoBridge.appContext = this
-        // Inject the SQLCipher key into the process-wide storage key slot BEFORE any
-        // SqliteStorage::open (both MahoBridge.initialize -> with_storage and, later,
-        // nativeAgentCreateSession). Without this the agent fails with native_error.
-        Trace.beginSection("provisionSqlcipherKey")
-        MahoBridge.provisionSqlcipherKey()
-        Trace.endSection()
+
+        // U06a: hydration runs OFF Main. The SQLCipher key must be injected in
+        // the same serial chain BEFORE any storage open, and dependent sync
+        // setup waits for a Ready publication (never a half-hydrated core).
+        applicationScope.launch {
+            Trace.beginSection("hydrate")
+            try {
+                Trace.beginSection("provisionSqlcipherKey")
+                MahoBridge.provisionSqlcipherKey()
+                Trace.endSection()
+
+                Trace.beginSection("initialize")
+                val ready = try {
+                    MahoBridge.beginHydration(storagePath)
+                } finally {
+                    Trace.endSection()
+                }
+                if (ready) {
+                    Trace.beginSection("sync")
+                    try {
+                        SyncManager.initialize(this@MahoApplication)
+                    } finally {
+                        Trace.endSection()
+                    }
+                }
+            } finally {
+                Trace.endSection()
+            }
+        }
 
         applicationScope.launch {
             Trace.beginSection("provisionAssets")
@@ -32,15 +55,6 @@ class MahoApplication : Application() {
                 Trace.endSection()
             }
         }
-
-        Trace.beginSection("initialize")
-        MahoBridge.initialize(storagePath)
-        Trace.endSection()
-
-        Trace.beginSection("loadState")
-        MahoBridge.loadState()
-        Trace.endSection()
-        SyncManager.initialize(this)
     }
 
     override fun onTrimMemory(level: Int) {

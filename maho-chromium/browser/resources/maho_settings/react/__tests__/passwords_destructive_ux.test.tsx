@@ -77,6 +77,9 @@ function createItem(overrides: Partial<VaultItem> = {}): VaultItem {
     lastUsedAt: null,
     hasTotp: false,
     hasPasskey: false,
+    favorite: false,
+    trashedAt: null,
+    hasNotes: false,
     ...overrides,
   };
 }

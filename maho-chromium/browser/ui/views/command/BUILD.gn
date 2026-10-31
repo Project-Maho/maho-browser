@@ -1,5 +1,7 @@
 # Copyright 2026 Maho Browser. All rights reserved.
 
+import("//testing/test.gni")
+
 source_set("maho_command_overlay") {
   sources = [
     "maho_command_action_handler.cc",
@@ -50,6 +52,9 @@ source_set("maho_command_overlay") {
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_tab_id_helper",
+    # maho::ShowLinkCopiedToast (shared link-copied toast) lives in the
+    # notification overlay source set; maho_command_action_handler.cc calls it.
+    "//maho/browser:maho_theme_support",
     "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
     # maho_mini dep intentionally omitted: adding it creates a dependency
     # cycle (command → maho_mini → chrome/browser/ui → command, because
@@ -107,9 +112,29 @@ source_set("unit_tests") {
   ]
 }
 
+# Runnable binary for the command palette unit tests above. The `unit_tests`
+# source_set is not linked into any upstream test binary, so without this
+# target its tests compile but never run. Same leaf-test pattern as
+# //maho/browser:maho_context_menus_test.
+test("maho_command_overlay_unittests") {
+  sources = [ "//maho/browser/run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":unit_tests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+    "//ui/views:test_support",
+  ]
+}
+
 source_set("interactive_tests") {
   testonly = true
   sources = [
+    "maho_mini_runtime_proof_uitest.cc",
     "maho_ai_popup_lifetime_interactive_uitest.cc",
     "maho_command_incognito_interactive_uitest.cc",
     # TODO(other-session): re-enable once test-only APIs

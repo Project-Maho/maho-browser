@@ -5,6 +5,7 @@ import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {PasswordProviderKind, VaultAgentPolicy} from '../mojo.js';
 import type {SettingValue} from '../mojo.js';
 import type {PaneDefinition} from '../models.js';
+import {VAULT_AUTO_LOCK_OPTIONS} from '../schema/setting_schema.js';
 import {
   ActionButton,
   ManagedSettingRow,
@@ -22,6 +23,8 @@ import {
   createPasswordLoadingState,
   getPasswordProviderBackendValue,
   getPasswordsEnabled,
+  getVaultAutoLockMinutes,
+  getVaultDeviceAuthRequired,
 } from './passwords_model.js';
 import type {
   PasswordSettingsPaneData,
@@ -77,12 +80,18 @@ export function PasswordsPane(
   const [loadState, setLoadState] = useState<PasswordsLoadState<PasswordSettingsPaneData>>(
       createPasswordLoadingState());
   const [passwordsEnabledOverride, setPasswordsEnabledOverride] = useState<boolean | null>(null);
+  const [vaultAutoLockOverride, setVaultAutoLockOverride] = useState<string | null>(null);
+  const [vaultDeviceAuthOverride, setVaultDeviceAuthOverride] = useState<boolean | null>(null);
   const hasLoadedOnceRef = useRef(false);
   const settingsRequestIdRef = useRef(0);
   const passwordsEnabled = passwordsEnabledOverride ?? getPasswordsEnabled(settings);
+  const vaultAutoLockMinutes = vaultAutoLockOverride ?? getVaultAutoLockMinutes(settings);
+  const vaultDeviceAuthRequired = vaultDeviceAuthOverride ?? getVaultDeviceAuthRequired(settings);
 
   useEffect(() => {
     setPasswordsEnabledOverride(null);
+    setVaultAutoLockOverride(null);
+    setVaultDeviceAuthOverride(null);
   }, [settings]);
 
   const loadPasswordSettings: LoadPasswordSettings = useCallback(async (showLoading = true) => {
@@ -136,6 +145,10 @@ export function PasswordsPane(
             loadPasswordSettings={loadPasswordSettings}
             passwordsEnabled={passwordsEnabled}
             setPasswordsEnabledOverride={setPasswordsEnabledOverride}
+            vaultAutoLockMinutes={vaultAutoLockMinutes}
+            vaultDeviceAuthRequired={vaultDeviceAuthRequired}
+            setVaultAutoLockOverride={setVaultAutoLockOverride}
+            setVaultDeviceAuthOverride={setVaultDeviceAuthOverride}
             store={store}
           />
           <ImportPasswordsSection
@@ -153,11 +166,17 @@ type PasswordSettingsCardProps = {
   readonly loadPasswordSettings: LoadPasswordSettings;
   readonly passwordsEnabled: boolean;
   readonly setPasswordsEnabledOverride: (value: boolean) => void;
+  readonly vaultAutoLockMinutes: string;
+  readonly vaultDeviceAuthRequired: boolean;
+  readonly setVaultAutoLockOverride: (value: string) => void;
+  readonly setVaultDeviceAuthOverride: (value: boolean) => void;
   readonly store: MahoSettingsStore;
 };
 
 function PasswordSettingsCard(
-    {data, loadPasswordSettings, passwordsEnabled, setPasswordsEnabledOverride, store}:
+    {data, loadPasswordSettings, passwordsEnabled, setPasswordsEnabledOverride,
+     vaultAutoLockMinutes, vaultDeviceAuthRequired, setVaultAutoLockOverride,
+     setVaultDeviceAuthOverride, store}:
         PasswordSettingsCardProps) {
   const handler = store.getHandler();
 
@@ -197,6 +216,37 @@ function PasswordSettingsCard(
             const success = await store.commitSettingValue('autofill.password_provider', nextValue);
             if (success) {
               void loadPasswordSettings(false);
+            }
+          }}
+        />
+      </ManagedSettingRow>
+      <ManagedSettingRow
+        description="Lock the Vault automatically after this much inactivity."
+        title="Lock Maho Vault">
+        <SelectShell<string>
+          ariaLabel="Lock Maho Vault after"
+          options={[...VAULT_AUTO_LOCK_OPTIONS]}
+          value={vaultAutoLockMinutes}
+          onChange={async nextValue => {
+            const success = await store.commitSettingValue(
+                'autofill.vault_auto_lock_minutes', nextValue);
+            if (success) {
+              setVaultAutoLockOverride(nextValue);
+            }
+          }}
+        />
+      </ManagedSettingRow>
+      <ManagedSettingRow
+        description="Ask for Touch ID (or your device passcode) before filling, copying, or changing saved passwords."
+        title="Require device authentication">
+        <Toggle
+          enabled={vaultDeviceAuthRequired}
+          label="Require device authentication"
+          onToggle={async nextEnabled => {
+            const success = await store.commitSettingValue(
+                'autofill.vault_require_device_auth', nextEnabled ? 'true' : 'false');
+            if (success) {
+              setVaultDeviceAuthOverride(nextEnabled);
             }
           }}
         />

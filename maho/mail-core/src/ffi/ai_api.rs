@@ -867,7 +867,10 @@ pub(crate) struct CancellationGuard {
 
 impl Drop for CancellationGuard {
     fn drop(&mut self) {
-        let mut cancellations = get_cancellations().lock().unwrap();
+        let mut cancellations = match get_cancellations().lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
         if let Some(stored) = cancellations.get(&self.key) {
             if Arc::ptr_eq(stored, &self.token) {
                 cancellations.remove(&self.key);
@@ -1255,6 +1258,7 @@ async fn natural_language_search_impl(
                 query: keywords,
                 account_id: request.account_id,
                 folder_id: request.folder_id,
+                mailbox: None,
                 limit: Some(50),
                 offset: Some(0),
                 from: None,
@@ -1778,7 +1782,10 @@ async fn send_agent_message_impl(
 
     let cancel_token = Arc::new(AtomicBool::new(false));
     {
-        let mut cancellations = get_cancellations().lock().unwrap();
+        let mut cancellations = match get_cancellations().lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
         cancellations.insert(
             (account_id.clone(), session_id.clone()),
             cancel_token.clone(),
@@ -2170,7 +2177,10 @@ fn cancel_agent_message_impl(ctx: &AppCtx, account_id: String, session_id: Strin
         )));
     }
 
-    let cancellations = get_cancellations().lock().unwrap();
+    let cancellations = match get_cancellations().lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
     if let Some(token) = cancellations.get(&(account_id, session_id)) {
         token.store(true, Ordering::Relaxed);
     }
@@ -2182,6 +2192,16 @@ async fn get_auto_draft_for_email_impl(
     account_id: String,
     email_id: String,
 ) -> Result<Option<AutoDraft>> {
+    let (subject, from, body) = {
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        match require_email_owned(&db, &account_id, &email_id) {
+            Ok(t) => t,
+            Err(_) => return Ok(None),
+        }
+    };
     let existing: Option<AutoDraft> = {
         let db = ctx
             .pool
@@ -2214,16 +2234,6 @@ async fn get_auto_draft_for_email_impl(
         }
     }
 
-    let (subject, from, body) = {
-        let db = ctx
-            .pool
-            .get()
-            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-        match require_email_owned(&db, &account_id, &email_id) {
-            Ok(t) => t,
-            Err(_) => return Ok(None),
-        }
-    };
     let body_capped = cap_text(&body, MAX_REPLY_BODY_CHARS);
 
     let context = format!("From: {}\nSubject: {}\n\n{}", from, subject, body_capped);
@@ -2806,6 +2816,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn auto_draft_cache_ownership_callback() {
+        use std::ffi::{c_void, CStr};
+        use std::sync::atomic::AtomicPtr;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        unsafe extern "C" fn capture(ok: bool, json: *const c_char, data: *mut c_void) {
+            // The callback owns the sender, including if the receiver times out.
+            let sender = unsafe { Box::from_raw(data.cast::<mpsc::Sender<(bool, Vec<u8>)>>()) };
+            let payload = unsafe { CStr::from_ptr(json) }.to_bytes().to_owned();
+            // A timed-out receiver already fails the test; never panic across FFI.
+            let _ = sender.send((ok, payload));
+        }
+
+        let pool = crate::test_support::pool_with_seeded_data();
+        pool.get().unwrap().execute(
+            "INSERT INTO auto_drafts (id, email_id, draft_content, status, created_at) VALUES ('draft1', 'em1', 'owned-cache-sentinel', 'pending', '2026-09-05')",
+            [],
+        ).unwrap();
+        let ctx = crate::test_support::ctx_arc(pool);
+        let read = |account: &str, email: &str| {
+            let ctx = ctx.clone();
+            let account = account.to_owned();
+            let email = email.to_owned();
+            let (sender, receiver) = mpsc::channel::<(bool, Vec<u8>)>();
+            super::super::read_api::spawn_read_task(
+                crate::runtime::runtime().unwrap(),
+                capture,
+                AtomicPtr::new(Box::into_raw(Box::new(sender)).cast()),
+                Box::pin(async move {
+                    let result = get_auto_draft_for_email_impl(&ctx, account, email).await?;
+                    serde_json::to_string(&result).map_err(MailFfiError::from)
+                }),
+            );
+            let (ok, payload) = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            let payload = String::from_utf8(payload).unwrap();
+            assert!(ok, "{payload}");
+            serde_json::from_str::<serde_json::Value>(&payload).unwrap()
+        };
+        assert_eq!(read("acc2", "em1"), serde_json::Value::Null);
+        assert_eq!(read("acc1", "em1")["draft_content"], "owned-cache-sentinel");
+        assert_eq!(read("acc2", "em2"), serde_json::Value::Null);
+        for status in ["accepted", "dismissed"] {
+            update_auto_draft_status_impl(&ctx, "draft1".into(), status.into()).unwrap();
+            assert_eq!(read("acc1", "em1"), serde_json::Value::Null);
+        }
+    }
+
+    #[test]
     fn test_normalize_category() {
         assert_eq!(
             normalize_category("important"),
@@ -2937,6 +2996,24 @@ mod tests {
         );
 
         set_browser_ai_keys(HashMap::new());
+    }
+
+    #[test]
+    fn test_cancellation_guard_drop_recovers_from_poison() {
+        let _ = std::panic::catch_unwind(|| {
+            let _lock = get_cancellations().lock().unwrap();
+            panic!("poisoning mutex for test");
+        });
+        assert!(get_cancellations().is_poisoned());
+
+        let res = std::panic::catch_unwind(|| {
+            let guard = CancellationGuard {
+                key: ("acc_1".to_string(), "sess_1".to_string()),
+                token: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            };
+            drop(guard);
+        });
+        assert!(res.is_ok(), "CancellationGuard::drop must not panic on poisoned mutex");
     }
 }
 

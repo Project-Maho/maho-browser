@@ -24,36 +24,11 @@ constexpr bool RequiresPasswordSetup(bool welcome_completed) {
   return !welcome_completed;
 }
 
-// Whether a profile that already finished onboarding must be sent back through
-// Vault setup because its profile database holds no Vault key material.
-//
-// `kWelcomeCompleted` lives in profile Preferences while the Vault's key
-// material lives in the profile database, so the two can diverge (a reset,
-// replaced, or newly created database under an already-onboarded profile).
-// Onboarding is the only path that initializes the Vault, so without this
-// reconciliation such a profile keeps an uninitialized Vault forever: every
-// native password write is refused for the life of the profile.
-//
-// Only an affirmatively observed uninitialized Vault re-opens setup. A locked
-// Vault is initialized, and an unknown/unreadable state must never be treated
-// as "no key material" because re-running setup would overwrite key material
-// that exists but could not be read.
-constexpr bool RequiresVaultSetupRepair(bool welcome_completed,
-                                        bool vault_is_uninitialized) {
-  return welcome_completed && vault_is_uninitialized;
-}
-
-// Returning-profile repair additionally respects the selected password
-// provider. bitwarden/onepassword/disabled profiles legitimately hold no
-// native Vault, so only a profile that affirmatively selected Maho Native may
-// be re-opened through setup; an unknown/unreadable provider token is never
-// native and is therefore never repair.
-constexpr bool RequiresVaultSetupRepair(bool welcome_completed,
-                                        bool vault_is_uninitialized,
-                                        bool selected_provider_is_native) {
-  return welcome_completed && vault_is_uninitialized &&
-         selected_provider_is_native;
-}
+// The account-escrow model supersedes the Vault-setup repair gate that used to
+// send already-onboarded profiles back through onboarding when their profile
+// database held no Vault key material: the Vault key now follows the signed-in
+// account and is provisioned/escrowed by the sign-in Sync bootstrap, so a
+// diverged profile is repaired by the next sign-in instead of a ceremony.
 
 constexpr bool IsLoginGateActive(bool login_gate_bypassed,
                                  bool has_valid_relay_session,

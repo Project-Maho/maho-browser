@@ -7,7 +7,17 @@ sys_includes = ["stdint.h", "stddef.h", "stdbool.h"]
 style = "both"
 
 [export]
-exclude = []
+# These three ABI types are declared by hand in the Chromium overlay
+# (browser/ai/maho_unified_agent_adapter.h) as a C++ `enum class` and matching
+# structs. Emitting cbindgen's unscoped C versions too collides with those
+# declarations. The overlay stays the single owner; keep values in sync there.
+exclude = [
+    "MahoAgentEventKindV2",
+    "MahoUnifiedAgentEventEnvelope",
+    "MahoUnifiedAgentEventCallback",
+    "maho_agent_register_unified_event_callback",
+    "maho_agent_register_unified_event_callback_leased",
+]
 prefix = ""
 
 [export.mangle]

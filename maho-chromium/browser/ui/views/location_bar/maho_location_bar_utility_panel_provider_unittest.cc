@@ -14,6 +14,7 @@
 #include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 #include "chrome/test/base/test_browser_window.h"
@@ -368,9 +369,11 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 
     TestingProfile profile;
     auto window = std::make_unique<TestBrowserWindow>();
-    Browser::CreateParams params(&profile, true);
+    BrowserWindowCreateParams params(&profile, true);
     params.window = window.release();
-    Browser* browser = Browser::Create(params);
+    std::unique_ptr<Browser> owned_browser =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+    Browser* browser = owned_browser.get();
     ASSERT_NE(browser, nullptr);
 
     std::unique_ptr<content::WebContents> contents =
@@ -415,15 +418,17 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 
     TestingProfile profile;
     auto window = std::make_unique<TestBrowserWindow>();
-    Browser::CreateParams params(&profile, true);
+    BrowserWindowCreateParams params(&profile, true);
     params.window = window.release();
-    Browser* browser = Browser::Create(params);
+    std::unique_ptr<Browser> owned_browser =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+    Browser* browser = owned_browser.get();
     ASSERT_NE(browser, nullptr);
 
     const GURL url("https://example.com/");
     chrome::AddTabAt(browser, GURL("about:blank"), -1, true);
     content::WebContents* contents =
-        browser->tab_strip_model()->GetActiveWebContents();
+        browser->GetTabStripModel()->GetActiveWebContents();
     ASSERT_NE(contents, nullptr);
 
     MahoAdBlockTabHelper::CreateForWebContents(contents);
@@ -452,7 +457,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
     EXPECT_EQ(row.accessible_name,
               u"Block Ads & Trackers — " + row.subtitle);
 
-    browser->tab_strip_model()->CloseAllTabs();
+    browser->GetTabStripModel()->CloseAllTabs();
   }
 
   maho_core_free(core);
@@ -470,9 +475,11 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
     ASSERT_TRUE(maho::core::SetContentBlockingMode(core, 0));
     TestingProfile profile;
     auto window = std::make_unique<TestBrowserWindow>();
-    Browser::CreateParams params(&profile, true);
+    BrowserWindowCreateParams params(&profile, true);
     params.window = window.release();
-    Browser* browser = Browser::Create(params);
+    std::unique_ptr<Browser> owned_browser =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+    Browser* browser = owned_browser.get();
     ASSERT_NE(browser, nullptr);
 
     const GURL url("https://example.com/");
@@ -484,7 +491,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 
     chrome::AddTabAt(browser, GURL("about:blank"), -1, true);
     content::WebContents* contents =
-        browser->tab_strip_model()->GetActiveWebContents();
+        browser->GetTabStripModel()->GetActiveWebContents();
     ASSERT_NE(contents, nullptr);
     content::NavigationSimulator::NavigateAndCommitFromBrowser(contents, url);
 
@@ -501,7 +508,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
     EXPECT_TRUE(row.close_after_activate);
     EXPECT_EQ(row.subtitle, u"0 blocked · Shields off");
 
-    browser->tab_strip_model()->CloseAllTabs();
+    browser->GetTabStripModel()->CloseAllTabs();
   }
 
   maho_core_free(core);
@@ -688,9 +695,11 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
        ExtensionsZoneReadsFromExtensionRegistryNotCoreCache) {
   TestingProfile profile;
   auto window = std::make_unique<TestBrowserWindow>();
-  Browser::CreateParams params(&profile, true);
+  BrowserWindowCreateParams params(&profile, true);
   params.window = window.release();
-  Browser* browser = Browser::Create(params);
+  std::unique_ptr<Browser> owned_browser =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+    Browser* browser = owned_browser.get();
 
   auto* registry = extensions::ExtensionRegistry::Get(&profile);
   ASSERT_TRUE(registry);
@@ -731,9 +740,11 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
        ExtensionsZoneFiltersByShouldDisplayInExtensionSettings) {
   TestingProfile profile;
   auto window = std::make_unique<TestBrowserWindow>();
-  Browser::CreateParams params(&profile, true);
+  BrowserWindowCreateParams params(&profile, true);
   params.window = window.release();
-  Browser* browser = Browser::Create(params);
+  std::unique_ptr<Browser> owned_browser =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+    Browser* browser = owned_browser.get();
 
   auto* registry = extensions::ExtensionRegistry::Get(&profile);
 
@@ -753,9 +764,11 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
        ExtensionsZoneHeaderTrailingActionIsManage) {
   TestingProfile profile;
   auto window = std::make_unique<TestBrowserWindow>();
-  Browser::CreateParams params(&profile, true);
+  BrowserWindowCreateParams params(&profile, true);
   params.window = window.release();
-  Browser* browser = Browser::Create(params);
+  std::unique_ptr<Browser> owned_browser =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+    Browser* browser = owned_browser.get();
 
   MahoUtilityPanelZone zone = internal::BuildExtensionsZone(browser);
   ASSERT_TRUE(zone.header_trailing_action.has_value());
@@ -766,18 +779,51 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
   // Add a dummy tab first
   chrome::AddTabAt(browser, GURL("about:blank"), -1, true);
 
-  // Verify it navigates to the extensions settings URL
   zone.header_trailing_action->callback.Run();
 
-  EXPECT_EQ(browser->tab_strip_model()->count(), 2);
-  EXPECT_EQ(browser->tab_strip_model()
+  EXPECT_EQ(browser->GetTabStripModel()->count(), 2);
+  EXPECT_EQ(browser->GetTabStripModel()
                 ->GetActiveWebContents()
                 ->GetVisibleURL()
                 .spec(),
-            "chrome://maho-settings/?pane=extensions");
+            "chrome://extensions/");
 
   // Close all tabs before browser destruction to avoid crash
-  browser->tab_strip_model()->CloseAllTabs();
+  browser->GetTabStripModel()->CloseAllTabs();
+}
+
+TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
+       ExtensionsZonePinActionPersistsToolbarVisibility) {
+  TestingProfile profile;
+  auto window = std::make_unique<TestBrowserWindow>();
+  BrowserWindowCreateParams params(&profile, true);
+  params.window = window.release();
+  std::unique_ptr<Browser> owned_browser =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+    Browser* browser = owned_browser.get();
+
+  auto* registry = extensions::ExtensionRegistry::Get(&profile);
+  ASSERT_TRUE(registry);
+  auto extension =
+      extensions::ExtensionBuilder("Alpha").SetID("alpha_id").Build();
+  registry->AddEnabled(extension);
+
+  auto* toolbar_model = ToolbarActionsModel::Get(&profile);
+  ASSERT_TRUE(toolbar_model);
+
+  MahoUtilityPanelZone zone = internal::BuildExtensionsZone(browser);
+  ASSERT_EQ(zone.items.size(), 1u);
+  EXPECT_FALSE(zone.items[0].is_pinned);
+  EXPECT_TRUE(zone.items[0].pin_enabled);
+  ASSERT_TRUE(zone.items[0].pin_callback);
+
+  zone.items[0].pin_callback.Run(true);
+
+  EXPECT_TRUE(toolbar_model->IsActionPinned("alpha_id"));
+  EXPECT_TRUE(
+      internal::BuildExtensionsZone(browser).items[0].is_pinned);
+
+  browser->GetTabStripModel()->CloseAllTabs();
 }
 
 TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
@@ -790,9 +836,11 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
     ASSERT_TRUE(maho::core::SetContentBlockingMode(core, 0));
     TestingProfile profile;
     auto window = std::make_unique<TestBrowserWindow>();
-    Browser::CreateParams params(&profile, true);
+    BrowserWindowCreateParams params(&profile, true);
     params.window = window.release();
-    Browser* browser = Browser::Create(params);
+    std::unique_ptr<Browser> owned_browser =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+    Browser* browser = owned_browser.get();
     ASSERT_NE(browser, nullptr);
 
     const GURL captured_url("https://captured.example/");
@@ -834,9 +882,11 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
     ASSERT_TRUE(maho::core::SetContentBlockingMode(core, 0));
     TestingProfile profile;
     auto window = std::make_unique<TestBrowserWindow>();
-    Browser::CreateParams params(&profile, true);
+    BrowserWindowCreateParams params(&profile, true);
     params.window = window.release();
-    Browser* browser = Browser::Create(params);
+    std::unique_ptr<Browser> owned_browser =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+    Browser* browser = owned_browser.get();
     ASSERT_NE(browser, nullptr);
 
     std::unique_ptr<content::WebContents> captured_contents =
@@ -855,7 +905,7 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
     EXPECT_FALSE(row.callback);
     EXPECT_FALSE(row.anchor_callback);
     EXPECT_FALSE(row.show_disclosure_indicator);
-    browser->tab_strip_model()->CloseAllTabs();
+    browser->GetTabStripModel()->CloseAllTabs();
   }
 
   maho_core_free(core);
@@ -870,9 +920,11 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
     ScopedCoreOverride scoped_core(core);
     TestingProfile profile;
     auto window = std::make_unique<TestBrowserWindow>();
-    Browser::CreateParams params(&profile, true);
+    BrowserWindowCreateParams params(&profile, true);
     params.window = window.release();
-    Browser* browser = Browser::Create(params);
+    std::unique_ptr<Browser> owned_browser =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+    Browser* browser = owned_browser.get();
     ASSERT_NE(browser, nullptr);
     std::unique_ptr<content::WebContents> contents =
         content::WebContentsTester::CreateTestWebContents(&profile, nullptr);

@@ -11,11 +11,28 @@
 #include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/views/frame/test_with_browser_view.h"
+#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
+#include "chrome/browser/autocomplete/chrome_autocomplete_provider_client.h"
+#include "chrome/browser/extensions/extension_action_test_util.h"
+#include "chrome/browser/media/router/media_router_feature.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/search_engines/template_url_service_test_util.h"
+#include "chrome/browser/signin/chrome_signin_client_factory.h"
+#include "chrome/browser/signin/chrome_signin_client_test_util.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/test/base/browser_with_test_window_test.h"
+#include "components/omnibox/browser/autocomplete_classifier.h"
+#include "components/omnibox/browser/autocomplete_controller.h"
+#include "components/omnibox/browser/autocomplete_controller_config.h"
+#include "components/omnibox/browser/test_scheme_classifier.h"
+#include "components/signin/public/base/list_accounts_test_utils.h"
+#include "extensions/browser/load_error_reporter.h"
 #include "chrome/browser/ui/views/passwords/manage_passwords_view.h"
 #include "chrome/browser/ui/views/passwords/password_bubble_view_test_base.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/mock_password_store_interface.h"
 #include "components/prefs/testing_pref_service.h"
@@ -26,6 +43,7 @@
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
 #include "ui/views/test/views_drawing_test_utils.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -91,7 +109,8 @@ class MahoPasswordSaveUpdateViewTest : public PasswordBubbleViewTestBase {
     pending_password_.url = GURL("https://login.example.test/sign-in");
     pending_password_.signon_realm = "https://login.example.test/";
     pending_password_.username_value = u"maho-user";
-    pending_password_.password_value = u"secret";
+    pending_password_.password_value =
+        password_manager::PasswordString(std::u16string(u"secret"));
 
     ON_CALL(*model_delegate_mock(), GetOrigin)
         .WillByDefault(Return(url::Origin::Create(pending_password_.url)));
@@ -252,17 +271,92 @@ TEST_F(MahoPasswordSaveUpdateViewTest,
   EXPECT_EQ(bubble->GetClassName(), ManagePasswordsView::kViewClassName);
 }
 
+std::unique_ptr<KeyedService> CreateAutocompleteClassifier(
+    content::BrowserContext* context) {
+  Profile* profile = Profile::FromBrowserContext(context);
+  return std::make_unique<AutocompleteClassifier>(
+      std::make_unique<AutocompleteController>(
+          std::make_unique<ChromeAutocompleteProviderClient>(profile),
+          AutocompleteControllerConfig{
+              .provider_types =
+                  AutocompleteClassifier::DefaultOmniboxProviders()}),
+      std::make_unique<TestSchemeClassifier>());
+}
+
+// Canonical real-window test harness for unit tests requiring a real
+// BrowserView and BrowserWidget. Replaces the obsolete upstream
+// chrome/browser/ui/views/frame/test_with_browser_view.h (removed in Chromium
+// commit 9f4cc6c49e001 under Project Bedrock) by overriding
+// CreateBrowserWindow() to return nullptr, allowing Browser::Create() to
+// instantiate a production BrowserView and BrowserWidget. Initializes the
+// omnibox/profile test factories required for BrowserView, and ensures
+// proper tab and window teardown.
+class TestWithBrowserView : public BrowserWithTestWindowTest {
+ public:
+  TestWithBrowserView() {
+    feature_list_.InitAndDisableFeature(media_router::kMediaRouter);
+  }
+  ~TestWithBrowserView() override = default;
+
+  void SetUp() override {
+    BrowserWithTestWindowTest::SetUp();
+    browser_view_ = BrowserView::GetBrowserViewForBrowser(browser());
+  }
+
+  void TearDown() override {
+    if (browser_view_ && browser_view_->browser()) {
+      browser_view_->browser()->GetTabStripModel()->CloseAllTabs();
+    }
+    browser_view_ = nullptr;
+    ASSERT_TRUE(release_browser());
+    BrowserWithTestWindowTest::TearDown();
+  }
+
+  TestingProfile* CreateProfile(const std::string& profile_name) override {
+    TestingProfile* profile =
+        BrowserWithTestWindowTest::CreateProfile(profile_name);
+    TemplateURLServiceFactory::GetInstance()->SetTestingFactory(
+        profile,
+        TemplateURLServiceTestUtil::GetTemplateURLServiceTestingFactory());
+    AutocompleteClassifierFactory::GetInstance()->SetTestingFactory(
+        profile, base::BindRepeating(&CreateAutocompleteClassifier));
+    extensions::LoadErrorReporter::Init(/*enable_noisy_errors=*/false);
+    extensions::extension_action_test_util::CreateToolbarModelForProfile(
+        profile);
+    signin::SetListAccountsResponseHttpNotFound(test_url_loader_factory());
+    return profile;
+  }
+
+  std::unique_ptr<BrowserWindow> CreateBrowserWindow() override {
+    return nullptr;
+  }
+
+  TestingProfile::TestingFactories GetTestingFactories() override {
+    return {TestingProfile::TestingFactory{
+        ChromeSigninClientFactory::GetInstance(),
+        base::BindRepeating(&BuildChromeSigninClientWithURLLoader,
+                            test_url_loader_factory())}};
+  }
+
+  BrowserView* browser_view() { return browser_view_; }
+
+ private:
+  raw_ptr<BrowserView> browser_view_ = nullptr;
+  base::test::ScopedFeatureList feature_list_;
+};
+
 class MahoPasswordShowBubbleDispatchTest : public TestWithBrowserView {
  public:
   void SetUp() override {
     TestWithBrowserView::SetUp();
     AddTab(browser(), GURL("https://login.example.test/sign-in"));
-    web_contents_ = browser()->tab_strip_model()->GetActiveWebContents();
+    web_contents_ = browser()->GetTabStripModel()->GetActiveWebContents();
 
     pending_password_.url = web_contents_->GetLastCommittedURL();
     pending_password_.signon_realm = "https://login.example.test/";
     pending_password_.username_value = u"maho-user";
-    pending_password_.password_value = u"secret";
+    pending_password_.password_value =
+        password_manager::PasswordString(std::u16string(u"secret"));
 
     ON_CALL(model_delegate_, GetWebContents)
         .WillByDefault(Return(web_contents_));
@@ -337,6 +431,19 @@ TEST_F(MahoPasswordShowBubbleDispatchTest,
       PasswordBubbleViewBase::manage_password_bubble();
   ASSERT_TRUE(bubble);
   EXPECT_EQ(bubble->GetClassName(), MahoPasswordSaveUpdateView::kViewClassName);
+}
+
+TEST_F(MahoPasswordShowBubbleDispatchTest,
+       ShowBubbleSuppressesPromptWhenNativeWritesDisabled) {
+  TestingPrefServiceSimple local_state;
+  RegisterLocalStatePrefs(local_state.registry());
+  local_state.SetBoolean(prefs::kMahoNativePasswordWriteEnabled, false);
+  ScopedNativePasswordWritePrefsForTesting scoped_prefs(&local_state);
+
+  PasswordBubbleViewBase::ShowBubble(web_contents_,
+                                     LocationBarBubbleDelegateView::AUTOMATIC);
+
+  EXPECT_EQ(PasswordBubbleViewBase::manage_password_bubble(), nullptr);
 }
 
 TEST_F(MahoPasswordSaveUpdateViewTest,
@@ -416,7 +523,8 @@ TEST_F(MahoPasswordSaveUpdateViewTest, BuildsModernCredentialCardAndControls) {
 }
 
 TEST_F(MahoPasswordSaveUpdateViewTest, PasswordMaskDoesNotLeakSecretLength) {
-  pending_password_.password_value = u"this-is-a-much-longer-password";
+  pending_password_.password_value = password_manager::PasswordString(
+      std::u16string(u"this-is-a-much-longer-password"));
   CreateViewAndShow();
 
   EXPECT_EQ(view_->password_label_for_testing()->GetText(), u"••••••••");
@@ -424,6 +532,9 @@ TEST_F(MahoPasswordSaveUpdateViewTest, PasswordMaskDoesNotLeakSecretLength) {
 
 TEST_F(MahoPasswordSaveUpdateViewTest,
        PasswordRevealRequiresExplicitActionAndCanBeHiddenAgain) {
+  const std::u16string expected_password = u"s\u00e9cret\U0001f512\u4e2d";
+  pending_password_.password_value =
+      password_manager::PasswordString(std::u16string(expected_password));
   CreateViewAndShow();
 
   ASSERT_TRUE(view_->password_reveal_button_for_testing());
@@ -434,7 +545,9 @@ TEST_F(MahoPasswordSaveUpdateViewTest,
       view_->password_reveal_button_for_testing());
 
   EXPECT_TRUE(view_->password_revealed_for_testing());
-  EXPECT_EQ(view_->password_label_for_testing()->GetText(), u"secret");
+  EXPECT_EQ(view_->password_label_for_testing()->GetText(), expected_password);
+  EXPECT_EQ(view_->password_label_for_testing()->GetText().size(),
+            expected_password.size());
   EXPECT_EQ(view_->password_reveal_button_for_testing()->GetText(), u"Hide");
   EXPECT_EQ(view_->password_label_for_testing()
                 ->GetViewAccessibility()
@@ -475,8 +588,10 @@ TEST_F(MahoPasswordSaveUpdateViewTest, PreservesUpstreamUpdateWording) {
 TEST_F(MahoPasswordSaveUpdateViewTest, SaveUsesChromiumCallback) {
   CreateViewAndShow();
 
-  EXPECT_CALL(*model_delegate_mock(), SavePassword(std::u16string(u"maho-user"),
-                                                   std::u16string(u"secret")));
+  EXPECT_CALL(*model_delegate_mock(),
+              SavePassword(std::u16string(u"maho-user"),
+                           password_manager::PasswordString(
+                               std::u16string(u"secret"))));
   views::test::InteractionTestUtilSimulatorViews::PressButton(
       view_->GetOkButton());
 }
@@ -487,8 +602,10 @@ TEST_F(MahoPasswordSaveUpdateViewTest, UpdateUsesChromiumCallback) {
           Return(password_manager::ui::PENDING_PASSWORD_UPDATE_STATE));
   CreateViewAndShow();
 
-  EXPECT_CALL(*model_delegate_mock(), SavePassword(std::u16string(u"maho-user"),
-                                                   std::u16string(u"secret")));
+  EXPECT_CALL(*model_delegate_mock(),
+              SavePassword(std::u16string(u"maho-user"),
+                           password_manager::PasswordString(
+                               std::u16string(u"secret"))));
   views::test::InteractionTestUtilSimulatorViews::PressButton(
       view_->GetOkButton());
 }

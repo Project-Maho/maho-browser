@@ -2,6 +2,7 @@
 #define MAHO_BROWSER_UI_WEBUI_MAHO_AI_MAHO_AI_PAGE_HANDLER_H_
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -19,9 +20,11 @@
 #include "maho/browser/ai/maho_ai_page_context_extractor.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
 #include "maho/browser/ai/maho_ai_runtime_router.h"
+#include "maho/browser/ai/maho_control_activity_service.h"
 #include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/maho_ai_ingress_coordinator.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai_runtime_event_persistence.h"
 #include "maho/browser/ui/webui/maho_routines/maho_routines.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -31,6 +34,7 @@ class PrefRegistrySimple;
 class PrefService;
 class MahoAiVoiceSession;
 class MahoAIPageHandlerTestPeer;
+class MahoAIEventLogPersistence;
 class MahoRoutinesPageHandler;
 
 namespace maho::ai {
@@ -46,7 +50,8 @@ class WebContents;
 }  // namespace content
 
 class MahoAIPageHandler : public maho_ai::mojom::PageHandler,
-                          public maho_routines::mojom::Page {
+                          public maho_routines::mojom::Page,
+                          private maho::ai::MahoControlActivityService::Observer {
  public:
   MahoAIPageHandler(
       mojo::PendingReceiver<maho_ai::mojom::PageHandler> receiver,
@@ -149,10 +154,10 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler,
   void OpenSettings() override;
   void OpenSettingsPane(const std::string& pane_key) override;
   void GetAISettings(GetAISettingsCallback callback) override;
-  void SetAISelection(const std::string& provider_id,
+  void SetDefaultAISelection(const std::string& provider_id,
                       const std::string& model_id,
                       maho_ai::mojom::ReasoningEffort reasoning_effort,
-                      SetAISelectionCallback callback) override;
+                      SetDefaultAISelectionCallback callback) override;
   // Session runtime configuration (plan row-1 plumbing; the CapabilityBroker
   // remains the sole enforcement point). Thin passthrough to the active
   // runtime adapter; Get reports broker defaults (guard / true / false) when
@@ -229,6 +234,9 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler,
   void StartVoiceSession(StartVoiceSessionCallback callback) override;
   void PushAudioChunk(const std::vector<float>& pcm16k) override;
   void StopVoiceSession() override;
+
+  // External control activity feed (Maho CLI / remote MCP client).
+  void WatchControlActivity(WatchControlActivityCallback callback) override;
 
  private:
   friend class MahoAIPageHandlerTestPeer;
@@ -353,13 +361,15 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler,
   // persistence is disabled, or when the newest session has no stored events.
   void AdoptMostRecentPersistedSessionAsActive();
   void PersistEventLog(const std::string& session_id, bool synchronous = false);
+  void PersistEventLogWithReplyForTesting(
+      const std::string& session_id,
+      base::OnceCallback<void(bool)> completed);
   void PersistEventLogForSession(
       const std::string& session_id,
       const std::vector<maho_ai::mojom::RuntimeEventPtr>& log,
       bool synchronous = false);
   std::vector<maho_ai::mojom::RuntimeEventPtr> LoadPersistedEventLog(
-      const std::string& session_id);
-  void OnEventLogSerialized(const std::string& session_id, std::string json);
+      const std::string& session_id, bool* unavailable = nullptr);
   void OnSessionListSerialized(std::vector<std::string> kept_ids,
                                std::string json);
   void ClearPersistedEventLog(const std::string& session_id);
@@ -369,6 +379,17 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler,
 
   mojo::Receiver<maho_ai::mojom::PageHandler> receiver_;
   mojo::Remote<maho_ai::mojom::Page> page_;
+
+  raw_ptr<maho::ai::MahoControlActivityService> control_activity_service_ =
+      nullptr;
+  bool control_activity_watched_ = false;
+  std::string external_controller_session_;
+
+  // maho::ai::MahoControlActivityService::Observer:
+  void OnControlActivityChanged(
+      const maho::ai::ControlActivity& activity) override;
+  std::vector<maho_ai::mojom::ControlActivitySnapshotPtr>
+  BuildControlActivityTimeline();
   std::unique_ptr<MahoPrivateContextToken> token_;
   // The WebUI host (side panel or tab) WebContents. The capability tokens for
   // the untrusted preview/export iframes must bind to THIS WebContents (the
@@ -412,13 +433,21 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler,
   uint64_t event_sequence_ = 0;
   uint32_t tool_call_count_ = 0;
   std::vector<maho_ai::mojom::RuntimeEventPtr> session_event_log_;
+  maho::ai::RuntimeReplayBudget replay_budget_;
   std::vector<maho_ai::mojom::SessionInfoPtr> persisted_sessions_;
+  base::WeakPtr<MahoAIEventLogPersistence> event_log_persistence_;
 
-  std::optional<os_crypt_async::Encryptor> encryptor_;
-  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+  // Test-only reply gate. The closure owns the real serialized result and
+  // original weak commit callback; an unset gate leaves delivery unchanged.
+  base::RepeatingCallback<void(base::OnceClosure)>
+      event_log_reply_gate_for_testing_;
+
+  scoped_refptr<os_crypt_async::Encryptor> encryptor_;
+  void OnOsCryptReady(scoped_refptr<os_crypt_async::Encryptor> encryptor);
 
   PrefChangeRegistrar pref_change_registrar_;
   void OnAISettingsPrefsChanged();
+  void OnRuntimeConfigPrefsChanged();
   maho_ai::mojom::AISettingsInfoPtr BuildAISettingsInfo() const;
 
   // Voice input: forwards final transcripts / errors to the Page remote.
@@ -437,7 +466,6 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler,
 
   base::WeakPtrFactory<MahoAIPageHandler> weak_factory_{this};
   base::WeakPtrFactory<MahoAIPageHandler> session_list_weak_factory_{this};
-  base::WeakPtrFactory<MahoAIPageHandler> event_log_weak_factory_{this};
 };
 
 #endif  // MAHO_BROWSER_UI_WEBUI_MAHO_AI_MAHO_AI_PAGE_HANDLER_H_

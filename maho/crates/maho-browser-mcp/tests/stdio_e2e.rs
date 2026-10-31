@@ -330,7 +330,9 @@ async fn default_frozen_binary_lists_but_refuses_dispatch() {
     let browser = FakeBrowser::start().await;
     // A registry path that cannot exist: the default must fail closed even
     // when no DB has ever been created.
-    let absent_db = std::env::temp_dir().join("maho-gate-e2e-absent").join("maho.db");
+    let absent_db = std::env::temp_dir()
+        .join("maho-gate-e2e-absent")
+        .join("maho.db");
     let binary = env!("CARGO_BIN_EXE_maho-browser-mcp");
     let mut child = tokio::process::Command::new(binary)
         .env("MAHO_MCP_SOCKET_PATH", &browser.path)
@@ -358,7 +360,11 @@ async fn default_frozen_binary_lists_but_refuses_dispatch() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names, ["read_page", "act_page"], "discovery stays available while dispatch is frozen");
+    assert_eq!(
+        names,
+        ["read_page", "act_page"],
+        "discovery stays available while dispatch is frozen"
+    );
 
     for (id, name) in [(3, "read_page"), (4, "act_page")] {
         write_request(
@@ -373,8 +379,7 @@ async fn default_frozen_binary_lists_but_refuses_dispatch() {
         .await;
         let refused = read_response(&mut reader).await;
         assert_eq!(
-            refused["error"]["data"]["status"],
-            "broker_unavailable",
+            refused["error"]["data"]["status"], "broker_unavailable",
             "frozen default must refuse '{name}' fail-closed"
         );
     }

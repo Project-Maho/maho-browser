@@ -127,17 +127,17 @@ class TidyRun {
     }
 
     auto route_res = maho::ai::ResolveMahoAiModelRoute(
-        browser_->profile()->GetPrefs(), maho::ai::MahoAiTask::kTabTidy);
+        browser_->GetProfile()->GetPrefs(), maho::ai::MahoAiTask::kTabTidy);
     if (!route_res.is_ok()) {
       Finish(0, "Tab Tidy model is not configured");
       return;
     }
 
-    auto url_loader_factory = browser_->profile()
+    auto url_loader_factory = browser_->GetProfile()
                                   ->GetDefaultStoragePartition()
                                   ->GetURLLoaderFactoryForBrowserProcess();
     llm_client_ = std::make_unique<MahoAiLlmClient>(
-        browser_->profile()->GetPrefs(),
+        browser_->GetProfile()->GetPrefs(),
         url_loader_factory.get(),
         nullptr,
         /*provider_adapter_v2_enabled=*/false,

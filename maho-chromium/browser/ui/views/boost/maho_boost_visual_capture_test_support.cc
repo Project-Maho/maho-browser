@@ -45,6 +45,14 @@ std::optional<base::Time> FileMtime(const base::FilePath& path) {
 
 }  // namespace
 
+VisualCaptureSpec::VisualCaptureSpec() = default;
+VisualCaptureSpec::VisualCaptureSpec(const VisualCaptureSpec&) = default;
+VisualCaptureSpec& VisualCaptureSpec::operator=(const VisualCaptureSpec&) = default;
+VisualCaptureSpec::~VisualCaptureSpec() = default;
+
+MahoBoostVisualCaptureTestBase::MahoBoostVisualCaptureTestBase() = default;
+MahoBoostVisualCaptureTestBase::~MahoBoostVisualCaptureTestBase() = default;
+
 const std::vector<VisualCaptureSpec>&
 MahoBoostVisualCaptureTestBase::visual_capture_matrix() {
   CHECK(LoadVisualCaptureContract());
@@ -146,14 +154,15 @@ bool MahoBoostVisualCaptureTestBase::LoadVisualCaptureContract() {
     if (const std::string* value = state->FindString("reference")) {
       reference = *value;
     }
-    visual_capture_matrix_.push_back(
-        {.id = *id,
-         .owner_test = *owner_test,
-         .surface = *surface,
-         .size = gfx::Size(*width, *height),
-         .filename = *filename,
-         .reference = std::move(reference),
-         .frame = *frame});
+    VisualCaptureSpec spec;
+    spec.id = *id;
+    spec.owner_test = *owner_test;
+    spec.surface = *surface;
+    spec.size = gfx::Size(*width, *height);
+    spec.filename = *filename;
+    spec.reference = std::move(reference);
+    spec.frame = *frame;
+    visual_capture_matrix_.push_back(std::move(spec));
   }
 
   visual_capture_contract_loaded_ = true;

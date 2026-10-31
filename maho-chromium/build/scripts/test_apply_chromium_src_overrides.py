@@ -1,3 +1,4 @@
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -5,8 +6,14 @@ from pathlib import Path
 from apply_chromium_src_overrides import (
     _CHROMIUM_BRANDING_TARGETS,
     _MAHO_FOCUS_ACCELERATOR_REGISTRATION,
+    _MAHO_SIDEBAR_RAIL_LAYOUT,
+    _MAHO_SIDEBAR_RAIL_LAYOUT_V1,
     REPLACEMENTS,
+    apply_base_patch,
     apply_replacements,
+    base_patch_targets,
+    normalize_peek_open_url_routing,
+    normalize_startup_browser_creator_session_restore,
 )
 
 
@@ -61,6 +68,7 @@ _STARTUP_BROWSER_CREATOR_IMPL_PATH = (
     "chrome/browser/ui/startup/startup_browser_creator_impl.cc"
 )
 _BROWSER_CC_PATH = "chrome/browser/ui/browser.cc"
+_MAIN_MENU_BUILDER_PATH = "chrome/browser/ui/cocoa/main_menu_builder.mm"
 _PERMISSION_PROMPT_FACTORY_PATH = (
     "chrome/browser/ui/views/permissions/permission_prompt_factory.cc"
 )
@@ -90,6 +98,23 @@ _UPSTREAM_RUN_FILE_CHOOSER = (
 
 
 class ApplyChromiumSrcOverridesTest(unittest.TestCase):
+    def test_macos_app_declares_bluetooth_for_hybrid_passkeys(self):
+        import plistlib
+
+        source = Path(
+            Path(__file__).resolve().parents[3],
+            "chromium/src/chrome/app/app-Info.plist",
+        ).read_text(encoding="utf-8")
+        replacements = REPLACEMENTS["chrome/app/app-Info.plist"]
+        for replacement in replacements:
+            if replacement.old in source:
+                source = source.replace(replacement.old, replacement.new, 1)
+            elif replacement.new not in source and not replacement.idempotent:
+                self.fail(f"Missing app Info.plist anchor: {replacement.description}")
+
+        info = plistlib.loads(source.encode("utf-8"))
+        self.assertTrue(info.get("NSBluetoothAlwaysUsageDescription"))
+
     def test_password_fill_browsertest_waits_for_renderer_data(self):
         source = Path(
             Path(__file__).resolve().parents[2],
@@ -155,6 +180,62 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
             changed_again, _ = apply_replacements(
                 target,
                 [replacement],
+                relative_path=_STARTUP_BROWSER_CREATOR_IMPL_PATH,
+            )
+            self.assertFalse(changed_again)
+
+    def test_startup_browser_creator_session_restore_palette_reverted(self):
+        legacy_restore_code = (
+            "    browser = SessionRestore::RestoreSession(profile_, nullptr, restore_options,\n"
+            "                                             tabs);\n"
+            "    if (browser) {\n"
+            "      static std::atomic<bool> g_maho_restore_palette_shown{false};\n"
+            "      if (!g_maho_restore_palette_shown.exchange(true)) {\n"
+            "        ShowMahoColdStartPaletteWhenReady(browser->AsWeakPtr(), 200);\n"
+            "      }\n"
+            "      return browser;\n"
+            "    }\n"
+        )
+        normalized, count = normalize_startup_browser_creator_session_restore(
+            legacy_restore_code
+        )
+        self.assertEqual(count, 1)
+        self.assertNotIn("g_maho_restore_palette_shown", normalized)
+        self.assertIn("return browser;", normalized)
+
+        # Verify idempotence on already-clean text
+        clean_code = (
+            "    browser = SessionRestore::RestoreSession(profile_, nullptr, restore_options,\n"
+            "                                             tabs);\n"
+            "    if (browser) {\n"
+            "      return browser;\n"
+            "    }\n"
+        )
+        normalized_clean, count_clean = (
+            normalize_startup_browser_creator_session_restore(clean_code)
+        )
+        self.assertEqual(count_clean, 0)
+        self.assertEqual(normalized_clean, clean_code)
+
+        # Verify apply_replacements on target file normalizes and does not re-add
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "startup_browser_creator_impl.cc"
+            target.write_text(legacy_restore_code)
+
+            changed, applied = apply_replacements(
+                target,
+                [],
+                relative_path=_STARTUP_BROWSER_CREATOR_IMPL_PATH,
+            )
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertNotIn("g_maho_restore_palette_shown", output)
+            self.assertIn("return browser;", output)
+
+            # Re-running must be a clean no-op
+            changed_again, _ = apply_replacements(
+                target,
+                [],
                 relative_path=_STARTUP_BROWSER_CREATOR_IMPL_PATH,
             )
             self.assertFalse(changed_again)
@@ -527,7 +608,6 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
         repository = Path(__file__).resolve().parents[2]
         workspace = repository.parent
         chromium_src = workspace / "chromium" / "src"
-        chromium_root = chromium_src.parent
         overlay_root = repository / "chromium_src"
         wrapper = overlay_root / (
             "chrome/browser/ui/views/passwords/password_bubble_view_base.cc"
@@ -537,7 +617,7 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
             "password_bubble_view_base.h"
         )
         upstream_fallback = (
-            "src/chrome/browser/ui/views/passwords/password_bubble_view_base.h"
+            "../src/chrome/browser/ui/views/passwords/password_bubble_view_base.h"
         )
         canonical_password_manager_header = Path(
             "components/password_manager/core/browser/password_manager_driver.h"
@@ -553,7 +633,20 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
         overlay_text = (chromium_src / overlay_include).read_text(encoding="utf-8")
         self.assertIn("CreateBubble_ChromiumImpl", overlay_text)
         self.assertIn(f'#include "{upstream_fallback}"', overlay_text)
-        self.assertTrue((chromium_root / upstream_fallback).is_file())
+        self.assertTrue((chromium_src / upstream_fallback).is_file())
+        for relative_path in (
+            "chrome/browser/ui/views/passwords/password_bubble_view_base.h",
+            "chrome/browser/ui/views/passwords/password_bubble_view_base.cc",
+            "chrome/browser/ui/views/autofill/popup/popup_row_view.h",
+            "chrome/browser/ui/views/autofill/popup/popup_row_view.cc",
+        ):
+            with self.subTest(wrapper=relative_path):
+                text = (overlay_root / relative_path).read_text(encoding="utf-8")
+                fallback = f"../src/{relative_path}"
+                self.assertIn(f'#include "{fallback}"', text)
+                self.assertTrue((chromium_src / fallback).is_file())
+                self.assertEqual((chromium_src / fallback).resolve(),
+                                 (chromium_src / relative_path).resolve())
 
         # With no //maho/chromium_src target include root, ordinary canonical
         # password-manager includes select the transformed upstream checkout.
@@ -700,10 +793,15 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             target = Path(tmp_dir) / "toolbar_view.cc"
             target.write_text(source)
+            from apply_chromium_src_overrides import SPLIT_VIEW_REPLACEMENTS
 
+            # The excerpt lacks the ctor/include anchors of the pinned-tree
+            # split hunks, which are covered by MahoToolbarViewArcRegistrationTest.
+            split = SPLIT_VIEW_REPLACEMENTS.get(_TOOLBAR_VIEW_CC_PATH, [])
             changed, _ = apply_replacements(
                 target,
-                REPLACEMENTS[_TOOLBAR_VIEW_CC_PATH],
+                [r for r in REPLACEMENTS[_TOOLBAR_VIEW_CC_PATH]
+                 if r not in split],
                 relative_path=_TOOLBAR_VIEW_CC_PATH,
             )
 
@@ -735,6 +833,134 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
             output = target.read_text()
             self.assertIn("root_ca_layer_.opaque = NO;", output)
             self.assertNotIn("root_ca_layer_.opaque = YES;", output)
+
+    def test_macos_main_menu_drops_the_bookmarks_menu(self):
+        upstream = REPLACEMENTS[_MAIN_MENU_BUILDER_PATH][0].old
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "main_menu_builder.mm"
+            target.write_text(upstream)
+
+            changed, _ = apply_replacements(
+                target,
+                REPLACEMENTS[_MAIN_MENU_BUILDER_PATH],
+                relative_path=_MAIN_MENU_BUILDER_PATH,
+            )
+
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertIn("return nil;", output)
+            self.assertNotIn("IDS_BOOKMARKS_MENU", output)
+            self.assertNotIn("IDC_SHOW_BOOKMARK_MANAGER", output)
+            self.assertNotIn("IDC_BOOKMARK_THIS_TAB", output)
+            self.assertIn("NSMenuItem* BuildBookmarksMenu(", output)
+
+            unchanged, _ = apply_replacements(
+                target,
+                REPLACEMENTS[_MAIN_MENU_BUILDER_PATH],
+                relative_path=_MAIN_MENU_BUILDER_PATH,
+            )
+            self.assertFalse(unchanged)
+
+    def test_macos_linker_driver_aligns_stripped_string_pool(self):
+        path = "build/toolchain/apple/linker_driver.py"
+        replacements = REPLACEMENTS[path]
+
+        upstream = (
+            "class LinkerDriver(object):\n"
+            "    def __init__(self, args):\n"
+            "        self._args = args\n"
+            "\n"
+            "    def run_strip(self, strip_args_string):\n"
+            "        strip_command = list(self._strip_cmd)\n"
+            "        if len(strip_args_string) > 0:\n"
+            "            strip_command += strip_args_string.split(',')\n"
+            "        strip_command.append(self._get_linker_output())\n"
+            "        subprocess.check_call(strip_command)\n"
+            "        return []\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "linker_driver.py"
+            target.write_text(upstream)
+
+            changed, _ = apply_replacements(
+                target,
+                replacements,
+                relative_path=path,
+            )
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertIn("def _ensure_symtab_string_pool_aligned", output)
+            self.assertIn(
+                "_ensure_symtab_string_pool_aligned(self._get_linker_output())",
+                output,
+            )
+            self.assertIn('"--remove-signature"', output)
+            self.assertIn('"-f", "-s", "-"', output)
+
+            # The generated module must stay syntactically valid Python.
+            compile(output, "linker_driver.py", "exec")
+
+            unchanged, _ = apply_replacements(
+                target,
+                replacements,
+                relative_path=path,
+            )
+            self.assertFalse(unchanged)
+
+    def test_macos_bookmark_bridge_is_skipped_when_the_menu_is_absent(self):
+        replacement = next(
+            replacement
+            for replacement in REPLACEMENTS[_APP_CONTROLLER_MM_PATH]
+            if replacement.description.startswith(
+                "Maho: skip the macOS BookmarkMenuBridge setup"
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "app_controller_mac.mm"
+            target.write_text(replacement.old)
+
+            changed, _ = apply_replacements(
+                target,
+                [replacement],
+                relative_path=_APP_CONTROLLER_MM_PATH,
+            )
+
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertIn("if (bookmarkItem) {", output)
+            self.assertIn("CHECK(menu_root_)", output)
+            self.assertIn("bookmarkItem.hidden = hidden;\n  }\n", output)
+            self.assertNotIn(
+                "  _bookmarkMenuBridge = entry.get();\n"
+                "\n"
+                "  // No need to |BuildMenu| here.",
+                output,
+            )
+
+            unchanged, _ = apply_replacements(
+                target,
+                [replacement],
+                relative_path=_APP_CONTROLLER_MM_PATH,
+            )
+            self.assertFalse(unchanged)
+
+            misplaced_target = Path(tmp_dir) / "misplaced_app_controller_mac.mm"
+            misplaced_target.write_text(
+                "  auto& entry = _profileBookmarkMenuBridgeMap[profile->GetPath()];\n"
+                "  _bookmarkMenuBridge = entry.get();\n"
+            )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Missing expected anchor for Maho: skip the macOS BookmarkMenuBridge",
+            ):
+                apply_replacements(
+                    misplaced_target,
+                    [replacement],
+                    relative_path=_APP_CONTROLLER_MM_PATH,
+                )
 
     def test_macos_reopen_activates_welcome_before_creating_browser(self):
         replacements = REPLACEMENTS[_APP_CONTROLLER_MM_PATH]
@@ -946,6 +1172,64 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
             output = target.read_text()
             self.assertNotIn("TranslateBubbleController::From", output)
             self.assertIn("ShowTranslateBubbleResult::kSuccess", output)
+
+    def test_translate_bubble_comment_retargets_from_removed_pill(self):
+        # A tree patched while the sidebar search pill existed still names it
+        # in the suppression comment; the follow-up entry rewrites it once.
+        legacy = (
+            "  // Maho: in Maho's Arc-style layout, translation affordances are surfaced\n"
+            "  // via the sidebar search pill (MahoSidebar" "SearchView) and on-device\n"
+            "  // translation engine. The upstream TranslateBubbleView popup is suppressed\n"
+            "  // so it does not duplicate or overlay the sidebar interface.\n"
+            "  return ShowTranslateBubbleResult::kSuccess;\n"
+        )
+        replacements = [
+            item
+            for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+            if "translate bubble suppression comment" in item.description
+            or "suppress upstream TranslateBubbleView" in item.description
+        ]
+        self.assertEqual(len(replacements), 2)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser_view.cc"
+            target.write_text(legacy)
+            changed, _ = apply_replacements(
+                target, replacements, relative_path=_BROWSER_VIEW_CC_PATH)
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertNotIn("SearchView", output)
+            self.assertIn("MahoContentsHeaderView", output)
+            changed_again, applied = apply_replacements(
+                target, replacements, relative_path=_BROWSER_VIEW_CC_PATH)
+            self.assertFalse(changed_again)
+            self.assertTrue(all(line.startswith("already: ") for line in applied))
+
+    def test_ui_build_strips_retired_search_pill_sources(self):
+        pill = (
+            '      "//maho/browser/ui/views/sidebar/maho_sidebar_'
+            'search_view.cc",\n'
+            '      "//maho/browser/ui/views/sidebar/maho_sidebar_'
+            'search_view.h",\n'
+        )
+        popover = (
+            '      "//maho/browser/ui/views/sidebar/maho_translate_popover_view.cc",\n'
+        )
+        replacement = next(
+            item
+            for item in REPLACEMENTS["chrome/browser/ui/BUILD.gn"]
+            if "retired sidebar search pill" in item.description
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "BUILD.gn"
+            target.write_text("sources = [\n" + pill + popover + "]\n")
+            changed, _ = apply_replacements(target, [replacement])
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertNotIn("search_view", output)
+            self.assertIn(popover, output)
+            changed_again, applied = apply_replacements(target, [replacement])
+            self.assertFalse(changed_again)
+            self.assertEqual(applied, [f"already: {replacement.description}"])
 
     def test_shared_glass_view_is_browser_owned_and_spans_all_three_panes(self):
         replacements = REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
@@ -1645,6 +1929,35 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
                 )
 
 
+    def test_current_tab_prefill_migrates_intermediate_display_policy_form(self):
+        replacements = [
+            item
+            for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+            if item.guard
+            == "visible.is_empty() ? contents->GetLastCommittedURL() : visible;"
+        ]
+        self.assertEqual(len(replacements), 2)
+        intermediate = replacements[1].old
+        self.assertIn("MahoDisplayPolicy::IsInternalBrowserPage(url)", intermediate)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser_view.cc"
+            target.write_text("// prefix\n" + intermediate + "\n// suffix\n")
+
+            changed, _ = apply_replacements(
+                target, replacements, relative_path=_BROWSER_VIEW_CC_PATH
+            )
+
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertIn("/*select_initial_text=*/true);", output)
+            self.assertNotIn("IsInternalBrowserPage", output)
+
+            changed_again, _ = apply_replacements(
+                target, replacements, relative_path=_BROWSER_VIEW_CC_PATH
+            )
+            self.assertFalse(changed_again)
+
+
 class MahoDesktopDefectRegressionTest(unittest.TestCase):
     """Regressions for the 2026-09-14 macOS desktop defect report.
 
@@ -1901,6 +2214,909 @@ class MahoDesktopDefectRegressionTest(unittest.TestCase):
             "bubble_anchor_util::kNoToolbarLeftOffset",
             anchor_output,
         )
+
+    def test_browser_open_url_from_tab_bypasses_context_menu_and_preserves_fallthrough(self):
+        sample = """  struct AtcBypassState {
+    // dummy
+  };
+
+  if (!AtcBypassState::ShouldBypass(this)) {
+    // old logic
+  }
+
+  // If the source is already split
+"""
+        normalized, count = normalize_peek_open_url_routing(sample)
+        self.assertEqual(count, 1)
+        self.assertIn("!params.started_from_context_menu", normalized)
+        self.assertIn("return result;", normalized)
+        # Verify kFallThrough does not unconditional return nullptr
+        self.assertNotIn("std::move(route_after_atc).Run();\n    return nullptr;", normalized)
+
+    def test_render_view_context_menu_open_link_in_split_view_guards_null_and_notab(self):
+        repl = next(
+            (
+                r
+                for r in REPLACEMENTS.get(
+                    "chrome/browser/renderer_context_menu/render_view_context_menu.cc",
+                    [],
+                )
+                if "OpenLinkInSplitView" in r.description
+            ),
+            None,
+        )
+        self.assertIsNotNone(repl)
+        assert repl is not None
+        self.assertIn("if (!new_web_contents)", repl.new)
+        self.assertIn("if (new_tab_index == TabStripModel::kNoTab)", repl.new)
+        self.assertIn("const int post_split_index =", repl.new)
+        self.assertIn("tab_strip_model->ActivateTabAt(post_split_index);", repl.new)
+        # Ensure we never activate with the stale pre-split index
+        self.assertNotIn("tab_strip_model->ActivateTabAt(new_tab_index);", repl.new)
+
+        # Verify replacement applies to upstream and is idempotent
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "render_view_context_menu.cc"
+            target.write_text(repl.old)
+
+            changed, _ = apply_replacements(
+                target,
+                [repl],
+                relative_path="chrome/browser/renderer_context_menu/render_view_context_menu.cc",
+            )
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertIn("if (!new_web_contents)", output)
+            self.assertIn("post_split_index", output)
+
+            # Second application must be idempotent (no change)
+            changed_again, _ = apply_replacements(
+                target,
+                [repl],
+                relative_path="chrome/browser/renderer_context_menu/render_view_context_menu.cc",
+            )
+            self.assertFalse(changed_again)
+
+
+class MahoSidebarFloatingLayoutTest(unittest.TestCase):
+    """An auto-hide sidebar reserves no width but must stay laid out as a
+    floating hover strip, or nothing on screen can receive the hover that
+    reveals it again."""
+
+    _PATH = "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc"
+
+    def _apply_twice(self, source):
+        replacements = [
+            item
+            for item in REPLACEMENTS[self._PATH]
+            if item.new == _MAHO_SIDEBAR_RAIL_LAYOUT
+            or item.old == '#include "ui/views/view_utils.h"\n'
+        ]
+        self.assertEqual(len(replacements), 3)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser_view_tabbed_layout_impl.cc"
+            target.write_text(source)
+            apply_replacements(target, replacements, relative_path=self._PATH)
+            output = target.read_text()
+            changed_again, _ = apply_replacements(
+                target, replacements, relative_path=self._PATH)
+            self.assertFalse(changed_again)
+            return output
+
+    def _assert_floating_layout(self, output):
+        self.assertEqual(output.count("Maho: reserve the leading rail"), 1)
+        self.assertIn("GetFloatingOverlayWidth()", output)
+        self.assertIn(
+            '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"',
+            output)
+
+    def test_pristine_tree_gets_floating_layout(self):
+        output = self._apply_twice(
+            '#include "ui/views/view_utils.h"\n'
+            "void F() {\n"
+            "  bool needs_exclusion = true;\n"
+            "}\n")
+        self._assert_floating_layout(output)
+
+    def test_reserved_only_tree_migrates_to_floating_layout(self):
+        output = self._apply_twice(
+            '#include "ui/views/view_utils.h"\n'
+            "void F() {\n" + _MAHO_SIDEBAR_RAIL_LAYOUT_V1 + "}\n")
+        self._assert_floating_layout(output)
+        self.assertIn(_MAHO_SIDEBAR_RAIL_LAYOUT, output)
+
+
+class MahoContentsHeaderSlotTest(unittest.TestCase):
+    """contents_container_view.{h,cc} are pinned-incompatible, so only
+    SPLIT_VIEW_REPLACEMENTS patch them; the pinned pristine blobs must gain the
+    existing Maho hunks plus the per-pane contents header slot."""
+
+    _REVISION = "ee4bd9e95294a95c855ef51dfa26f0576f192e69"
+    _HEADER = "chrome/browser/ui/views/frame/contents_container_view.h"
+    _SOURCE = "chrome/browser/ui/views/frame/contents_container_view.cc"
+
+    def _pristine(self, relative_path, revision=None):
+        import os
+        import subprocess
+
+        revision = revision or self._REVISION
+        # MAHO_PRISTINE_FIXTURE_DIR/<revision>/<relative_path> holds blobs
+        # fetched from a builder when the local checkout is unavailable.
+        fixture_root = os.environ.get("MAHO_PRISTINE_FIXTURE_DIR")
+        if fixture_root:
+            fixture = Path(fixture_root) / revision / relative_path
+            if fixture.is_file():
+                return fixture.read_text()
+        chromium_src = Path(__file__).resolve().parents[3] / "chromium" / "src"
+        result = subprocess.run(
+            ["git", "-C", str(chromium_src), "show",
+             f"{revision}:{relative_path}"],
+            capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            self.skipTest(f"pinned Chromium blob unavailable: {relative_path}")
+        return result.stdout
+
+    def _apply_twice(self, relative_path, revision=None):
+        from apply_chromium_src_overrides import (
+            SPLIT_VIEW_REPLACEMENTS,
+            is_revision_incompatible_target,
+        )
+
+        revision = revision or self._REVISION
+        self.assertTrue(
+            is_revision_incompatible_target(relative_path, revision))
+        replacements = SPLIT_VIEW_REPLACEMENTS.get(relative_path, [])
+        self.assertTrue(replacements, f"no split replacements for {relative_path}")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / relative_path
+            target.parent.mkdir(parents=True)
+            target.write_text(self._pristine(relative_path, revision))
+            changed, _ = apply_replacements(
+                target, replacements, relative_path=relative_path)
+            self.assertTrue(changed)
+            output = target.read_text()
+            changed_again, applied_again = apply_replacements(
+                target, replacements, relative_path=relative_path)
+            self.assertFalse(changed_again)
+            self.assertTrue(applied_again)
+            self.assertTrue(
+                all(line.startswith("already: ") for line in applied_again),
+                applied_again)
+            return output
+
+    def test_pinned_header_declares_contents_header_slot(self):
+        output = self._apply_twice(self._HEADER)
+        self.assertIn("class MahoContentsHeaderView;", output)
+        self.assertIn(
+            "raw_ptr<maho::MahoContentsHeaderView> maho_contents_header_ = nullptr;",
+            output)
+        self.assertIn(
+            "maho::MahoContentsHeaderView* maho_contents_header() {", output)
+        self.assertIn("void SetMahoAiPanelAdjacent(bool adjacent);", output)
+        self.assertIn("bool maho_ai_panel_adjacent_ = false;", output)
+
+    def test_pinned_source_lays_out_contents_header_slot(self):
+        output = self._apply_twice(self._SOURCE)
+        self.assertIn(
+            '#include "maho/browser/ui/views/frame/maho_contents_header_view.h"',
+            output)
+        self.assertIn("maho_contents_header_ = AddChildView(", output)
+        self.assertLess(
+            output.index("mini_toolbar_ = AddChildView("),
+            output.index("maho_contents_header_ = AddChildView("))
+        self.assertIn("maho::kMahoContentsHeaderHeightDp", output)
+        layout_start = output.index(
+            "  gfx::Rect full_contents_bounds = GetContentsBounds();\n")
+        inset_at = output.index(
+            "full_contents_bounds.Inset(gfx::Insets().set_top(", layout_start)
+        self.assertLess(inset_at, output.index(
+            "ApplyDevToolsContentsResizingStrategy(", layout_start))
+        # Existing Maho hunks for this file stay applied.
+        self.assertIn("constexpr float kContentCornerRadius = 0;", output)
+        self.assertIn("constexpr int kSplitViewContentPadding = 0;", output)
+        self.assertIn("    container_outline_->SetVisible(false);\n", output)
+        self.assertIn("    mini_toolbar_->SetVisible(false);\n", output)
+        self.assertNotIn("UpdateState(is_active, is_highlighted)", output)
+        self.assertIn(
+            "void ContentsContainerView::SetMahoAiPanelAdjacent(bool adjacent) {",
+            output)
+
+    _SET_ACTIVE = (
+        "    if (maho_contents_header_) {\n"
+        "      maho_contents_header_->SetActive(!is_in_split || is_active);\n"
+        "    }\n")
+
+    def _assert_set_active_in_both_branches(self, output):
+        start = output.index("void ContentsContainerView::UpdateBorderAndOverlay(")
+        body = output[start:output.index("\n}\n", start)]
+        self.assertEqual(body.count(self._SET_ACTIVE), 2, body)
+        non_split = body.index("  if (!is_in_split) {\n")
+        split = body.index("  } else {\n", non_split)
+        self.assertLess(non_split, body.index(self._SET_ACTIVE))
+        self.assertLess(body.index(self._SET_ACTIVE), split)
+        self.assertGreater(body.rindex(self._SET_ACTIVE),
+                           body.index("    mini_toolbar_->SetVisible(false);\n"
+                                      "    if (maho_contents_header_)"))
+
+    def test_pinned_source_wires_header_active_state(self):
+        output = self._apply_twice(self._SOURCE)
+        self._assert_set_active_in_both_branches(output)
+
+    def test_second_pinned_source_wires_header_active_state(self):
+        from apply_chromium_src_overrides import _PINNED_CHROMIUM_REVISIONS
+
+        output = self._apply_twice(self._SOURCE, _PINNED_CHROMIUM_REVISIONS[1])
+        self._assert_set_active_in_both_branches(output)
+        self.assertIn("maho_contents_header_ = AddChildView(", output)
+
+    def _apply_split_hunks_once(self, relative_path, text):
+        """Apply this file's SPLIT_VIEW_REPLACEMENTS hunks once to `text` and
+        return the resulting text (no pristine fetch, no revision check)."""
+        from apply_chromium_src_overrides import SPLIT_VIEW_REPLACEMENTS
+
+        replacements = SPLIT_VIEW_REPLACEMENTS.get(relative_path, [])
+        self.assertTrue(replacements, f"no split replacements for {relative_path}")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / relative_path
+            target.parent.mkdir(parents=True)
+            target.write_text(text)
+            apply_replacements(target, replacements, relative_path=relative_path)
+            return target.read_text()
+
+    def test_split_hunks_do_not_duplicate_already_present_set_maho_ai_panel_adjacent_in_source(self):
+        # Regression for the omarchy task-9 build failure: a tree that already
+        # carries ContentsContainerView::SetMahoAiPanelAdjacent at a DIFFERENT
+        # location than this hunk's anchor (an older REPLACEMENTS entry put it
+        # at the end of the file) must not gain a second copy. The definition
+        # is deliberately not adjacent to the anchor, so the hunk's `new` text
+        # is absent and the generic "already applied" check cannot fire; only
+        # the _SPLIT_VIEW_HUNK_GUARDS entry prevents the duplicate. (F2 N22:
+        # the previous variant placed it at the anchor and passed without the
+        # guard.)
+        pristine = self._pristine(self._SOURCE)
+        definition = (
+            "void ContentsContainerView::SetMahoAiPanelAdjacent(bool adjacent) {\n"
+            "  if (maho_ai_panel_adjacent_ == adjacent) {\n"
+            "    return;\n"
+            "  }\n"
+            "  maho_ai_panel_adjacent_ = adjacent;\n"
+            "}\n"
+            "\n")
+        already_present = pristine.replace(
+            "BEGIN_METADATA(ContentsContainerView)\n",
+            definition + "BEGIN_METADATA(ContentsContainerView)\n",
+            1,
+        )
+        signature = "void ContentsContainerView::SetMahoAiPanelAdjacent(bool adjacent) {"
+        self.assertEqual(already_present.count(signature), 1)
+        hunk = self._split_hunk(self._SOURCE, signature + "\n")
+        self.assertIn(hunk.old, already_present)
+        self.assertNotIn(hunk.new, already_present)
+
+        output = self._apply_split_hunks_once(self._SOURCE, already_present)
+        self.assertEqual(output.count(signature), 1, output)
+
+    def test_split_hunks_do_not_duplicate_already_present_set_maho_ai_panel_adjacent_in_header(self):
+        # Same shape for the declaration: present after a different member
+        # than the hunk's anchor, so only the guard prevents a duplicate.
+        pristine = self._pristine(self._HEADER)
+        declaration = "  void SetMahoAiPanelAdjacent(bool adjacent);\n"
+        already_present = pristine.replace(
+            "  void HideCaptureContentsBorder();\n",
+            "  void HideCaptureContentsBorder();\n" + declaration,
+            1,
+        )
+        self.assertEqual(already_present.count(declaration), 1)
+        hunk = self._split_hunk(self._HEADER, declaration)
+        self.assertIn(hunk.old, already_present)
+        self.assertNotIn(hunk.new, already_present)
+
+        output = self._apply_split_hunks_once(self._HEADER, already_present)
+        self.assertEqual(output.count(declaration), 1, output)
+
+    def _split_hunk(self, relative_path, guard):
+        """The SPLIT_VIEW_REPLACEMENTS hunk for `relative_path` guarded by
+        `guard`."""
+        from apply_chromium_src_overrides import SPLIT_VIEW_REPLACEMENTS
+
+        matches = [r for r in SPLIT_VIEW_REPLACEMENTS[relative_path]
+                   if r.guard == guard]
+        self.assertEqual(len(matches), 1, [r.description for r in matches])
+        return matches[0]
+
+    def test_pristine_source_still_gets_exactly_one_set_maho_ai_panel_adjacent(self):
+        output = self._apply_twice(self._SOURCE)
+        self.assertEqual(
+            output.count(
+                "void ContentsContainerView::SetMahoAiPanelAdjacent(bool adjacent) {"),
+            1, output)
+
+    def test_pristine_header_still_gets_exactly_one_set_maho_ai_panel_adjacent(self):
+        output = self._apply_twice(self._HEADER)
+        self.assertEqual(
+            output.count("void SetMahoAiPanelAdjacent(bool adjacent);"), 1, output)
+
+
+# Pinned 72f18f12 excerpts (fetched read-only from omarchy
+# ~/maho-workspace/chromium/src) and the legacy search_view construction block
+# still present in that builder's patched browser_view.cc.
+_BV72_INCLUDE = (
+    "#include \"maho/browser/ui/views/command/maho_command_overlay_controller.h\"\n"
+)
+_BV72_ACCESSOR = (
+    "ToolbarButtonProvider* BrowserView::toolbar_button_provider() {\n"
+    "  return ToolbarButtonProvider::From(browser_);\n"
+    "}\n"
+)
+_BV72_INIT = (
+    "  EnsureFocusOrder();\n"
+    "\n"
+    "  // At this point a ToolbarButtonProvider must have been set. It is set only\n"
+    "  // once per browser instance.\n"
+    "  auto* toolbar_button_provider = ToolbarButtonProvider::From(browser_);\n"
+    "  CHECK(toolbar_button_provider);\n"
+)
+_BV72_DTOR = (
+    "  autofill_bubble_handler_.reset();\n"
+    "\n"
+    "  // These are raw pointers to child views, so they need to be set to null\n"
+)
+_BV_LEGACY_SEARCH_VIEW_INIT = (
+    "  EnsureFocusOrder();\n"
+    "\n"
+    "  if (!maho_toolbar_button_provider_ &&\n"
+    "      !ToolbarButtonProvider::From(browser_.get()) &&\n"
+    "      IsMahoArcLayoutActive()) {\n"
+    "    // Resolve search_view opportunistically; MahoToolbarButtonProvider\n"
+    "    // null-checks it internally and falls back to LastResortAnchor(), so\n"
+    "    // construction must not be gated on a non-null search_view.\n"
+    "    maho::MahoSidebar" "SearchView* search_view = nullptr;\n"
+    "    if (auto* container = static_cast<maho::MahoSidebarContainerView*>(\n"
+    "            maho_sidebar_container_)) {\n"
+    "      if (auto* sidebar =\n"
+    "              static_cast<maho::MahoSidebarView*>(container->sidebar_view())) {\n"
+    "        search_view = sidebar->search_view_" "for_testing();\n"
+    "      }\n"
+    "    }\n"
+    "    maho_toolbar_button_provider_ =\n"
+    "        std::make_unique<maho::MahoToolbarButtonProvider>(\n"
+    "            browser_.get(), this, search_view);\n"
+    "  }\n"
+    "\n"
+    "  // At this point a ToolbarButtonProvider must have been set. It is set only\n"
+    "  // once per browser instance.\n"
+    "  auto* toolbar_button_provider = ToolbarButtonProvider::From(browser_);\n"
+    "  CHECK(toolbar_button_provider);\n"
+)
+_BVH72_FORWARD = (
+    "namespace maho {\n"
+    "class MahoCommandOverlayController;\n"
+    "class MahoSpacesOverlayController;\n"
+    "}  // namespace maho\n"
+)
+_BVH72_MEMBER = (
+    "  raw_ptr<views::View> maho_create_space_blank_view_ = nullptr;\n"
+    "\n"
+    "  std::unique_ptr<maho::MahoCommandOverlayController>\n"
+)
+
+
+class MahoToolbarButtonProviderRegistrationTest(unittest.TestCase):
+    """BrowserView owns the Maho ToolbarButtonProvider in the Arc layout and
+    exposes it through toolbar_button_provider(); upstream ToolbarView keeps
+    the browser's user-data registration."""
+
+    _CC = "chrome/browser/ui/views/frame/browser_view.cc"
+    _H = "chrome/browser/ui/views/frame/browser_view.h"
+
+    def _provider_replacements(self, relative_path):
+        return [
+            r for r in REPLACEMENTS[relative_path]
+            if any(marker in text
+                   for marker in ("maho_toolbar_button_provider",
+                                  "MahoToolbarButtonProvider")
+                   for text in (r.old, r.new))
+        ]
+
+    def _apply_twice(self, relative_path, source):
+        replacements = self._provider_replacements(relative_path)
+        self.assertTrue(replacements, relative_path)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / Path(relative_path).name
+            target.write_text(source)
+            changed, _ = apply_replacements(
+                target, replacements, relative_path=relative_path)
+            self.assertTrue(changed)
+            output = target.read_text()
+            changed_again, applied_again = apply_replacements(
+                target, replacements, relative_path=relative_path)
+            self.assertFalse(changed_again)
+            self.assertTrue(
+                all(line.startswith("already: ") for line in applied_again),
+                applied_again)
+            return output
+
+    def _assert_source(self, output):
+        self.assertIn(
+            '#include "maho/browser/ui/views/sidebar/'
+            'maho_toolbar_button_provider.h"', output)
+        self.assertEqual(1, output.count(
+            "        std::make_unique<maho::MahoToolbarButtonProvider>(\n"
+            "            browser_.get(), this);\n"))
+        self.assertIn(
+            "  if (!maho_toolbar_button_provider_ && IsMahoArcLayoutActive()) {",
+            output)
+        self.assertNotIn("search_view", output)
+        construct_at = output.index("maho_toolbar_button_provider_ =")
+        self.assertLess(construct_at, output.index(
+            "  // At this point a ToolbarButtonProvider must have been set."))
+        self.assertIn(
+            "  auto* toolbar_button_provider =\n"
+            "      BrowserView::toolbar_button_provider();\n", output)
+        self.assertIn(
+            "  if (maho_toolbar_button_provider_) {\n"
+            "    return maho_toolbar_button_provider_.get();\n"
+            "  }\n"
+            "  return ToolbarButtonProvider::From(browser_);\n", output)
+        reset_at = output.index("  maho_toolbar_button_provider_.reset();\n")
+        self.assertLess(
+            output.index("  autofill_bubble_handler_.reset();\n"), reset_at)
+        self.assertLess(reset_at, output.index(
+            "  // These are raw pointers to child views"))
+
+    def test_pinned_source_constructs_and_exposes_maho_provider(self):
+        self._assert_source(self._apply_twice(
+            self._CC,
+            _BV72_INCLUDE + "\n" + _BV72_DTOR + "\n" + _BV72_ACCESSOR
+            + "\n" + _BV72_INIT))
+
+    def test_legacy_search_view_block_migrates(self):
+        self._assert_source(self._apply_twice(
+            self._CC,
+            _BV72_INCLUDE
+            + '#include "maho/browser/ui/views/sidebar/'
+            'maho_toolbar_button_provider.h"\n\n'
+            + _BV72_DTOR + "\n" + _BV72_ACCESSOR + "\n"
+            + _BV_LEGACY_SEARCH_VIEW_INIT))
+
+    def test_pinned_header_owns_maho_provider(self):
+        output = self._apply_twice(self._H, _BVH72_FORWARD + _BVH72_MEMBER)
+        self.assertEqual(1, output.count("class MahoToolbarButtonProvider;"))
+        self.assertLess(output.index("class MahoToolbarButtonProvider;"),
+                        output.index("}  // namespace maho"))
+        self.assertEqual(1, output.count(
+            "  std::unique_ptr<maho::MahoToolbarButtonProvider>\n"
+            "      maho_toolbar_button_provider_;\n"))
+
+
+class MahoBasePatchLayerTest(unittest.TestCase):
+    """Whole-file base patches rebuild a pristine checkout, are idempotent,
+    and reject a file that matches neither pristine nor patched text."""
+
+    _REL = "chrome/browser/example.cc"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        root = Path(self._tmp.name)
+        self.src = root / "src"
+        target = self.src / self._REL
+        target.parent.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(self.src)], check=True)
+        target.write_text("int a = 1;\nint b = 2;\n")
+        subprocess.run(["git", "-C", str(self.src), "add", "."], check=True)
+        target.write_text("int a = 1;\n// Maho\nint b = 2;\n")
+        diff = subprocess.run(
+            ["git", "-C", str(self.src), "diff", "--no-color", "--full-index"],
+            check=True, capture_output=True, text=True).stdout
+        subprocess.run(["git", "-C", str(self.src), "checkout", "-q", "--", "."],
+                       check=True)
+        patches = root / "patches"
+        (patches / self._REL).parent.mkdir(parents=True)
+        (patches / f"{self._REL}.patch").write_text(diff)
+        self.patches = patches
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_applies_once_then_reports_already(self):
+        targets = base_patch_targets(self.patches)
+        self.assertEqual(list(targets), [self._REL])
+        patch = targets[self._REL]
+        self.assertEqual(
+            apply_base_patch(self.src, self._REL, patch, dry_run=False), "patched")
+        self.assertIn("// Maho", (self.src / self._REL).read_text())
+        self.assertEqual(
+            apply_base_patch(self.src, self._REL, patch, dry_run=False), "already")
+
+    def test_drifted_file_is_rejected(self):
+        (self.src / self._REL).write_text("unrelated\n")
+        patch = base_patch_targets(self.patches)[self._REL]
+        with self.assertRaises(RuntimeError):
+            apply_base_patch(self.src, self._REL, patch, dry_run=True)
+
+    def test_main_base_layer_does_not_apply_legacy_anchors(self):
+        import contextlib
+        import io
+        import sys
+        from unittest.mock import patch
+        import apply_chromium_src_overrides as module
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(
+                sys, "argv", ["overrides", "--chromium-src", str(self.src)]))
+            stack.enter_context(patch.object(
+                module, "chromium_revision", return_value="fixture"))
+            stack.enter_context(patch.object(
+                module, "base_patch_dir", return_value=self.patches))
+            stack.enter_context(patch.object(
+                module, "REPLACEMENTS", {"retired/missing.cc": []}))
+            stack.enter_context(patch.object(module, "MAHO_SCHEMA_FILE_COPIES", {}))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            self.assertEqual(module.main(), 0)
+            self.assertIn("// Maho", (self.src / self._REL).read_text())
+            self.assertEqual(module.main(), 0)
+
+
+class MahoContentsHeaderAccessiblePaneTest(unittest.TestCase):
+    """Todo 7 (keyboard/accessibility for the header): the per-pane header
+    must be a keyboard pane, so ContentsContainerView::GetAccessiblePanes()
+    (pinned-incompatible, patched only via SPLIT_VIEW_REPLACEMENTS) has to
+    list it ahead of the WebContents pane when it is visible."""
+
+    _SOURCE = "chrome/browser/ui/views/frame/contents_container_view.cc"
+
+    def _pristine(self, relative_path, revision):
+        import os
+        import subprocess
+
+        fixture_root = os.environ.get("MAHO_PRISTINE_FIXTURE_DIR")
+        if fixture_root:
+            fixture = Path(fixture_root) / revision / relative_path
+            if fixture.is_file():
+                return fixture.read_text()
+        chromium_src = Path(__file__).resolve().parents[3] / "chromium" / "src"
+        result = subprocess.run(
+            ["git", "-C", str(chromium_src), "show",
+             f"{revision}:{relative_path}"],
+            capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            self.skipTest(f"pinned Chromium blob unavailable: {relative_path}")
+        return result.stdout
+
+    def _apply_twice(self, revision):
+        from apply_chromium_src_overrides import (
+            SPLIT_VIEW_REPLACEMENTS,
+            is_revision_incompatible_target,
+        )
+
+        self.assertTrue(
+            is_revision_incompatible_target(self._SOURCE, revision))
+        replacements = SPLIT_VIEW_REPLACEMENTS.get(self._SOURCE, [])
+        self.assertTrue(replacements, f"no split replacements for {self._SOURCE}")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / self._SOURCE
+            target.parent.mkdir(parents=True)
+            target.write_text(self._pristine(self._SOURCE, revision))
+            changed, _ = apply_replacements(
+                target, replacements, relative_path=self._SOURCE)
+            self.assertTrue(changed)
+            output = target.read_text()
+            changed_again, applied_again = apply_replacements(
+                target, replacements, relative_path=self._SOURCE)
+            self.assertFalse(changed_again)
+            self.assertTrue(applied_again)
+            self.assertTrue(
+                all(line.startswith("already: ") for line in applied_again),
+                applied_again)
+            return output
+
+    def _assert_accessible_pane_wired(self, output):
+        # Machine-relevant structure only: the function signature, the
+        # visibility-guarded push, and push ordering. The explanatory
+        # comment's wording is not pinned here (prose is free to change).
+        self.assertIn(
+            "std::vector<views::View*> ContentsContainerView::"
+            "GetAccessiblePanes() {\n"
+            "  std::vector<views::View*> accessible_panes;\n",
+            output)
+        self.assertIn(
+            "  if (maho_contents_header_ && maho_contents_header_->GetVisible()) {\n"
+            "    accessible_panes.push_back(maho_contents_header_);\n"
+            "  }\n",
+            output)
+        # The header pane must be pushed before the WebContents/devtools panes
+        # so F6 reaches header controls ahead of the page.
+        header_push = output.index(
+            "accessible_panes.push_back(maho_contents_header_);")
+        contents_push = output.index(
+            "accessible_panes.push_back(contents_view_);")
+        self.assertLess(header_push, contents_push)
+
+    def test_pinned_source_wires_accessible_pane(self):
+        from apply_chromium_src_overrides import _PINNED_CHROMIUM_REVISIONS
+
+        output = self._apply_twice(_PINNED_CHROMIUM_REVISIONS[0])
+        self._assert_accessible_pane_wired(output)
+
+    def test_second_pinned_source_wires_accessible_pane(self):
+        from apply_chromium_src_overrides import _PINNED_CHROMIUM_REVISIONS
+
+        output = self._apply_twice(_PINNED_CHROMIUM_REVISIONS[1])
+        self._assert_accessible_pane_wired(output)
+
+
+# ee4bd9e9 excerpts (local Mac / maho-mac pin; `git show ee4bd9e9:...`). This
+# revision predates ToolbarButtonProvider::From(): BrowserView keeps a raw
+# toolbar_button_provider_ set through SetToolbarButtonProvider() and the
+# accessor is inline in browser_view.h.
+_BVEE_DTOR = (
+    "  autofill_bubble_handler_.reset();\n"
+    "\n"
+    "  // These are raw pointers to child views, so they need to be set to null\n"
+    "  // before `RemoveAllChildViews()` is called to avoid dangling.\n"
+    "  toolbar_ = nullptr;\n"
+    "  contents_height_side_panel_ = nullptr;\n"
+    "  toolbar_button_provider_ = nullptr;\n"
+    "\n"
+    "  RemoveAllChildViews();\n"
+)
+_BVEE_INIT = (
+    "  EnsureFocusOrder();\n"
+    "\n"
+    "  // This browser view may already have a custom button provider set (e.g the\n"
+    "  // hosted app frame).\n"
+    "  if (!toolbar_button_provider_) {\n"
+    "    SetToolbarButtonProvider(toolbar_);\n"
+    "  }\n"
+)
+_BVEE_ACCESSOR_H = (
+    "  ToolbarButtonProvider* toolbar_button_provider() {\n"
+    "    return toolbar_button_provider_;\n"
+    "  }\n"
+)
+
+
+class MahoToolbarButtonProviderEe4bd9e9Test(unittest.TestCase):
+    """On ee4bd9e9 the Maho provider is installed through
+    SetToolbarButtonProvider() in the `if (!toolbar_button_provider_)` path,
+    and the 72f18f12-only accessor/CHECK replacements skip instead of
+    raising."""
+
+    _REVISION = "ee4bd9e95294a95c855ef51dfa26f0576f192e69"
+    _CC = "chrome/browser/ui/views/frame/browser_view.cc"
+    _H = "chrome/browser/ui/views/frame/browser_view.h"
+
+    def _pristine(self, relative_path):
+        import os
+        import subprocess
+
+        fixture_root = os.environ.get("MAHO_PRISTINE_FIXTURE_DIR")
+        if fixture_root:
+            fixture = Path(fixture_root) / self._REVISION / relative_path
+            if fixture.is_file():
+                return fixture.read_text()
+        chromium_src = Path(__file__).resolve().parents[3] / "chromium" / "src"
+        result = subprocess.run(
+            ["git", "-C", str(chromium_src), "show",
+             f"{self._REVISION}:{relative_path}"],
+            capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            self.skipTest(f"pinned Chromium blob unavailable: {relative_path}")
+        return result.stdout
+
+    def _apply_twice(self, relative_path, source):
+        replacements = [
+            r for r in REPLACEMENTS[relative_path]
+            if any(marker in text
+                   for marker in ("maho_toolbar_button_provider",
+                                  "MahoToolbarButtonProvider",
+                                  "maho_sidebar_prefs.h")
+                   for text in (r.old, r.new))
+        ]
+        self.assertTrue(replacements, relative_path)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / Path(relative_path).name
+            target.write_text(source)
+            changed, _ = apply_replacements(
+                target, replacements, relative_path=relative_path)
+            self.assertTrue(changed)
+            output = target.read_text()
+            changed_again, applied_again = apply_replacements(
+                target, replacements, relative_path=relative_path)
+            self.assertFalse(changed_again)
+            self.assertTrue(
+                all(line.startswith("already: ") for line in applied_again),
+                applied_again)
+            return output
+
+    def _assert_ee_source(self, output):
+        self.assertIn(
+            '#include "maho/browser/ui/views/sidebar/'
+            'maho_toolbar_button_provider.h"\n', output)
+        self.assertIn(
+            '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n',
+            output)
+        self.assertEqual(1, output.count(
+            "          std::make_unique<maho::MahoToolbarButtonProvider>(\n"
+            "              browser_.get(), this);\n"))
+        self.assertEqual(1, output.count(
+            "  if (!toolbar_button_provider_) {\n"
+            "    // Maho: in the Arc layout page bubbles anchor to the active pane\n"
+            "    // header, so BrowserView owns the Maho provider and installs it in\n"
+            "    // place of toolbar_.\n"
+            "    if (browser_->is_type_normal() &&\n"
+            "        maho::sidebar_prefs::IsSidebarLayoutEnabled(\n"
+            "            browser_->profile()->GetPrefs())) {\n"))
+        self.assertIn(
+            "      SetToolbarButtonProvider(maho_toolbar_button_provider_.get());\n"
+            "    } else {\n"
+            "      SetToolbarButtonProvider(toolbar_);\n"
+            "    }\n"
+            "  }\n", output)
+        # No 72f18f12-only shapes leak into this revision.
+        self.assertNotIn("ToolbarButtonProvider::From(", output)
+        self.assertNotIn("BrowserView::toolbar_button_provider() {", output)
+        # Teardown: the raw toolbar_button_provider_ is cleared before the
+        # owning unique_ptr dies, both after the autofill handler and before
+        # RemoveAllChildViews() destroys toolbar_.
+        self.assertEqual(
+            1, output.count("  maho_toolbar_button_provider_.reset();\n"))
+        reset_at = output.index("  maho_toolbar_button_provider_.reset();\n")
+        self.assertLess(
+            output.index("  autofill_bubble_handler_.reset();\n"), reset_at)
+        self.assertLess(
+            output.index("  toolbar_button_provider_ = nullptr;\n"), reset_at)
+        self.assertLess(reset_at, output.index("  RemoveAllChildViews();\n"))
+
+    def test_ee4bd9e9_excerpt_installs_maho_provider_via_setter(self):
+        self._assert_ee_source(self._apply_twice(
+            self._CC, _BV72_INCLUDE + "\n" + _BVEE_DTOR + "\n" + _BVEE_INIT))
+
+    def test_ee4bd9e9_pristine_blob_installs_maho_provider(self):
+        source = self._pristine(self._CC)
+        self.assertEqual(1, source.count(_BVEE_INIT.split("\n\n", 1)[1]))
+        self.assertNotIn("ToolbarButtonProvider::From(browser_)", source)
+        # The pristine blob lacks the Maho include anchor (added by earlier
+        # overrides), so seed it the way the full REPLACEMENTS run does.
+        seeded = _BV72_INCLUDE + source
+        self._assert_ee_source(self._apply_twice(self._CC, seeded))
+
+    def test_ee4bd9e9_header_keeps_inline_accessor_and_owns_provider(self):
+        header = self._pristine(self._H)
+        self.assertIn(_BVEE_ACCESSOR_H, header)
+        output = self._apply_twice(self._H, _BVH72_FORWARD + _BVH72_MEMBER)
+        self.assertEqual(1, output.count(
+            "  std::unique_ptr<maho::MahoToolbarButtonProvider>\n"
+            "      maho_toolbar_button_provider_;\n"))
+
+
+class MahoToolbarViewArcRegistrationTest(unittest.TestCase):
+    """In the Arc layout MahoToolbarButtonProvider owns the browser's
+    ToolbarButtonProvider user-data slot (72f18f12), so ToolbarView must drop
+    its ctor registration under the exact BrowserView Arc predicate. The split
+    hunk anchors on text present on both pins; the registration drop is
+    compiled only where ToolbarView has scoped_unowned_user_data_."""
+
+    _CC = "chrome/browser/ui/views/toolbar/toolbar_view.cc"
+    _PROVIDER_H = (Path(__file__).resolve().parents[2]
+                   / "browser/ui/views/sidebar/maho_toolbar_button_provider.h")
+    _VERSION_GUARD = "#if CHROME_VERSION_BUILD > 7795\n"
+    _RESET = "    scoped_unowned_user_data_.reset();\n"
+
+    def _pristine(self, relative_path, revision):
+        import os
+
+        fixture_root = os.environ.get("MAHO_PRISTINE_FIXTURE_DIR")
+        if fixture_root:
+            fixture = Path(fixture_root) / revision / relative_path
+            if fixture.is_file():
+                return fixture.read_text()
+        chromium_src = Path(__file__).resolve().parents[3] / "chromium" / "src"
+        result = subprocess.run(
+            ["git", "-C", str(chromium_src), "show",
+             f"{revision}:{relative_path}"],
+            capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            self.skipTest(f"pinned Chromium blob unavailable: {relative_path}")
+        return result.stdout
+
+    def _apply_twice(self, revision):
+        from apply_chromium_src_overrides import (
+            SPLIT_VIEW_REPLACEMENTS,
+            is_revision_incompatible_target,
+        )
+
+        self.assertTrue(is_revision_incompatible_target(self._CC, revision))
+        replacements = SPLIT_VIEW_REPLACEMENTS.get(self._CC, [])
+        self.assertTrue(replacements, self._CC)
+        pristine = self._pristine(self._CC, revision)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / Path(self._CC).name
+            target.write_text(pristine)
+            changed, _ = apply_replacements(
+                target, replacements, relative_path=self._CC)
+            self.assertTrue(changed)
+            output = target.read_text()
+            changed_again, applied_again = apply_replacements(
+                target, replacements, relative_path=self._CC)
+            self.assertFalse(changed_again)
+            self.assertTrue(
+                all(line.startswith("already: ") for line in applied_again),
+                applied_again)
+            return pristine, output
+
+    @staticmethod
+    def _tokens(text):
+        import re
+
+        return re.findall(r"\w+|->|::|&&|\S", text)
+
+    def _arc_condition(self, output):
+        block = output[output.index(self._VERSION_GUARD):]
+        block = block[:block.index("#endif")]
+        condition = block[block.index("  if (") + len("  if ("):
+                          block.index(") {\n")]
+        return block, condition
+
+    def test_72f18f12_drops_ctor_registration_in_arc_layout(self):
+        from apply_chromium_src_overrides import _PINNED_CHROMIUM_REVISIONS
+
+        pristine, output = self._apply_twice(_PINNED_CHROMIUM_REVISIONS[1])
+        self.assertIn("      scoped_unowned_user_data_;\n", self._pristine(
+            "chrome/browser/ui/views/toolbar/toolbar_view.h",
+            _PINNED_CHROMIUM_REVISIONS[1]))
+        self.assertEqual(1, output.count(self._VERSION_GUARD))
+        self.assertEqual(1, output.count(self._RESET))
+        self.assertEqual(1, output.count(
+            '#include "chrome/common/chrome_version.h"\n'))
+        self.assertEqual(1, output.count(
+            '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'))
+        # Upstream registration stays; the drop runs right after it and
+        # before any other ctor work.
+        emplace_at = output.index(
+            "    scoped_unowned_user_data_.emplace(browser_->GetUnownedUserDataHost(),\n")
+        self.assertLess(emplace_at, output.index(self._RESET))
+        self.assertLess(output.index(self._RESET),
+                        output.index("  SetID(VIEW_ID_TOOLBAR);\n"))
+        self.assertEqual(1, pristine.count("  SetID(VIEW_ID_TOOLBAR);\n"))
+
+    def test_ee4bd9e9_hunk_applies_but_compiles_out(self):
+        from apply_chromium_src_overrides import _PINNED_CHROMIUM_REVISIONS
+
+        pristine, output = self._apply_twice(_PINNED_CHROMIUM_REVISIONS[0])
+        self.assertNotIn("scoped_unowned_user_data_", pristine)
+        self.assertNotIn("scoped_unowned_user_data_", self._pristine(
+            "chrome/browser/ui/views/toolbar/toolbar_view.h",
+            _PINNED_CHROMIUM_REVISIONS[0]))
+        # The only reference to the 72f18f12-only member sits inside the
+        # version guard, so ee4bd9e9 (7795) compiles none of it.
+        block, _ = self._arc_condition(output)
+        self.assertEqual(1, output.count("scoped_unowned_user_data_"))
+        self.assertIn(self._RESET, block)
+
+    def test_version_threshold_matches_provider_header(self):
+        header = self._PROVIDER_H.read_text()
+        self.assertIn(
+            "#define MAHO_TOOLBAR_BUTTON_PROVIDER_OWNS_USER_DATA \\\n"
+            "  (CHROME_VERSION_BUILD > 7795)\n", header)
+
+    def test_arc_predicate_matches_browser_view_construction(self):
+        from apply_chromium_src_overrides import (
+            _BROWSER_VIEW_EE4BD9E9_PROVIDER_INIT,
+            _PINNED_CHROMIUM_REVISIONS,
+            REPLACEMENTS,
+        )
+
+        _, output = self._apply_twice(_PINNED_CHROMIUM_REVISIONS[1])
+        _, condition = self._arc_condition(output)
+        # BrowserView's Arc gate (the ee4bd9e9 install branch spells out the
+        # same body IsMahoArcLayoutActive() returns on 72f18f12).
+        install = next(
+            r.new for r in REPLACEMENTS["chrome/browser/ui/views/frame/browser_view.cc"]
+            if r.old == _BROWSER_VIEW_EE4BD9E9_PROVIDER_INIT)
+        gate = install[install.index("    if (") + len("    if ("):
+                       install.index(") {\n      maho_toolbar_button_provider_")]
+        self.assertEqual(self._tokens(gate), self._tokens(condition))
 
 
 if __name__ == "__main__":

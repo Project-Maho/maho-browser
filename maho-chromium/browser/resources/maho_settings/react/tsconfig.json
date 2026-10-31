@@ -17,6 +17,7 @@
     "typeRoots": [
       "../../../../../website/node_modules/@types"
     ],
+    "types": [],
     "paths": {
       "react": [
         "../../../../../website/node_modules/@types/react/index.d.ts"

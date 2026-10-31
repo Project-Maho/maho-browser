@@ -22,6 +22,11 @@ export function nodeModulesGuardPlugin(allowedBases) {
     setup(esbuild) {
       esbuild.onEnd((result) => {
         if (!result.metafile) return;
+        // esbuild reports metafile inputs relative to the REAL working dir, so
+        // the overlay symlink (chromium/src/maho -> maho-chromium) must be
+        // resolved here. Resolving against the raw symlinked path instead sends
+        // the `..` segments up /Volumes/T9-Mac/chromium/src and yields bogus
+        // absolutes like /Volumes/node_modules/react.
         const rawWorkingDir = esbuild.initialOptions.absWorkingDir || process.cwd();
         let absWorkingDir;
         try {
@@ -58,3 +63,4 @@ export function nodeModulesGuardPlugin(allowedBases) {
     },
   };
 }
+

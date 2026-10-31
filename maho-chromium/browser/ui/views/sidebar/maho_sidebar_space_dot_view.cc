@@ -170,6 +170,9 @@ void MahoSidebarSpaceDotView::SetSelected(bool selected) {
 void MahoSidebarSpaceDotView::SetSidebarPalette(
     const MahoSidebarPalette& palette) {
   palette_ = palette;
+  if (palette_.primary_text != SK_ColorTRANSPARENT) {
+    icon_label_->SetEnabledColor(palette_.primary_text);
+  }
   SchedulePaint();
 }
 
@@ -188,22 +191,13 @@ void MahoSidebarSpaceDotView::OnPaint(gfx::Canvas* canvas) {
     const float radius = dot_size / 2.0f;
     const float h = static_cast<float>(hover_animation_.GetCurrentValue());
 
-    const auto* cp = GetColorProvider();
+    // The footer (and its dots) is hidden in private windows, so the dot
+    // always paints from the resolved Space palette: the active dot and a
+    // hovered icon-less dot use the text role, idle dots the glyph role.
     const bool is_hovered_no_icon = is_hovered_ && !has_icon_ && !is_active_;
-    const SkColor fallback_fill =
-        is_active_
-            ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
-            : (cp ? cp->GetColor(is_hovered_no_icon
-                                      ? ui::kColorSysOnSurface
-                                      : ui::kColorSysOnSurfaceSubtle)
-                  : (is_hovered_no_icon ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
-                                        : SkColorSetRGB(0xA2, 0xA8, 0xB6)));
-    const SkColor fill =
-        is_active_ && palette_.primary_text != SK_ColorTRANSPARENT
-            ? palette_.primary_text
-            : (!is_active_ && palette_.neutral_glyph != SK_ColorTRANSPARENT
-                   ? palette_.neutral_glyph
-                   : fallback_fill);
+    const SkColor fill = is_active_ || is_hovered_no_icon
+                             ? palette_.primary_text
+                             : palette_.neutral_glyph;
     const int base_alpha = is_active_ ? 212 : 72;
     const int peak_alpha = is_active_ ? 240 : 200;
     const float lerped_alpha =

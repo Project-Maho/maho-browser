@@ -52,7 +52,7 @@ content::WebContents* MahoInlineEditHandler::GetActiveWebContents() {
   if (!browser_) {
     return nullptr;
   }
-  return browser_->tab_strip_model()->GetActiveWebContents();
+  return browser_->GetTabStripModel()->GetActiveWebContents();
 }
 
 void MahoInlineEditHandler::ExecuteJsInActiveTab(

@@ -1,3 +1,4 @@
+// allow: SIZE_OK — Lane T exact allowlist mandates test module edits inside memory_manager.rs without splitting or structural edits.
 //! Memory feature backend: extracts facts from chat sessions, embeds them,
 //! retrieves them as AI context. Operates as a sub-manager owned by MahoCore.
 
@@ -506,24 +507,100 @@ mod tests {
         MemoryManager::load_snapshot(&directory.path().join(MEMORY_INDEX_SNAPSHOT_FILE)).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn memory_manager_drop_aborts_tasks() {
+    struct TaskDropGuard {
+        dropped_tx: Option<tokio::sync::oneshot::Sender<()>>,
+        drop_counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Drop for TaskDropGuard {
+        fn drop(&mut self) {
+            self.drop_counter
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(tx) = self.dropped_tx.take() {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    async fn assert_drop_aborts_tasks_for_count(task_count: usize) {
         let mut manager = MemoryManager::new();
+        let drop_counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-        let handle = tokio::spawn(async {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        });
+        if task_count == 0 {
+            // Case 1: Empty manager — drop must be a safe, clean no-op.
+            drop(manager);
+            assert_eq!(
+                drop_counter.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "empty manager drop must not invoke task drop guards"
+            );
+            return;
+        }
 
-        let abort_handle = handle.abort_handle();
-        manager.push_task_for_test(handle);
+        let mut dropped_rxs = Vec::with_capacity(task_count);
 
+        for index in 0..task_count {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+            dropped_rxs.push(dropped_rx);
+
+            let guard = TaskDropGuard {
+                dropped_tx: Some(dropped_tx),
+                drop_counter: std::sync::Arc::clone(&drop_counter),
+            };
+
+            let handle = tokio::spawn(async move {
+                let _guard = guard;
+                let _ = started_tx.send(());
+                std::future::pending::<()>().await;
+            });
+
+            started_rx
+                .await
+                .unwrap_or_else(|_| panic!("task {index} failed to signal started"));
+            manager.push_task_for_test(handle);
+        }
+
+        // Verify that before drop(manager) is called, no drop guards have executed.
+        assert_eq!(
+            drop_counter.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no task drop guards should be invoked before manager drop"
+        );
+
+        // Drop the manager: Drop implementation must abort all active tasks.
         drop(manager);
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Await dropped signal for every started task with a bounded timeout guard:
+        for (index, dropped_rx) in dropped_rxs.into_iter().enumerate() {
+            tokio::time::timeout(std::time::Duration::from_secs(5), dropped_rx)
+                .await
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "task {index}/{task_count} drop guard was not triggered within 5s timeout guard"
+                    )
+                })
+                .unwrap_or_else(|_| {
+                    panic!("task {index}/{task_count} dropped channel sender dropped without sending")
+                });
+        }
 
-        assert!(
-            abort_handle.is_finished(),
-            "task should have been aborted when MemoryManager was dropped"
+        assert_eq!(
+            drop_counter.load(std::sync::atomic::Ordering::SeqCst),
+            task_count,
+            "every started task guard must be destroyed exactly once"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn memory_manager_drop_aborts_tasks() {
+        // Subcase 1: Empty manager drops cleanly without tasks.
+        assert_drop_aborts_tasks_for_count(0).await;
+
+        // Subcase 2: Single task is aborted on Drop; guard dropped exactly once.
+        assert_drop_aborts_tasks_for_count(1).await;
+
+        // Subcase 3: Multiple tasks are all aborted on Drop; all guards dropped exactly once.
+        assert_drop_aborts_tasks_for_count(5).await;
     }
 }

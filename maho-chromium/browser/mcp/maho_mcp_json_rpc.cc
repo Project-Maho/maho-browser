@@ -21,6 +21,8 @@ McpJsonRpcMessage& McpJsonRpcMessage::operator=(McpJsonRpcMessage&&) = default;
 
 namespace {
 
+constexpr size_t kMaxFrameBytes = 1024 * 1024;
+
 std::string SerializeResponse(base::DictValue response) {
   response.Set("jsonrpc", "2.0");
   std::string output;
@@ -45,8 +47,33 @@ MahoMcpJsonRpc::~MahoMcpJsonRpc() = default;
 
 void MahoMcpJsonRpc::AppendData(const std::string& data) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  buffer_.append(data);
-  ProcessBuffer();
+  if (frame_limit_exceeded_) {
+    return;
+  }
+  size_t offset = 0;
+  while (offset < data.size()) {
+    const size_t delimiter = data.find('\n', offset);
+    const bool complete = delimiter != std::string::npos;
+    const size_t bytes = (complete ? delimiter : data.size()) - offset;
+    scanned_bytes_for_testing_ += bytes + (complete ? 1 : 0);
+    // Always reserve the delimiter, including while a frame is incomplete.
+    if (bytes >= kMaxFrameBytes - buffer_.size()) {
+      frame_limit_exceeded_ = true;
+      std::string().swap(buffer_);
+      pending_responses_.push_back(
+          BuildErrorResponse(std::nullopt, -32600, "frame_too_large"));
+      return;
+    }
+    buffer_.append(data, offset, bytes);
+    if (!complete) {
+      return;
+    }
+    if (!buffer_.empty()) {
+      ProcessLine(buffer_);
+      buffer_.clear();
+    }
+    offset = delimiter + 1;
+  }
 }
 
 std::optional<std::string> MahoMcpJsonRpc::TakeNextResponse() {
@@ -97,15 +124,23 @@ std::string MahoMcpJsonRpc::BuildErrorResponse(
   return SerializeResponse(std::move(response));
 }
 
-void MahoMcpJsonRpc::ProcessBuffer() {
-  size_t pos;
-  while ((pos = buffer_.find('\n')) != std::string::npos) {
-    std::string line = buffer_.substr(0, pos);
-    buffer_.erase(0, pos + 1);
-    if (!line.empty()) {
-      ProcessLine(line);
-    }
+std::string MahoMcpJsonRpc::BuildErrorResponse(
+    const std::optional<base::Value>& id,
+    int code,
+    const std::string& message,
+    base::Value data) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::DictValue error;
+  error.Set("code", code);
+  error.Set("message", message);
+  if (!data.is_none()) {
+    error.Set("data", std::move(data));
   }
+
+  base::DictValue response;
+  response.Set("id", CloneId(id));
+  response.Set("error", std::move(error));
+  return SerializeResponse(std::move(response));
 }
 
 void MahoMcpJsonRpc::ProcessLine(const std::string& line) {

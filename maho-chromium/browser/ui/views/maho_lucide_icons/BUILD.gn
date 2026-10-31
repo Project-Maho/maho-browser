@@ -25,6 +25,7 @@ aggregate_vector_icons("maho_lucide_icons") {
     "notebook_text.icon",
     "panel_left.icon",
     "pencil_line.icon",
+    "pin.icon",
     "picture_in_picture_2.icon",
     "plus.icon",
     "puzzle.icon",
@@ -58,7 +59,11 @@ aggregate_vector_icons("maho_lucide_icons") {
     "arrow_up_right.icon",
     "trash_2.icon",
     "globe.icon",
+    "languages.icon",
     "file.icon",
+    "lock.icon",
+    "lock_open.icon",
+    "shield_alert.icon",
   ]
 }
 

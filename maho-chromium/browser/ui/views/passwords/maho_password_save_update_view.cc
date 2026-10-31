@@ -368,7 +368,7 @@ void MahoPasswordSaveUpdateView::TogglePasswordVisibility() {
   }
 
   password_revealed_ = !password_revealed_;
-  password_label_->SetText(password_revealed_ ? password_form.password_value
+  password_label_->SetText(password_revealed_ ? password_form.password_value.value()
                                               : MaskPassword(password_form));
   password_label_->SetAccessibleName(password_revealed_
                                          ? kPasswordVisibleAccessibleName

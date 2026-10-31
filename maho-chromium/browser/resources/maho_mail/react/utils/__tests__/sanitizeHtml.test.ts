@@ -131,3 +131,27 @@ describe("sanitizeEmailHtml", () => {
     expect(result).toContain("Hello world");
   });
 });
+
+describe("Trusted Types default-policy sanitizer (__mahoSanitizeHtml)", () => {
+  it("keeps the body when DOMPurify's own parse re-enters the default policy", () => {
+    // On chrome://maho-mail every DOMParser.parseFromString call is a Trusted
+    // Types sink routed through the default policy, including the one inside
+    // DOMPurify. Emulate that routing and check the message body survives.
+    const hook = globalThis.__mahoSanitizeHtml!;
+    const original = DOMParser.prototype.parseFromString;
+    DOMParser.prototype.parseFromString = function (
+      this: DOMParser,
+      input: string,
+      type: DOMParserSupportedType,
+    ) {
+      return original.call(this, hook(String(input)), type);
+    };
+    try {
+      const out = hook('<div dir="ltr">Body text from Gmail</div><script>alert(1)</script>');
+      expect(out).toContain("Body text from Gmail");
+      expect(out).not.toContain("<script");
+    } finally {
+      DOMParser.prototype.parseFromString = original;
+    }
+  });
+});

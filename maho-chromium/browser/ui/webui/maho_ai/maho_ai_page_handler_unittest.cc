@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -13,12 +14,19 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_run_loop_timeout.h"
+#include "base/test/test_future.h"
+#include "base/time/time.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
@@ -29,6 +37,7 @@
 #include "maho/browser/ui/maho_ai_ingress_coordinator.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai_pending_surface.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai_runtime_event_persistence.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_routines/maho_routines_page_handler.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -37,6 +46,10 @@
 
 class MahoAIPageHandlerTestPeer {
  public:
+  static size_t RetainedReplayBytes(MahoAIPageHandler* handler) {
+    return handler->replay_budget_.bytes;
+  }
+
   static void EmitRuntimeEvent(MahoAIPageHandler* handler,
                                const std::string& session_id,
                                std::optional<std::string> request_id,
@@ -141,7 +154,11 @@ class MahoAIPageHandlerTestPeer {
 
   static void PersistEventLog(MahoAIPageHandler* handler,
                               const std::string& session_id) {
-    handler->PersistEventLog(session_id, true);
+    base::test::TestFuture<bool> committed;
+    handler->PersistEventLogWithReplyForTesting(session_id,
+                                                committed.GetCallback());
+    ASSERT_TRUE(committed.Wait());
+    EXPECT_TRUE(committed.Get());
   }
 
   static void SetPageContextExtractor(
@@ -165,6 +182,14 @@ class MahoAIPageHandlerTestPeer {
     return handler->routine_handler_.get();
   }
 
+  static void DisconnectRoutineHandler(MahoAIPageHandler* handler) {
+    handler->routine_handler_.reset();
+  }
+
+  static bool routine_remote_connected(const MahoAIPageHandler* handler) {
+    return handler->routine_handler_remote_.is_connected();
+  }
+
   static void EmitRoutineStatus(MahoAIPageHandler* handler,
                                 const std::string& json) {
     handler->routine_handler_->OnRoutineRunStatusJson(json);
@@ -182,6 +207,31 @@ class MahoAIPageHandlerTestPeer {
   static void PrepareForViewModeHandoff(MahoAIPageHandler* handler) {
     handler->PrepareForViewModeHandoff();
   }
+
+  static const auto& RetainedReplay(const MahoAIPageHandler* handler) {
+    return handler->session_event_log_;
+  }
+
+  static void SetEventLogReplyGate(
+      MahoAIPageHandler* handler,
+      base::RepeatingCallback<void(base::OnceClosure)> gate) {
+    handler->event_log_reply_gate_for_testing_ = std::move(gate);
+  }
+
+  static void PersistEventLogAsync(MahoAIPageHandler* handler,
+                                  const std::string& session_id) {
+    handler->PersistEventLog(session_id);
+  }
+
+  static void ClearEventLog(MahoAIPageHandler* handler,
+                            const std::string& session_id) {
+    handler->ClearPersistedEventLog(session_id);
+  }
+
+  static std::vector<maho_ai::mojom::RuntimeEventPtr> LoadEventLog(
+      MahoAIPageHandler* handler, const std::string& session_id) {
+    return handler->LoadPersistedEventLog(session_id);
+  }
 };
 
 namespace maho {
@@ -189,6 +239,8 @@ namespace {
 
 class MockPage : public maho_ai::mojom::Page {
  public:
+  void FlushForTesting() { receiver_.FlushForTesting(); }
+
   mojo::PendingRemote<maho_ai::mojom::Page> BindAndGetRemote() {
     return receiver_.BindNewPipeAndPassRemote();
   }
@@ -209,6 +261,10 @@ class MockPage : public maho_ai::mojom::Page {
   void OnAISettingsChanged(maho_ai::mojom::AISettingsInfoPtr info) override {
     settings_updates.push_back(std::move(info));
   }
+  void OnRuntimeConfigChanged(
+      maho_ai::mojom::RuntimeConfigInfoPtr config) override {
+    runtime_config_updates.push_back(std::move(config));
+  }
   void OnAskMahoSessionAccepted(
       const std::string& request_id,
       maho_ai::mojom::SessionInfoPtr session) override {
@@ -218,11 +274,14 @@ class MockPage : public maho_ai::mojom::Page {
   void OnVoicePartial(const std::string& transcript) override {}
   void OnVoiceFinal(const std::string& transcript) override {}
   void OnVoiceError(const std::string& message) override {}
+  void OnControlActivityChanged(
+      std::vector<maho_ai::mojom::ControlActivitySnapshotPtr> entries) override {}
 
   std::vector<maho_ai::mojom::SurfaceRequestPtr> surface_requests;
   std::vector<maho_routines::mojom::RoutineRunStatusPtr> routine_statuses;
   std::vector<maho_ai::mojom::RuntimeEventPtr> events;
   std::vector<maho_ai::mojom::AISettingsInfoPtr> settings_updates;
+  std::vector<maho_ai::mojom::RuntimeConfigInfoPtr> runtime_config_updates;
   std::vector<std::string> accepted_requests;
   std::vector<maho_ai::mojom::SessionInfoPtr> accepted_sessions;
 
@@ -255,11 +314,8 @@ class AcceptingRuntimeAdapter : public MahoAiRuntimeAdapter {
   std::vector<std::string> submitted_messages;
 };
 
-// Recording fake for the session runtime_config passthrough (plan row-1
-// plumbing): mirrors the adapter-side contract — Get/Set report unsupported
-// while no session is active, and Set records exactly what the handler
-// forwards (tier normalization is the unified adapter's concern, covered by
-// the broker's ParseRuntimeConfigTier unittests).
+// Mirrors the live adapter contract: no session means no live config. Record
+// forwarded fields verbatim so handler-side normalization is tested.
 class RecordingRuntimeConfigAdapter : public AcceptingRuntimeAdapter {
  public:
   bool GetRuntimeConfig(MahoAiRuntimeConfig* out_config) const override {
@@ -321,7 +377,7 @@ class MahoAIPageHandlerTest : public BrowserWithTestWindowTest {
       Browser* target_browser,
       MockPage* page) {
     content::WebContents* web_contents =
-        target_browser->tab_strip_model()->GetWebContentsAt(0);
+        target_browser->GetTabStripModel()->GetWebContentsAt(0);
     auto token =
         std::make_unique<MahoPrivateContextToken>(target_browser, web_contents);
     mojo::PendingReceiver<maho_ai::mojom::PageHandler> receiver;
@@ -391,6 +447,17 @@ class MahoAIPageHandlerTest : public BrowserWithTestWindowTest {
 
 class MahoRoutineHandoffTest : public MahoAIPageHandlerTest {};
 
+TEST_F(MahoAIPageHandlerTest, RoutineUserTierRespondsWhenRoutinePipeDisconnects) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  int32_t tier = -1;
+  handler->GetRoutineUserTier(
+      base::BindLambdaForTesting([&](int32_t value) { tier = value; }));
+  MahoAIPageHandlerTestPeer::DisconnectRoutineHandler(handler.get());
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(tier, 0);
+}
+
 TEST_F(MahoAIPageHandlerTest,
        OnePanelOwnsOneRoutineStatusSubscriptionAndRendererOperationsWork) {
   MockPage page;
@@ -401,19 +468,27 @@ TEST_F(MahoAIPageHandlerTest,
   ASSERT_TRUE(routine_handler);
   EXPECT_TRUE(routine_handler->HasStatusSubscriptionForTesting());
 
-  int32_t tier = -1;
-  handler->GetRoutineUserTier(
-      base::BindLambdaForTesting([&](int32_t value) { tier = value; }));
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(tier, 0);
+  base::test::TestFuture<int32_t> tier_future;
+  handler->GetRoutineUserTier(tier_future.GetCallback());
+  EXPECT_EQ(tier_future.Get(), 0);
 
-  std::vector<maho_routines::mojom::RoutineInfoPtr> routines;
-  handler->ListAllRoutines(base::BindLambdaForTesting(
-      [&](std::vector<maho_routines::mojom::RoutineInfoPtr> result) {
-        routines = std::move(result);
-      }));
-  base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(routines.empty());
+  base::test::TestFuture<std::vector<maho_routines::mojom::RoutineInfoPtr>>
+      list_future;
+  handler->ListAllRoutines(list_future.GetCallback());
+  std::vector<maho_routines::mojom::RoutineInfoPtr> routines =
+      list_future.Take();
+  ASSERT_EQ(4u, routines.size());
+  std::vector<std::string> routine_ids;
+  for (const auto& routine : routines) {
+    EXPECT_FALSE(routine->is_custom);
+    EXPECT_TRUE(routine->schedule.has_value());
+    routine_ids.push_back(routine->id);
+  }
+  std::sort(routine_ids.begin(), routine_ids.end());
+  EXPECT_EQ(routine_ids,
+            (std::vector<std::string>{"close_old_tabs", "morning_briefing",
+                                      "summarize_reading_list",
+                                      "weekly_tab_tidy"}));
 
   MahoAIPageHandlerTestPeer::EmitRoutineStatus(
       handler.get(),
@@ -423,6 +498,10 @@ TEST_F(MahoAIPageHandlerTest,
   EXPECT_EQ("run-1", page.routine_statuses[0]->run_id);
   EXPECT_EQ(maho_routines::mojom::RoutineRunState::kRunning,
             page.routine_statuses[0]->state);
+
+  EXPECT_TRUE(routine_handler->HasStatusSubscriptionForTesting());
+  EXPECT_TRUE(
+      MahoAIPageHandlerTestPeer::routine_remote_connected(handler.get()));
 }
 
 TEST_F(MahoRoutineHandoffTest,
@@ -623,13 +702,13 @@ TEST_F(MahoAIPageHandlerTest, MailReadConsentDefaultsOffAndPersistsPerProfile) {
       existing_profile.GetPrefs()->GetBoolean(ai_prefs::kMailReadAllowed));
 }
 
-TEST_F(MahoAIPageHandlerTest, SetAISelectionPersistsAndNotifiesPage) {
+TEST_F(MahoAIPageHandlerTest, SetDefaultAISelectionPersistsAndNotifiesPage) {
   MockPage page;
   auto handler = CreateHandler(&page);
   ASSERT_TRUE(handler);
 
   bool accepted = false;
-  handler->SetAISelection(
+  handler->SetDefaultAISelection(
       "anthropic", "claude-opus-4-20250514",
       maho_ai::mojom::ReasoningEffort::kHigh,
       base::BindLambdaForTesting([&](bool result) { accepted = result; }));
@@ -649,7 +728,7 @@ TEST_F(MahoAIPageHandlerTest, SetAISelectionPersistsAndNotifiesPage) {
             update->active_reasoning_effort);
 }
 
-TEST_F(MahoAIPageHandlerTest, SetAISelectionRejectsInvalidValues) {
+TEST_F(MahoAIPageHandlerTest, SetDefaultAISelectionRejectsInvalidValues) {
   MockPage page;
   auto handler = CreateHandler(&page);
   ASSERT_TRUE(handler);
@@ -659,20 +738,20 @@ TEST_F(MahoAIPageHandlerTest, SetAISelectionRejectsInvalidValues) {
   profile()->GetPrefs()->SetString(ai_prefs::kReasoningEffort, "medium");
 
   bool accepted = true;
-  handler->SetAISelection(
+  handler->SetDefaultAISelection(
       "invalid-provider", "gpt-4o-mini",
       maho_ai::mojom::ReasoningEffort::kMedium,
       base::BindLambdaForTesting([&](bool result) { accepted = result; }));
   EXPECT_FALSE(accepted);
 
   accepted = true;
-  handler->SetAISelection(
+  handler->SetDefaultAISelection(
       "anthropic", "gpt-4o-mini", maho_ai::mojom::ReasoningEffort::kMedium,
       base::BindLambdaForTesting([&](bool result) { accepted = result; }));
   EXPECT_FALSE(accepted);
 
   accepted = true;
-  handler->SetAISelection(
+  handler->SetDefaultAISelection(
       "openai", "gpt-4o-mini",
       static_cast<maho_ai::mojom::ReasoningEffort>(999),
       base::BindLambdaForTesting([&](bool result) { accepted = result; }));
@@ -880,6 +959,7 @@ TEST_F(MahoAIPageHandlerTest,
 
 TEST_F(MahoAIPageHandlerTest,
        PermissionRevocationAfterAcceptancePersistsInterruptionAndReleasesOnce) {
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(10));
   MockPage page;
   auto handler = CreateHandler(&page);
   ASSERT_TRUE(handler);
@@ -908,8 +988,22 @@ TEST_F(MahoAIPageHandlerTest,
   MahoAIPageHandlerTestPeer::SetActiveIngressRequest(handler.get(), "request-a",
                                                      delivery_ids[0]);
 
+  base::test::TestFuture<void> persisted_cancelled;
+  PrefChangeRegistrar persistence_observer;
+  persistence_observer.Init(profile()->GetPrefs());
+  persistence_observer.Add(
+      ai_prefs::kSessionEventLogs, base::BindLambdaForTesting([&] {
+        const auto* log = profile()->GetPrefs()
+                              ->GetDict(ai_prefs::kSessionEventLogs)
+                              .FindString(session_a->session_id);
+        if (log && log->find("cancelled") != std::string::npos &&
+            !persisted_cancelled.IsReady()) {
+          persisted_cancelled.SetValue();
+        }
+      }));
   MahoAIPageHandlerTestPeer::RevokePermission(handler.get());
   MahoAIPageHandlerTestPeer::RevokePermission(handler.get());
+  ASSERT_TRUE(persisted_cancelled.Wait());
 
   EXPECT_EQ((std::vector<std::string>{"request-a", "request-b"}), deliveries);
   EXPECT_EQ(maho_ai::mojom::SessionStatus::kCancelled,
@@ -924,6 +1018,7 @@ TEST_F(MahoAIPageHandlerTest,
 
 TEST_F(MahoAIPageHandlerTest,
        HandlerDestructionAfterAcceptanceInterruptsWithoutRedelivery) {
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(10));
   MockPage page;
   auto handler = CreateHandler(&page);
   ASSERT_TRUE(handler);
@@ -951,7 +1046,21 @@ TEST_F(MahoAIPageHandlerTest,
   coordinator->Dispatch(MakeDispatch("request-b", "second"));
   MahoAIPageHandlerTestPeer::SetActiveIngressRequest(handler.get(), "request-a",
                                                      delivery_ids[0]);
+  base::test::TestFuture<void> persisted_cancelled;
+  PrefChangeRegistrar persistence_observer;
+  persistence_observer.Init(profile()->GetPrefs());
+  persistence_observer.Add(
+      ai_prefs::kSessionEventLogs, base::BindLambdaForTesting([&] {
+        const auto* log = profile()->GetPrefs()
+                              ->GetDict(ai_prefs::kSessionEventLogs)
+                              .FindString(session_a->session_id);
+        if (log && log->find("cancelled") != std::string::npos &&
+            !persisted_cancelled.IsReady()) {
+          persisted_cancelled.SetValue();
+        }
+      }));
   handler.reset();
+  ASSERT_TRUE(persisted_cancelled.Wait());
 
   EXPECT_EQ((std::vector<std::string>{"request-a", "request-b"}), deliveries);
   const std::string* persisted_log = profile()
@@ -1071,6 +1180,7 @@ TEST_F(MahoAIPageHandlerTest,
 
 TEST_F(MahoAIPageHandlerTest,
        ManualStartInterruptsIngressBeforeDeferredNextDelivery) {
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(10));
   MockPage page;
   auto handler = CreateHandler(&page);
   ASSERT_TRUE(handler);
@@ -1104,7 +1214,21 @@ TEST_F(MahoAIPageHandlerTest,
   coordinator->Dispatch(MakeDispatch("request-b", "second"));
   ASSERT_EQ((std::vector<std::string>{"request-a"}), deliveries);
 
+  page.FlushForTesting();
   const size_t event_start = page.events.size();
+  base::test::TestFuture<void> persisted_cancelled;
+  PrefChangeRegistrar persistence_observer;
+  persistence_observer.Init(profile()->GetPrefs());
+  persistence_observer.Add(
+      ai_prefs::kSessionEventLogs, base::BindLambdaForTesting([&] {
+        const auto* log = profile()->GetPrefs()
+                              ->GetDict(ai_prefs::kSessionEventLogs)
+                              .FindString(session_a->session_id);
+        if (log && log->find("cancelled") != std::string::npos &&
+            !persisted_cancelled.IsReady()) {
+          persisted_cancelled.SetValue();
+        }
+      }));
   auto manual_session = StartSession(handler.get());
   ASSERT_TRUE(manual_session);
   EXPECT_NE(session_a->session_id, manual_session->session_id);
@@ -1114,6 +1238,7 @@ TEST_F(MahoAIPageHandlerTest,
           .empty());
   EXPECT_EQ(
       0u, MahoAIPageHandlerTestPeer::active_ingress_delivery_id(handler.get()));
+  page.FlushForTesting();
   ASSERT_GT(page.events.size(), event_start);
   const auto& manual_started = page.events.back();
   EXPECT_EQ(maho_ai::mojom::RuntimeEventKind::kSessionStatus,
@@ -1121,6 +1246,7 @@ TEST_F(MahoAIPageHandlerTest,
   EXPECT_EQ(manual_session->session_id, manual_started->session_id);
   EXPECT_FALSE(manual_started->request_id.has_value());
 
+  ASSERT_TRUE(persisted_cancelled.Wait());
   const std::string* persisted_log = profile()
                                          ->GetPrefs()
                                          ->GetDict(ai_prefs::kSessionEventLogs)
@@ -1139,6 +1265,7 @@ TEST_F(MahoAIPageHandlerTest, ManualStartWithoutIngressRemainsUncorrelated) {
 
   const size_t event_start = page.events.size();
   auto session = StartSession(handler.get());
+  page.FlushForTesting();
   ASSERT_TRUE(session);
   ASSERT_EQ(event_start + 1, page.events.size());
   EXPECT_EQ(session->session_id, page.events.back()->session_id);
@@ -1152,6 +1279,7 @@ TEST_F(MahoAIPageHandlerTest, ManualStartWithoutIngressRemainsUncorrelated) {
 
 TEST_F(MahoAIPageHandlerTest,
        DelayedAEventsPersistAndEmitForAWithoutMutatingCurrentB) {
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(10));
   MockPage page;
   auto handler = CreateHandler(&page);
   ASSERT_TRUE(handler);
@@ -1163,8 +1291,24 @@ TEST_F(MahoAIPageHandlerTest,
                                                      1);
   const auto status_b =
       MahoAIPageHandlerTestPeer::session_status(handler.get());
+  page.FlushForTesting();
   const size_t event_start = page.events.size();
 
+  base::test::TestFuture<void> persisted_terminal;
+  PrefChangeRegistrar persistence_observer;
+  persistence_observer.Init(profile()->GetPrefs());
+  persistence_observer.Add(
+      ai_prefs::kSessionEventLogs, base::BindLambdaForTesting([&] {
+        const auto* log = profile()->GetPrefs()
+                              ->GetDict(ai_prefs::kSessionEventLogs)
+                              .FindString(session_a->session_id);
+        if (log && log->find("token") != std::string::npos &&
+            log->find("error") != std::string::npos &&
+            log->find("done") != std::string::npos &&
+            !persisted_terminal.IsReady()) {
+          persisted_terminal.SetValue();
+        }
+      }));
   MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
       handler.get(), session_a->session_id, "request-a",
       MahoAiRuntimeEventType::kAssistantToken, "token");
@@ -1174,7 +1318,8 @@ TEST_F(MahoAIPageHandlerTest,
   MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
       handler.get(), session_a->session_id, "request-a",
       MahoAiRuntimeEventType::kTurnComplete, "done");
-  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(persisted_terminal.Wait());
+  page.FlushForTesting();
 
   ASSERT_EQ(event_start + 3, page.events.size());
   for (size_t i = event_start; i < page.events.size(); ++i) {
@@ -1300,7 +1445,8 @@ TEST_F(MahoAIPageHandlerTest,
   EXPECT_NE(persisted->find("credential_decrypt_failed"), std::string::npos);
   EXPECT_EQ(persisted->find(kDiagnostic), std::string::npos);
 
-  auto history = GetSessionHistory(handler.get(), session->session_id);
+  auto history = MahoAIPageHandlerTestPeer::LoadEventLog(
+      handler.get(), session->session_id);
   const auto history_event_it =
       std::find_if(history.begin(), history.end(), [](const auto& event) {
         return event->kind == maho_ai::mojom::RuntimeEventKind::kError &&
@@ -1555,21 +1701,21 @@ TEST_F(MahoAIPageHandlerTest,
             (*event_it)->interaction_request->artifact_ref.value());
 }
 
-// Plan rows 1/4: the WebUI runtime-config surface is a thin passthrough to
-// the active runtime adapter. Without an adapter (or before a session
-// exists) Get reports the broker defaults and Set is refused, so the panel
-// keeps its previous displayed state.
-TEST_F(MahoAIPageHandlerTest, GetRuntimeConfigDefaultsAndSetRefusedWithoutRuntime) {
+// Profile permissions remain editable even when no runtime adapter exists.
+TEST_F(MahoAIPageHandlerTest, GetRuntimeConfigDefaultsAndSetWithoutRuntime) {
   MockPage page;
   auto handler = CreateHandler(&page);
   ASSERT_TRUE(handler);
 
+  MahoAIPageHandlerTestPeer::SetRuntimeRouter(handler.get(), nullptr);
   auto config = maho_ai::mojom::RuntimeConfigInfo::New();
   config->permission_tier = "sentinel-wrong";
   config->final_confirm = false;
   config->proactive_mode = true;
   handler->GetRuntimeConfig(base::BindLambdaForTesting(
-      [&](maho_ai::mojom::RuntimeConfigInfoPtr result) { config = result; }));
+      [&](maho_ai::mojom::RuntimeConfigInfoPtr result) {
+        config = std::move(result);
+      }));
   ASSERT_TRUE(config);
   EXPECT_EQ("guard", config->permission_tier);
   EXPECT_TRUE(config->final_confirm);
@@ -1583,12 +1729,14 @@ TEST_F(MahoAIPageHandlerTest, GetRuntimeConfigDefaultsAndSetRefusedWithoutRuntim
   handler->SetRuntimeConfig(
       std::move(requested),
       base::BindLambdaForTesting([&](bool result) { accepted = result; }));
-  EXPECT_FALSE(accepted);
+  EXPECT_TRUE(accepted);
+  EXPECT_EQ("read_only", profile()->GetPrefs()->GetString(
+                             maho::ai_prefs::kPermissionTier));
+  EXPECT_FALSE(profile()->GetPrefs()->GetBoolean(maho::ai_prefs::kFinalConfirm));
+  EXPECT_TRUE(profile()->GetPrefs()->GetBoolean(maho::ai_prefs::kProactiveMode));
 }
 
-// With a runtime that owns a session, Set delegates (fields intact) and the
-// same values round-trip through Get; unsupported adapters keep Get on the
-// broker defaults.
+// The active runtime receives the durable profile permissions.
 TEST_F(MahoAIPageHandlerTest, RuntimeConfigRoundTripsThroughActiveRuntime) {
   MockPage page;
   auto handler = CreateHandler(&page);
@@ -1597,21 +1745,25 @@ TEST_F(MahoAIPageHandlerTest, RuntimeConfigRoundTripsThroughActiveRuntime) {
   MahoAIPageHandlerTestPeer::SetRuntimeAdapterForTesting(handler.get(),
                                                          &adapter);
 
-  // Adapter without a session: Get stays on broker defaults, Set refused.
+  // Before a session exists, Get uses registered defaults and Set persists.
   auto defaults = maho_ai::mojom::RuntimeConfigInfo::New();
   handler->GetRuntimeConfig(base::BindLambdaForTesting(
-      [&](maho_ai::mojom::RuntimeConfigInfoPtr result) { defaults = result; }));
+      [&](maho_ai::mojom::RuntimeConfigInfoPtr result) {
+        defaults = std::move(result);
+      }));
   EXPECT_EQ("guard", defaults->permission_tier);
   EXPECT_TRUE(defaults->final_confirm);
   EXPECT_FALSE(defaults->proactive_mode);
 
-  auto refused = maho_ai::mojom::RuntimeConfigInfo::New();
-  refused->permission_tier = "full_access";
-  bool accepted = true;
+  auto initial = maho_ai::mojom::RuntimeConfigInfo::New();
+  initial->permission_tier = "full_access";
+  initial->final_confirm = false;
+  initial->proactive_mode = true;
+  bool accepted = false;
   handler->SetRuntimeConfig(
-      std::move(refused),
+      std::move(initial),
       base::BindLambdaForTesting([&](bool result) { accepted = result; }));
-  EXPECT_FALSE(accepted);
+  EXPECT_TRUE(accepted);
   EXPECT_EQ(0, adapter.set_calls);
 
   // Session active: Set delegates with the fields intact and Get serves the
@@ -1632,10 +1784,101 @@ TEST_F(MahoAIPageHandlerTest, RuntimeConfigRoundTripsThroughActiveRuntime) {
 
   auto stored = maho_ai::mojom::RuntimeConfigInfo::New();
   handler->GetRuntimeConfig(base::BindLambdaForTesting(
-      [&](maho_ai::mojom::RuntimeConfigInfoPtr result) { stored = result; }));
+      [&](maho_ai::mojom::RuntimeConfigInfoPtr result) {
+        stored = std::move(result);
+      }));
   EXPECT_EQ("read_only", stored->permission_tier);
   EXPECT_FALSE(stored->final_confirm);
   EXPECT_TRUE(stored->proactive_mode);
+}
+
+TEST_F(MahoAIPageHandlerTest, RuntimeConfigPersistsAndRoundTripsFromPrefs) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  RecordingRuntimeConfigAdapter adapter;
+  adapter.has_session = true;
+  MahoAIPageHandlerTestPeer::SetRuntimeAdapterForTesting(handler.get(), &adapter);
+
+  auto requested = maho_ai::mojom::RuntimeConfigInfo::New();
+  requested->permission_tier = "full_access";
+  requested->final_confirm = false;
+  requested->proactive_mode = true;
+  // mail_read_allowed defaults to false, so true is a real state change and
+  // this assertion cannot pass by inheriting the default.
+  requested->mail_read_allowed = true;
+  base::test::TestFuture<bool> accepted;
+  handler->SetRuntimeConfig(std::move(requested), accepted.GetCallback());
+  ASSERT_TRUE(accepted.Get());
+
+  PrefService* prefs = profile()->GetPrefs();
+  ASSERT_TRUE(prefs->FindPreference("maho.ai.permission_tier"));
+  ASSERT_TRUE(prefs->FindPreference("maho.ai.final_confirm"));
+  ASSERT_TRUE(prefs->FindPreference("maho.ai.proactive_mode"));
+  EXPECT_EQ("full_access", prefs->GetString("maho.ai.permission_tier"));
+  EXPECT_FALSE(prefs->GetBoolean("maho.ai.final_confirm"));
+  EXPECT_TRUE(prefs->GetBoolean("maho.ai.proactive_mode"));
+  // Mail read consent shares the SSOT pref with chrome://maho-settings.
+  EXPECT_TRUE(prefs->GetBoolean("maho.ai.mail_read_allowed"));
+  EXPECT_EQ("full_access", adapter.config.permission_tier);
+  EXPECT_FALSE(adapter.config.final_confirm);
+  EXPECT_TRUE(adapter.config.proactive_mode);
+
+  // A stale live cache must not override the durable profile choice.
+  adapter.config = MahoAiRuntimeConfig{};
+  base::test::TestFuture<maho_ai::mojom::RuntimeConfigInfoPtr> stored;
+  handler->GetRuntimeConfig(stored.GetCallback());
+  EXPECT_EQ("full_access", stored.Get()->permission_tier);
+  EXPECT_FALSE(stored.Get()->final_confirm);
+  EXPECT_TRUE(stored.Get()->proactive_mode);
+  EXPECT_TRUE(stored.Get()->mail_read_allowed);
+  EXPECT_EQ("full_access", adapter.config.permission_tier);
+
+  // Settings-side writes push to both the page and the live runtime.
+  page.FlushForTesting();
+  page.runtime_config_updates.clear();
+  prefs->SetString(maho::ai_prefs::kPermissionTier, "read_only");
+  prefs->SetBoolean(maho::ai_prefs::kFinalConfirm, true);
+  prefs->SetBoolean(maho::ai_prefs::kProactiveMode, false);
+  page.FlushForTesting();
+  ASSERT_EQ(3u, page.runtime_config_updates.size());
+  const auto& update = page.runtime_config_updates.back();
+  EXPECT_EQ("read_only", update->permission_tier);
+  EXPECT_TRUE(update->final_confirm);
+  EXPECT_FALSE(update->proactive_mode);
+  EXPECT_EQ("read_only", adapter.config.permission_tier);
+  EXPECT_TRUE(adapter.config.final_confirm);
+  EXPECT_FALSE(adapter.config.proactive_mode);
+}
+
+TEST_F(MahoAIPageHandlerTest, RuntimeConfigPersistsWithoutSessionAndFailsClosed) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  RecordingRuntimeConfigAdapter adapter;
+  adapter.has_session = false;
+  MahoAIPageHandlerTestPeer::SetRuntimeAdapterForTesting(handler.get(), &adapter);
+  PrefService* prefs = profile()->GetPrefs();
+
+  for (const std::string tier : {"full_access", "root", "GUARD"}) {
+    SCOPED_TRACE(tier);
+    // Seed a non-default tier before each invalid input so fail-closure cannot
+    // pass merely because the registered default already equals guard.
+    if (tier != "full_access") {
+      prefs->SetString("maho.ai.permission_tier", "full_access");
+    }
+    auto requested = maho_ai::mojom::RuntimeConfigInfo::New();
+    requested->permission_tier = tier;
+    requested->final_confirm = false;
+    requested->proactive_mode = true;
+    base::test::TestFuture<bool> accepted;
+    handler->SetRuntimeConfig(std::move(requested), accepted.GetCallback());
+    ASSERT_TRUE(accepted.Get());
+    ASSERT_TRUE(prefs->FindPreference("maho.ai.permission_tier"));
+    EXPECT_EQ(tier == "full_access" ? "full_access" : "guard",
+              prefs->GetString("maho.ai.permission_tier"));
+    EXPECT_FALSE(prefs->GetBoolean("maho.ai.final_confirm"));
+    EXPECT_TRUE(prefs->GetBoolean("maho.ai.proactive_mode"));
+  }
+  EXPECT_EQ(0, adapter.set_calls);
 }
 
 TEST_F(MahoAIPageHandlerTest, ApprovalResultRoundTripsDecisionMetadata) {
@@ -1878,16 +2121,28 @@ TEST_F(MahoAIPageHandlerTest,
   ASSERT_TRUE(second_session);
   ASSERT_NE(stale_session_id, second_session->session_id);
 
+  page.FlushForTesting();
   page.events.clear();
+  const auto current_status =
+      MahoAIPageHandlerTestPeer::session_status(handler.get());
+  base::test::TestFuture<bool> accepted;
 
   handler->SubmitPrompt(stale_session_id, "This must not vanish.",
                         /*attach_browser_context=*/false,
                         maho_ai::mojom::InteractionMode::kAssistant,
                         /*attachments=*/std::nullopt,
                         maho_ai::mojom::ChatIntent::kFreeform,
-                        base::DoNothing());
+                        accepted.GetCallback());
 
-  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(accepted.Get());
+  page.FlushForTesting();
+  const auto sessions = GetSessionList(handler.get());
+  const auto active = std::find_if(sessions.begin(), sessions.end(),
+                                 [](const auto& item) { return item->is_active; });
+  ASSERT_NE(active, sessions.end());
+  EXPECT_EQ(second_session->session_id, (*active)->session_id);
+  EXPECT_EQ(current_status,
+            MahoAIPageHandlerTestPeer::session_status(handler.get()));
 
   const auto* error_event =
       FindEventOfKind(page.events, maho_ai::mojom::RuntimeEventKind::kError);
@@ -1929,7 +2184,7 @@ TEST_F(
   ASSERT_TRUE(session);
 
   AddTab(browser(), GURL("https://article.example.com/page1"));
-  browser()->tab_strip_model()->ActivateTabAt(1);
+  browser()->GetTabStripModel()->ActivateTabAt(1);
 
   handler->SubmitPrompt(
       session->session_id, "Summarize this page.", true,
@@ -1937,7 +2192,7 @@ TEST_F(
       maho_ai::mojom::ChatIntent::kSummarizeCurrentPage, base::DoNothing());
 
   AddTab(browser(), GURL("https://article.example.com/page2"));
-  browser()->tab_strip_model()->ActivateTabAt(2);
+  browser()->GetTabStripModel()->ActivateTabAt(2);
 
   base::RunLoop().RunUntilIdle();
 
@@ -1962,7 +2217,7 @@ TEST_F(MahoAIPageHandlerTest,
   ASSERT_TRUE(handler);
 
   AddTab(browser(), GURL("https://page-a.example.com"));
-  browser()->tab_strip_model()->ActivateTabAt(1);
+  browser()->GetTabStripModel()->ActivateTabAt(1);
 
   auto session_a = StartSession(handler.get());
   ASSERT_TRUE(session_a);
@@ -1973,7 +2228,7 @@ TEST_F(MahoAIPageHandlerTest,
                         base::DoNothing());
 
   AddTab(browser(), GURL("https://page-b.example.com"));
-  browser()->tab_strip_model()->ActivateTabAt(2);
+  browser()->GetTabStripModel()->ActivateTabAt(2);
 
   auto session_b = StartSession(handler.get());
   ASSERT_TRUE(session_b);
@@ -2038,7 +2293,7 @@ TEST_F(MahoAIPageHandlerTest,
 }
 
 TEST_F(MahoAIPageHandlerTest,
-       SetAISelectionAfterSessionCreationRefreshesStateAndNotifiesPage) {
+       SetDefaultAISelectionAfterSessionCreationRefreshesStateAndNotifiesPage) {
   MockPage page;
   auto handler = CreateHandler(&page);
   ASSERT_TRUE(handler);
@@ -2047,7 +2302,7 @@ TEST_F(MahoAIPageHandlerTest,
   ASSERT_TRUE(session);
 
   bool accepted = false;
-  handler->SetAISelection(
+  handler->SetDefaultAISelection(
       "anthropic", "claude-sonnet-4-20250514",
       maho_ai::mojom::ReasoningEffort::kMedium,
       base::BindLambdaForTesting([&](bool result) { accepted = result; }));
@@ -2255,6 +2510,556 @@ TEST_F(MahoAIPageHandlerTest, ArtifactCreatedEventReplaysWithArtifactPayload) {
   EXPECT_EQ("plan.html", event->artifact->display_name);
   EXPECT_EQ("text/html", event->artifact->mime_type);
   EXPECT_EQ(128u, event->artifact->size_bytes);
+}
+
+TEST_F(MahoAIPageHandlerTest, MemoryThreadReplayBoundsAndSemantics) {
+  // Given: the real ingress, live replay owner, and Mojo resume path.
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+  const auto& id = session->session_id;
+
+  // When: a normally representable long turn crosses the raw event limit.
+  for (int i = 0; i < 100000; ++i) {
+    MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+        handler.get(), id, "mt-turn", MahoAiRuntimeEventType::kAssistantToken,
+        "x");
+  }
+  base::DictValue call;
+  call.Set("call_id", "mt-tool");
+  call.Set("tool_name", "test.echo");
+  call.Set("arguments_json", "{}");
+  MahoAIPageHandlerTestPeer::EmitRuntimeEventWithPayload(
+      handler.get(), id, MahoAiRuntimeEventType::kToolRequest, std::move(call));
+  base::DictValue result;
+  result.Set("call_id", "mt-tool");
+  result.Set("success", true);
+  result.Set("output", "ok");
+  MahoAIPageHandlerTestPeer::EmitRuntimeEventWithPayload(
+      handler.get(), id, MahoAiRuntimeEventType::kToolResult, std::move(result));
+  MahoAIPageHandlerTestPeer::EmitApprovalRequest(handler.get(), id, "{}");
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), id, "mt-turn", MahoAiRuntimeEventType::kArtifactCreated,
+      "{\"artifact_id\":\"mt-artifact\",\"session_id\":\"" + id +
+          "\",\"display_name\":\"mt.txt\",\"mime_type\":\"text/plain\","
+          "\"size_bytes\":2,\"created_at\":1}");
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), id, "mt-turn", MahoAiRuntimeEventType::kTurnComplete);
+  base::test::TestFuture<maho_ai::mojom::SessionInfoPtr,
+                        std::vector<maho_ai::mojom::RuntimeEventPtr>> resumed;
+  handler->ResumeSession(id, resumed.GetCallback());
+
+  // Then: both retained ownership and the clone are bounded, without loss.
+  EXPECT_LE(MahoAIPageHandlerTestPeer::RetainedReplay(handler.get()).size(),
+            2048u);
+  const auto& replay = resumed.Get<1>();
+  EXPECT_LE(replay.size(), 2048u);
+  size_t bytes = 0;
+  std::string text;
+  std::vector<maho_ai::mojom::RuntimeEventKind> controls;
+  uint64_t previous_sequence = 0;
+  for (const auto& event : replay) {
+    EXPECT_GT(event->sequence, previous_sequence);
+    previous_sequence = event->sequence;
+    std::string json;
+    ASSERT_TRUE(base::JSONWriter::Write(
+        maho::ai::SerializeRuntimeEventForPersistence(*event), &json));
+    bytes += json.size();
+    if (event->kind == maho_ai::mojom::RuntimeEventKind::kAssistantToken) {
+      text += event->text.value_or("");
+      EXPECT_EQ(event->request_id, "mt-turn");
+    } else if (event->kind != maho_ai::mojom::RuntimeEventKind::kSessionStatus) {
+      controls.push_back(event->kind);
+    }
+  }
+  EXPECT_LE(bytes, 4u * 1024 * 1024);
+  EXPECT_EQ(text, std::string(100000, 'x'));
+  EXPECT_EQ(controls, (std::vector<maho_ai::mojom::RuntimeEventKind>{
+                         maho_ai::mojom::RuntimeEventKind::kToolRequest,
+                         maho_ai::mojom::RuntimeEventKind::kToolResult,
+                         maho_ai::mojom::RuntimeEventKind::kApprovalRequest,
+                         maho_ai::mojom::RuntimeEventKind::kArtifactCreated,
+                         maho_ai::mojom::RuntimeEventKind::kTurnComplete}));
+  const auto* tool = FindEventOfKind(
+      replay, maho_ai::mojom::RuntimeEventKind::kToolRequest);
+  const auto* output = FindEventOfKind(
+      replay, maho_ai::mojom::RuntimeEventKind::kToolResult);
+  const auto* approval = FindEventOfKind(
+      replay, maho_ai::mojom::RuntimeEventKind::kApprovalRequest);
+  const auto* artifact = FindEventOfKind(
+      replay, maho_ai::mojom::RuntimeEventKind::kArtifactCreated);
+  ASSERT_TRUE(tool && tool->tool_call && output && output->tool_result);
+  EXPECT_EQ(tool->tool_call->call_id, "mt-tool");
+  EXPECT_EQ(output->tool_result->call_id, "mt-tool");
+  EXPECT_EQ(output->tool_result->output, "ok");
+  ASSERT_TRUE(approval && approval->approval_request);
+  EXPECT_EQ(approval->approval_request->approval_id, "approval-typed");
+  ASSERT_TRUE(artifact && artifact->artifact);
+  EXPECT_EQ(artifact->artifact->artifact_id, "mt-artifact");
+}
+
+TEST_F(MahoAIPageHandlerTest, MemoryThreadReplayWholeTurnEviction) {
+  // Given: complete turns each have a correlated tool pair and terminal.
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+
+  // When: completed-turn churn exceeds the retained record envelope.
+  for (int i = 0; i < 800; ++i) {
+    const std::string turn = "turn-" + std::to_string(i);
+    base::DictValue call;
+    call.Set("call_id", turn);
+    call.Set("tool_name", "test.echo");
+    call.Set("arguments_json", "{}");
+    MahoAIPageHandlerTestPeer::EmitRuntimeEventWithPayload(
+        handler.get(), session->session_id, MahoAiRuntimeEventType::kToolRequest,
+        std::move(call));
+    base::DictValue result;
+    result.Set("call_id", turn);
+    result.Set("success", true);
+    result.Set("output", turn);
+    MahoAIPageHandlerTestPeer::EmitRuntimeEventWithPayload(
+        handler.get(), session->session_id, MahoAiRuntimeEventType::kToolResult,
+        std::move(result));
+    MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+        handler.get(), session->session_id, turn,
+        MahoAiRuntimeEventType::kTurnComplete, turn);
+  }
+
+  // Then: only complete oldest turns disappear; the newest turn is intact.
+  const auto& replay = MahoAIPageHandlerTestPeer::RetainedReplay(handler.get());
+  EXPECT_LE(replay.size(), 2048u);
+  std::set<std::string> calls;
+  std::set<std::string> results;
+  std::set<std::string> terminals;
+  for (const auto& event : replay) {
+    if (event->tool_call) calls.insert(event->tool_call->call_id);
+    if (event->tool_result) results.insert(event->tool_result->call_id);
+    if (event->kind == maho_ai::mojom::RuntimeEventKind::kTurnComplete) {
+      terminals.insert(event->request_id.value_or(""));
+    }
+  }
+  EXPECT_EQ(calls, results);
+  EXPECT_EQ(calls, terminals);
+  EXPECT_TRUE(calls.contains("turn-799"));
+  EXPECT_FALSE(calls.contains("turn-0"));
+  EXPECT_LE(MahoAIPageHandlerTestPeer::RetainedReplayBytes(handler.get()),
+            4u * 1024u * 1024u);
+  ASSERT_TRUE(replay.front()->text);
+  const auto window =
+      base::JSONReader::ReadDict(*replay.front()->text, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(window);
+  const auto* metadata = window->FindDict("history_window");
+  ASSERT_TRUE(metadata);
+  EXPECT_GT(metadata->FindInt("omitted_turns").value_or(0), 0);
+  std::vector<maho_ai::mojom::RuntimeEventPtr> restored;
+  for (const auto& event : replay) {
+    restored.push_back(event->Clone());
+  }
+  maho::ai::RuntimeReplayBudget restored_budget;
+  maho::ai::NormalizeReplayWindow(restored, restored_budget);
+  EXPECT_EQ(restored.size(), replay.size());
+  EXPECT_EQ(restored_budget.bytes,
+            MahoAIPageHandlerTestPeer::RetainedReplayBytes(handler.get()));
+  EXPECT_EQ(restored_budget.omitted_turns,
+            static_cast<uint64_t>(metadata->FindInt("omitted_turns").value()));
+  ASSERT_TRUE(restored.front()->replay_window);
+  EXPECT_EQ(restored.front()->replay_window->omitted_turns,
+            restored_budget.omitted_turns);
+  page.FlushForTesting();
+  const auto notice = std::find_if(
+      page.events.begin(), page.events.end(),
+      [](const auto& event) { return static_cast<bool>(event->replay_window); });
+  ASSERT_NE(notice, page.events.end());
+  EXPECT_LT((*notice)->replay_window->omitted_through_sequence,
+            (*notice)->sequence);
+}
+
+TEST_F(MahoAIPageHandlerTest, MemoryThreadReplayOversizedTurnFailsExplicitly) {
+  // Given: one turn that cannot fit even after delta coalescing.
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+  const std::string chunk(64 * 1024, 'x');
+
+  // When: the producer crosses the byte envelope and then claims completion.
+  for (int i = 0; i < 65; ++i) {
+    MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+        handler.get(), session->session_id, "oversized",
+        MahoAiRuntimeEventType::kAssistantToken, chunk);
+  }
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), session->session_id, "oversized",
+      MahoAiRuntimeEventType::kTurnComplete);
+
+  // Then: one explicit capacity failure, no false success, bounded ownership.
+  const auto& replay = MahoAIPageHandlerTestPeer::RetainedReplay(handler.get());
+  size_t bytes = 0;
+  size_t failures = 0;
+  for (const auto& event : replay) {
+    std::string json;
+    ASSERT_TRUE(base::JSONWriter::Write(
+        maho::ai::SerializeRuntimeEventForPersistence(*event), &json));
+    bytes += json.size();
+    EXPECT_NE(event->kind, maho_ai::mojom::RuntimeEventKind::kTurnComplete);
+    if (event->kind == maho_ai::mojom::RuntimeEventKind::kError) {
+      ++failures;
+      EXPECT_NE(event->text.value_or("").find("replay_capacity_exceeded"),
+                std::string::npos);
+    }
+  }
+  EXPECT_EQ(failures, 1u);
+  EXPECT_LE(bytes, 4u * 1024 * 1024);
+  EXPECT_EQ(MahoAIPageHandlerTestPeer::session_status(handler.get()),
+            maho_ai::mojom::SessionStatus::kError);
+}
+
+TEST_F(MahoAIPageHandlerTest, MemoryThreadLegacyReplayRejectsOversizedJson) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  base::DictValue record;
+  record.Set("kind",
+             static_cast<int>(maho_ai::mojom::RuntimeEventKind::kAssistantToken));
+  record.Set("text", std::string(4 * 1024 * 1024, 'x'));
+  base::ListValue records;
+  records.Append(std::move(record));
+  std::string json;
+  ASSERT_TRUE(base::JSONWriter::Write(records, &json));
+  {
+    ScopedDictPrefUpdate update(profile()->GetPrefs(), ai_prefs::kSessionEventLogs);
+    update->Set("legacy-large", json);
+  }
+  auto events =
+      MahoAIPageHandlerTestPeer::LoadEventLog(handler.get(), "legacy-large");
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events.front()->kind, maho_ai::mojom::RuntimeEventKind::kError);
+  EXPECT_EQ(events.front()->text, "history_unavailable");
+  const std::string* stored =
+      profile()->GetPrefs()->GetDict(ai_prefs::kSessionEventLogs)
+          .FindString("legacy-large");
+  ASSERT_TRUE(stored);
+  EXPECT_EQ(*stored, json);
+}
+
+TEST_F(MahoAIPageHandlerTest, MemoryThreadLegacyReplayNormalizesRecordEnvelope) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  base::ListValue records;
+  for (int i = 0; i < 3000; ++i) {
+    base::DictValue record;
+    record.Set("kind",
+               static_cast<int>(maho_ai::mojom::RuntimeEventKind::kAssistantToken));
+    record.Set("request_id", "legacy-turn");
+    record.Set("sequence", static_cast<double>(i + 1));
+    record.Set("text", "x");
+    records.Append(std::move(record));
+  }
+  std::string json;
+  ASSERT_TRUE(base::JSONWriter::Write(records, &json));
+  ASSERT_LT(json.size(), 4u * 1024u * 1024u);
+  {
+    ScopedDictPrefUpdate update(profile()->GetPrefs(), ai_prefs::kSessionEventLogs);
+    update->Set("legacy-records", json);
+  }
+  auto events =
+      MahoAIPageHandlerTestPeer::LoadEventLog(handler.get(), "legacy-records");
+  ASSERT_LE(events.size(), 2048u);
+  std::string text;
+  for (const auto& event : events) {
+    if (event->kind == maho_ai::mojom::RuntimeEventKind::kAssistantToken) {
+      text += event->text.value_or("");
+    }
+  }
+  EXPECT_EQ(text, std::string(3000, 'x'));
+}
+
+TEST_F(MahoAIPageHandlerTest, MemoryThreadPersistenceCoalescesPendingSnapshots) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+  std::vector<base::OnceClosure> replies;
+  MahoAIPageHandlerTestPeer::SetEventLogReplyGate(
+      handler.get(), base::BindLambdaForTesting([&](base::OnceClosure reply) {
+        replies.push_back(std::move(reply));
+      }));
+  for (int i = 0; i < 32; ++i) {
+    MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+        handler.get(), session->session_id, "burst",
+        MahoAiRuntimeEventType::kAssistantToken, "x");
+    MahoAIPageHandlerTestPeer::PersistEventLogAsync(
+        handler.get(), session->session_id);
+  }
+  base::ThreadPoolInstance::Get()->FlushForTesting();
+  base::RunLoop().RunUntilIdle();
+  ASSERT_EQ(replies.size(), 1u);
+  auto first = std::move(replies.front());
+  replies.clear();
+  std::move(first).Run();
+  base::ThreadPoolInstance::Get()->FlushForTesting();
+  base::RunLoop().RunUntilIdle();
+  ASSERT_EQ(replies.size(), 1u);
+  MahoAIPageHandlerTestPeer::SetEventLogReplyGate(handler.get(), {});
+  std::move(replies.front()).Run();
+  auto history = GetSessionHistory(handler.get(), session->session_id);
+  std::string text;
+  for (const auto& event : history) {
+    if (event->kind == maho_ai::mojom::RuntimeEventKind::kAssistantToken) {
+      text += event->text.value_or("");
+    }
+  }
+  EXPECT_EQ(text, std::string(32, 'x'));
+}
+
+TEST_F(MahoAIPageHandlerTest,
+       MemoryThreadInactiveFlushSurvivesHandlerDestruction) {
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(10));
+  std::vector<base::OnceClosure> replies;
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto a = StartSession(handler.get());
+  ASSERT_TRUE(a);
+  MahoAIPageHandlerTestPeer::SetEventLogReplyGate(
+      handler.get(), base::BindLambdaForTesting([&](base::OnceClosure reply) {
+        replies.push_back(std::move(reply));
+      }));
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), a->session_id, "a", MahoAiRuntimeEventType::kAssistantToken,
+      "a1");
+  MahoAIPageHandlerTestPeer::PersistEventLogAsync(handler.get(), a->session_id);
+  base::ThreadPoolInstance::Get()->FlushForTesting();
+  base::RunLoop().RunUntilIdle();
+  ASSERT_EQ(replies.size(), 1u);
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), a->session_id, "a", MahoAiRuntimeEventType::kAssistantToken,
+      "a2");
+  auto b = StartSession(handler.get());
+  ASSERT_TRUE(b);
+  MahoAIPageHandlerTestPeer::SetEventLogReplyGate(handler.get(), {});
+  handler.reset();
+  for (auto& reply : replies) {
+    std::move(reply).Run();
+  }
+  base::ThreadPoolInstance::Get()->FlushForTesting();
+  base::RunLoop().RunUntilIdle();
+  const auto* json = profile()->GetPrefs()->GetDict(ai_prefs::kSessionEventLogs)
+                         .FindString(a->session_id);
+  ASSERT_TRUE(json);
+  EXPECT_NE(json->find("a1a2"), std::string::npos);
+}
+
+TEST_F(MahoAIPageHandlerTest, MemoryThreadLateEventCannotUndoClear) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto a = StartSession(handler.get());
+  ASSERT_TRUE(a);
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), a->session_id, "a", MahoAiRuntimeEventType::kAssistantToken,
+      "before-clear");
+  auto b = StartSession(handler.get());
+  ASSERT_TRUE(b);
+  MahoAIPageHandlerTestPeer::ClearEventLog(handler.get(), a->session_id);
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), a->session_id, "a", MahoAiRuntimeEventType::kAssistantToken,
+      "after-clear");
+  base::ThreadPoolInstance::Get()->FlushForTesting();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(profile()->GetPrefs()->GetDict(ai_prefs::kSessionEventLogs)
+                   .contains(a->session_id));
+}
+
+TEST_F(MahoAIPageHandlerTest,
+       MemoryThreadPersistenceDisableInvalidatesAdmittedWrite) {
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(10));
+  base::test::TestFuture<base::OnceClosure> serialized;
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+  MahoAIPageHandlerTestPeer::SetEventLogReplyGate(
+      handler.get(), serialized.GetRepeatingCallback());
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), session->session_id, "a",
+      MahoAiRuntimeEventType::kAssistantToken, "before-disable");
+  MahoAIPageHandlerTestPeer::PersistEventLogAsync(handler.get(),
+                                                session->session_id);
+  ASSERT_TRUE(serialized.Wait());
+  auto commit = serialized.Take();
+  profile()->GetPrefs()->SetBoolean(ai_prefs::kSessionPersistenceEnabled, false);
+  profile()->GetPrefs()->SetBoolean(ai_prefs::kSessionPersistenceEnabled, true);
+  std::move(commit).Run();
+  MahoAIPageHandlerTestPeer::SetEventLogReplyGate(handler.get(), {});
+  EXPECT_FALSE(profile()->GetPrefs()->GetDict(ai_prefs::kSessionEventLogs)
+                   .contains(session->session_id));
+}
+
+TEST_F(MahoAIPageHandlerTest, MemoryThreadLatePersistenceOrdersPerSession) {
+  // Given: subscribe to the actual serializer replies before any work starts.
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(10));
+  base::test::TestFuture<base::OnceClosure> a_serialized;
+  base::test::TestFuture<base::OnceClosure> b_serialized;
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto a = StartSession(handler.get());
+  ASSERT_TRUE(a);
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), a->session_id, "a", MahoAiRuntimeEventType::kAssistantToken,
+      "a1");
+  MahoAIPageHandlerTestPeer::SetEventLogReplyGate(
+      handler.get(), a_serialized.GetRepeatingCallback());
+  auto b = StartSession(handler.get());
+  ASSERT_TRUE(b);
+  ASSERT_TRUE(a_serialized.Wait());
+  auto commit_a = a_serialized.Take();
+  MahoAIPageHandlerTestPeer::SetEventLogReplyGate(
+      handler.get(), b_serialized.GetRepeatingCallback());
+
+  // When: A continues after switching to B; B's reply overtakes A's reply.
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), a->session_id, "a", MahoAiRuntimeEventType::kAssistantToken,
+      "a2");
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), a->session_id, "a", MahoAiRuntimeEventType::kTurnComplete);
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), b->session_id, "b", MahoAiRuntimeEventType::kAssistantToken,
+      "b1");
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), b->session_id, "b", MahoAiRuntimeEventType::kError);
+  ASSERT_TRUE(b_serialized.Wait());
+  std::move(b_serialized.Take()).Run();
+  std::move(commit_a).Run();
+  MahoAIPageHandlerTestPeer::SetEventLogReplyGate(handler.get(), {});
+
+  // Then: real persisted history includes all accepted A text, not only a2.
+  auto history = GetSessionHistory(handler.get(), a->session_id);
+  std::string text;
+  for (const auto& event : history) {
+    if (event->kind == maho_ai::mojom::RuntimeEventKind::kAssistantToken) {
+      text += event->text.value_or("");
+    }
+  }
+  EXPECT_EQ(text, "a1a2");
+  EXPECT_TRUE(FindEventOfKind(history,
+                            maho_ai::mojom::RuntimeEventKind::kTurnComplete));
+  const auto* b_json = profile()->GetPrefs()->GetDict(ai_prefs::kSessionEventLogs)
+                           .FindString(b->session_id);
+  ASSERT_TRUE(b_json);
+  EXPECT_NE(b_json->find("b1"), std::string::npos);
+}
+
+TEST_F(MahoAIPageHandlerTest, MemoryThreadDeletePreventsResurrection) {
+  // Given: a real serialized write is ready, but its commit has not run.
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(10));
+  base::test::TestFuture<base::OnceClosure> serialized;
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), session->session_id, "deleted",
+      MahoAiRuntimeEventType::kAssistantToken, "accepted-before-delete");
+  MahoAIPageHandlerTestPeer::SetEventLogReplyGate(
+      handler.get(), serialized.GetRepeatingCallback());
+  MahoAIPageHandlerTestPeer::PersistEventLogAsync(handler.get(),
+                                                session->session_id);
+  ASSERT_TRUE(serialized.Wait());
+  auto commit = serialized.Take();
+  MahoAIPageHandlerTestPeer::ClearEventLog(handler.get(), session->session_id);
+
+  // When: the already-admitted write completes after the clear transition.
+  std::move(commit).Run();
+  MahoAIPageHandlerTestPeer::SetEventLogReplyGate(handler.get(), {});
+
+  // Then: the completion cannot resurrect the removed pref entry.
+  EXPECT_FALSE(profile()->GetPrefs()->GetDict(ai_prefs::kSessionEventLogs)
+                   .contains(session->session_id));
+}
+
+TEST_F(MahoAIPageHandlerTest,
+       MemoryThreadReplayRespectsRequestAndControlBoundaries) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+  for (const char* text : {"a", "b"}) {
+    MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+        handler.get(), session->session_id, "request-a",
+        MahoAiRuntimeEventType::kAssistantToken, text);
+  }
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), session->session_id, "request-b",
+      MahoAiRuntimeEventType::kAssistantToken, "x");
+  base::DictValue call;
+  call.Set("call_id", "boundary-tool");
+  call.Set("tool_name", "test.echo");
+  call.Set("arguments_json", "{}");
+  MahoAIPageHandlerTestPeer::EmitRuntimeEventWithPayload(
+      handler.get(), session->session_id, MahoAiRuntimeEventType::kToolRequest,
+      std::move(call));
+  MahoAIPageHandlerTestPeer::EmitRuntimeEvent(
+      handler.get(), session->session_id, "request-b",
+      MahoAiRuntimeEventType::kAssistantToken, "y");
+  const auto& replay = MahoAIPageHandlerTestPeer::RetainedReplay(handler.get());
+  std::vector<std::string> text;
+  std::vector<std::string> requests;
+  uint64_t previous_sequence = 0;
+  for (const auto& event : replay) {
+    EXPECT_GT(event->sequence, previous_sequence);
+    EXPECT_GT(event->sequence_start, 0u);
+    EXPECT_LE(event->sequence_start, event->sequence);
+    previous_sequence = event->sequence;
+    if (event->kind == maho_ai::mojom::RuntimeEventKind::kAssistantToken) {
+      ASSERT_TRUE(event->text && event->request_id);
+      text.push_back(*event->text);
+      requests.push_back(*event->request_id);
+    }
+  }
+  EXPECT_EQ(text, (std::vector<std::string>{"ab", "x", "y"}));
+  EXPECT_EQ(requests,
+            (std::vector<std::string>{"request-a", "request-b", "request-b"}));
+  const auto* tool =
+      FindEventOfKind(replay, maho_ai::mojom::RuntimeEventKind::kToolRequest);
+  ASSERT_TRUE(tool && tool->tool_call);
+  EXPECT_EQ(tool->tool_call->call_id, "boundary-tool");
+}
+
+TEST_F(MahoAIPageHandlerTest, MemoryThreadReplayRecoversAfterExhaustedTurn) {
+  std::vector<maho_ai::mojom::RuntimeEventPtr> replay;
+  maho::ai::RuntimeReplayBudget budget;
+  auto event = maho_ai::mojom::RuntimeEvent::New();
+  event->kind = maho_ai::mojom::RuntimeEventKind::kAssistantToken;
+  event->session_id = "recovery-session";
+  event->request_id = "failed-turn";
+  event->sequence = 1;
+  event->text = std::string(4 * 1024 * 1024, 'x');
+  EXPECT_EQ(maho::ai::AppendBoundedReplayEvent(replay, budget, event),
+            maho::ai::ReplayAdmission::kExhausted);
+  ASSERT_EQ(replay.size(), 1u);
+  EXPECT_EQ(replay.front()->kind, maho_ai::mojom::RuntimeEventKind::kError);
+  event->kind = maho_ai::mojom::RuntimeEventKind::kAssistantToken;
+  event->sequence = 2;
+  event->text = "late";
+  EXPECT_EQ(maho::ai::AppendBoundedReplayEvent(replay, budget, event),
+            maho::ai::ReplayAdmission::kIgnored);
+  EXPECT_EQ(replay.size(), 1u);
+  event->kind = maho_ai::mojom::RuntimeEventKind::kUserPrompt;
+  event->request_id = "next-turn";
+  event->sequence = 3;
+  event->text = "continue";
+  EXPECT_EQ(maho::ai::AppendBoundedReplayEvent(replay, budget, event),
+            maho::ai::ReplayAdmission::kAccepted);
+  event->kind = maho_ai::mojom::RuntimeEventKind::kAssistantToken;
+  event->sequence = 4;
+  event->text = "answer";
+  EXPECT_EQ(maho::ai::AppendBoundedReplayEvent(replay, budget, event),
+            maho::ai::ReplayAdmission::kAccepted);
+  EXPECT_FALSE(budget.exhausted);
+  EXPECT_LE(budget.bytes, 4u * 1024u * 1024u);
+  EXPECT_EQ(replay.back()->request_id, "next-turn");
+  EXPECT_EQ(replay.back()->text, "answer");
 }
 
 TEST_F(MahoAIPageHandlerTest, ArtifactMutationsFailForUnknownIds) {

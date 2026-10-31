@@ -92,6 +92,30 @@ TEST(MahoMcpAccessibilityHandlerTest, BuildSnapshot_InteractiveElementsGetRefs) 
   EXPECT_EQ(textbox.FindInt("ref").value(), 3);
 }
 
+TEST(MahoMcpAccessibilityHandlerTest, NativeSelectHasComboboxRoleAndRef) {
+  ui::AXTreeUpdate update;
+  update.root_id = 1;
+  update.nodes.resize(2);
+  update.nodes[0].id = 1;
+  update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  update.nodes[0].child_ids = {2};
+  update.nodes[1].id = 2;
+  update.nodes[1].role = ax::mojom::Role::kComboBoxSelect;
+  update.nodes[1].SetName("Category");
+
+  ui::AXTree tree(update);
+  MahoMcpAccessibilityHandler::RefTable refs;
+  base::Value snapshot = MahoMcpAccessibilityHandler::BuildSnapshot(tree, refs);
+  ASSERT_EQ(refs.size(), 1u);
+  const base::ListValue* children = snapshot.GetDict().FindList("children");
+  ASSERT_TRUE(children);
+  ASSERT_EQ(children->size(), 1u);
+  const base::DictValue& select = (*children)[0].GetDict();
+  EXPECT_EQ(*select.FindString("role"), "combobox");
+  EXPECT_EQ(select.FindInt("ref"), 1);
+  EXPECT_TRUE(MahoMcpAccessibilityHandler::SelectByRef(tree, refs, 1, "mail"));
+}
+
 TEST(MahoMcpAccessibilityHandlerTest,
      BuildSnapshot_NonInteractiveElementsSkipped) {
   ui::AXTreeUpdate update;
@@ -302,7 +326,8 @@ TEST(MahoMcpAccessibilityHandlerTest,
   update.nodes[1].SetValue("S3NTINEL-recovery");
   update.nodes[1].html_attributes.emplace_back("aria-label", "Recovery code");
   update.nodes[1].html_attributes.emplace_back("name", "backup_code");
-  update.nodes[1].html_attributes.emplace_back("id", "recovery-entry");
+  update.nodes[1].AddStringAttribute(
+      ax::mojom::StringAttribute::kHtmlId, "recovery-entry");
   update.nodes[1].html_attributes.emplace_back("placeholder", "Enter code");
   update.nodes[1].html_attributes.emplace_back("data-maho-field",
                                                 "recovery-code");

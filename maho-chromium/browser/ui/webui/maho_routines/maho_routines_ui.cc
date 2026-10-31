@@ -7,7 +7,8 @@
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
@@ -54,8 +55,11 @@ MahoRoutinesUI::MahoRoutinesUI(content::WebUI* web_ui)
         }));
   }
   content::WebContents* host = web_ui->GetWebContents();
-  Browser* browser = host ? chrome::FindBrowserWithTab(host) : nullptr;
-  if (!profile || !browser || browser->is_type_popup() ||
+  Browser* browser =
+      host ? static_cast<Browser*>(
+                 GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(host))
+           : nullptr;
+  if (!profile || !browser || (browser->GetType() == BrowserWindowInterface::TYPE_POPUP) ||
       !MahoIsWebUIEnabled(profile)) {
     return;
   }
@@ -74,14 +78,16 @@ MahoRoutinesUI::MahoRoutinesUI(content::WebUI* web_ui)
             if (!web_contents) {
               return;
             }
-            Browser* browser = chrome::FindBrowserWithTab(web_contents.get());
+            Browser* browser =
+                static_cast<Browser*>(GlobalBrowserCollection::GetInstance()
+                                          ->FindBrowserWithTab(web_contents.get()));
             if (!browser) {
               return;
             }
-            const int index = browser->tab_strip_model()->GetIndexOfWebContents(
+            const int index = browser->GetTabStripModel()->GetIndexOfWebContents(
                 web_contents.get());
             if (index != TabStripModel::kNoTab) {
-              browser->tab_strip_model()->CloseWebContentsAt(
+              browser->GetTabStripModel()->CloseWebContentsAt(
                   index, TabCloseTypes::CLOSE_USER_GESTURE);
             }
           },

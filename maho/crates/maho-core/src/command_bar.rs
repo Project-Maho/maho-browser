@@ -397,6 +397,22 @@ impl CommandBarEngine {
     }
 
     pub fn add_history_entry(&mut self, url: String, title: String, icon: Option<ImageData>) {
+        self.push_history_entry(url, title, icon, now_millis());
+    }
+
+    /// Rehydrate a persisted visit, keeping its original visit time so
+    /// recency ranking survives a restart. Callers restore oldest first.
+    pub fn restore_history_entry(&mut self, url: String, title: String, visited_at: u64) {
+        self.push_history_entry(url, title, None, visited_at);
+    }
+
+    fn push_history_entry(
+        &mut self,
+        url: String,
+        title: String,
+        icon: Option<ImageData>,
+        visited_at: u64,
+    ) {
         let lower_target = format!("{} {}", title, url).to_lowercase();
         let seq = self.history_base_seq + self.history.len() as u64;
 
@@ -408,7 +424,7 @@ impl CommandBarEngine {
             url,
             title,
             icon,
-            visited_at: now_millis(),
+            visited_at,
             lower_target,
         });
 
@@ -596,14 +612,22 @@ impl CommandBarEngine {
 
         // Search tabs
         for tab in &ctx.tabs {
-            let target = format!("{} {}", tab.title, tab.url).to_lowercase();
+            if tab.title.trim().is_empty() && tab.url.trim().is_empty() {
+                continue;
+            }
+            let title = if !tab.title.trim().is_empty() {
+                tab.title.clone()
+            } else {
+                tab.url.clone()
+            };
+            let target = format!("{} {}", title, tab.url).to_lowercase();
             let match_result = Self::fuzzy_match(&lower_query, &target);
             if match_result.is_match {
                 results.push(SearchResult {
                     suggestion: SuggestionViewModel {
                         kind: SuggestionType::Tab,
                         key: format!("tab:{}", tab.id),
-                        title: tab.title.clone(),
+                        title,
                         subtitle: Some(tab.url.clone()),
                         execution_payload: Some(tab.url.clone()),
                         icon: tab.favicon.clone(),
@@ -677,14 +701,22 @@ impl CommandBarEngine {
 
         // Search archived tabs
         for tab in &ctx.archived_tabs {
-            let target = format!("{} {}", tab.title, tab.url).to_lowercase();
+            if tab.title.trim().is_empty() && tab.url.trim().is_empty() {
+                continue;
+            }
+            let title = if !tab.title.trim().is_empty() {
+                tab.title.clone()
+            } else {
+                tab.url.clone()
+            };
+            let target = format!("{} {}", title, tab.url).to_lowercase();
             let match_result = Self::fuzzy_match(&lower_query, &target);
             if match_result.is_match {
                 results.push(SearchResult {
                     suggestion: SuggestionViewModel {
                         kind: SuggestionType::ArchivedTab,
                         key: format!("archived:{}", tab.id),
-                        title: tab.title.clone(),
+                        title,
                         subtitle: Some(tab.url.clone()),
                         execution_payload: Some(tab.url.clone()),
                         icon: tab.favicon.clone(),
@@ -743,14 +775,22 @@ impl CommandBarEngine {
                 if closed_count >= 3 {
                     break;
                 }
-                let target = format!("{} {}", tab.title, tab.url).to_lowercase();
+                if tab.title.trim().is_empty() && tab.url.trim().is_empty() {
+                    continue;
+                }
+                let title = if !tab.title.trim().is_empty() {
+                    tab.title.clone()
+                } else {
+                    tab.url.clone()
+                };
+                let target = format!("{} {}", title, tab.url).to_lowercase();
                 let match_result = Self::fuzzy_match(&lower_query, &target);
                 if match_result.is_match {
                     results.push(SearchResult {
                         suggestion: SuggestionViewModel {
                             kind: SuggestionType::ClosedTab,
                             key: format!("closed:{}", tab.url),
-                            title: tab.title.clone(),
+                            title,
                             subtitle: Some(tab.url.clone()),
                             execution_payload: Some(tab.url.clone()),
                             icon: tab.favicon.clone(),
@@ -992,6 +1032,20 @@ impl CommandBarEngine {
             .collect()
     }
 
+    fn is_ineligible_tab_url(url: &str) -> bool {
+        let trimmed = url.trim();
+        if trimmed.is_empty() {
+            return true;
+        }
+        let lower = trimmed.to_lowercase();
+        lower.starts_with("about:")
+            || lower.starts_with("chrome-search://")
+            || lower.starts_with("chrome://newtab")
+            || lower.starts_with("chrome://new-tab-page")
+            || lower.starts_with("chrome://downloads")
+            || lower.starts_with("chrome://history")
+    }
+
     fn recent_tab_suggestions(ctx: &SearchContext) -> Vec<SuggestionViewModel> {
         let live_ids: std::collections::HashSet<String> =
             ctx.tabs.iter().map(|tab| tab.id.to_string()).collect();
@@ -1000,15 +1054,27 @@ impl CommandBarEngine {
 
         let mut suggestions: Vec<SuggestionViewModel> = Vec::new();
         for (index, tab) in ctx.recent_tabs.iter().enumerate() {
+            let trimmed_url = tab.url.trim();
+            if Self::is_ineligible_tab_url(trimmed_url) {
+                continue;
+            }
+            if tab.title.trim().is_empty() && trimmed_url.is_empty() {
+                continue;
+            }
             if live_ids.contains(&tab.id.to_string())
                 || live_urls.contains(&normalize_url(&tab.url))
             {
                 continue;
             }
+            let title = if !tab.title.trim().is_empty() {
+                tab.title.clone()
+            } else {
+                trimmed_url.to_string()
+            };
             suggestions.push(SuggestionViewModel {
                 kind: SuggestionType::Tab,
                 key: format!("tab:{}", tab.id),
-                title: tab.title.clone(),
+                title,
                 subtitle: Some(tab.url.clone()),
                 execution_payload: Some(tab.url.clone()),
                 icon: tab.favicon.clone(),
@@ -1223,14 +1289,22 @@ impl CommandBarEngine {
 
         // 3. Same-window tabs
         for tab in &ctx.tabs {
-            let target = format!("{} {}", tab.title, tab.url).to_lowercase();
+            if tab.title.trim().is_empty() && tab.url.trim().is_empty() {
+                continue;
+            }
+            let title = if !tab.title.trim().is_empty() {
+                tab.title.clone()
+            } else {
+                tab.url.clone()
+            };
+            let target = format!("{} {}", title, tab.url).to_lowercase();
             let match_result = Self::fuzzy_match(&lower_query, &target);
             if match_result.is_match {
                 results.push(SearchResult {
                     suggestion: SuggestionViewModel {
                         kind: SuggestionType::Tab,
                         key: format!("tab:{}", tab.id),
-                        title: tab.title.clone(),
+                        title,
                         subtitle: Some(tab.url.clone()),
                         execution_payload: Some(tab.url.clone()),
                         icon: tab.favicon.clone(),
@@ -1968,6 +2042,50 @@ fn format_value(val: f64) -> String {
 }
 
 #[cfg(test)]
+mod history_restore_tests {
+    use super::*;
+
+    fn ctx() -> SearchContext {
+        SearchContext {
+            tabs: Vec::new(),
+            spaces: Vec::new(),
+            folders: Vec::new(),
+            archived_tabs: Vec::new(),
+            bookmarks: Vec::new(),
+            bookmark_favicons: Vec::new(),
+            closed_tabs: Vec::new(),
+            extensions: Vec::new(),
+            is_incognito: false,
+            recent_tabs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn restored_history_is_searchable_and_keeps_visit_time() {
+        let mut engine = CommandBarEngine::new();
+        engine.restore_history_entry(
+            "https://github.com/".into(),
+            "GitHub".into(),
+            1_000,
+        );
+        let urls: Vec<String> = engine
+            .search("github", None, &ctx())
+            .into_iter()
+            .filter_map(|s| s.execution_payload)
+            .collect();
+        assert!(urls.iter().any(|u| u == "https://github.com/"), "{urls:?}");
+        assert_eq!(engine.history.back().map(|e| e.visited_at), Some(1_000));
+    }
+
+    #[test]
+    fn loaded_usage_frequency_is_visible() {
+        let mut engine = CommandBarEngine::new();
+        engine.load_usage_frequencies(vec![("tab:1".into(), 7)]);
+        assert_eq!(engine.get_usage_frequency("tab:1"), 7);
+    }
+}
+
+#[cfg(test)]
 mod trigram_eviction_tests {
     use super::*;
 
@@ -2109,6 +2227,10 @@ mod trigram_eviction_tests {
 #[cfg(test)]
 mod mail_action_tests {
     use super::*;
+    use maho_types::common::DateTime;
+    use maho_types::identifiers::{SpaceId, TabId};
+    use maho_types::tab::TabRole;
+    use maho_types::traits::shell_renderer::TabViewModel;
 
     fn ctx() -> SearchContext {
         SearchContext {
@@ -2156,5 +2278,46 @@ mod mail_action_tests {
                 assert_eq!(actions[0].key, format!("action:{}", command.id));
             }
         }
+    }
+
+    #[test]
+    fn recent_tab_suggestions_filters_empty_tabs() {
+        let mut context = ctx();
+        let make_tab = |title: &str, url: &str| TabViewModel {
+            id: TabId::generate(),
+            space_id: SpaceId::generate(),
+            title: title.to_string(),
+            custom_title: None,
+            custom_icon: None,
+            pinned_url: None,
+            url: url.to_string(),
+            favicon: None,
+            is_loading: false,
+            is_pinned: false,
+            is_favorite: false,
+            favorite_order: None,
+            is_muted: false,
+            is_playing_audio: false,
+            lifecycle_state: "active".to_string(),
+            children: Vec::new(),
+            created_at: DateTime::now(),
+            last_active_at: DateTime::now(),
+            role: TabRole::Normal,
+            is_private: false,
+        };
+
+        context.recent_tabs = vec![
+            make_tab("", ""),
+            make_tab("", "about:blank"),
+            make_tab("", "chrome://new-tab-page"),
+            make_tab("", "chrome://newtab/suffix?foo=bar"),
+            make_tab("", "chrome-search://local-ntp/ntp.html"),
+            make_tab("Google", "https://www.google.com"),
+        ];
+
+        let suggestions = CommandBarEngine::recent_tab_suggestions(&context);
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].title, "Google");
+        assert_eq!(suggestions[0].subtitle, Some("https://www.google.com".to_string()));
     }
 }

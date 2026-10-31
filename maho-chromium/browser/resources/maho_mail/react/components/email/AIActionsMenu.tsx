@@ -95,7 +95,7 @@ export function AIActionsMenu(props: AIActionsMenuProps) {
           aria-label="AI actions"
           aria-haspopup="menu"
           aria-expanded={open}
-          className="flex items-center gap-1.5 rounded-lg border border-border bg-background/70 px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
+          className="flex items-center gap-1.5 mail-pressable flex h-8 rounded-lg border border-border bg-background/70 px-2.5 text-xs font-medium text-muted-foreground hover:border-foreground/20 hover:bg-surface-hover hover:text-foreground"
         >
           <Sparkles size={14} className="text-primary" />
           AI

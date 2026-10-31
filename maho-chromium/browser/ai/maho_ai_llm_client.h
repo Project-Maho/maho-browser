@@ -151,7 +151,7 @@ class MahoAiLlmClient {
   void FinishWithError(const std::string& error);
 
   void PerformStartCompletion(CompletionRequest request);
-  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+  void OnOsCryptReady(scoped_refptr<os_crypt_async::Encryptor> encryptor);
   void OnRefreshComplete(bool success,
                          int http_status,
                          std::optional<maho::auth::RefreshedTokens> tokens);
@@ -173,7 +173,7 @@ class MahoAiLlmClient {
   ErrorCallback on_error_;
 
   raw_ptr<const os_crypt_async::Encryptor> encryptor_ = nullptr;
-  std::optional<os_crypt_async::Encryptor> local_encryptor_;
+  scoped_refptr<os_crypt_async::Encryptor> local_encryptor_;
   std::optional<PendingRequest> pending_request_;
   CompletionRequest active_request_;
   bool is_retry_ = false;

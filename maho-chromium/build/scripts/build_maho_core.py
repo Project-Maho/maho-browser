@@ -527,6 +527,16 @@ def _is_private_rust_runtime_symbol(symbol):
     # leading `_$LT$` (`<`). The alloc shim entry points match none of these.
     # rustc_demangle / addr2line / gimli / miniz_oxide are pulled in by std's
     # backtrace support, so they ship inside the bundled runtime too.
+    #
+    # MSVC (x86_64-pc-windows-msvc) uses the v0 Rust mangling, where the crate
+    # path is encoded as `3std` / `4core` / `5alloc` segments after a crate
+    # disambiguator, e.g. `_RNvMNtNtCsaZOKLwlFm27_3std4time7instant...`. Those
+    # never contain `_ZN3std` or `std::`, so without the segment markers every
+    # bundled std/core/alloc symbol stayed unprefixed and two staticlibs
+    # collided at the chrome.dll link (`duplicate symbol
+    # <std::time::Instant>::now`).
+    if any(seg in symbol for seg in ('_3std', '_4core', '_5alloc')):
+        return True
     return any(marker in symbol for marker in (
         'std::', 'core::', 'alloc::',
         'std..', 'core..', 'alloc..',
@@ -536,19 +546,29 @@ def _is_private_rust_runtime_symbol(symbol):
     ))
 
 
+def _cargo_build_output_dirs(release_dir, crate):
+    # cargo changed its build-dir layout from build/<crate>-<hash>/out to
+    # build/<crate>/<hash>/out. Match both so a vendored static lib is found
+    # regardless of the toolchain version; missing it silently skips the
+    # symbol privatize step and the lib collides with Chromium's BoringSSL.
+    out_dirs = []
+    for pattern in (f'{crate}-*', os.path.join(crate, '*')):
+        for build_dir in glob.glob(os.path.join(release_dir, 'build', pattern)):
+            out_dir = os.path.join(build_dir, 'out')
+            if os.path.isdir(out_dir):
+                out_dirs.append(out_dir)
+    return out_dirs
+
+
 def _bundled_c_staticlibs(release_dir):
     libraries = []
-    for name in ('libcrypto.lib', 'libssl.lib', 'libcrypto.a', 'libssl.a'):
-        libraries += glob.glob(
-            os.path.join(release_dir, 'build', 'openssl-sys-*', 'out',
-                         '**', name),
-            recursive=True)
-    for pattern in (
-            '*sqlcipher*.a', '*sqlcipher*.lib',
-            '*sqlite3*.a', '*sqlite3*.lib'):
-        libraries += glob.glob(
-            os.path.join(release_dir, 'build', 'libsqlite3-sys-*', 'out',
-                         pattern))
+    for crate in ('openssl-sys', 'libsqlite3-sys'):
+        for out_dir in _cargo_build_output_dirs(release_dir, crate):
+            for name in ('libcrypto.lib', 'libssl.lib', 'libcrypto.a', 'libssl.a',
+                         '*sqlcipher*.a', '*sqlcipher*.lib',
+                         '*sqlite3*.a', '*sqlite3*.lib'):
+                libraries += glob.glob(
+                    os.path.join(out_dir, '**', name), recursive=True)
     return libraries
 
 
@@ -688,42 +708,14 @@ def build_rust_prebuilt(target=None, incremental=False):
             old_content = f.read()
 
     if new_content != old_content:
-        active_task = os.environ.get('ACTIVE_TASK') or os.environ.get('TASK_ID')
-
-        # Dynamically find the active attempt directory (highest numbered folder)
-        evidence_root = os.path.join(WORKSPACE_ROOT, '.omo', 'evidence', 'arc-parity-incognito-desktop')
-        attempt_dir = None
-        if os.path.exists(evidence_root):
-            attempts = [d for d in os.listdir(evidence_root) if d.startswith('attempt-') and os.path.isdir(os.path.join(evidence_root, d))]
-            if attempts:
-                attempts.sort()
-                attempt_dir = os.path.join(evidence_root, attempts[-1])
-
-        tsv_path = os.path.join(attempt_dir, 'preimage', 'owned-product-paths.tsv') if attempt_dir else None
-        rel_header_path = os.path.relpath(header_path, WORKSPACE_ROOT)
-
-        owned = False
-        if active_task and tsv_path and os.path.exists(tsv_path):
-            with open(tsv_path, 'r') as f:
-                for line in f:
-                    parts = line.strip().split('|')
-                    if len(parts) >= 3:
-                        task_id, mode, path = parts[0], parts[1], parts[2]
-                        if task_id == str(active_task) and path == rel_header_path:
-                            owned = True
-                            break
-
-        if owned:
-            try:
-                os.replace(temp_header_path, header_path)
-            except OSError:
-                shutil.copy2(temp_header_path, header_path)
-                os.remove(temp_header_path)
-            print(f'Replaced tracked header: {header_path}')
-        else:
-            print(f'Active task {active_task} does not own {rel_header_path}. Skip replace.')
-            if os.path.exists(temp_header_path):
-                os.remove(temp_header_path)
+        # Generated output, never hand-authored: it must always track maho-ffi's
+        # exports, or C++ compiles against a header the static lib disagrees with.
+        try:
+            os.replace(temp_header_path, header_path)
+        except OSError:
+            shutil.copy2(temp_header_path, header_path)
+            os.remove(temp_header_path)
+        print(f'Updated generated header: {header_path}')
     else:
         print('Header content unchanged. Skip replace.')
         if os.path.exists(temp_header_path):

@@ -190,7 +190,8 @@ function linkifyEmailAddresses(doc: Document): void {
       const a = doc.createElement("a");
       a.className = "maho-email-link";
       a.setAttribute("data-email", match.email);
-      a.setAttribute("href", "javascript:void(0)");
+      a.setAttribute("href", "#");
+      a.setAttribute("role", "button");
       a.textContent = match.email;
       frag.appendChild(a);
       cursor = match.index + match.length;
@@ -291,6 +292,9 @@ export function prepareIframeHtml(
   // 2. Process links for safety (homograph + domain mismatch)
   const parser = new DOMParser();
   const doc = parser.parseFromString(trackerResult.html, "text/html");
+  for (const element of doc.querySelectorAll('meta[http-equiv="refresh" i], base')) {
+    element.remove();
+  }
   markSuspiciousLinks(doc);
   linkifyEmailAddresses(doc);
 
@@ -367,39 +371,4 @@ export function prepareIframeHtml(
     trackersBlocked: trackerResult.trackersBlocked,
     trackerDomains: trackerResult.trackerDomains,
   };
-}
-
-/**
- * Wraps HTML content with dark mode CSS styles for iframe display.
- * @deprecated Use prepareIframeHtml for unified sandbox setup
- */
-export function wrapHtmlForDarkMode(html: string): string {
-  const darkCss = `<style>
-    body { background: #18181b !important; color: #d4d4d8 !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 16px; word-break: break-word; }
-    a { color: #60a5fa !important; }
-    img { max-width: 100%; height: auto; opacity: 0.9; }
-    pre { overflow-x: auto; }
-    ${LINK_SAFETY_CSS}
-  </style>`;
-  if (html.includes("<head>")) {
-    return html.replace("<head>", `<head>${darkCss}`);
-  }
-  return `<html><head>${darkCss}</head><body>${html}</body></html>`;
-}
-
-/**
- * Wraps HTML content with base CSS styles for iframe display (light mode).
- * @deprecated Use prepareIframeHtml for unified sandbox setup
- */
-export function wrapHtmlBase(html: string): string {
-  const baseCss = `<style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 16px; word-break: break-word; }
-    img { max-width: 100%; height: auto; }
-    pre { overflow-x: auto; }
-    ${LINK_SAFETY_CSS}
-  </style>`;
-  if (html.includes("<head>")) {
-    return html.replace("<head>", `<head>${baseCss}`);
-  }
-  return `<html><head>${baseCss}</head><body>${html}</body></html>`;
 }

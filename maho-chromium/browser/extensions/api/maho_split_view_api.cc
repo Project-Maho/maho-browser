@@ -13,7 +13,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "maho/browser/maho_private_context_policy.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "components/sessions/core/session_id.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "url/gurl.h"
@@ -28,7 +29,7 @@ base::DictValue BuildSplitViewInfo(Browser* browser, bool active) {
   info.Set("active", active);
   if (active) {
     info.Set("splitViewId",
-             base::NumberToString(browser->session_id().id()));
+             base::NumberToString(browser->GetSessionID().id()));
   }
   return info;
 }
@@ -66,14 +67,19 @@ Browser* ResolveTargetBrowser(ExtensionFunction* function,
             &controller, error)) {
       return nullptr;
     }
-    Browser* browser = controller ? controller->GetBrowser() : nullptr;
-    if (!browser || browser->profile() != profile) {
+    BrowserWindowInterface* browser_interface =
+        controller ? controller->GetBrowser() : nullptr;
+    if (!browser_interface || browser_interface->GetProfile() != profile) {
       *error = "windowId does not match a window for this profile.";
       return nullptr;
     }
-    return browser;
+    return static_cast<Browser*>(browser_interface);
   }
-  return chrome::FindBrowserWithProfile(profile);
+  ProfileBrowserCollection* collection =
+      ProfileBrowserCollection::GetForProfile(profile);
+  BrowserWindowInterface* browser_interface =
+      collection ? collection->GetLastActiveBrowser() : nullptr;
+  return static_cast<Browser*>(browser_interface);
 }
 
 }  // namespace

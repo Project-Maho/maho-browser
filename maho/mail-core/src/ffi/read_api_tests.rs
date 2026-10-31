@@ -104,10 +104,10 @@ fn malformed_search_json_is_rejected_without_invocation() {
     assert_eq!(capture.invocations(), 0);
 }
 
-// 3. not initialized (global ctx unset) -> rejected, never invoked. No test
-// installs a global ctx, so this observes the uninitialized state reliably.
+// 3. not initialized (global ctx unset) -> rejected, never invoked.
 #[test]
 fn uninitialized_state_is_rejected_without_invocation() {
+    let _guard = crate::test_support::global_ctx_guard();
     crate::state::clear_ctx_for_test();
     let capture = Capture::new();
     assert!(!MahoMailListAccounts(

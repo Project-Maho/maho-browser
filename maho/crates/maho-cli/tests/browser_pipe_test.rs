@@ -161,7 +161,7 @@ async fn test_pipe_act_forwards_exact_args_and_preserves_rpc_denials() {
     first["op"] = json!("act");
     first["consent"] = json!(true);
     first["tool"] = json!("must_not_forward");
-    let click_args = json!({"action": {"kind": "click"}, "locator": {"ref": 2}});
+    let click_args = json!({"action": {"kind": "click"}, "tab_id": 7, "locator": {"ref": 2}});
     let mut click = click_args.clone();
     click["id"] = json!(2);
     click["op"] = json!("act");
@@ -176,6 +176,7 @@ async fn test_pipe_act_forwards_exact_args_and_preserves_rpc_denials() {
         json!({"id": "after-denials", "op": "observe"}),
         json!({"id": "old-rpc", "op": "observe", "tab_id": -32602}),
         json!({"id": "missing", "op": "act"}),
+        json!({"id": "no-tab-binding", "op": "act", "action": {"kind": "click"}, "locator": {"ref": 2}}),
         json!({"id": "native", "op": "act", "action": "native_key"}),
         json!({"id": "recovered", "op": "observe"}),
     ]);
@@ -184,9 +185,9 @@ async fn test_pipe_act_forwards_exact_args_and_preserves_rpc_denials() {
         json!({"action": {"kind": "native_key"}, "locator": {"ref": 2}}),
         json!({"action": {"kind": "observe"}, "locator": {"ref": 2}}),
         json!({"action": {"kind": "navigate"}, "locator": {"ref": 2}}),
-        json!({"action": {"kind": "click"}}),
-        json!({"action": {"kind": "click"}, "locator": {"ref": "@e2"}}),
-        json!({"action": {"kind": "click"}, "locator": {"ref": 2}, "wait": "auto"}),
+        json!({"action": {"kind": "click"}, "tab_id": 7}),
+        json!({"action": {"kind": "click"}, "tab_id": 7, "locator": {"ref": "@e2"}}),
+        json!({"action": {"kind": "click"}, "tab_id": 7, "locator": {"ref": 2}, "wait": "auto"}),
     ]
     .into_iter()
     .enumerate()
@@ -255,7 +256,7 @@ async fn test_pipe_act_forwards_exact_args_and_preserves_rpc_denials() {
             "kind": "click", "text": null, "locator": {"ref": 2}
         })
     );
-    for response in &responses[11..] {
+    for response in &responses[13..] {
         assert_eq!(response["error"]["code"], "invalid_params", "{response}");
         assert!(response["error"].get("rpc_code").is_none());
     }
@@ -276,12 +277,19 @@ async fn test_pipe_act_forwards_exact_args_and_preserves_rpc_denials() {
         responses[7]["error"],
         json!({"code": "invalid_params", "message": "invalid", "rpc_code": -32602})
     );
-    for response in &responses[8..10] {
-        assert_eq!(response["error"]["code"], "invalid_params");
-        assert!(response["error"].get("rpc_code").is_none());
-        assert!(response["error"].get("rpc_data").is_none());
-    }
-    assert_eq!(responses[10]["ok"], true);
+    // The act without tab_id is rejected client-side: no server call, and the
+    // error names the missing binding.
+    let no_binding = &responses[9];
+    assert_eq!(no_binding["error"]["code"], "invalid_params", "{no_binding}");
+    assert!(no_binding["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("tab_id"), "{no_binding}");
+    assert!(no_binding["error"].get("rpc_data").is_none());
+    assert_eq!(responses[10]["error"]["code"], "invalid_params");
+    assert!(responses[10]["error"].get("rpc_code").is_none());
+    assert!(responses[10]["error"].get("rpc_data").is_none());
+    assert_eq!(responses[11]["ok"], true);
     let calls = captured.lock().unwrap();
     assert_eq!(
         calls.len(),
@@ -588,7 +596,7 @@ async fn test_sequential_ops_correlate_ids_and_chain_snapshot_tokens() {
 
     let stdin_data = [
         r#"{"id": "op-1", "op": "observe", "mode": "compact"}"#,
-        r#"{"id": "op-2", "op": "click", "locator": {"ref": 2}}"#,
+        r#"{"id": "op-2", "op": "click", "tab_id": 7, "locator": {"ref": 2}}"#,
         r#"{"id": "op-3", "op": "observe"}"#,
     ]
     .join("\n")
@@ -633,6 +641,7 @@ async fn test_sequential_ops_correlate_ids_and_chain_snapshot_tokens() {
     assert_eq!(calls[0].0, "page.accessibility_snapshot_v2");
     assert_eq!(calls[0].1.get("since_snapshot_token"), None);
     assert_eq!(calls[1].0, "input.locator_click");
+    assert_eq!(calls[1].1["tab_id"], 7);
     assert_eq!(calls[1].1["locator"]["ref"], 2);
     assert_eq!(calls[1].1["observe"], "diff");
     assert_eq!(calls[2].0, "page.accessibility_snapshot_v2");
@@ -791,8 +800,12 @@ async fn test_type_navigate_wait_ops() {
                 "action": { "dispatched": true, "verified": true, "method": "type" },
                 "observation": { "snapshot_token": "token-type-1" }
             })),
-            "navigation.navigate" => Ok(json!({ "navigated": true })),
-            "page.wait_for_selector" => Ok(json!({ "found": true })),
+            // Mirror the live session dispatch: navigate and wait_for_selector
+            // are matched by MCP tool name only; their canonical ids return
+            // -32601 "unknown tool" from a real browser.
+            "browser_acquire_lease" => Ok(json!({ "acquired": true })),
+            "browser_navigate" => Ok(json!({ "navigated": true })),
+            "page_wait_for_selector" => Ok(json!({ "found": true })),
             other => panic!("Unexpected tool call: {other}"),
         }
     });
@@ -804,8 +817,8 @@ async fn test_type_navigate_wait_ops() {
             .expect("failed to connect");
 
     let stdin_data = [
-        r##"{"id": 1, "op": "type", "locator": {"css": "input.query"}, "text": "search terms", "submit": true}"##,
-        r##"{"id": 2, "op": "navigate", "url": "https://example.com"}"##,
+        r##"{"id": 1, "op": "type", "tab_id": 7, "locator": {"css": "input.query"}, "text": "search terms", "submit": true}"##,
+        r##"{"id": 2, "op": "navigate", "tab_id": 7, "url": "https://example.com"}"##,
         r##"{"id": 3, "op": "wait", "selector": "#results", "timeout_ms": 2000}"##,
     ]
     .join("\n")
@@ -841,6 +854,14 @@ async fn test_type_navigate_wait_ops() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_pipe_grant_op_dispatches_grant_exact_origin() {
     let handler: MockHandler = Box::new(|req: Value| {
+        // The browser exposes this capability on the control plane only
+        // (catalog surface ControlPlane); a `tools/call` is rejected live
+        // with -32601 "Capability is not available on the public MCP".
+        assert_eq!(
+            req["method"], "maho/control/call",
+            "grant op must use the control plane, got: {}",
+            req["method"]
+        );
         let params = req.get("params").cloned().unwrap_or(Value::Null);
         let tool_name = params
             .get("name")
@@ -907,4 +928,195 @@ async fn test_pipe_grant_missing_origin_is_invalid_params() {
     assert!(!resp.ok);
     let err = resp.error.expect("missing origin must be an error");
     assert_eq!(err.code, "invalid_params");
+}
+
+// ─── D5: `upload` pipe op tests (pending chooser & selector string) ───────────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_pipe_upload_dispatches_exact_requests() {
+    let captured_calls = Arc::new(Mutex::new(Vec::new()));
+    let calls_clone = Arc::clone(&captured_calls);
+
+    let handler: MockHandler = Box::new(move |req: Value| {
+        let params = req.get("params").cloned().unwrap_or(Value::Null);
+        let tool_name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
+        calls_clone
+            .lock()
+            .unwrap()
+            .push((tool_name, arguments));
+        Ok(json!({}))
+    });
+
+    let (_dir, sock_path, server_handle) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
+    let client =
+        BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
+            .await
+            .expect("failed to connect");
+
+    let stdin_data = [
+        r#"{"id": 1, "op": "upload", "tab_id": 7, "path": "/tmp/upload.png"}"#,
+        r##"{"id": 2, "op": "upload", "tab_id": 7, "path": "/tmp/package.msix", "selector": "#upload-file"}"##,
+    ]
+    .join("\n")
+        + "\n";
+
+    let mut output = Vec::new();
+    browser_pipe::run_pipe_loop(stdin_data.as_bytes(), &mut output, &client)
+        .await
+        .expect("run_pipe_loop failed");
+
+    server_handle.abort();
+
+    let output_str = String::from_utf8(output).expect("valid utf8");
+    let responses: Vec<PipeResponse> = output_str
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("parse response line"))
+        .collect();
+
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0].id, json!(1));
+    assert!(responses[0].ok);
+    assert_eq!(responses[1].id, json!(2));
+    assert!(responses[1].ok);
+
+    let calls = captured_calls.lock().unwrap();
+    assert_eq!(calls.len(), 4);
+
+    assert_eq!(calls[0].0, "browser_acquire_lease");
+    assert_eq!(calls[0].1, json!({ "tab_id": 7, "ttl_seconds": 60 }));
+    assert_eq!(calls[1].0, "browser_file_upload_select");
+    assert_eq!(
+        calls[1].1,
+        json!({ "tab_id": 7, "path": "/tmp/upload.png" })
+    );
+
+    assert_eq!(calls[2].0, "browser_acquire_lease");
+    assert_eq!(calls[2].1, json!({ "tab_id": 7, "ttl_seconds": 60 }));
+    assert_eq!(calls[3].0, "browser_file_upload_select");
+    assert_eq!(
+        calls[3].1,
+        json!({ "tab_id": 7, "path": "/tmp/package.msix", "selector": "#upload-file" })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_pipe_upload_does_not_dispatch_when_lease_acquisition_fails() {
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let calls = Arc::clone(&captured);
+    let handler: MockHandler = Box::new(move |req: Value| {
+        let name = req["params"]["name"].as_str().unwrap_or("").to_string();
+        calls.lock().unwrap().push(name);
+        Err((-32007, "active tab lease required".to_string(), None))
+    });
+    let (_dir, socket, server) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
+    let client = BrowserClient::connect_as(&socket, Duration::from_secs(5), ControllerKind::MahoCli)
+        .await
+        .expect("failed to connect");
+
+    let mut output = Vec::new();
+    browser_pipe::run_pipe_loop(
+        &b"{\"id\":1,\"op\":\"upload\",\"tab_id\":7,\"path\":\"/tmp/upload.png\",\"selector\":\"#upload\"}\n"[..],
+        &mut output,
+        &client,
+    )
+    .await
+    .expect("run_pipe_loop failed");
+    server.abort();
+
+    let response: PipeResponse = serde_json::from_slice(&output).expect("parse response");
+    assert!(!response.ok);
+    assert_eq!(response.error.expect("lease error").code, "lease_required");
+    assert_eq!(*captured.lock().unwrap(), ["browser_acquire_lease"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_pipe_navigate_does_not_dispatch_without_lease() {
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let calls = Arc::clone(&captured);
+    let handler: MockHandler = Box::new(move |req: Value| {
+        calls.lock().unwrap().push(req["params"]["name"].as_str().unwrap_or("").to_string());
+        Err((-32007, "active tab lease required".to_string(), None))
+    });
+    let (_dir, socket, server) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
+    let client = BrowserClient::connect_as(&socket, Duration::from_secs(5), ControllerKind::MahoCli)
+        .await
+        .expect("failed to connect");
+    let mut output = Vec::new();
+    browser_pipe::run_pipe_loop(
+        &b"{\"id\":1,\"op\":\"navigate\",\"tab_id\":7,\"url\":\"https://example.com/spa\"}\n"[..],
+        &mut output,
+        &client,
+    )
+    .await
+    .expect("run_pipe_loop failed");
+    server.abort();
+    let response: PipeResponse = serde_json::from_slice(&output).expect("parse response");
+    assert!(!response.ok);
+    assert_eq!(response.error.expect("lease error").code, "lease_required");
+    assert_eq!(*captured.lock().unwrap(), ["browser_acquire_lease"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_pipe_upload_invalid_params() {
+    let captured_calls = Arc::new(Mutex::new(Vec::new()));
+    let calls_clone = Arc::clone(&captured_calls);
+
+    let handler: MockHandler = Box::new(move |req: Value| {
+        let params = req.get("params").cloned().unwrap_or(Value::Null);
+        let tool_name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
+        calls_clone
+            .lock()
+            .unwrap()
+            .push((tool_name, arguments));
+        Ok(json!({}))
+    });
+
+    let (_dir, sock_path, server_handle) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
+    let client =
+        BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
+            .await
+            .expect("failed to connect");
+
+    let stdin_data = [
+        r#"{"id": 1, "op": "upload", "path": "/tmp/upload.png"}"#,
+        r#"{"id": 2, "op": "upload", "tab_id": 7}"#,
+        r#"{"id": 3, "op": "upload", "tab_id": 7, "path": "   "}"#,
+        r#"{"id": 4, "op": "upload", "tab_id": 7, "path": "/tmp/upload.png", "selector": 12345}"#,
+        r#"{"id": 5, "op": "upload", "tab_id": 7, "path": "/tmp/upload.png", "selector": ""}"#,
+        r#"{"id": 6, "op": "upload", "tab_id": 7, "path": "/tmp/upload.png", "selector": "   "}"#,
+    ]
+    .join("\n")
+        + "\n";
+
+    let mut output = Vec::new();
+    browser_pipe::run_pipe_loop(stdin_data.as_bytes(), &mut output, &client)
+        .await
+        .expect("run_pipe_loop failed");
+
+    server_handle.abort();
+
+    let output_str = String::from_utf8(output).expect("valid utf8");
+    let responses: Vec<PipeResponse> = output_str
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("parse response line"))
+        .collect();
+
+    assert_eq!(responses.len(), 6);
+    for resp in &responses {
+        assert!(!resp.ok);
+        assert_eq!(resp.error.as_ref().unwrap().code, "invalid_params");
+    }
+
+    let calls = captured_calls.lock().unwrap();
+    assert_eq!(calls.len(), 0, "No invalid input should reach the server");
 }

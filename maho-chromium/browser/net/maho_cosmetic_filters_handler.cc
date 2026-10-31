@@ -12,6 +12,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "maho/browser/maho_core_holder.h"
@@ -77,43 +78,49 @@ void MahoCosmeticFiltersHandler::InjectCosmeticFilters(
     return;
   }
 
-  std::string json = maho::core::GetCosmeticResources(core, url.c_str());
-  auto parsed = base::JSONReader::Read(json,
-      base::JSON_PARSE_RFC | base::JSON_ALLOW_TRAILING_COMMAS);
-  if (!parsed || !parsed->is_dict()) {
-    return;
-  }
-
-  const base::DictValue& dict = parsed->GetDict();
-
-  const base::ListValue* hide_selectors = dict.FindList("hideSelectors");
-  const std::string* injected_script = dict.FindString("injectedScript");
-
-  if (hide_selectors && !hide_selectors->empty()) {
-    std::vector<std::string> selectors;
-    selectors.reserve(hide_selectors->size());
-    for (const auto& val : *hide_selectors) {
-      if (val.is_string()) {
-        selectors.push_back(val.GetString());
-      }
-    }
-
-    if (!selectors.empty()) {
-      std::string combined = base::JoinString(selectors, ", ");
-      std::string css = combined + " { display: none !important; }";
-
-      std::string script = BuildCssInjectionScript(css);
-      render_frame_host->ExecuteJavaScriptInIsolatedWorld(
-          base::UTF8ToUTF16(script),
-          base::DoNothing(),
-          kIsolatedWorldIdForCosmeticFilters);
-    }
-  }
-
-  if (injected_script && !injected_script->empty()) {
-    render_frame_host->ExecuteJavaScriptInIsolatedWorld(
-        base::UTF8ToUTF16(*injected_script),
-        base::DoNothing(),
-        kIsolatedWorldIdForCosmeticFilters);
-  }
+  const uint64_t generation = maho::GetCoreGeneration();
+  maho::PostCoreTask<std::vector<std::u16string>>(
+      FROM_HERE,
+      base::BindOnce([](uint64_t generation, std::string url) {
+        std::vector<std::u16string> scripts;
+        if (generation != maho::GetCoreGeneration() || !maho::GetCore()) {
+          return scripts;
+        }
+        auto parsed = base::JSONReader::Read(
+            maho::core::GetCosmeticResources(maho::GetCore(), url.c_str()),
+            base::JSON_PARSE_RFC | base::JSON_ALLOW_TRAILING_COMMAS);
+        if (!parsed || !parsed->is_dict()) {
+          return scripts;
+        }
+        const auto& dict = parsed->GetDict();
+        if (const auto* hide_selectors = dict.FindList("hideSelectors")) {
+          std::vector<std::string> selectors;
+          for (const auto& value : *hide_selectors) {
+            if (value.is_string()) {
+              selectors.push_back(value.GetString());
+            }
+          }
+          if (!selectors.empty()) {
+            scripts.push_back(base::UTF8ToUTF16(BuildCssInjectionScript(
+                base::JoinString(selectors, ", ") + " { display: none !important; }")));
+          }
+        }
+        if (const auto* script = dict.FindString("injectedScript");
+            script && !script->empty()) {
+          scripts.push_back(base::UTF8ToUTF16(*script));
+        }
+        return scripts;
+      }, generation, url),
+      base::BindOnce([](content::WeakDocumentPtr document, uint64_t generation,
+                        std::vector<std::u16string> scripts) {
+        auto* frame = document.AsRenderFrameHostIfValid();
+        if (!frame || !frame->IsRenderFrameLive() || !frame->IsActive() ||
+            generation != maho::GetCoreGeneration()) {
+          return;
+        }
+        for (const auto& script : scripts) {
+          frame->ExecuteJavaScriptInIsolatedWorld(
+              script, base::DoNothing(), kIsolatedWorldIdForCosmeticFilters);
+        }
+      }, render_frame_host->GetWeakDocumentPtr(), generation));
 }

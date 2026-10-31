@@ -25,13 +25,47 @@ pub fn queue_mutation(
     mutation_type: &str,
     target_folder: Option<&str>,
 ) -> Result<(), AppError> {
+    queue_mutation_with_payload(conn, account_id, email_uid, folder_path, mutation_type, target_folder, None)
+}
+
+/// `queue_mutation` plus extra payload fields the delivery step needs when the
+/// local row cannot name its server copy by UID. A folder move parks a negative
+/// placeholder UID on the row until the next sync learns the real one, so the
+/// intent carries the Message-ID it can be resolved by in the meantime.
+pub fn queue_mutation_with_payload(
+    conn: &Connection,
+    account_id: &str,
+    email_uid: i64,
+    folder_path: &str,
+    mutation_type: &str,
+    target_folder: Option<&str>,
+    extra_payload: Option<&serde_json::Value>,
+) -> Result<(), AppError> {
     let id = Uuid::new_v4().to_string();
+    let epoch: i64 = conn.query_row(
+        "SELECT COALESCE((SELECT uid_validity FROM folders WHERE account_id=?1 AND path=?2), 0)",
+        params![account_id, folder_path], |row| row.get(0),
+    )?;
+    let mut payload = serde_json::json!({"uid_validity": epoch});
+    if let (Some(extra), Some(fields)) = (extra_payload.and_then(|value| value.as_object()), payload.as_object_mut()) {
+        for (key, value) in extra {
+            fields.insert(key.clone(), value.clone());
+        }
+    }
     conn.execute(
-        "INSERT OR REPLACE INTO pending_mutations (id, account_id, email_uid, folder_path, mutation_type, target_folder)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, account_id, email_uid, folder_path, mutation_type, target_folder],
+        "INSERT OR REPLACE INTO pending_mutations (id, account_id, email_uid, folder_path, mutation_type, target_folder, payload_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![id, account_id, email_uid, folder_path, mutation_type, target_folder, payload.to_string()],
     )?;
     Ok(())
+}
+
+/// Pending remote intent takes precedence over a fetched provider snapshot.
+pub fn has_pending_mail_mutation(conn: &Connection, account: &str, folder: &str, uid: u32) -> Result<bool, AppError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pending_mutations WHERE account_id=?1 AND folder_path=?2 AND email_uid=?3 AND calendar_event_id IS NULL)",
+        params![account, folder, uid], |row| row.get(0),
+    )?)
 }
 
 pub fn queue_calendar_mutation(
@@ -152,7 +186,7 @@ pub fn list_pending_mutations(
     let mut stmt = conn.prepare(
         "SELECT id, account_id, email_uid, folder_path, mutation_type, target_folder, created_at,
                 calendar_event_id, payload_json
-         FROM pending_mutations WHERE account_id = ?1 ORDER BY created_at ASC",
+         FROM pending_mutations WHERE account_id = ?1 ORDER BY created_at ASC, rowid ASC",
     )?;
     let rows = stmt
         .query_map(params![account_id], |row| {

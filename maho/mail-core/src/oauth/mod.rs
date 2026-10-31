@@ -23,11 +23,11 @@ pub use loopback::{sign_in_with_oauth_loopback, sign_in_with_oauth_loopback_with
 
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use rand::RngCore;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::time::Instant;
-use uuid::Uuid;
 
 use maho_core::models::account::{AccountResponse, CreateAccountRequest, Encryption};
 
@@ -94,11 +94,8 @@ fn generate_state() -> String {
 }
 
 fn random_bytes_32() -> [u8; 32] {
-    let first = Uuid::new_v4().into_bytes();
-    let second = Uuid::new_v4().into_bytes();
     let mut out = [0u8; 32];
-    out[..16].copy_from_slice(&first);
-    out[16..].copy_from_slice(&second);
+    rand::thread_rng().fill_bytes(&mut out);
     out
 }
 
@@ -345,9 +342,7 @@ impl OAuthCompletion<'_> {
         }
         let completion_expected_google_sub =
             normalize_expected_google_sub(options.expected_google_sub)?;
-        let entry = state::pending_pkce()
-            .take(state_token)
-            .ok_or_else(|| MailFfiError::InvalidState(state_token.to_string()))?;
+        let (entry, completion) = state::pending_pkce().begin(state_token)?;
         let captured_expected_google_sub =
             normalize_expected_google_sub(entry.expected_google_sub.clone())?;
 
@@ -404,16 +399,15 @@ impl OAuthCompletion<'_> {
             oauth2_refresh_token: token.refresh_token,
             oauth2_expires_at: token.expires_at,
         };
-        let response = match entry.reauthorize_account_id {
+        completion.commit(|| match entry.reauthorize_account_id {
             Some(account_id) => account::replace_oauth_credentials(
                 self.conn,
                 self.credential_key,
                 &account_id,
                 request,
-            )?,
-            None => account::create_account(self.conn, self.credential_key, request)?,
-        };
-        Ok(response)
+            ),
+            None => account::create_account(self.conn, self.credential_key, request),
+        })
     }
 }
 
@@ -451,5 +445,31 @@ pub fn complete_oauth_with_options(
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_random_bytes_32_entropy_not_fixed_uuid_version() {
+        let mut all_have_uuid_v4_nibble = true;
+        for _ in 0..50 {
+            let bytes = random_bytes_32();
+            // If random_bytes_32 concatenates two UUIDv4s, byte 6 has fixed version nibble 0x4
+            if (bytes[6] >> 4) != 0x4 {
+                all_have_uuid_v4_nibble = false;
+                break;
+            }
+        }
+        assert!(
+            !all_have_uuid_v4_nibble,
+            "random_bytes_32 should not be derived from UUIDv4 (fixed version bit 0x4 in byte 6)"
+        );
+    }
+}
+
+#[cfg(test)]
 #[path = "oauth_tests.rs"]
 mod oauth_tests;
+
+#[cfg(test)]
+#[path = "account_review_tests.rs"]
+mod account_review_tests;

@@ -132,31 +132,34 @@ impl VaultRuntime {
                 item.form_details.as_ref(),
             )?;
             let item_id = VaultItemId::new();
-            let record = VaultRecordPayload {
+            let mut record = VaultRecordPayload {
                 schema_version: VaultSchemaVersion::CURRENT,
                 metadata,
                 username: item.username,
                 secret: item.secret,
                 last_used_at: None,
                 form_details: item.form_details,
+                totp_seed: None,
             };
+            record.metadata.has_notes = record.has_notes();
             let envelope = manager
                 .encrypt_and_wrap(&serialize_record(&record)?, &item_id)
                 .map_err(VaultCrudError::from)?;
             let row = build_item_row(&item_id, item.provider, kind, &encode_envelope(&envelope)?);
-            if !repository
+            let dto = public_dto(&row, &record)?;
+            let count = match repository
                 .insert_item(&row)
                 .map_err(|error| VaultCrudError::Storage(error.to_string()))?
             {
-                return Err(VaultCrudError::Storage(
-                    "insert-only create did not persist (id collision)".to_string(),
-                ));
-            }
-            let item_count = repository
-                .count_active_items()
-                .map_err(|error| VaultCrudError::Storage(error.to_string()))?;
-            manager.set_item_count(item_count);
-            public_dto(&row, &record)
+                Some(count) => count,
+                None => {
+                    return Err(VaultCrudError::Storage(
+                        "insert-only create did not persist (id collision)".to_string(),
+                    ));
+                }
+            };
+            manager.set_item_count(count);
+            Ok(dto)
         })
         .map_err(VaultCrudError::from)?
     }
@@ -176,31 +179,43 @@ fn reject_duplicate(
         if row.provider != provider || record.metadata.item_kind != kind {
             continue;
         }
-        if record.username.as_deref().unwrap_or("").trim() != username.trim() {
-            continue;
-        }
-        if let (Some(new_details), Some(stored_details)) = (form_details, &record.form_details) {
-            if new_details.username_element != stored_details.username_element
-                || new_details.password_element != stored_details.password_element
-                || new_details.signon_realm != stored_details.signon_realm
-            {
-                continue;
-            }
-        }
-        let overlaps = origins.iter().any(|origin| {
-            record
-                .metadata
-                .origins
-                .iter()
-                .any(|stored| stored == origin)
-        });
-        if overlaps {
+        if has_same_identity(&record, origins, username, form_details) {
             let id =
                 VaultItemId::from_str(&row.id).map_err(|_| VaultCrudError::MalformedPayload)?;
             return Err(VaultCrudError::Duplicate { existing: id });
         }
     }
     Ok(())
+}
+
+pub(super) fn has_same_identity(
+    record: &VaultRecordPayload,
+    origins: &[maho_types::vault::CredentialOrigin],
+    username: &str,
+    form_details: Option<&VaultCredentialFormDetails>,
+) -> bool {
+    if record.username.as_deref().unwrap_or("").trim() != username.trim() {
+        return false;
+    }
+    if let (Some(new_details), Some(stored_details)) = (form_details, &record.form_details) {
+        if new_details.username_element != stored_details.username_element
+            || new_details.password_element != stored_details.password_element
+            || new_details.signon_realm != stored_details.signon_realm
+        {
+            return false;
+        }
+        // Non-web credentials (e.g. Android) use their exact realm instead of
+        // a web origin. Empty/default form details do not establish identity.
+        if origins.is_empty()
+            && record.metadata.origins.is_empty()
+            && !new_details.signon_realm.is_empty()
+        {
+            return true;
+        }
+    }
+    origins
+        .iter()
+        .any(|origin| record.metadata.origins.contains(origin))
 }
 
 fn build_item_row(

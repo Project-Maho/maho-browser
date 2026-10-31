@@ -13,8 +13,7 @@ use super::consolidation::{
 };
 use super::retrieval::{HybridMemoryResult, HybridMemoryRetriever};
 use super::snapshot::{
-    load_snapshot, save_snapshot, Embedding, MEMORY_INDEX_MAX_SEGMENTS,
-    MEMORY_INDEX_SNAPSHOT_FILE,
+    load_snapshot, save_snapshot, Embedding, MEMORY_INDEX_MAX_SEGMENTS, MEMORY_INDEX_SNAPSHOT_FILE,
 };
 use super::tier::{PromptBlock, PromptBlockTier, L1_BRIEFING_LABEL};
 use crate::embedding::{bytes_to_vec, vec_to_bytes, EMBED_DIM};
@@ -49,7 +48,10 @@ impl EmbeddingEngine for DefaultEmbeddingEngine {
 
     fn embed_single(&self, text: &str) -> Result<Vec<f32>, CoreError> {
         let res = crate::embedding::embed(&[text.to_string()])?;
-        Ok(res.into_iter().next().unwrap_or_else(|| vec![0.0; EMBED_DIM]))
+        Ok(res
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| vec![0.0; EMBED_DIM]))
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, CoreError> {
@@ -142,7 +144,10 @@ impl MemoryEngine {
     }
 
     /// Retrieve the current L1 briefing prompt block from storage.
-    pub fn get_l1_briefing(&self, storage: &SqliteStorage) -> Result<Option<PromptBlock>, CoreError> {
+    pub fn get_l1_briefing(
+        &self,
+        storage: &SqliteStorage,
+    ) -> Result<Option<PromptBlock>, CoreError> {
         match storage.get_memory_block(L1_BRIEFING_LABEL) {
             Ok(Some(content)) => {
                 let token_count = content.split_whitespace().count();
@@ -165,7 +170,9 @@ impl MemoryEngine {
         storage: &SqliteStorage,
     ) -> Result<PromptBlock, CoreError> {
         let now = self.now();
-        let memories = storage.load_all_memories().map_err(|e| CoreError::Storage(e.to_string()))?;
+        let memories = storage
+            .load_all_memories()
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
 
         let mut content = String::from("User Profile & Memory Briefing:\n");
         if memories.is_empty() {
@@ -374,16 +381,18 @@ impl MemoryEngine {
         let mut metadata_map = HashMap::new();
         if let Ok(all_facts) = storage.load_all_memories() {
             for fact in all_facts {
-                metadata_map.insert(
-                    fact.0,
-                    (fact.5 as f32, 1.0f32, fact.2),
-                );
+                metadata_map.insert(fact.0, (fact.5 as f32, 1.0f32, fact.2, fact.1));
             }
         }
 
         // 4. Fuse with RRF
-        self.retriever
-            .fuse(&lexical_candidates, &dense_candidates, &metadata_map, top_k, None)
+        self.retriever.fuse(
+            &lexical_candidates,
+            &dense_candidates,
+            &metadata_map,
+            top_k,
+            None,
+        )
     }
 
     /// Run one step of background maintenance (dreaming / consolidation / re-embedding / briefing refresh).
@@ -448,7 +457,9 @@ impl MemoryEngine {
 
         // 2. Process maintenance jobs from queue
         let mut jobs_processed = 0;
-        while jobs_processed < self.maintenance_policy.max_jobs_per_tick && !self.queued_jobs.is_empty() {
+        while jobs_processed < self.maintenance_policy.max_jobs_per_tick
+            && !self.queued_jobs.is_empty()
+        {
             let mut job = self.queued_jobs.remove(0);
             job.status = JobStatus::Running;
 
@@ -458,13 +469,13 @@ impl MemoryEngine {
                     if !self.processed_cluster_hashes.contains(&cluster_key) {
                         if let Some(payload_str) = &job.payload {
                             if let Ok(facts) = serde_json::from_str::<Vec<String>>(payload_str) {
-                                let existing_records = storage
-                                    .load_all_memories()
-                                    .unwrap_or_default();
-                                let existing_tuples: Vec<(String, String, f32, f32)> = existing_records
-                                    .iter()
-                                    .map(|r| (r.0.clone(), r.1.clone(), r.5 as f32, 1.0f32))
-                                    .collect();
+                                let existing_records =
+                                    storage.load_all_memories().unwrap_or_default();
+                                let existing_tuples: Vec<(String, String, f32, f32)> =
+                                    existing_records
+                                        .iter()
+                                        .map(|r| (r.0.clone(), r.1.clone(), r.5 as f32, 1.0f32))
+                                        .collect();
 
                                 for fact_text in facts {
                                     let action = evaluate_claim(
@@ -490,9 +501,12 @@ impl MemoryEngine {
                                                 importance: 0.8,
                                                 metadata: None,
                                             });
-                                            if let Ok(emb) = self.embedding_engine.embed_single(&fact_text) {
+                                            if let Ok(emb) =
+                                                self.embedding_engine.embed_single(&fact_text)
+                                            {
                                                 let bytes = vec_to_bytes(&emb);
-                                                let _ = storage.update_memory_embedding(&fact_id, &bytes);
+                                                let _ = storage
+                                                    .update_memory_embedding(&fact_id, &bytes);
                                             }
                                         }
                                         ConsolidationAction::Reinforce { .. } => {
@@ -639,19 +653,28 @@ mod tests {
             created_at: t_12h,
         });
         let processed_12h = engine.step_maintenance(&storage).unwrap();
-        assert_eq!(processed_12h, 0, "12h elapsed does not satisfy 24h age threshold");
+        assert_eq!(
+            processed_12h, 0,
+            "12h elapsed does not satisfy 24h age threshold"
+        );
 
         // Advance mock time to 25 hours later (25h >= 24h threshold)
         let t_25h = t0 + Duration::hours(25);
         engine.set_mock_time(Some(t_25h));
         let processed_25h = engine.step_maintenance(&storage).unwrap();
-        assert_eq!(processed_25h, 2, "25h elapsed must satisfy 24h threshold and run dreaming");
+        assert_eq!(
+            processed_25h, 2,
+            "25h elapsed must satisfy 24h threshold and run dreaming"
+        );
         assert_eq!(engine.dream_metadata.last_dream_at, Some(t_25h));
         assert_eq!(engine.dream_metadata.sessions_since_dream, 0);
 
         // Re-running immediately without new sessions does not fire
         let processed_again = engine.step_maintenance(&storage).unwrap();
-        assert_eq!(processed_again, 0, "Idempotent on re-run with 0 new sessions");
+        assert_eq!(
+            processed_again, 0,
+            "Idempotent on re-run with 0 new sessions"
+        );
     }
 
     #[test]
@@ -679,10 +702,15 @@ mod tests {
         engine.step_maintenance(&storage).unwrap();
 
         // 3. Verify L1 briefing generated
-        let briefing1 = engine.get_l1_briefing(&storage).unwrap().expect("L1 briefing must exist");
+        let briefing1 = engine
+            .get_l1_briefing(&storage)
+            .unwrap()
+            .expect("L1 briefing must exist");
         assert_eq!(briefing1.label, "briefing");
         assert_eq!(briefing1.tier, PromptBlockTier::Hot);
-        assert!(briefing1.content.contains("User prefers TypeScript and Rust"));
+        assert!(briefing1
+            .content
+            .contains("User prefers TypeScript and Rust"));
         assert!(briefing1.content.contains("User lives in Tokyo timezone"));
         assert_eq!(briefing1.updated_at, t0);
 
@@ -698,8 +726,13 @@ mod tests {
         engine.step_maintenance(&storage).unwrap();
 
         // 5. Verify refreshed briefing has updated content and bumped timestamp
-        let briefing2 = engine.get_l1_briefing(&storage).unwrap().expect("L1 briefing must exist");
-        assert!(briefing2.content.contains("User uses macOS terminal Ghostty"));
+        let briefing2 = engine
+            .get_l1_briefing(&storage)
+            .unwrap()
+            .expect("L1 briefing must exist");
+        assert!(briefing2
+            .content
+            .contains("User uses macOS terminal Ghostty"));
         assert_eq!(briefing2.updated_at, t1);
     }
 

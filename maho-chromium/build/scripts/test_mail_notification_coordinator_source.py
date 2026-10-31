@@ -14,6 +14,7 @@ PLATFORM = ROOT / "maho-chromium/browser/maho_browser_main_extra_parts.cc"
 PERMISSION_HEADER = ROOT / "maho-chromium/browser/mail_helper/maho_mail_service.h"
 PERMISSION_SOURCE = ROOT / "maho-chromium/browser/mail_helper/maho_mail_service.cc"
 MAC_PERMISSION = ROOT / "maho-chromium/browser/mail_helper/maho_mail_notification_permission_mac.mm"
+LINUX_PERMISSION = ROOT / "maho-chromium/browser/mail_helper/maho_mail_notification_permission.cc"
 TEST = ROOT / "maho-chromium/browser/mail_helper/maho_mail_notification_coordinator_unittest.cc"
 SETTINGS = ROOT / "maho-chromium/browser/ui/webui/maho_settings/maho_settings_page_handler.cc"
 
@@ -27,6 +28,7 @@ class MailNotificationCoordinatorSourceTest(unittest.TestCase):
         cls.permission_header = PERMISSION_HEADER.read_text(encoding="utf-8")
         cls.permission_source = PERMISSION_SOURCE.read_text(encoding="utf-8")
         cls.mac_permission = MAC_PERMISSION.read_text(encoding="utf-8")
+        cls.linux_permission = LINUX_PERMISSION.read_text(encoding="utf-8")
         cls.test = TEST.read_text(encoding="utf-8")
         cls.settings = SETTINGS.read_text(encoding="utf-8")
 
@@ -104,6 +106,16 @@ class MailNotificationCoordinatorSourceTest(unittest.TestCase):
         self.assertNotIn("CurrentPermission()", self.mac_permission)
         self.assertIn(
             "GetMahoMailNotificationPermission(base::BindOnce(", self.settings
+        )
+
+    def test_linux_permission_provider_grants_notifications(self) -> None:
+        self.assertIn(
+            "MailOsNotificationPermission::kGranted",
+            self.linux_permission,
+        )
+        self.assertNotIn(
+            "MailOsNotificationPermission::kUnsupported",
+            self.linux_permission,
         )
 
     def test_permission_change_regressions_and_prompt_serialization(self) -> None:

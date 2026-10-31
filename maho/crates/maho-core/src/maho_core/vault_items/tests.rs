@@ -4,7 +4,6 @@
 //! back with no memory/DB divergence, including after reload. All names select
 //! with `vault_crud`.
 
-use maho_storage::sqlite::set_sqlcipher_key;
 use maho_types::vault::{
     CredentialOrigin, VaultItemKind, VaultItemPublicMetadata, VaultRevision, VaultSchemaVersion,
 };
@@ -19,6 +18,9 @@ const SENTINEL: &str = "S3NTINEL-maho-vault-9F4C";
 
 fn login_meta(origin: &str) -> VaultItemPublicMetadata {
     VaultItemPublicMetadata {
+        favorite: false,
+        trashed_at: None,
+        has_notes: false,
         title: "Site".to_string(),
         origins: vec![CredentialOrigin::try_from(origin).expect("origin")],
         username_hint: String::new(),
@@ -38,7 +40,7 @@ fn login_input(origin: &str, username: &str, password: &str) -> VaultLoginInput 
 }
 
 fn fault_core(dir: &tempfile::TempDir, name: &str) -> MahoCore {
-    set_sqlcipher_key("vault-crud-fault-key").expect("configure key");
+    crate::install_test_sqlcipher_key();
     let path = dir.path().join(name);
     let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
     core.initialize_vault(MASTER, RECOVERY).expect("init vault");
@@ -68,6 +70,7 @@ fn vault_crud_injected_persist_fault_rolls_back_and_state_is_identical_after_rel
         dto.id,
         VaultRevision::new(1),
         VaultLoginUpdate {
+            notes: None,
             metadata: update_meta,
             username: "alice".to_string(),
             password: Some(Zeroizing::new("newpw".to_string())),
@@ -95,7 +98,7 @@ fn vault_crud_injected_persist_fault_rolls_back_and_state_is_identical_after_rel
     assert_eq!(after.revision, 1);
     drop(core);
 
-    set_sqlcipher_key("vault-crud-fault-key").expect("configure key");
+    crate::install_test_sqlcipher_key();
     let mut reopened = MahoCore::new().with_storage(&path);
     reopened.load_persisted_data().unwrap();
     reopened.unlock_vault(MASTER).unwrap();
@@ -111,7 +114,6 @@ fn vault_crud_injected_persist_fault_rolls_back_and_state_is_identical_after_rel
     );
     assert_eq!(reload_row.revision, 1);
     assert_eq!(reopened.vault_status().item_count, 1);
-    let _ = set_sqlcipher_key("");
 }
 
 #[test]
@@ -131,5 +133,4 @@ fn vault_crud_injected_fault_on_add_persists_nothing() {
     );
     assert_eq!(core.vault_status().item_count, 0, "cached count unchanged");
     let _ = VaultSchemaVersion::CURRENT;
-    let _ = set_sqlcipher_key("");
 }

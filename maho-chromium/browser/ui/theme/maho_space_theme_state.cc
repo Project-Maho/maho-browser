@@ -419,6 +419,11 @@ MahoSpaceThemeState::ChangedSpaceIds MahoSpaceThemeState::UpdateFromCore() {
 MahoSpaceThemeState::ChangedSpaceIds
 MahoSpaceThemeState::UpdateFromSnapshotForTesting(
     const std::string& spaces_json) {
+  return UpdateFromSnapshot(spaces_json);
+}
+
+MahoSpaceThemeState::ChangedSpaceIds
+MahoSpaceThemeState::UpdateFromSnapshot(const std::string& spaces_json) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   return ReplaceCommittedThemeSnapshot(spaces_json, committed_themes_.get());
 }
@@ -426,7 +431,7 @@ MahoSpaceThemeState::UpdateFromSnapshotForTesting(
 std::optional<MahoSpaceThemeState::ThemeData>
 MahoSpaceThemeState::GetThemeDataForBrowser(Browser* browser) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!browser || !browser->profile() || browser->profile()->IsOffTheRecord()) {
+  if (!browser || !browser->GetProfile() || browser->GetProfile()->IsOffTheRecord()) {
     return std::nullopt;
   }
   auto preview_it = preview_overrides_->find(browser);
@@ -490,7 +495,7 @@ void MahoSpaceThemeState::Clear() {
 bool MahoSpaceThemeState::SetPreviewOverride(Browser* browser,
                                              const std::string& theme_json) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!browser || !browser->profile() || browser->profile()->IsOffTheRecord()) {
+  if (!browser || !browser->GetProfile() || browser->GetProfile()->IsOffTheRecord()) {
     return false;
   }
   std::optional<base::Value> parsed =
@@ -520,8 +525,8 @@ void MahoSpaceThemeState::ClearPreviewOverride(Browser* browser) {
 
 bool MahoSpaceThemeState::HasPreviewOverride(Browser* browser) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  return browser && browser->profile() &&
-         !browser->profile()->IsOffTheRecord() &&
+  return browser && browser->GetProfile() &&
+         !browser->GetProfile()->IsOffTheRecord() &&
          preview_overrides_->contains(browser);
 }
 

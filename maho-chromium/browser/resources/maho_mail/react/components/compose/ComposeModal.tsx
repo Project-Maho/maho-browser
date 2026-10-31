@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { AccountSummary, ReplyContext, ComposeEmailRequest } from "../../types";
+import type { AccountSummary, ReplyContext, ComposeEmailRequest, ComposeAttachment, SendRequestedOptions } from "../../types";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { cn } from "../../lib/utils";
 import { ComposeForm } from "./ComposeForm";
@@ -16,14 +16,23 @@ interface ComposeModalProps {
   accountId: string;
   accountEmail?: string;
   initialBody?: string;
+  initialBodyHtml?: string;
+  initialBodyIsComplete?: boolean;
+  initialAttachments?: ComposeAttachment[];
   initialTo?: string;
   initialDraftId?: string;
   initialSubject?: string;
   initialCc?: string;
   initialBcc?: string;
+  initialReadReceipt?: boolean;
+  initialPgpEncrypt?: boolean;
+  initialSmimeSign?: boolean;
+  initialSmimeEncrypt?: boolean;
+  initialInReplyTo?: string;
+  initialReferences?: string;
   accounts: AccountSummary[];
   sourceAccountId?: string;
-  onSendRequested?: (request: ComposeEmailRequest) => void;
+  onSendRequested?: (request: ComposeEmailRequest, options?: SendRequestedOptions) => void | Promise<void>;
   fullscreen?: boolean;
 }
 
@@ -38,7 +47,7 @@ export function ComposeModal({ fullscreen: initialFullscreen, ...props }: Compos
     <div
       ref={modalRef}
       className={cn(
-        "fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm",
+        "fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in",
         fullscreen ? "p-0" : "p-4",
       )}
       role="dialog"
@@ -46,10 +55,10 @@ export function ComposeModal({ fullscreen: initialFullscreen, ...props }: Compos
     >
       <div
         className={cn(
-          "flex flex-col border-border bg-background shadow-2xl overflow-hidden animate-scale-in",
+          "flex flex-col border-border bg-background shadow-2xl overflow-hidden dialog-enter",
           fullscreen
             ? "h-full w-full rounded-none border-0"
-            : "h-[90vh] w-full max-w-4xl rounded-xl border",
+            : "h-[90vh] w-full max-w-4xl rounded-2xl border",
         )}
       >
         <ComposeForm

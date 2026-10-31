@@ -1,179 +1,178 @@
 // Copyright 2026 Maho Browser. All rights reserved.
-//
-// Independent runtime-proof tests for the portable Maho Mini implementation.
-// These drive LaunchMahoMini directly (with a real URL) instead of going
-// through ui_test_utils::NavigateToURL, which does not complete reliably for
-// first navigations inside the macOS VM e2e environment.
-
-#include <functional>
 
 #include "base/run_loop.h"
-#include "base/functional/callback.h"
+#include "base/scoped_observation.h"
+#include "base/test/scoped_run_loop_timeout.h"
 #include "base/time/time.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
-#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/top_container_view.h"
+#include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/ui_test_utils.h"
+#include "components/keep_alive_registry/keep_alive_types.h"
+#include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
+#include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"
 #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
-#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/views/view_observer.h"
+#include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
 namespace {
 
-Browser* FindPopupBrowser(Browser* opener) {
-  Browser* result = nullptr;
-  for (BrowserWindowInterface* bwi : GetAllBrowserWindowInterfaces()) {
-    if (bwi->GetType() == BrowserWindowInterface::TYPE_POPUP &&
-        (opener == nullptr ||
-         bwi->GetBrowserForMigrationOnly() != opener)) {
-      result = bwi->GetBrowserForMigrationOnly();
-      break;
+class PopupCreatedWaiter : public BrowserCollectionObserver {
+ public:
+  PopupCreatedWaiter() {
+    observation_.Observe(GlobalBrowserCollection::GetInstance());
+  }
+  void OnBrowserCreated(BrowserWindowInterface* browser) override {
+    if (browser->GetType() == BrowserWindowInterface::TYPE_POPUP) {
+      popup_ = browser;
+      run_loop_.Quit();
     }
   }
-  return result;
-}
+  BrowserWindowInterface* Wait() {
+    base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(30));
+    if (!popup_) {
+      run_loop_.Run();
+    }
+    return popup_;
+  }
+ private:
+  BrowserWindowInterface* popup_ = nullptr;
+  base::RunLoop run_loop_;
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      observation_{this};
+};
 
-bool WaitForCondition(std::function<bool()> cond,
-                      base::TimeDelta timeout) {
-  const base::TimeTicks deadline = base::TimeTicks::Now() + timeout;
-  while (base::TimeTicks::Now() < deadline) {
-    if (cond()) {
-      return true;
-    }
-    base::PlatformThread::Sleep(base::Milliseconds(250));
+class BoundsChangedWaiter : public views::ViewObserver {
+ public:
+  explicit BoundsChangedWaiter(views::View* view) { observation_.Observe(view); }
+  void OnViewBoundsChanged(views::View* view) override {
+    changed_ = true;
+    run_loop_.Quit();
   }
-  return cond();
+  void Wait() {
+    base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(30));
+    if (!changed_) {
+      run_loop_.Run();
+    }
+  }
+ private:
+  bool changed_ = false;
+  base::RunLoop run_loop_;
+  base::ScopedObservation<views::View, views::ViewObserver> observation_{this};
+};
+
+void CheckMiniLayout(BrowserWindowInterface* popup) {
+  ASSERT_EQ(BrowserWindowInterface::TYPE_POPUP, popup->GetType());
+  BrowserView* view = BrowserView::GetBrowserViewForBrowser(popup);
+  ASSERT_TRUE(view);
+  maho::MahoMiniTopBarView* top_bar = nullptr;
+  for (views::View* child : view->children()) {
+    if (auto* candidate = views::AsViewClass<maho::MahoMiniTopBarView>(child)) {
+      top_bar = candidate;
+    }
+  }
+  ASSERT_TRUE(top_bar);
+  views::View* contents = view->contents_container();
+  ASSERT_TRUE(contents);
+  BoundsChangedWaiter changed(contents);
+  gfx::Rect bounds = view->GetWidget()->GetWindowBoundsInScreen();
+  bounds.set_width(bounds.width() + 37);
+  view->GetWidget()->SetBounds(bounds);
+  view->GetWidget()->LayoutRootViewIfNecessary();
+  changed.Wait();
+  view->GetWidget()->LayoutRootViewIfNecessary();
+  EXPECT_TRUE(top_bar->GetVisible());
+  EXPECT_EQ(46, top_bar->height());
+  EXPECT_EQ(0, view->top_container()->height());
+  EXPECT_EQ(top_bar->GetBoundsInScreen().bottom(),
+            contents->GetBoundsInScreen().y());
+  ASSERT_EQ(1, popup->GetTabStripModel()->count());
+  auto* web_contents = popup->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(web_contents);
+  EXPECT_FALSE(web_contents->IsCrashed());
 }
 
 }  // namespace
 
-class MahoMiniRuntimeProofTest : public InProcessBrowserTest {
- public:
-  MahoMiniRuntimeProofTest() = default;
-  MahoMiniRuntimeProofTest(const MahoMiniRuntimeProofTest&) = delete;
-  MahoMiniRuntimeProofTest& operator=(const MahoMiniRuntimeProofTest&) = delete;
-  ~MahoMiniRuntimeProofTest() override = default;
-
-  void SetUpOnMainThread() override {
-    embedded_test_server()->ServeFilesFromSourceDirectory("chrome/test/data");
-    ASSERT_TRUE(embedded_test_server()->Start());
-    InProcessBrowserTest::SetUpOnMainThread();
-  }
-};
+class MahoMiniRuntimeProofTest : public InProcessBrowserTest {};
 
 IN_PROC_BROWSER_TEST_F(MahoMiniRuntimeProofTest,
                        MahoMini_OpensPopupFromNormalBrowser) {
-  const size_t initial_browser_count =
-      GlobalBrowserCollection::GetInstance()->GetSize();
-
-  maho::ExecuteCommandAction(browser(), "maho_mini");
-
-  ASSERT_TRUE(WaitForCondition([=]() {
-    return GlobalBrowserCollection::GetInstance()->GetSize() >
-           initial_browser_count;
-  }, base::Seconds(30))) << "maho_mini action must open a new popup browser window";
-
-  Browser* popup = FindPopupBrowser(browser());
-  ASSERT_TRUE(popup) << "A TYPE_POPUP browser must exist after maho_mini";
-  EXPECT_EQ(Browser::TYPE_POPUP, popup->type());
+  PopupCreatedWaiter created;
+  maho::ExecuteCommandAction(static_cast<Browser*>(browser()), "maho_mini");
+  auto* popup = created.Wait();
+  ASSERT_TRUE(popup);
+  CheckMiniLayout(popup);
+  CloseBrowserSynchronously(popup);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoMiniRuntimeProofTest,
                        LaunchMahoMini_WithNoOpenBrowser) {
-  const size_t initial_browser_count =
-      GlobalBrowserCollection::GetInstance()->GetSize();
-
-  maho::MahoMiniRequest request;
-  request.url = GURL("about:blank");
-
-  maho::LaunchMahoMini(browser()->profile(), request);
-
-  ASSERT_TRUE(WaitForCondition([=]() {
-    return GlobalBrowserCollection::GetInstance()->GetSize() >
-           initial_browser_count;
-  }, base::Seconds(30))) << "LaunchMahoMini must open a new popup browser window";
-
-  Browser* popup = FindPopupBrowser(nullptr);
-  ASSERT_TRUE(popup) << "A TYPE_POPUP browser must exist after LaunchMahoMini";
-  EXPECT_EQ(Browser::TYPE_POPUP, popup->type());
-
-  // NOTE: the VM e2e guest never commits navigations (GetLastCommittedURL()
-  // stays empty for any URL, including about:blank) - environment limitation,
-  // documented in the notepad. Assert the achievable runtime contract: the
-  // popup hosts its own tab with a live WebContents for the requested URL.
-  ASSERT_TRUE(WaitForCondition([=]() {
-    content::WebContents* wc =
-        popup->tab_strip_model()->GetActiveWebContents();
-    return wc != nullptr && !wc->IsCrashed();
-  }, base::Seconds(30))) << "Popup must host a live WebContents for the "
-                             "requested URL";
-  EXPECT_EQ(1, popup->tab_strip_model()->count());
-
+  Profile* profile = browser()->GetProfile();
+  ScopedKeepAlive process_alive(KeepAliveOrigin::BROWSER,
+                                KeepAliveRestartOption::DISABLED);
+  ScopedProfileKeepAlive profile_alive(profile,
+                                       ProfileKeepAliveOrigin::kBrowserWindow);
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(30));
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+  CloseBrowserSynchronously(browser());
+  ASSERT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
+  PopupCreatedWaiter created;
+  maho::LaunchMahoMini(profile,
+                      maho::MahoMiniRequest{GURL("about:blank")});
+  auto* popup = created.Wait();
+  ASSERT_TRUE(popup);
+  CheckMiniLayout(popup);
   CloseBrowserSynchronously(popup);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoMiniRuntimeProofTest,
                        MahoMini_PopupNavigatesIndependently) {
-  const GURL popup_url = GURL("about:blank");
-
-  maho::MahoMiniRequest request;
-  request.url = popup_url;
-  maho::LaunchMahoMini(browser()->profile(), request);
-
-  ASSERT_TRUE(WaitForCondition([=]() {
-    return FindPopupBrowser(nullptr) != nullptr;
-  }, base::Seconds(30))) << "Popup must open before independence test";
-
-  Browser* popup = FindPopupBrowser(nullptr);
+  auto* opener_contents = browser()->GetTabStripModel()->GetActiveWebContents();
+  const int opener_tabs = browser()->GetTabStripModel()->count();
+  PopupCreatedWaiter created;
+  maho::LaunchMahoMini(browser()->GetProfile(),
+                      maho::MahoMiniRequest{GURL("about:blank")});
+  auto* popup = created.Wait();
   ASSERT_TRUE(popup);
-
-  // Independence proof (VM cannot commit navigations - see note above): the
-  // popup hosts its own live WebContents while the opener keeps its tab.
-  content::WebContents* popup_wc = popup->tab_strip_model()->GetActiveWebContents();
-  ASSERT_TRUE(WaitForCondition([=]() {
-    return popup_wc != nullptr && !popup_wc->IsCrashed();
-  }, base::Seconds(30))) << "Popup must host its own live WebContents";
-  EXPECT_EQ(1, popup->tab_strip_model()->count());
-
-  ASSERT_EQ(Browser::TYPE_POPUP, popup->type())
-      << "Popup must remain a distinct popup browser";
+  CheckMiniLayout(popup);
+  EXPECT_NE(opener_contents, popup->GetTabStripModel()->GetActiveWebContents());
+  EXPECT_EQ(opener_tabs, browser()->GetTabStripModel()->count());
+  CloseBrowserSynchronously(popup);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoMiniRuntimeProofTest,
                        MahoMini_PromoteClosesPopupAndMovesTabToNormalBrowser) {
-  const size_t initial_normal_tabs = browser()->tab_strip_model()->count();
-
-  maho::MahoMiniRequest request;
-  request.url = embedded_test_server()->GetURL("/title1.html");
-  maho::LaunchMahoMini(browser()->profile(), request);
-
-  ASSERT_TRUE(WaitForCondition([=]() {
-    return FindPopupBrowser(nullptr) != nullptr;
-  }, base::Seconds(60))) << "Mini popup must open before promote test";
-
-  Browser* popup = FindPopupBrowser(nullptr);
+  PopupCreatedWaiter created;
+  maho::LaunchMahoMini(browser()->GetProfile(),
+                      maho::MahoMiniRequest{GURL("about:blank")});
+  auto* popup = created.Wait();
   ASSERT_TRUE(popup);
-  const size_t tabs_before =
-      browser()->tab_strip_model()->count() + popup->tab_strip_model()->count();
-
-  MahoMiniWindow::PromoteToTab(popup);
-
-  ASSERT_TRUE(WaitForCondition([=]() {
-    return !FindPopupBrowser(nullptr);
-  }, base::Seconds(30))) << "Promote must close the popup and move its tab "
-                            "into the normal browser";
-
-  const size_t tabs_after = browser()->tab_strip_model()->count();
-  EXPECT_EQ(tabs_before, tabs_after)
-      << "Promote must preserve the total tab count";
-
-  base::RunLoop().RunUntilIdle();
+  CheckMiniLayout(popup);
+  const int tabs_before = browser()->GetTabStripModel()->count() +
+                          popup->GetTabStripModel()->count();
+  ASSERT_EQ(browser(),
+            ProfileBrowserCollection::GetForProfile(popup->GetProfile())
+                ->FindTabbedBrowser(/*match_original_profiles=*/false));
+  ui_test_utils::BrowserDestroyedObserver closed(popup);
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(30));
+  // LaunchMahoMini uses the non-Android CreateBrowserWindow overload, which
+  // returns Browser::Create; the observed popup is therefore a concrete Browser.
+  MahoMiniWindow::PromoteToTab(static_cast<Browser*>(popup));
+  closed.Wait();
+  EXPECT_EQ(tabs_before, browser()->GetTabStripModel()->count());
 }

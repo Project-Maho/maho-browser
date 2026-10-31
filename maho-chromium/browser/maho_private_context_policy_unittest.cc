@@ -29,10 +29,8 @@ class TestBrowserWindowInterface : public MockBrowserWindowInterface {
     ON_CALL(*this, GetWeakPtr).WillByDefault([this]() {
       return weak_factory_.GetWeakPtr();
     });
-    browser_actions_ = new BrowserActions(this);
-    ON_CALL(*this, GetActions()).WillByDefault(testing::Return(browser_actions_));
-    ON_CALL(*this, GetUnownedUserDataHost()).WillByDefault(testing::ReturnRef(user_data_host_));
     ON_CALL(testing::Const(*this), GetUnownedUserDataHost()).WillByDefault(testing::ReturnRef(user_data_host_));
+    browser_actions_ = std::make_unique<BrowserActions>(this);
     user_education_ = std::make_unique<testing::NiceMock<MockBrowserUserEducationInterface>>(this);
     features_ = std::make_unique<BrowserWindowFeatures>();
   }
@@ -54,7 +52,7 @@ class TestBrowserWindowInterface : public MockBrowserWindowInterface {
   raw_ptr<Profile> profile_;
   raw_ptr<TabStripModel> tab_strip_ = nullptr;
   ui::UnownedUserDataHost user_data_host_;
-  raw_ptr<BrowserActions> browser_actions_ = nullptr;
+  std::unique_ptr<BrowserActions> browser_actions_;
   std::unique_ptr<MockBrowserUserEducationInterface> user_education_;
   std::unique_ptr<BrowserWindowFeatures> features_;
   base::WeakPtrFactory<TestBrowserWindowInterface> weak_factory_;

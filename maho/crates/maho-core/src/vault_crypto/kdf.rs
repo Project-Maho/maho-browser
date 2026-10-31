@@ -8,6 +8,7 @@ use super::{
 const USER_DOMAIN: &[u8] = b"maho-vault-v1/user-wrapping";
 const RECOVERY_DOMAIN: &[u8] = b"maho-vault-v1/recovery-wrapping";
 const DEVICE_DOMAIN: &[u8] = b"maho-vault-v1/device-wrapping";
+const ACCOUNT_DOMAIN: &[u8] = b"maho-vault-v1/account-wrapping";
 
 pub fn derive_user_wrapping_key(
     secret: &[u8],
@@ -30,6 +31,17 @@ pub fn derive_device_wrapping_key(
     derive_wrapping_key(secret, metadata, WrappingDomain::Device)
 }
 
+/// Derives the account-escrow wrapping key from the sync bootstrap seed. The
+/// account seed is shared with the Sync E2EE derivation, so the vault domain is
+/// separated at the Argon2 associated-data layer: the same seed must never
+/// yield the sync key and the vault wrapping key.
+pub fn derive_account_wrapping_key(
+    secret: &[u8],
+    metadata: &VaultKdfMetadata,
+) -> Result<WrappingKey, VaultCryptoError> {
+    derive_wrapping_key(secret, metadata, WrappingDomain::Account)
+}
+
 fn derive_wrapping_key(
     secret: &[u8],
     metadata: &VaultKdfMetadata,
@@ -40,6 +52,7 @@ fn derive_wrapping_key(
         WrappingDomain::User => USER_DOMAIN,
         WrappingDomain::Recovery => RECOVERY_DOMAIN,
         WrappingDomain::Device => DEVICE_DOMAIN,
+        WrappingDomain::Account => ACCOUNT_DOMAIN,
     };
     let parameters = metadata.parameters();
     let mut builder = ParamsBuilder::new();

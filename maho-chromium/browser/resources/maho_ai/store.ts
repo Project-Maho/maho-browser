@@ -82,7 +82,7 @@ type SubmissionRequest = {
 interface ComposerDraftPageHandlerRemote extends ComposerDraftRemote {}
 
 interface AISelectionRemote {
-  setAISelection(
+  setDefaultAISelection(
       providerId: string,
       modelId: string,
       reasoningEffort: AIReasoningEffort): Promise<{accepted: boolean}>;
@@ -100,8 +100,8 @@ function supportsComposerDraftPersistence(
 
 function supportsAISelection(
     pageHandler: PageHandlerRemote): pageHandler is PageHandlerRemote&AISelectionRemote {
-  return 'setAISelection' in pageHandler &&
-      typeof pageHandler.setAISelection === 'function';
+  return 'setDefaultAISelection' in pageHandler &&
+      typeof pageHandler.setDefaultAISelection === 'function';
 }
 
 interface RuntimeConfigRemote {
@@ -204,7 +204,7 @@ function normalizeAISettings(info: AISettingsInfoPayload): AISettingsState {
     activeModelId: normalizeIdentifier(info.activeModelId),
     activeProviderId: normalizeIdentifier(info.activeProviderId),
     activeReasoningEffort:
-        normalizeReasoningEffort(info.activeReasoningEffort) || AI_REASONING_EFFORT.kMedium,
+        normalizeReasoningEffort(info.activeReasoningEffort) ?? AI_REASONING_EFFORT.kMedium,
     providerOptions: normalizeProviderOptions(info.providerOptions),
     reasoningOptions: normalizeReasoningOptions(info.reasoningOptions),
   };
@@ -285,9 +285,11 @@ export class MahoAiStore {
       new WeakMap<NonNullable<RuntimeEvent['browserContext']>, bigint>();
   private readonly replayInteractionSequences = new Map<string, Map<string, bigint>>();
   private selectionRevision = 0;
+  private historySearchGeneration = 0;
   private submissionInFlight = false;
   private composerDraftScope: ComposerDraftScope = {kind: 'new_task'};
   private composerDraftRevision = 0;
+  private readonly composerDraftRevisionByScope = new Map<string, number>();
   private composerDraftPersistence: ComposerDraftPersistencePort|null;
   private readonly routineOperationsClient: RoutineOperationsClient;
   /**
@@ -449,6 +451,7 @@ export class MahoAiStore {
 
   setComposerPrompt(prompt: string) {
     ++this.composerDraftRevision;
+    this.composerDraftRevisionByScope.set(scopeKey(this.composerDraftScope), this.composerDraftRevision);
     this.patch(state => {
       state.composer.prompt = prompt;
     });
@@ -918,6 +921,7 @@ export class MahoAiStore {
   }
 
   async searchHistory(query: string, maxResults = 20): Promise<void> {
+    const generation = ++this.historySearchGeneration;
     this.patch(state => {
       state.historySearch = {
         query,
@@ -929,6 +933,7 @@ export class MahoAiStore {
 
     try {
       const {items} = await this.pageHandler.searchHistory(query, maxResults);
+      if (generation !== this.historySearchGeneration) return;
       this.patch(state => {
         state.historySearch = {
           query,
@@ -938,6 +943,7 @@ export class MahoAiStore {
         };
       });
     } catch (error) {
+      if (generation !== this.historySearchGeneration) return;
       this.patch(state => {
         state.historySearch = {
           ...state.historySearch,
@@ -949,6 +955,7 @@ export class MahoAiStore {
   }
 
   resetHistorySearch() {
+    ++this.historySearchGeneration;
     this.patch(state => {
       state.historySearch = {...DEFAULT_HISTORY_SEARCH_STATE};
     });
@@ -1043,7 +1050,7 @@ export class MahoAiStore {
     input.click();
   }
 
-  async setAISelection(selection: AISelectionRequest): Promise<boolean> {
+  async setDefaultAISelection(selection: AISelectionRequest): Promise<boolean> {
     const providerId = selection.providerId.trim();
     const modelId = selection.modelId.trim();
     const reasoningEffort = normalizeReasoningEffort(selection.reasoningEffort);
@@ -1053,19 +1060,19 @@ export class MahoAiStore {
     }
 
     if (!supportsAISelection(this.pageHandler)) {
-      console.warn('[maho-ai] SetAISelection is unavailable on this page handler');
+      console.warn('[maho-ai] SetDefaultAISelection is unavailable on this page handler');
       await this.refreshAISettings();
       return false;
     }
 
     try {
-      const {accepted} = await this.pageHandler.setAISelection(
+      const {accepted} = await this.pageHandler.setDefaultAISelection(
           providerId, modelId, reasoningEffort);
       await this.refreshAISettings();
       return accepted;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn('[maho-ai] SetAISelection failed', message);
+      console.warn('[maho-ai] SetDefaultAISelection failed', message);
       await this.refreshAISettings();
       return false;
     }
@@ -1078,6 +1085,8 @@ export class MahoAiStore {
       return;
     }
 
+    const draftScope = this.composerDraftScope;
+    const draftRevision = this.composerDraftRevisionByScope.get(scopeKey(draftScope));
     const request = this.beginSubmission();
     if (!request) {
       return;
@@ -1088,10 +1097,11 @@ export class MahoAiStore {
         state.turnPendingBySessionId[sessionId] = true;
       });
       await this.submitCapturedRequest(sessionId, request);
-      if (this.composerDraftScope.kind === 'new_task') {
+      if (draftScope.kind === 'new_task' &&
+          scopeKey(this.composerDraftScope) === scopeKey(draftScope)) {
         await this.promoteAcceptedNewTaskDraft(sessionId);
-      } else {
-        await this.composerDraftPersistence?.clear(this.composerDraftScope);
+      } else if (this.composerDraftRevisionByScope.get(scopeKey(draftScope)) === draftRevision) {
+        await this.composerDraftPersistence?.clear(draftScope);
       }
     } catch (error) {
       this.rollbackSubmission(sessionId, request);
@@ -1371,9 +1381,15 @@ export class MahoAiStore {
   }
 
   private async hydrateComposerDraft(scope: ComposerDraftScope): Promise<void> {
+    const switching = scopeKey(this.composerDraftScope) !== scopeKey(scope);
+    const flushed = switching ? this.composerDraftPersistence?.flush(this.composerDraftScope) : undefined;
     this.composerDraftScope = scope;
+    if (switching) {
+      this.patch(state => { state.composer.prompt = ''; });
+    }
     const revision = this.composerDraftRevision;
     const promptAtStart = this.state.composer.prompt;
+    await flushed;
     const restored = await this.composerDraftPersistence?.load(scope);
     if (restored === null || restored === undefined ||
         scopeKey(this.composerDraftScope) !== scopeKey(scope) ||

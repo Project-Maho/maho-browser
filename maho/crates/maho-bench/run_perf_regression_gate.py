@@ -395,6 +395,7 @@ def generate_mock_estimates() -> List[BenchmarkEstimate]:
 def run_cargo_benchmark(
     manifest_path: Path,
     bench_target: str,
+    target_dir: Path,
     filter_expr: Optional[str] = None,
     verbose: bool = False,
 ) -> int:
@@ -408,6 +409,8 @@ def run_cargo_benchmark(
         "maho-bench",
         "--bench",
         bench_target,
+        "--target-dir",
+        str(target_dir.resolve()),
     ]
     if filter_expr:
         cmd.extend(["--", filter_expr])
@@ -659,6 +662,7 @@ def main() -> int:
             exit_code = run_cargo_benchmark(
                 manifest_path=args.manifest_path,
                 bench_target=suite,
+                target_dir=args.target_dir,
                 filter_expr=args.filter,
                 verbose=args.verbose,
             )

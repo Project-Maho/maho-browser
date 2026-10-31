@@ -10,6 +10,7 @@
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 #include "ui/views/controls/button/image_button_factory.h"
+#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/menu/menu_runner.h"
@@ -107,7 +108,7 @@ std::vector<TabSectionSpec> BuildTabSections(const SpaceBoardColumn& column) {
 
   std::vector<TabSectionSpec> sections;
   if (!pinned_tabs.empty()) {
-    sections.push_back(TabSectionSpec{u"BOOKMARKS", std::move(pinned_tabs)});
+    sections.push_back(TabSectionSpec{u"PINNED", std::move(pinned_tabs)});
   }
   if (!regular_tabs.empty()) {
     sections.push_back(TabSectionSpec{u"TABS", std::move(regular_tabs)});
@@ -116,8 +117,8 @@ std::vector<TabSectionSpec> BuildTabSections(const SpaceBoardColumn& column) {
 }
 
 std::u16string SectionAccessibleName(const std::u16string& title) {
-  if (title == u"BOOKMARKS") {
-    return u"Bookmarks";
+  if (title == u"PINNED") {
+    return u"Pinned tabs";
   }
   if (title == u"TABS") {
     return u"Tabs";
@@ -362,7 +363,7 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
 
       for (const SpaceBoardTabItem* tab : section.tabs) {
         auto tab_row = std::make_unique<MahoSpacesOverlayTabRowView>(
-            browser_ ? browser_->profile() : nullptr, *tab, column_.space_id,
+            browser_ ? browser_->GetProfile() : nullptr, *tab, column_.space_id,
             tab_selected_callback_);
         tab_row->SetPalette(palette_);
         tab_row_views_.push_back(section_view->AddChildView(std::move(tab_row)));
@@ -381,9 +382,8 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
   footer_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  auto* drag_handle = footer_row->AddChildView(std::make_unique<GrabImageView>());
-  drag_handle->SetImage(ui::ImageModel::FromVectorIcon(
-      maho_lucide_icons::kMoveIcon, ui::kColorSysOnSurfaceSubtle, 16));
+  // Glyph color is bound to the sidebar palette in UpdateColors().
+  drag_handle_ = footer_row->AddChildView(std::make_unique<GrabImageView>());
 
   auto* spacer = footer_row->AddChildView(std::make_unique<views::View>());
   footer_layout->SetFlexForView(spacer, 1);
@@ -467,18 +467,21 @@ void MahoSpacesOverlayColumnView::UpdateColors() {
   }
   badge_container_->SetBorder(nullptr);
   title_label_->SetEnabledColor(palette_.primary_text);
-  subtitle_label_->SetEnabledColor(palette_.tertiary_text);
-
-  const SkColor section_label_color =
-      SkColorSetA(palette_.tertiary_text, 0xCC);
+  // Tab count is readable metadata: secondary role, never tertiary.
+  subtitle_label_->SetEnabledColor(palette_.secondary_text);
 
   if (clear_label_) {
-    clear_label_->SetEnabledColor(section_label_color);
+    clear_label_->SetEnabledColor(palette_.secondary_text);
   }
 
   if (clear_arrow_) {
     clear_arrow_->SetImage(ui::ImageModel::FromVectorIcon(
-        maho_lucide_icons::kArrowUpIcon, section_label_color, 12));
+        maho_lucide_icons::kArrowUpIcon, palette_.neutral_glyph, 12));
+  }
+
+  if (drag_handle_) {
+    drag_handle_->SetImage(ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kMoveIcon, palette_.neutral_glyph, 16));
   }
 
   if (empty_state_label_) {
@@ -486,33 +489,40 @@ void MahoSpacesOverlayColumnView::UpdateColors() {
   }
 
   if (tag_chip_) {
-    const SkColor tag_bg = SkColorSetA(base_fill, 0x80);
-    tag_chip_->SetBackground(views::CreateRoundedRectBackground(tag_bg, 4));
+    tag_chip_->SetBackground(
+        views::CreateRoundedRectBackground(palette_.row_hover, 4));
     tag_chip_->SetEnabledColor(palette_.secondary_text);
   }
 
+  // Functional glyphs use the contrast-guarded neutral role in every state;
+  // the raw Space color has no contrast guarantee on the column surface.
   if (edit_button_) {
-    const SkColor edit_icon_color =
-        theme_color.value_or(palette_.tertiary_text);
-    edit_button_->SetImageModel(
-        views::Button::STATE_NORMAL,
-        ui::ImageModel::FromVectorIcon(maho_lucide_icons::kPencilLineIcon,
-                                       edit_icon_color, 16));
+    SetFunctionalGlyphImages(edit_button_, maho_lucide_icons::kPencilLineIcon);
   }
 
   if (menu_button_) {
-    menu_button_->SetImageModel(
-        views::Button::STATE_NORMAL,
-        ui::ImageModel::FromVectorIcon(maho_lucide_icons::kEllipsisIcon,
-                                       palette_.tertiary_text, 16));
+    SetFunctionalGlyphImages(menu_button_, maho_lucide_icons::kEllipsisIcon);
   }
+}
+
+void MahoSpacesOverlayColumnView::SetFunctionalGlyphImages(
+    views::ImageButton* button,
+    const gfx::VectorIcon& icon) {
+  const ui::ImageModel normal =
+      ui::ImageModel::FromVectorIcon(icon, palette_.neutral_glyph, 16);
+  button->SetImageModel(views::Button::STATE_NORMAL, normal);
+  button->SetImageModel(views::Button::STATE_HOVERED, normal);
+  button->SetImageModel(views::Button::STATE_PRESSED, normal);
+  button->SetImageModel(
+      views::Button::STATE_DISABLED,
+      ui::ImageModel::FromVectorIcon(icon, palette_.disabled_text, 16));
 }
 
 
 void MahoSpacesOverlayColumnView::HandleEditPressed() {
   if (browser_) {
     MahoSpaceConfigDialog::Open(
-        browser_->profile(), GetWidget()->GetNativeWindow(),
+        browser_->GetProfile(), GetWidget()->GetNativeWindow(),
         column_.space_id, maho_space_config::mojom::InitialFocus::kName);
   }
 }

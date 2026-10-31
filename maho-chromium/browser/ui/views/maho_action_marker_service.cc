@@ -8,7 +8,8 @@
 
 #include "base/functional/bind.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/browser/navigation_handle.h"
@@ -165,7 +166,9 @@ bool MahoActionMarkerService::Show(const Request& request) {
     return false;
   }
 
-  Browser* browser = chrome::FindBrowserWithTab(web_contents());
+  Browser* browser = static_cast<Browser*>(
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents()));
   BrowserView* browser_view =
       browser ? BrowserView::GetBrowserViewForBrowser(browser) : nullptr;
   views::View* contents_view =
@@ -216,9 +219,10 @@ bool MahoActionMarkerService::IsTargetStillValid(const Request& request) const {
     return false;
   }
 
-  Browser* browser = chrome::FindBrowserWithTab(contents);
-  return browser && browser->tab_strip_model() &&
-         browser->tab_strip_model()->GetActiveWebContents() == contents;
+  Browser* browser = static_cast<Browser*>(
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(contents));
+  return browser && browser->GetTabStripModel() &&
+         browser->GetTabStripModel()->GetActiveWebContents() == contents;
 }
 
 void MahoActionMarkerService::Clear() {

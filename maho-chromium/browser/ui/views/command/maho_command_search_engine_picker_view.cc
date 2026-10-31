@@ -16,6 +16,7 @@
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/class_property.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
@@ -37,6 +38,9 @@
 namespace maho {
 
 namespace {
+
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(views::BubbleDialogDelegate,
+                                 kSearchEngineDelegateKey)
 
 constexpr int kCardCornerRadius = 16;
 constexpr int kCardPadding = 8;
@@ -95,7 +99,7 @@ class MahoCommandSearchEnginePickerView::SearchEngineRow : public views::View {
     checkmark_view_ = content_row->AddChildView(std::make_unique<views::ImageView>());
     checkmark_view_->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
     checkmark_view_->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kCheckCircleIcon, ui::kColorSysPrimary, kIconSize));
+        vector_icons::kCheckCircleOldIcon, ui::kColorSysPrimary, kIconSize));
     checkmark_view_->SetVisible(is_default);
 
     GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
@@ -220,7 +224,7 @@ MahoCommandSearchEnginePickerView::MahoCommandSearchEnginePickerView(
   favicon::LargeIconService* large_icon_service = nullptr;
   if (model_ && model_->browser()) {
     large_icon_service =
-        LargeIconServiceFactory::GetForBrowserContext(model_->browser()->profile());
+        LargeIconServiceFactory::GetForBrowserContext(model_->browser()->GetProfile());
   }
 
   for (size_t i = 0; i < engines_.size(); ++i) {
@@ -272,8 +276,10 @@ views::Widget* MahoCommandSearchEnginePickerView::Show(
   delegate->SetContentsView(std::move(contents));
 
   views::Widget* widget =
-      views::BubbleDialogDelegate::CreateBubble(std::move(delegate));
+      views::BubbleDialogDelegate::CreateBubbleDeprecated(
+          delegate.get(), views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   if (widget) {
+    widget->SetProperty(kSearchEngineDelegateKey, std::move(delegate));
     widget->Show();
   }
   return widget;

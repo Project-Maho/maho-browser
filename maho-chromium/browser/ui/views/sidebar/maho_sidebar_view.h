@@ -74,7 +74,7 @@ class MahoSidebarGrainOverlayView;
 class MahoSidebarLibraryActionPaneView;
 class MahoSidebarMediaView;
 class MahoSidebarNowPlayingView;
-class MahoSidebarSearchView;
+class MahoSidebarScrollBar;
 class MahoSidebarTabListView;
 class MahoSidebarUpdateNotificationController;
 class MahoSidebarUpdateNotificationView;
@@ -166,12 +166,12 @@ class MahoSidebarView
     return tab_list_view_;
   }
   MahoSidebarFooterView* footer_view_for_testing() { return footer_view_; }
-  MahoSidebarSearchView* search_view_for_testing() { return search_view_; }
   MahoSidebarTopBarView* top_bar_view_for_testing() { return top_bar_view_; }
   MahoSidebarTopBarView* top_bar_view() { return top_bar_view_; }
   views::View* tabs_surface_for_testing() { return tabs_surface_; }
   views::View* space_header_view_for_testing() { return space_header_view_; }
   views::ScrollView* tab_scroll_view_for_testing() { return tab_scroll_view_; }
+  MahoSidebarScrollBar* tab_scroll_bar_for_testing() { return tab_scroll_bar_; }
   MahoSidebarArchiveView* archive_view_for_testing() { return archive_view_; }
   MahoSidebarDownloadsView* downloads_view_for_testing() {
     return downloads_view_;
@@ -240,9 +240,8 @@ class MahoSidebarView
     }
   }
   void OnTabChangedAtForTesting(tabs::TabInterface* tab,
-                                int index,
                                 TabChangeType change_type) {
-    OnTabChangedAt(tab, index, change_type);
+    OnTabChangedAt(tab, change_type);
   }
   void SetPrivateFlagsForTesting(bool is_private, bool is_otr) {
     is_private_ = is_private;
@@ -343,7 +342,6 @@ class MahoSidebarView
   bool IsTabListScrolling() const;
 
   void UpdateTopBar(const MahoSidebarTopBarModel& model);
-  void UpdateSearch(const MahoSidebarSearchModel& model);
   void UpdateFavorites(const MahoSidebarFavoritesModel& model);
   void UpdateTabList(MahoSidebarTabListModel model);
   void UpdateFooter(const MahoSidebarFooterModel& model);
@@ -370,7 +368,6 @@ class MahoSidebarView
       const TabStripSelectionChange& selection) override;
   void OnSplitTabChanged(const SplitTabChange& change) override;
   void OnTabChangedAt(tabs::TabInterface* tab,
-                      int index,
                       TabChangeType change_type) override;
   void OnTabPinnedStateChanged(tabs::TabInterface* tab, int index) override;
   void OnTabGroupChanged(const TabGroupChange& change) override;
@@ -401,11 +398,11 @@ class MahoSidebarView
   raw_ptr<MahoSpacesOverlayBoardView> spaces_view_ = nullptr;
   raw_ptr<MahoSidebarLibraryRailView> library_rail_view_ = nullptr;
   raw_ptr<MahoSidebarTopBarView> top_bar_view_ = nullptr;
-  raw_ptr<MahoSidebarSearchView> search_view_ = nullptr;
   raw_ptr<MahoSidebarFavoritesGridView> favorites_view_ = nullptr;
   raw_ptr<MahoSidebarTabListView> tab_list_view_ = nullptr;
   raw_ptr<views::View> space_header_view_ = nullptr;
   raw_ptr<views::ScrollView> tab_scroll_view_ = nullptr;
+  raw_ptr<MahoSidebarScrollBar> tab_scroll_bar_ = nullptr;
   base::CallbackListSubscription tab_scroll_subscription_;
   raw_ptr<MahoSidebarFooterView> footer_view_ = nullptr;
   raw_ptr<MahoSidebarNowPlayingView> now_playing_view_ = nullptr;
@@ -420,7 +417,6 @@ class MahoSidebarView
       palette_changed_callbacks_;
   base::CallbackListSubscription library_rail_palette_subscription_;
   base::CallbackListSubscription top_bar_palette_subscription_;
-  base::CallbackListSubscription search_palette_subscription_;
   base::CallbackListSubscription favorites_palette_subscription_;
   base::CallbackListSubscription footer_palette_subscription_;
   base::CallbackListSubscription create_space_palette_subscription_;

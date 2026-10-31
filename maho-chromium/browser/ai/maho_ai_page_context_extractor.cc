@@ -555,7 +555,7 @@ content::WebContents* MahoAiPageContextExtractor::GetActiveWebContents() const {
   if (!browser_) {
     return nullptr;
   }
-  return browser_->tab_strip_model()->GetActiveWebContents();
+  return browser_->GetTabStripModel()->GetActiveWebContents();
 }
 
 content::WebContents* MahoAiPageContextExtractor::GetWebContentsForTabId(
@@ -563,7 +563,7 @@ content::WebContents* MahoAiPageContextExtractor::GetWebContentsForTabId(
   if (!browser_) {
     return nullptr;
   }
-  TabStripModel* tab_strip = browser_->tab_strip_model();
+  TabStripModel* tab_strip = browser_->GetTabStripModel();
   if (!tab_strip) {
     return nullptr;
   }

@@ -47,6 +47,24 @@ pub struct AppCtx {
     pub credential_key: [u8; 32],
 }
 
+impl AppCtx {
+    /// Runs `work` against the shared database connection and releases it
+    /// before returning.
+    ///
+    /// The connection guard is a `std::sync::MutexGuard` and therefore `!Send`:
+    /// holding one across an `.await` makes the surrounding future non-`Send`
+    /// and blocks every other caller for the length of the network round trip.
+    /// Async call sites do each database step through this helper so the guard
+    /// cannot outlive it.
+    pub fn with_db<T>(&self, work: impl FnOnce(&rusqlite::Connection) -> Result<T>) -> Result<T> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        work(&conn)
+    }
+}
+
 static INIT_INFO: OnceLock<InitInfo> = OnceLock::new();
 static CTX: RwLock<Option<Arc<AppCtx>>> = RwLock::new(None);
 static REGISTRY: OnceLock<SyncRegistry> = OnceLock::new();
@@ -97,15 +115,15 @@ pub fn start_account_workers(
     account_id: &str,
 ) -> (bool, bool) {
     let _guard = rt.enter();
-    let sync = registry().ensure_sync(account_id, {
-        let ctx = Arc::clone(ctx);
-        let id = account_id.to_string();
-        move || crate::sync::start_sync_worker(ctx, id)
-    });
     let backfill = registry().ensure_backfill(account_id, {
         let ctx = Arc::clone(ctx);
         let id = account_id.to_string();
         move || crate::backfill::start_backfill_worker(ctx, id)
+    });
+    let sync = registry().ensure_sync(account_id, {
+        let ctx = Arc::clone(ctx);
+        let id = account_id.to_string();
+        move || crate::sync::start_sync_worker(ctx, id)
     });
     (sync, backfill)
 }
@@ -130,11 +148,15 @@ pub fn spawn_account_workers_if_ready(account_id: &str) {
 pub struct WorkerHandle {
     pub stop: Arc<AtomicBool>,
     pub tasks: Vec<tokio::task::JoinHandle<()>>,
+    pub wake: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl WorkerHandle {
     pub fn stop(&self) {
         self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(wake) = &self.wake {
+            wake.notify_one();
+        }
         for task in &self.tasks {
             task.abort();
         }
@@ -231,6 +253,34 @@ impl SyncRegistry {
         }
     }
 
+    pub(crate) fn backfill_wake(&self, account_id: &str) -> Option<Arc<tokio::sync::Notify>> {
+        let map = self.backfill.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        map.get(account_id)
+            .filter(|handle| !handle.stop.load(std::sync::atomic::Ordering::SeqCst))
+            .and_then(|handle| handle.wake.as_ref().map(Arc::clone))
+    }
+
+    pub(crate) fn with_backfill_commit<T>(
+        &self,
+        account_id: &str,
+        expected_stop: &Arc<AtomicBool>,
+        persist: impl FnOnce() -> Result<T>,
+    ) -> Result<Option<T>> {
+        let map = self.backfill.lock()
+            .map_err(|_| MailFfiError::Internal("backfill registry lock poisoned".into()))?;
+        let Some(handle) = map.get(account_id) else {
+            return Ok(None);
+        };
+        if !Arc::ptr_eq(&handle.stop, expected_stop)
+            || handle.stop.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(None);
+        }
+        let result = persist();
+        drop(map);
+        result.map(Some)
+    }
+
     /// Guarded, idempotent counterpart to [`Self::ensure_sync`] for the backfill
     /// worker. Same single-lock claim-before-spawn semantics.
     pub fn ensure_backfill<F>(&self, account_id: &str, spawn: F) -> bool
@@ -310,47 +360,124 @@ pub struct PkceEntry {
     pub created_at: Instant,
 }
 
-/// Process-wide store of in-flight PKCE authorizations. Entries expire after
-/// [`PKCE_TTL`]; expired entries are purged lazily on every access.
+#[derive(PartialEq, Eq)]
+enum PkcePhase {
+    Pending,
+    Exchanging,
+    Committing,
+}
+
+struct PkceAttempt {
+    entry: PkceEntry,
+    phase: PkcePhase,
+    cancelled: bool,
+}
+
+/// Process-wide store of in-flight PKCE authorizations. Pending entries expire
+/// after [`PKCE_TTL`]; exchanging/committing entries belong to their completion
+/// guard until it finishes, including on error.
 #[derive(Default)]
 pub struct PkceStore {
-    entries: Mutex<HashMap<String, PkceEntry>>,
+    entries: Mutex<HashMap<String, PkceAttempt>>,
 }
 
 impl PkceStore {
-    pub fn insert(&self, state: String, entry: PkceEntry) {
+    fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<String, PkceAttempt>> {
         let mut map = match self.entries.lock() {
             Ok(m) => m,
             Err(p) => p.into_inner(),
         };
-        map.retain(|_, e| e.created_at.elapsed() < PKCE_TTL);
-        map.insert(state, entry);
+        map.retain(|_, e| e.phase != PkcePhase::Pending || e.entry.created_at.elapsed() < PKCE_TTL);
+        map
+    }
+
+    pub fn insert(&self, state: String, entry: PkceEntry) {
+        // Never replace a live attempt or its completion owner.
+        self.entries().entry(state).or_insert(PkceAttempt {
+            entry,
+            phase: PkcePhase::Pending,
+            cancelled: false,
+        });
     }
 
     pub fn take(&self, state: &str) -> Option<PkceEntry> {
-        let mut map = match self.entries.lock() {
-            Ok(m) => m,
-            Err(p) => p.into_inner(),
-        };
-        map.retain(|_, e| e.created_at.elapsed() < PKCE_TTL);
-        map.remove(state)
+        let mut map = self.entries();
+        if map.get(state)?.phase != PkcePhase::Pending {
+            // Listener/replay cleanup must not invalidate an in-flight owner.
+            return None;
+        }
+        map.remove(state).map(|attempt| attempt.entry)
     }
 
     pub fn purge_expired(&self) {
-        let mut map = match self.entries.lock() {
-            Ok(m) => m,
-            Err(p) => p.into_inner(),
-        };
-        map.retain(|_, e| e.created_at.elapsed() < PKCE_TTL);
+        drop(self.entries());
     }
 
     pub fn contains(&self, state: &str) -> bool {
-        let mut map = match self.entries.lock() {
-            Ok(m) => m,
-            Err(p) => p.into_inner(),
+        self.entries().contains_key(state)
+    }
+
+    pub fn begin<'a>(&'a self, state: &'a str) -> Result<(PkceEntry, PkceCompletion<'a>)> {
+        let mut map = self.entries();
+        let attempt = map
+            .get_mut(state)
+            .ok_or_else(|| MailFfiError::InvalidState(state.to_string()))?;
+        if attempt.phase != PkcePhase::Pending {
+            return Err(MailFfiError::InvalidState(state.to_string()));
+        }
+        if attempt.cancelled || cancellation_store().is_cancelled(state) {
+            map.remove(state);
+            return Err(MailFfiError::OAuth("OAuth sign-in cancelled".to_string()));
+        }
+        attempt.phase = PkcePhase::Exchanging;
+        Ok((attempt.entry.clone(), PkceCompletion { store: self, state }))
+    }
+
+    pub fn cancel(&self, state: &str) -> bool {
+        let mut map = self.entries();
+        let Some(attempt) = map.get_mut(state) else {
+            return false;
         };
-        map.retain(|_, e| e.created_at.elapsed() < PKCE_TTL);
-        map.contains_key(state)
+        if attempt.phase == PkcePhase::Committing || attempt.cancelled {
+            return false;
+        }
+        attempt.cancelled = true;
+        // Keep the existing loopback notification. Its cleanup cannot undo the
+        // cancellation decision retained on the attempt under this mutex.
+        cancellation_store().cancel(state.to_string());
+        true
+    }
+}
+
+/// Exclusive completion owner. Replay never obtains this guard, so its cleanup
+/// cannot remove the original attempt or grant another exchange.
+pub struct PkceCompletion<'a> {
+    store: &'a PkceStore,
+    state: &'a str,
+}
+
+impl PkceCompletion<'_> {
+    pub fn commit<T>(self, persist: impl FnOnce() -> Result<T>) -> Result<T> {
+        {
+            let mut map = self.store.entries();
+            let attempt = map
+                .get_mut(self.state)
+                .ok_or_else(|| MailFfiError::InvalidState(self.state.to_string()))?;
+            if attempt.cancelled || cancellation_store().is_cancelled(self.state) {
+                return Err(MailFfiError::OAuth("OAuth sign-in cancelled".to_string()));
+            }
+            // This transition and cancel share one mutex: only one can win.
+            // Keep commit ownership through persistence, but release the lock
+            // before account APIs invoke runtime callbacks (which may reenter).
+            attempt.phase = PkcePhase::Committing;
+        }
+        persist()
+    }
+}
+
+impl Drop for PkceCompletion<'_> {
+    fn drop(&mut self) {
+        self.store.entries().remove(self.state);
     }
 }
 
@@ -403,21 +530,13 @@ pub fn cancellation_store() -> &'static CancellationStore {
 #[allow(clippy::disallowed_methods)]
 mod sync_registry_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
-
     use super::*;
 
     fn live_handle() -> WorkerHandle {
         WorkerHandle {
             stop: Arc::new(AtomicBool::new(false)),
             tasks: vec![tokio::spawn(std::future::pending::<()>())],
-        }
-    }
-
-    fn finished_handle() -> WorkerHandle {
-        WorkerHandle {
-            stop: Arc::new(AtomicBool::new(false)),
-            tasks: vec![tokio::spawn(async {})],
+            wake: None,
         }
     }
 
@@ -454,22 +573,21 @@ mod sync_registry_tests {
         let spawned = Arc::new(AtomicUsize::new(0));
 
         let c = Arc::clone(&spawned);
+        let completed = tokio::spawn(async {});
+        // Await the actual task completion before registering its finished
+        // handle; scheduler timing must not decide whether restart is tested.
+        let mut handle = WorkerHandle {
+            stop: Arc::new(AtomicBool::new(false)),
+            tasks: vec![completed],
+            wake: None,
+        };
+        tokio::time::timeout(Duration::from_secs(5), &mut handle.tasks[0])
+            .await.unwrap().unwrap();
         assert!(reg.ensure_sync("acc", move || {
             c.fetch_add(1, Ordering::SeqCst);
-            finished_handle()
+            handle
         }));
-
-        // Drive the finished handle's task to completion, then confirm it is no
-        // longer considered running.
-        let mut settled = false;
-        for _ in 0..200 {
-            if !reg.is_sync_running("acc") {
-                settled = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        assert!(settled, "finished worker must be treated as NOT running");
+        assert!(!reg.is_sync_running("acc"), "finished worker must be treated as NOT running");
 
         let c = Arc::clone(&spawned);
         assert!(
@@ -504,6 +622,10 @@ mod sync_registry_tests {
         reg.stop_all_backfill();
     }
 }
+
+#[cfg(test)]
+#[path = "backfill_commit_tests.rs"]
+mod backfill_commit_tests;
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]

@@ -120,8 +120,8 @@ source_set("maho_sidebar_core") {
     "maho_sidebar_favorites_grid_view.h",
     "maho_sidebar_footer_view.cc",
     "maho_sidebar_footer_view.h",
-    "maho_sidebar_search_view.cc",
-    "maho_sidebar_search_view.h",
+    "maho_sidebar_scroll_bar.cc",
+    "maho_sidebar_scroll_bar.h",
     "maho_sidebar_space_dot_view.cc",
     "maho_sidebar_space_dot_view.h",
     "maho_sidebar_state_adapter.cc",
@@ -130,6 +130,7 @@ source_set("maho_sidebar_core") {
     "maho_sidebar_state_models.h",
     "maho_sidebar_tab_list_view.cc",
     "maho_sidebar_tab_list_view.h",
+    "maho_sidebar_tab_row_modifiers.h",
     "maho_sidebar_visibility_manager.cc",
     "maho_sidebar_visibility_manager.h",
     "maho_sidebar_folder_hover_popup_view.cc",
@@ -216,6 +217,7 @@ source_set("maho_sidebar_core") {
     "//ui/base",
     "//ui/color",
     "//ui/gfx",
+    "//ui/native_theme",
     "//ui/views",
     "//url",
   ]
@@ -234,6 +236,7 @@ source_set("unit_tests") {
     "maho_sidebar_update_notification_controller_unittest.cc",
     "maho_sidebar_update_notification_view_unittest.cc",
     "maho_sidebar_processing_placeholder_view_unittest.cc",
+    "maho_sidebar_tab_row_modifiers_unittest.cc",
     "maho_now_playing_coordinator_unittest.cc",
   ]
 
@@ -345,6 +348,36 @@ test("maho_control_activity_ui_test") {
   ]
 }
 
+# Narrow overlay-scrollbar coverage: overlay contract, pill geometry, palette
+# tint and the reveal/fade cycle, without the full chrome unit-test binary.
+test("maho_sidebar_scroll_bar_test") {
+  sources = [
+    "//maho/browser/run_all_maho_unittests_main.cc",
+    "maho_sidebar_scroll_bar_unittest.cc",
+  ]
+
+  deps = [
+    ":maho_sidebar_core",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//components/prefs:test_support",
+    "//mojo/core/embedder",
+    "//skia",
+    "//testing/gtest",
+    "//ui/base",
+    "//ui/compositor",
+    "//ui/display",
+    "//ui/gfx",
+    "//ui/gfx/codec",
+    "//ui/native_theme",
+    "//ui/views",
+    "//ui/views:test_support",
+  ]
+}
+
 source_set("maho_spaces_board_data") {
   sources = [
     "maho_spaces_board_data.cc",
@@ -372,6 +405,8 @@ source_set("interactive_tests") {
     "maho_sidebar_navigation_interactive_test.cc",
     "maho_sidebar_spaces_interactive_test.cc",
     "maho_sidebar_now_playing_interactive_test.cc",
+    "maho_pinned_split_restart_interactive_test.cc",
+    "../frame/maho_contents_header_interactive_uitest.cc",
   ]
 
   defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
@@ -386,6 +421,7 @@ source_set("interactive_tests") {
     "//components/prefs",
     "//content/public/browser",
     "//content/test:test_support",
+    "//maho/browser/ui/webui/maho_test:maho_test",
     "//testing/gtest",
     "//ui/base",
     "//ui/base:test_support",

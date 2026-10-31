@@ -141,9 +141,13 @@ void MahoSpacesOverlayView::RequestFocus() {
 
 void MahoSpacesOverlayView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  const ui::ColorProvider* color_provider = GetColorProvider();
-  if (!color_provider) {
-    return;
+  // This overlay is its own top-level widget, so Chromium delivers its theme
+  // change independently of the docked rail's. Pull the rail's authoritative
+  // snapshot before repainting instead of relying on the frame overlay host's
+  // push landing first, so an OS light/dark flip cannot paint this widget once
+  // from the palette the rail has already replaced.
+  if (palette_refresh_callback_) {
+    palette_refresh_callback_.Run();
   }
   // The themed gradient is painted in OnPaintBackground(); repaint so it picks
   // up the new space-theme colors.
@@ -159,21 +163,18 @@ void MahoSpacesOverlayView::SetPalette(const MahoSidebarPalette& palette) {
 }
 
 void MahoSpacesOverlayView::OnPaintBackground(gfx::Canvas* canvas) {
-  // Paint the same space-theme-tinted gradient as the docked sidebar, forced
-  // opaque, so the Spaces overlay follows the theme instead of a flat color.
-  // Opaque stops keep the overlay a valid occluder (web contents must not bleed
-  // through) — identical to the fixed-width library overlay.
+  // Paint the same space-theme-tinted gradient as the docked sidebar so the
+  // Spaces overlay follows the theme instead of a flat color. Opaque stops keep
+  // the overlay a valid occluder (web contents must not bleed through), which is
+  // what the palette snapshot already carries while this overlay is up.
   //
   const SkVector radii[4] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
-  // Anchor the gradient span to the library-overlay content width (380dp): the
-  // narrow library overlay renders correctly with a full-bounds span at that
-  // width, so reusing it bounds the full-viewport diagonal to the same tint
-  // density instead of washing out across the ~2000px width (kClamp holds the
-  // final stop beyond the span). Chosen as the sanctioned proxy for the
-  // sidebar/rail width the docked gradient effectively paints across.
+  // The span is the shared sidebar-layout token, identical to the docked rail's
+  // and the library overlay's, so one palette resolves to one tint density
+  // across all three surfaces regardless of their very different widths.
   PaintMahoSidebarThemedBackground(
-      canvas, palette_, GetLocalBounds(), /*opaque=*/true, radii,
-      /*gradient_span_dp=*/sidebar_layout::kLibraryOverlayContentWidthDp);
+      canvas, palette_, GetLocalBounds(), palette_.opaque, radii,
+      sidebar_layout::kThemedBackgroundGradientSpanDp);
 }
 
 bool MahoSpacesOverlayView::AcceleratorPressed(

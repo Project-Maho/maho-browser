@@ -211,37 +211,35 @@ export function ChatScreen({
 
       dispatch({ type: 'BOOT_START' });
 
-      const provider = await resolveProviderConfig(bridge, providerId, model);
-      if (generation !== bootstrapGenerationRef.current) {
-        return;
-      }
-
-      if (!provider) {
-        activeHandleRef.current = null;
-        if (previousHandle) {
-          void bridge.chatSessionFree(previousHandle).catch(() => undefined);
-        }
-        dispatch({ type: 'BYOK_MISSING' });
-        return;
-      }
-
       let nextHandle: string | null = null;
-      const sessionOptions: ChatSessionOpts = {
-        ...(provider.apiKey === undefined ? {} : { apiKey: provider.apiKey }),
-        ...(provider.credentialProvider === undefined
-          ? {}
-          : { credentialProvider: provider.credentialProvider }),
-        ...(provider.endpoint === undefined ? {} : { endpoint: provider.endpoint }),
-        ...(provider.model === undefined ? {} : { model: provider.model }),
-        systemInstruction: buildSystemInstruction({
-          pageText,
-          pageTitle,
-          pageUrl,
-          systemInstruction,
-        }),
-      };
-
       try {
+        const provider = await resolveProviderConfig(bridge, providerId, model);
+        if (generation !== bootstrapGenerationRef.current) return;
+
+        if (!provider) {
+          activeHandleRef.current = null;
+          if (previousHandle) {
+            void bridge.chatSessionFree(previousHandle).catch(() => undefined);
+          }
+          dispatch({ type: 'BYOK_MISSING' });
+          return;
+        }
+
+        const sessionOptions: ChatSessionOpts = {
+          ...(provider.apiKey === undefined ? {} : { apiKey: provider.apiKey }),
+          ...(provider.credentialProvider === undefined
+            ? {}
+            : { credentialProvider: provider.credentialProvider }),
+          ...(provider.endpoint === undefined ? {} : { endpoint: provider.endpoint }),
+          ...(provider.model === undefined ? {} : { model: provider.model }),
+          systemInstruction: buildSystemInstruction({
+            pageText,
+            pageTitle,
+            pageUrl,
+            systemInstruction,
+          }),
+        };
+
         if (requestedSessionId) {
           nextHandle = await bridge.chatSessionResume(requestedSessionId, sessionOptions);
         } else {
@@ -277,6 +275,7 @@ export function ChatScreen({
         if (nextHandle && nextHandle !== previousHandle) {
           void bridge.chatSessionFree(nextHandle).catch(() => undefined);
         }
+        if (generation !== bootstrapGenerationRef.current) return;
         activeHandleRef.current = null;
         if (previousHandle) {
           void bridge.chatSessionFree(previousHandle).catch(() => undefined);
@@ -538,7 +537,7 @@ export function ChatScreen({
     }
 
     const content: ChatContent = { kind: 'text', text };
-    const sendScope = draftScope;
+    const acknowledgeDraft = drafts.captureSend();
     dispatch({ type: 'SEND_TURN_START', message: content });
 
     try {
@@ -547,9 +546,7 @@ export function ChatScreen({
         void bridge.saveConversationMessage?.(state.conversationId, 'user', text).catch(() => undefined);
         dispatch({ type: 'CONVERSATION_PERSISTED', conversationId: state.conversationId });
       }
-      if (sendScope !== null) {
-        void drafts.clearScope(sendScope);
-      }
+      void acknowledgeDraft(state.conversationId ? { kind: 'conversation', conversationId: state.conversationId } : undefined);
     } catch (error) {
       restoreUnsentDraft(text);
       const message = toErrorMessage(error, 'Unable to send this message.');
@@ -677,15 +674,13 @@ export function ChatScreen({
           ? { kind: 'image', mime: parsed.mime, base64: parsed.base64, text }
           : { kind: 'image', mime: parsed.mime, base64: parsed.base64 };
 
-        const sendScope = draftScope;
+        const acknowledgeDraft = drafts.captureSend();
         dispatch({ type: 'SEND_TURN_START', message: content });
         await bridge.chatSendMessage(handle, content);
         if (state.conversationId) {
           dispatch({ type: 'CONVERSATION_PERSISTED', conversationId: state.conversationId });
         }
-        if (sendScope !== null) {
-          void drafts.clearScope(sendScope);
-        }
+        void acknowledgeDraft(state.conversationId ? { kind: 'conversation', conversationId: state.conversationId } : undefined);
       } catch (error) {
         restoreUnsentDraft(state.draft.trim());
         const message = toErrorMessage(error, 'Unable to attach this image.');

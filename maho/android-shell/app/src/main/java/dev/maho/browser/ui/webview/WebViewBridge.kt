@@ -3,6 +3,7 @@ package dev.maho.browser.ui.webview
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import android.util.Log
 import android.webkit.JavascriptInterface
 import dev.maho.browser.BuildConfig
 import dev.maho.browser.MahoBridge
@@ -11,12 +12,15 @@ import dev.maho.browser.sync.GoogleSignInOutcome
 import dev.maho.browser.sync.SyncManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * WebViewBridge — @JavascriptInterface glue between the web-ai bundle and the
@@ -44,20 +48,48 @@ class WebViewBridge(
     private val googleCredentialSource: GoogleCredentialSource? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val agentSessions = HandleRegistry()
-    private val chatSessions = HandleRegistry()
+    internal val agentSessions = HandleRegistry()
+    internal val chatSessions = HandleRegistry()
+    private val destroyed = AtomicBoolean(false)
 
+    // Teardown scope independent of the RPC scope: draining must survive the
+    // RPC scope cancellation that destroy() performs, and it must never run on
+    // the caller's thread (Main) because closeAndDrain waits for parked borrows.
+    private val teardownScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Observe existing jobs without changing their parent, dispatcher, or cancellation. */
+    internal fun requestsForTesting(): List<Job> =
+        requireNotNull(scope.coroutineContext[Job]).children.toList()
+
+    /**
+     * U01 destroy contract: idempotent; closes admission immediately (new RPC
+     * dispatch and response delivery stop); the borrow-draining native free
+     * runs on the independent teardown scope so the calling thread (Main)
+     * never waits for a parked borrow or create. Teardown failures are
+     * aggregated and reported instead of being swallowed.
+     */
     fun destroy() {
+        if (!destroyed.compareAndSet(false, true)) return
         scope.cancel()
-        for ((_, ptr) in agentSessions.closeAndDrain()) {
-            try {
-                native.agentFreeSession(ptr)
-            } catch (_: Exception) {}
-        }
-        for ((_, ptr) in chatSessions.closeAndDrain()) {
-            try {
-                native.chatSessionFree(ptr)
-            } catch (_: Exception) {}
+        teardownScope.launch {
+            val failures = mutableListOf<Exception>()
+            for ((_, ptr) in agentSessions.closeAndDrain()) {
+                try {
+                    native.agentFreeSession(ptr)
+                } catch (e: Exception) {
+                    failures.add(e)
+                }
+            }
+            for ((_, ptr) in chatSessions.closeAndDrain()) {
+                try {
+                    native.chatSessionFree(ptr)
+                } catch (e: Exception) {
+                    failures.add(e)
+                }
+            }
+            if (failures.isNotEmpty()) {
+                Log.w("WebViewBridge", "native session teardown reported ${failures.size} failure(s)", failures.first())
+            }
         }
     }
 
@@ -71,7 +103,11 @@ class WebViewBridge(
     fun rpc(requestJson: String) {
         scope.launch {
             val response = handleRequest(requestJson)
-            evaluateJs("window.__mahoBridgeResponse(${escapeForJs(response)})")
+            // A destroyed bridge must never deliver a late RPC response (U01:
+            // cancelled delivery does not adopt a late native allocation).
+            if (coroutineContext.isActive) {
+                evaluateJs("window.__mahoBridgeResponse(${escapeForJs(response)})")
+            }
         }
     }
 

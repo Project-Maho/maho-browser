@@ -2,7 +2,9 @@
 
 #include "maho/browser/mail_helper/maho_mail_service.h"
 
+#include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -369,7 +371,7 @@ class MahoMailStartupTest : public MahoMailServiceTest {
 };
 
 TEST_F(MahoMailStartupTest, SilentVersionRetriesThenReachesCrashCap) {
-  constexpr int kBackoffMs[] = {500, 1000, 2000, 4000, 8000};
+  constexpr auto kBackoffMs = std::to_array<int>({500, 1000, 2000, 4000, 8000});
   for (size_t attempt = 0; attempt < 6; ++attempt) {
     ASSERT_EQ(attempt + 1, helpers_.size());
     ASSERT_TRUE(helper().version_reply);
@@ -381,7 +383,8 @@ TEST_F(MahoMailStartupTest, SilentVersionRetriesThenReachesCrashCap) {
       break;
     }
     ExpectStarting();
-    task_environment_.FastForwardBy(base::Milliseconds(kBackoffMs[attempt] - 1));
+    task_environment_.FastForwardBy(
+        base::Milliseconds(kBackoffMs.at(attempt) - 1));
     EXPECT_EQ(attempt + 1, helpers_.size());
     task_environment_.FastForwardBy(base::Milliseconds(1));
   }
@@ -501,6 +504,21 @@ TEST_F(MahoMailServiceTest, AttachmentFilenameAllowsOrdinaryExtensions) {
         }));
     EXPECT_TRUE(replied);
   }
+}
+
+TEST(MahoMailAppSettingDecodeTest, MissingRowDecodesToNulloptNotLiteralNull) {
+  // The helper answers an app-setting read with the JSON encoding of
+  // `Option<String>`: a row that was never written arrives as the four
+  // characters `null`, and a stored row arrives as a JSON string. Handing the
+  // raw payload to a JSON parser is what put a literal null into the settings
+  // calendar pane and crashed it, so decoding is mandatory before use.
+  EXPECT_EQ(std::nullopt, DecodeAppSettingRead("null"));
+  EXPECT_EQ(std::nullopt, DecodeAppSettingRead(std::string()));
+  EXPECT_EQ(std::nullopt, DecodeAppSettingRead("{\"hide_weekends\":true}"));
+  EXPECT_EQ(std::nullopt, DecodeAppSettingRead("not json"));
+  EXPECT_EQ("18:00", DecodeAppSettingRead("\"18:00\""));
+  EXPECT_EQ("{\"hide_weekends\":true}",
+            DecodeAppSettingRead("\"{\\\"hide_weekends\\\":true}\""));
 }
 
 class MahoMailUnreadAggregationTest : public testing::Test {

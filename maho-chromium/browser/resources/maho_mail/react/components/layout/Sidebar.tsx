@@ -4,7 +4,6 @@ import {
   Archive,
   Bell,
   Calendar,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock3,
@@ -31,7 +30,7 @@ import { Avatar } from "../ui/Avatar";
 import { DropTargetFolder } from "../common/DragDrop";
 import { useConfirm } from "../ui/ConfirmDialog";
 import { useToast } from "../ui/Toast";
-import { getErrorMessage } from "../../lib/utils";
+import { cn, getErrorMessage } from "../../lib/utils";
 
 const FOLDER_ENTRIES: Array<{
   id: string;
@@ -141,8 +140,8 @@ interface SidebarCustomFoldersSectionNode {
   customFolderTree: SidebarCustomFolderNode[];
 }
 
-const LEADING_SLOT_CLASSNAME = "flex h-3.5 w-3.5 shrink-0 items-center justify-center";
-const SHELL_TOGGLE_CLASSNAME = "absolute left-full top-24 z-30 flex h-10 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background/95 text-foreground shadow-lg ring-1 ring-background/90 backdrop-blur-sm transition-all hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
+const LEADING_SLOT_CLASSNAME = "flex h-6 w-5 shrink-0 items-center justify-center";
+const SHELL_TOGGLE_CLASSNAME = "absolute left-full top-24 z-30 flex h-10 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background/95 text-foreground shadow-lg ring-1 ring-background/90 backdrop-blur-sm transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 type SidebarRowNode =
   | SidebarParentNode
@@ -561,6 +560,24 @@ export function Sidebar({
 
   useEffect(() => {
     if (!contextMenu && !accountContextMenu) return;
+    const trigger = document.activeElement;
+    const menu = contextMenu ? contextMenuRef.current : accountContextMenuRef.current;
+    const items = Array.from(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
+    items[0]?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' || event.key === 'Tab') {
+        if (event.key === 'Escape') event.preventDefault();
+        setContextMenu(null);
+        setAccountContextMenu(null);
+        if (trigger instanceof HTMLElement) trigger.focus();
+      } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault();
+        const index = items.findIndex(item => item === document.activeElement);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+          : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        items[next]?.focus();
+      }
+    };
     const handler = (e: MouseEvent) => {
       if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
         setContextMenu(null);
@@ -570,7 +587,11 @@ export function Sidebar({
       }
     };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    menu?.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      menu?.removeEventListener('keydown', onKeyDown);
+    };
   }, [contextMenu, accountContextMenu]);
 
   const authErrorAccountIds = useMemo(
@@ -655,13 +676,13 @@ export function Sidebar({
     const isReconnecting = reconnectingAccountId === child.accountId;
     const reconnectRequiredLabel = t("auth.reconnectRequiredShort");
 
-    const rowClassName = `flex w-full items-center gap-2 rounded-xl px-2 py-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+    const rowClassName = `flex w-full items-center gap-2 rounded-xl px-2 py-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
       isSelected
-        ? "bg-primary/12 text-foreground ring-1 ring-inset ring-primary/20"
-        : "text-muted-foreground hover:bg-card/50 hover:text-foreground"
+        ? "mail-nav-current bg-primary/12 text-foreground"
+        : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
     }`;
 
-    const mainButtonClassName = "flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
+    const mainButtonClassName = "flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
     const content = (
       <>
@@ -691,7 +712,7 @@ export function Sidebar({
         disabled={isReconnecting}
         title={reconnectRequiredLabel}
         aria-label={reconnectRequiredLabel}
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60"
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
       >
         {isReconnecting ? <Loader2 size={13} className="animate-spin" /> : <AlertCircle size={13} />}
       </button>
@@ -762,25 +783,25 @@ export function Sidebar({
         <div
           className={`flex items-center gap-1 rounded-2xl px-2 py-1.5 transition-colors ${
             isSelected
-              ? "bg-primary/12 text-foreground ring-1 ring-inset ring-primary/20"
-              : "text-muted-foreground hover:bg-card/60 hover:text-foreground"
+              ? "mail-nav-current bg-primary/12 text-foreground"
+              : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
           }`}
         >
           <button
             type="button"
             onClick={onToggle}
-            className={`${LEADING_SLOT_CLASSNAME} rounded text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+            className={`${LEADING_SLOT_CLASSNAME} rounded-md text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
             aria-label={`${isExpanded ? "Collapse" : "Expand"} ${label}`}
             aria-expanded={isExpanded}
           >
-            {hasChildren ? isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} /> : null}
+            {hasChildren ? <ChevronRight size={12} className={cn("mail-disclosure", isExpanded && "rotate-90")} /> : null}
           </button>
 
           <button
             type="button"
             onClick={onSelect}
             aria-current={isSelected ? "page" : undefined}
-            className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <div
               className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl ${
@@ -891,17 +912,17 @@ export function Sidebar({
         <div
           className={`flex items-center gap-1 rounded-2xl px-2 py-1 transition-colors ${
             isSelected
-              ? "bg-primary/12 text-foreground ring-1 ring-inset ring-primary/20"
-              : "text-muted-foreground hover:bg-card/60 hover:text-foreground"
+              ? "mail-nav-current bg-primary/12 text-foreground"
+              : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
           }`}
         >
           <button
             type="button"
             onClick={() => node.hasChildren && toggleParent(node.id)}
-            className={`${LEADING_SLOT_CLASSNAME} rounded text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+            className={`${LEADING_SLOT_CLASSNAME} rounded-md text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
             aria-label={node.hasChildren ? `${node.isExpanded ? "Collapse" : "Expand"} ${node.name}` : undefined}
           >
-            {node.hasChildren ? (node.isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />) : null}
+            {node.hasChildren ? <ChevronRight size={12} className={cn("mail-disclosure", node.isExpanded && "rotate-90")} /> : null}
           </button>
 
           {isRenaming ? (
@@ -922,7 +943,7 @@ export function Sidebar({
               type="button"
               onContextMenu={(e) => handleFolderContextMenu(e, node.folder)}
               onClick={() => handleFolderSelect(node.folder.id)}
-              className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div
                 className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg ${
@@ -940,7 +961,7 @@ export function Sidebar({
           <button
             type="button"
             onClick={(e) => handleFolderContextMenu(e, node.folder)}
-            className="hidden shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-card hover:text-foreground group-hover:block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-surface-hover hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={`Actions for ${node.name}`}
           >
             <Plus size={12} />
@@ -1033,10 +1054,10 @@ export function Sidebar({
             handleSyntheticSelect(target.syntheticId);
           }}
           aria-current={isSelected ? "page" : undefined}
-          className={`flex w-full items-center gap-1 rounded-2xl px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          className={`flex w-full items-center gap-1 rounded-2xl px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
             isSelected
-              ? "bg-primary/12 text-foreground ring-1 ring-inset ring-primary/20"
-              : "text-muted-foreground hover:bg-card/60 hover:text-foreground"
+              ? "mail-nav-current bg-primary/12 text-foreground"
+              : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
           }`}
         >
           <span aria-hidden="true" className={LEADING_SLOT_CLASSNAME} />
@@ -1075,7 +1096,7 @@ export function Sidebar({
           key={node.id}
           type="button"
           onClick={onUpdateClick}
-          className="flex w-full items-center gap-2.5 rounded-2xl px-2 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-card/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="flex w-full items-center gap-2.5 rounded-2xl px-2 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-card/80 text-amber-300">
             <Icon size={14} />
@@ -1094,7 +1115,7 @@ export function Sidebar({
           key={node.id}
           type="button"
           onClick={onOpenSettings}
-          className="flex w-full items-center gap-2.5 rounded-2xl px-2 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-card/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="flex w-full items-center gap-2.5 rounded-2xl px-2 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-card/80 text-muted-foreground">
             <Icon size={14} />
@@ -1133,22 +1154,22 @@ export function Sidebar({
       return (
         <div key={node.id} className="group">
           <div
-            className="flex items-center gap-1 rounded-2xl px-2 py-1.5 text-muted-foreground transition-colors hover:bg-card/60 hover:text-foreground"
+            className="flex items-center gap-1 rounded-2xl px-2 py-1.5 text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
           >
             <button
               type="button"
               onClick={() => toggleParent(node.id)}
-              className={`${LEADING_SLOT_CLASSNAME} rounded text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+              className={`${LEADING_SLOT_CLASSNAME} rounded-md text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
               aria-label={`${node.isExpanded ? "Collapse" : "Expand"} ${sidebarLabel(node.label)} section`}
               aria-expanded={node.isExpanded}
             >
-              {node.isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              <ChevronRight size={12} className={cn("mail-disclosure", node.isExpanded && "rotate-90")} />
             </button>
 
             <button
               type="button"
               onClick={() => toggleParent(node.id)}
-              className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-card/80 text-muted-foreground">
                 <FolderIcon size={14} />
@@ -1183,10 +1204,10 @@ export function Sidebar({
           key={node.id}
           type="button"
           onClick={() => handleAggregateSelect(node.folderType)}
-          className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
             isSelected
-              ? "bg-primary/12 text-foreground ring-1 ring-inset ring-primary/20"
-              : "text-muted-foreground hover:bg-card/60 hover:text-foreground"
+              ? "mail-nav-current bg-primary/12 text-foreground"
+              : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
           }`}
           aria-label={sidebarLabel(node.name)}
           aria-current={isSelected ? "page" : undefined}
@@ -1206,10 +1227,10 @@ export function Sidebar({
           key={node.id}
           type="button"
           onClick={() => handleSyntheticSelect(node.syntheticId)}
-          className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
             isSelected
-              ? "bg-primary/12 text-foreground ring-1 ring-inset ring-primary/20"
-              : "text-muted-foreground hover:bg-card/60 hover:text-foreground"
+              ? "mail-nav-current bg-primary/12 text-foreground"
+              : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
           }`}
           aria-label={sidebarLabel(node.label)}
           aria-current={isSelected ? "page" : undefined}
@@ -1253,10 +1274,10 @@ export function Sidebar({
             }
             handleSyntheticSelect(target.syntheticId);
           }}
-          className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          className={`flex h-10 w-10 items-center justify-center rounded-2xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
             isSelected
-              ? "bg-primary/12 text-foreground ring-1 ring-inset ring-primary/20"
-              : "text-muted-foreground hover:bg-card/60 hover:text-foreground"
+              ? "mail-nav-current bg-primary/12 text-foreground"
+              : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"
           }`}
           aria-label={sidebarLabel(node.label)}
           aria-current={isSelected ? "page" : undefined}
@@ -1275,7 +1296,7 @@ export function Sidebar({
           key={node.id}
           type="button"
           onClick={onUpdateClick}
-          className="flex h-10 w-10 items-center justify-center rounded-2xl text-amber-300 transition-colors hover:bg-card/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="flex h-10 w-10 items-center justify-center rounded-2xl text-amber-300 transition-colors hover:bg-card/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={sidebarLabel(node.title)}
           title={sidebarLabel(node.title)}
         >
@@ -1292,7 +1313,7 @@ export function Sidebar({
           key={node.id}
           type="button"
           onClick={onOpenSettings}
-          className="flex h-10 w-10 items-center justify-center rounded-2xl text-muted-foreground transition-colors hover:bg-card/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="flex h-10 w-10 items-center justify-center rounded-2xl text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={sidebarLabel(node.title)}
           title={sidebarLabel(node.title)}
         >
@@ -1394,7 +1415,7 @@ export function Sidebar({
                         <button
                           type="button"
                           onClick={section.action.onClick}
-                          className="text-[11px] font-medium tracking-wide text-muted-foreground transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          className="text-[11px] font-medium tracking-wide text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           {sidebarLabel(section.action.label)}
                         </button>
@@ -1417,12 +1438,12 @@ export function Sidebar({
                 </div>
                 <div className="space-y-0.5">
                   {savedSearches.map((ss) => (
-                    <div key={ss.id} className="group flex items-center gap-1 rounded-2xl px-2 py-1.5 text-muted-foreground transition-colors hover:bg-card/60 hover:text-foreground">
+                    <div key={ss.id} className="group flex items-center gap-1 rounded-2xl px-2 py-1.5 text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground">
                       <span aria-hidden="true" className={LEADING_SLOT_CLASSNAME} />
                       <button
                         type="button"
                         onClick={() => handleSavedSearchClick(ss.query)}
-                        className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-card/80 text-muted-foreground">
                           <Search size={14} />
@@ -1434,7 +1455,7 @@ export function Sidebar({
                       <button
                         type="button"
                         onClick={() => void handleDeleteSavedSearch(ss.id)}
-                        className="hidden shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-card hover:text-destructive group-hover:block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-surface-hover hover:text-destructive group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         aria-label={`Delete ${ss.name}`}
                       >
                         <Trash2 size={12} />

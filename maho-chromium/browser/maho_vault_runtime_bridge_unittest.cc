@@ -5,7 +5,12 @@
 #include <type_traits>
 #include <utility>
 
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/run_loop.h"
+#include "base/synchronization/waitable_event.h"
+#include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -104,6 +109,45 @@ TEST_F(MahoVaultRuntimeBridgeTest, ResultAndBufferUseDedicatedBackendFree) {
     EXPECT_EQ(result.ConsumeJson(), "{\"items\":[]}"); }
   EXPECT_EQ(ffi_.result_free_calls, 1);
   EXPECT_EQ(ffi_.buffer_free_calls, 1);
+}
+
+TEST_F(MahoVaultRuntimeBridgeTest, CoreReadyCallbackCanCreateVaultSession) {
+  bool callback_ran = false;
+  base::CallbackListSubscription subscription = AddCoreReadyCallback(
+      base::BindRepeating([](TestingProfile* profile, bool* callback_ran) {
+        *callback_ran =
+            CreateVaultBackendSessionForProfile(profile).is_valid();
+      },
+      owner_profile(), &callback_ran));
+
+  SetCore(nullptr);
+  SetCoreForProfile(reinterpret_cast<MahoCore*>(0x1234), owner_profile());
+  EXPECT_TRUE(callback_ran);
+}
+
+TEST_F(MahoVaultRuntimeBridgeTest,
+       ClearedCoreSuppressesQueuedOffUiReadyCallback) {
+  SetCore(nullptr);
+  int callback_count = 0;
+  base::CallbackListSubscription subscription = AddCoreReadyCallback(
+      base::BindRepeating([](int* callback_count) { ++*callback_count; },
+                          &callback_count));
+  base::WaitableEvent core_set_on_worker(
+      base::WaitableEvent::ResetPolicy::MANUAL,
+      base::WaitableEvent::InitialState::NOT_SIGNALED);
+  ASSERT_TRUE(base::ThreadPool::PostTask(
+      FROM_HERE, {base::MayBlock()},
+      base::BindOnce(
+          [](TestingProfile* profile, base::WaitableEvent* core_set_on_worker) {
+            SetCoreForProfile(reinterpret_cast<MahoCore*>(0x1234), profile);
+            core_set_on_worker->Signal();
+          },
+          owner_profile(), &core_set_on_worker)));
+
+  ASSERT_TRUE(core_set_on_worker.TimedWait(base::Seconds(5)));
+  SetCore(nullptr);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(callback_count, 0);
 }
 
 TEST_F(MahoVaultRuntimeBridgeTest, HolderQuiesceRejectsLateWorkerWithoutCoreAccess) {

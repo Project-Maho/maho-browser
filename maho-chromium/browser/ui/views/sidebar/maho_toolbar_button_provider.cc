@@ -3,30 +3,39 @@
 #include "maho/browser/ui/views/sidebar/maho_toolbar_button_provider.h"
 
 #include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/contents_container_view.h"
 #include "chrome/browser/ui/views/frame/top_container_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "maho/browser/ui/views/frame/maho_contents_header_view.h"
 #include "maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
-#include "ui/base/unowned_user_data/unowned_user_data_host.h"
-#include "ui/views/controls/button/label_button.h"
-#include "ui/views/controls/label.h"
 #include "ui/views/view.h"
 
 namespace maho {
 
-MahoToolbarButtonProvider::MahoToolbarButtonProvider(
-    BrowserWindowInterface* browser,
-    BrowserView* browser_view,
-    MahoSidebarSearchView* search_view)
-    : browser_(browser),
-      browser_view_(browser_view),
-      search_view_(search_view),
-      upstream_toolbar_(browser_view ? browser_view->toolbar() : nullptr) {
-  if (browser_) {
-    scoped_unowned_user_data_.emplace(browser_->GetUnownedUserDataHost(),
-                                      *this);
+namespace {
+
+MahoHeaderAnchorKind AnchorKindForAction(
+    std::optional<actions::ActionId> action_id) {
+  if (action_id == kActionShowTranslate) {
+    return MahoHeaderAnchorKind::kTranslate;
   }
+  return MahoHeaderAnchorKind::kUtility;
+}
+
+}  // namespace
+
+MahoToolbarButtonProvider::MahoToolbarButtonProvider(
+    [[maybe_unused]] BrowserWindowInterface* browser,
+    BrowserView* browser_view)
+    : browser_view_(browser_view),
+      upstream_toolbar_(browser_view ? browser_view->toolbar() : nullptr)
+#if MAHO_TOOLBAR_BUTTON_PROVIDER_OWNS_USER_DATA
+      ,
+      scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this)
+#endif
+{
 }
 
 MahoToolbarButtonProvider::~MahoToolbarButtonProvider() = default;
@@ -67,28 +76,53 @@ MahoToolbarButtonProvider::GetControlActivityIndicator() const {
       toolbar_control_activity_);
 }
 
-views::View* MahoToolbarButtonProvider::ResolveTranslateAnchor() const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!search_view_) {
-    return nullptr;
+// static
+views::View* MahoToolbarButtonProvider::ResolveHeaderAnchor(
+    MahoHeaderAnchorKind kind,
+    views::View* translate,
+    bool translate_drawn,
+    views::View* utility,
+    bool utility_drawn,
+    views::View* security,
+    bool security_drawn) {
+  if (kind == MahoHeaderAnchorKind::kTranslate && translate &&
+      translate_drawn) {
+    return translate;
   }
-  views::Label* label = search_view_->translate_label_view();
-  if (label && label->GetVisible() && label->IsDrawn()) {
-    return label;
+  if (kind == MahoHeaderAnchorKind::kSecurity && security && security_drawn) {
+    return security;
   }
-  return ResolvePillAnchor();
-}
-
-views::View* MahoToolbarButtonProvider::ResolvePillAnchor() const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!search_view_) {
-    return nullptr;
-  }
-  views::View* idle = search_view_->idle_button_view();
-  if (idle && idle->IsDrawn()) {
-    return idle;
+  // Every kind falls back to the utility icon, the header's one control that
+  // is present on every page.
+  if (utility && utility_drawn) {
+    return utility;
   }
   return nullptr;
+}
+
+MahoContentsHeaderView* MahoToolbarButtonProvider::GetActiveHeader() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!browser_view_) {
+    return nullptr;
+  }
+  ContentsContainerView* container =
+      browser_view_->GetActiveContentsContainerView();
+  return container ? container->maho_contents_header() : nullptr;
+}
+
+views::View* MahoToolbarButtonProvider::ResolveActiveHeaderAnchor(
+    MahoHeaderAnchorKind kind) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoContentsHeaderView* header = GetActiveHeader();
+  if (!header) {
+    return nullptr;
+  }
+  views::View* translate = header->translate_anchor();
+  views::View* utility = header->utility_anchor();
+  views::View* security = header->security_anchor();
+  return ResolveHeaderAnchor(kind, translate, translate && translate->IsDrawn(),
+                             utility, utility && utility->IsDrawn(), security,
+                             security && security->IsDrawn());
 }
 
 views::BubbleAnchor MahoToolbarButtonProvider::LastResortAnchor() const {
@@ -106,13 +140,9 @@ views::BubbleAnchor MahoToolbarButtonProvider::LastResortAnchor() const {
 views::BubbleAnchor MahoToolbarButtonProvider::GetBubbleAnchor(
     std::optional<actions::ActionId> action_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (action_id == kActionShowTranslate) {
-    if (views::View* anchor = ResolveTranslateAnchor()) {
-      return views::BubbleAnchor(anchor);
-    }
-  }
-  if (views::View* pill = ResolvePillAnchor()) {
-    return views::BubbleAnchor(pill);
+  if (views::View* anchor =
+          ResolveActiveHeaderAnchor(AnchorKindForAction(action_id))) {
+    return views::BubbleAnchor(anchor);
   }
   return LastResortAnchor();
 }
@@ -120,18 +150,21 @@ views::BubbleAnchor MahoToolbarButtonProvider::GetBubbleAnchor(
 views::BubbleAnchor
 MahoToolbarButtonProvider::GetDefaultExtensionDialogAnchor() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (views::View* pill = ResolvePillAnchor()) {
-    return views::BubbleAnchor(pill);
-  }
-  if (upstream_toolbar_) {
-    return upstream_toolbar_->GetDefaultExtensionDialogAnchor();
+  if (views::View* anchor =
+          ResolveActiveHeaderAnchor(MahoHeaderAnchorKind::kUtility)) {
+    return views::BubbleAnchor(anchor);
   }
   return LastResortAnchor();
 }
 
-ExtensionsToolbarDesktop*
-MahoToolbarButtonProvider::GetExtensionsToolbarDesktop() {
-  return upstream_toolbar_ ? upstream_toolbar_->GetExtensionsToolbarDesktop()
+views::BubbleAnchor MahoToolbarButtonProvider::GetPageActionBubbleAnchor(
+    actions::ActionId action_id) {
+  return GetBubbleAnchor(action_id);
+}
+
+ExtensionsContainerViews*
+MahoToolbarButtonProvider::GetExtensionsContainerViews() {
+  return upstream_toolbar_ ? upstream_toolbar_->GetExtensionsContainerViews()
                            : nullptr;
 }
 
@@ -145,15 +178,10 @@ gfx::Size MahoToolbarButtonProvider::GetToolbarButtonSize() const {
                            : gfx::Size();
 }
 
-PageActionIconView* MahoToolbarButtonProvider::GetPageActionIconView(
-    PageActionIconType type) {
-  return upstream_toolbar_ ? upstream_toolbar_->GetPageActionIconView(type)
-                           : nullptr;
-}
-
-IconLabelBubbleView* MahoToolbarButtonProvider::GetPageActionView(
+page_actions::PageActionViewInterface*
+MahoToolbarButtonProvider::GetPageActionViewInterface(
     actions::ActionId action_id) {
-  return upstream_toolbar_ ? upstream_toolbar_->GetPageActionView(action_id)
+  return upstream_toolbar_ ? upstream_toolbar_->GetPageActionViewInterface(action_id)
                            : nullptr;
 }
 
@@ -194,16 +222,19 @@ MahoToolbarButtonProvider::GetAvatarToolbarButtonInterface() {
              : nullptr;
 }
 
+#if MAHO_TOOLBAR_BUTTON_PROVIDER_HAS_AVATAR_BUTTON
+AvatarToolbarButton* MahoToolbarButtonProvider::GetAvatarToolbarButton() {
+  return upstream_toolbar_ ? upstream_toolbar_->GetAvatarToolbarButton()
+                           : nullptr;
+}
+#endif
+
 ToolbarButton* MahoToolbarButtonProvider::GetBackButton() {
   return upstream_toolbar_ ? upstream_toolbar_->GetBackButton() : nullptr;
 }
 
 ReloadControl* MahoToolbarButtonProvider::GetReloadButton() {
   return upstream_toolbar_ ? upstream_toolbar_->GetReloadButton() : nullptr;
-}
-
-IntentChipButton* MahoToolbarButtonProvider::GetIntentChipButton() {
-  return upstream_toolbar_ ? upstream_toolbar_->GetIntentChipButton() : nullptr;
 }
 
 ToolbarButton* MahoToolbarButtonProvider::GetDownloadButton() {

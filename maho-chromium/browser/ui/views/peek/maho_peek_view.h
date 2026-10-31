@@ -7,10 +7,14 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
 #include "build/build_config.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "components/web_modal/modal_dialog_host.h"
+#include "components/web_modal/web_contents_modal_dialog_host.h"
+#include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
 #include "printing/buildflags/buildflags.h"
 #include "ui/views/controls/webview/webview.h"
 
@@ -25,7 +29,9 @@ class MdTextButton;
 // Hosts a transient Peek WebContents. Ownership deliberately remains here
 // rather than in views::WebView so ReleaseContents() can transfer the live page
 // into a tab without destroying it.
-class MahoPeekView : public views::WebView {
+class MahoPeekView : public views::WebView,
+                      public web_modal::WebContentsModalDialogManagerDelegate,
+                      public web_modal::WebContentsModalDialogHost {
  public:
   using ControllerCallback = base::RepeatingClosure;
 
@@ -93,6 +99,24 @@ class MahoPeekView : public views::WebView {
       content::RenderFrameHost* subframe_host) const override;
 #endif
 
+  // web_modal::WebContentsModalDialogManagerDelegate:
+  // Peek contents live in this view instead of a Browser window, so the modal
+  // dialog manager needs this view to serve as the dialog host. The base
+  // implementation returns nullptr, and constrained_window's
+  // CreateWebModalDialogViews() CHECKs the host, so any web-modal dialog raised
+  // by peeked content (WebAuthn passkey/caBLE, permission prompts) would kill
+  // the browser. Mirrors chrome's SimpleWebViewDialog, which hosts its own
+  // dialogs the same way.
+  web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost(
+      content::WebContents* web_contents) override;
+
+  // web_modal::WebContentsModalDialogHost:
+  gfx::NativeView GetHostView() const override;
+  gfx::Point GetDialogPosition(const gfx::Size& size) override;
+  gfx::Size GetMaximumDialogSize() override;
+  void AddObserver(web_modal::ModalDialogHostObserver* observer) override;
+  void RemoveObserver(web_modal::ModalDialogHostObserver* observer) override;
+
   // views::View:
   void Layout(PassKey) override;
 
@@ -106,6 +130,7 @@ class MahoPeekView : public views::WebView {
   ControllerCallback close_callback_;
   raw_ptr<views::MdTextButton> open_as_tab_button_ = nullptr;
   std::unique_ptr<content::WebContents> owned_contents_;
+  base::ObserverList<web_modal::ModalDialogHostObserver> observers_;
 };
 
 #endif  // MAHO_BROWSER_UI_VIEWS_PEEK_MAHO_PEEK_VIEW_H_

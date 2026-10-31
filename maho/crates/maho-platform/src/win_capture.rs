@@ -92,13 +92,7 @@ unsafe fn capture_screen_inner(output: Option<PathBuf>) -> Result<CaptureInfo, P
     }
 
     crate::win_probe::bgra_to_rgba_inplace(&mut pixels);
-    let target_path = output.unwrap_or_else(|| {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        std::env::temp_dir().join(format!("maho-capture-{ts}.png"))
-    });
+    let target_path = crate::capture::capture_target_path(output)?;
     encode_png(&target_path, &pixels, w, h)?;
     Ok(CaptureInfo {
         path: target_path.to_string_lossy().into_owned(),

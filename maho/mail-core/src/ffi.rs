@@ -19,6 +19,7 @@ pub mod data_api;
 pub mod io_api;
 pub mod onboarding_api;
 pub mod organize_api;
+pub mod messages_otp_api;
 pub mod otp_api;
 pub mod read_api;
 pub mod write_api;

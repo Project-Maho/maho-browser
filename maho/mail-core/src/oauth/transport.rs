@@ -69,9 +69,35 @@ impl OAuthTransport for ReqwestTransport {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
-            return Err(MailFfiError::OAuth(format!(
-                "token endpoint returned {status}: {body}"
-            )));
+            #[derive(Deserialize)]
+            struct OAuthError {
+                error: Option<String>,
+                error_description: Option<String>,
+            }
+            let err_code = serde_json::from_str::<OAuthError>(&body)
+                .ok()
+                .and_then(|e| {
+                    let code = match e.error.as_deref() {
+                        Some("invalid_request") => "invalid_request",
+                        Some("invalid_client") => "invalid_client",
+                        Some("invalid_grant") => "invalid_grant",
+                        Some("unauthorized_client") => "unauthorized_client",
+                        Some("unsupported_grant_type") => "unsupported_grant_type",
+                        Some("invalid_scope") => "invalid_scope",
+                        _ => return None,
+                    };
+                    if e.error_description.as_deref() == Some("client_secret is missing.") {
+                        Some(format!("{code} (client_secret is missing)"))
+                    } else {
+                        Some(code.to_string())
+                    }
+                });
+            let msg = match err_code {
+                Some(code) => format!("token endpoint returned {status}: {code}"),
+                None => format!("token endpoint returned {status}"),
+            };
+            log::error!("[mail-ffi] {msg}");
+            return Err(MailFfiError::OAuth(msg));
         }
         let token: TokenResp = resp
             .json()

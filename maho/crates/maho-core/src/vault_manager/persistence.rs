@@ -23,6 +23,9 @@ pub const SLOT_KDF_PARAMS: &str = "kdf_params";
 pub const SLOT_WRAPPED_USER_KEY: &str = "wrapped_user_key";
 /// Opaque slot holding the recovery-wrapped Vault key envelope.
 pub const SLOT_WRAPPED_RECOVERY_KEY: &str = "wrapped_recovery_key";
+/// Opaque slot holding the account-escrow-wrapped Vault key envelope. Absent on
+/// passphrase-provisioned vaults until the account-escrow migration adds it.
+pub const SLOT_WRAPPED_ACCOUNT_KEY: &str = "wrapped_account_key";
 
 /// Serialized slot payloads produced at initialization for `MahoCore` to persist
 /// transactionally. Every field is non-secret metadata / ciphertext-only bytes.
@@ -33,12 +36,22 @@ pub struct VaultPersistedSlots {
     pub wrapped_recovery_key: Vec<u8>,
 }
 
+/// Serialized slot payloads for an account-escrow provisioned Vault: KDF
+/// parameters plus the account-wrapped key envelope. No passphrase or recovery
+/// wrap exists for account-provisioned vaults.
+#[derive(Clone, Debug)]
+pub struct VaultAccountProvisionSlots {
+    pub kdf_params: Vec<u8>,
+    pub wrapped_account_key: Vec<u8>,
+}
+
 /// Raw slot bytes read back from storage for hydration. Any slot may be absent.
 #[derive(Clone, Debug, Default)]
 pub struct VaultHydrationSlots {
     pub kdf_params: Option<Vec<u8>>,
     pub wrapped_user_key: Option<Vec<u8>>,
     pub wrapped_recovery_key: Option<Vec<u8>>,
+    pub wrapped_account_key: Option<Vec<u8>>,
 }
 
 /// Result of hydrating locked-Vault metadata from opaque slots.
@@ -64,8 +77,9 @@ struct WrappedKeyPayload {
 
 pub(super) struct DecodedLockedState {
     pub metadata: VaultKdfMetadata,
-    pub wrapped_user_key: WrappedVaultKeyEnvelope,
-    pub wrapped_recovery_key: WrappedVaultKeyEnvelope,
+    pub wrapped_user_key: Option<WrappedVaultKeyEnvelope>,
+    pub wrapped_recovery_key: Option<WrappedVaultKeyEnvelope>,
+    pub wrapped_account_key: Option<WrappedVaultKeyEnvelope>,
 }
 
 pub(super) enum HydrationDecode {
@@ -97,39 +111,82 @@ pub(super) fn encode_slots(
     })
 }
 
+pub(super) fn encode_account_provision_slots(
+    metadata: &VaultKdfMetadata,
+    wrapped_account_key: &WrappedVaultKeyEnvelope,
+) -> Result<VaultAccountProvisionSlots, VaultManagerError> {
+    let kdf = KdfParamsPayload {
+        schema_version: VaultSchemaVersion::CURRENT,
+        metadata: metadata.clone(),
+    };
+    let account = WrappedKeyPayload {
+        schema_version: VaultSchemaVersion::CURRENT,
+        envelope: wrapped_account_key.clone(),
+    };
+    Ok(VaultAccountProvisionSlots {
+        kdf_params: serialize(&kdf)?,
+        wrapped_account_key: serialize(&account)?,
+    })
+}
+
+/// Serialized single-slot payload for persisting an account-escrow envelope on
+/// an already-initialized vault (migration path). Ciphertext-only bytes.
+#[derive(Clone, Debug)]
+pub struct VaultAccountWrapSlot {
+    pub wrapped_account_key: Vec<u8>,
+}
+
+pub fn encode_account_wrap_slot(
+    wrapped_account_key: &WrappedVaultKeyEnvelope,
+) -> Result<VaultAccountWrapSlot, VaultManagerError> {
+    let account = WrappedKeyPayload {
+        schema_version: VaultSchemaVersion::CURRENT,
+        envelope: wrapped_account_key.clone(),
+    };
+    Ok(VaultAccountWrapSlot {
+        wrapped_account_key: serialize(&account)?,
+    })
+}
+
 pub(super) fn decode_locked_state(
     slots: &VaultHydrationSlots,
 ) -> Result<HydrationDecode, VaultManagerError> {
-    // Classify by presence first, without reading any item payload. All three
-    // fresh-schema slots must be present together. No missing-recovery
-    // compatibility exists: there are no released legacy users.
-    let present = [
-        slots.kdf_params.is_some(),
-        slots.wrapped_user_key.is_some(),
-        slots.wrapped_recovery_key.is_some(),
-    ]
-    .into_iter()
-    .filter(|present| *present)
-    .count();
-    match present {
-        0 => return Ok(HydrationDecode::Uninitialized),
-        3 => {}
+    // Classify by presence first, without reading any item payload. A Vault is
+    // Locked when KDF params exist plus at least one usable wrap: the legacy
+    // passphrase kit (user + recovery, account optional) or the account-escrow
+    // kit (account, user/recovery optional). Any other combination is
+    // corruption; everything absent is uninitialized.
+    let kdf_present = slots.kdf_params.is_some();
+    let user_present = slots.wrapped_user_key.is_some();
+    let recovery_present = slots.wrapped_recovery_key.is_some();
+    let account_present = slots.wrapped_account_key.is_some();
+    match (kdf_present, user_present, recovery_present, account_present) {
+        (false, false, false, false) => return Ok(HydrationDecode::Uninitialized),
+        (true, true, true, _) | (true, false, false, true) => {}
         _ => return Err(VaultManagerError::CorruptedVaultData),
     }
-    let (Some(kdf_bytes), Some(user_bytes), Some(recovery_bytes)) = (
-        slots.kdf_params.as_ref(),
-        slots.wrapped_user_key.as_ref(),
-        slots.wrapped_recovery_key.as_ref(),
-    ) else {
-        return Err(VaultManagerError::CorruptedVaultData);
+    let kdf_bytes = slots
+        .kdf_params
+        .as_ref()
+        .ok_or(VaultManagerError::CorruptedVaultData)?;
+    let user: Option<WrappedKeyPayload> = match slots.wrapped_user_key.as_ref() {
+        Some(bytes) => Some(deserialize(bytes)?),
+        None => None,
+    };
+    let recovery: Option<WrappedKeyPayload> = match slots.wrapped_recovery_key.as_ref() {
+        Some(bytes) => Some(deserialize(bytes)?),
+        None => None,
+    };
+    let account: Option<WrappedKeyPayload> = match slots.wrapped_account_key.as_ref() {
+        Some(bytes) => Some(deserialize(bytes)?),
+        None => None,
     };
     let kdf: KdfParamsPayload = deserialize(kdf_bytes)?;
-    let user: WrappedKeyPayload = deserialize(user_bytes)?;
-    let recovery: WrappedKeyPayload = deserialize(recovery_bytes)?;
     Ok(HydrationDecode::Locked(Box::new(DecodedLockedState {
         metadata: kdf.metadata,
-        wrapped_user_key: user.envelope,
-        wrapped_recovery_key: recovery.envelope,
+        wrapped_user_key: user.map(|payload| payload.envelope),
+        wrapped_recovery_key: recovery.map(|payload| payload.envelope),
+        wrapped_account_key: account.map(|payload| payload.envelope),
     })))
 }
 

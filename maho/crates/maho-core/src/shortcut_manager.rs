@@ -217,6 +217,19 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         nav.clone(),
         KeyCombo::new("l", vec![primary_modifier()]),
     ));
+    // Windows/Linux address-bar alias (Chromium, Arc for Windows): Alt+D opens
+    // the same palette as Ctrl+L. Without a registry binding Alt+D fell through
+    // to upstream IDC_FOCUS_LOCATION, which focuses the hidden omnibox. macOS
+    // has no Alt+D convention (Option+D types a character), so it is not bound
+    // there.
+    if !cfg!(target_os = "macos") {
+        bindings.push(ShortcutBinding::new(
+            "command_bar_alt",
+            "Command Bar (Alternate)",
+            nav.clone(),
+            KeyCombo::new("d", vec![KeyModifier::Alt]),
+        ));
+    }
 
     // === Tabs (Arc-style: ⌘T = New Tab, ⌘D = Pin) ===
     let tabs = ShortcutCategory::Tabs;
@@ -326,6 +339,12 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
             "n",
             vec![primary_modifier(), KeyModifier::Shift, KeyModifier::Alt],
         ),
+    ));
+    bindings.push(ShortcutBinding::new(
+        "toggle_spaces_overlay",
+        "Spaces Overlay",
+        spaces.clone(),
+        KeyCombo::new("s", vec![primary_modifier(), KeyModifier::Alt]),
     ));
     let space_num_modifier = if cfg!(target_os = "macos") {
         vec![KeyModifier::Ctrl]
@@ -490,15 +509,6 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         window.clone(),
         KeyCombo::new("y", vec![primary_modifier()]),
     ));
-    bindings.push(ShortcutBinding::new(
-        "open_bookmarks",
-        "Bookmarks",
-        window.clone(),
-        KeyCombo::new(
-            "b",
-            vec![primary_modifier(), KeyModifier::Shift, KeyModifier::Alt],
-        ),
-    ));
 
     // === View ===
     let view = ShortcutCategory::View;
@@ -519,6 +529,14 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "Reset Zoom",
         view.clone(),
         KeyCombo::new("0", vec![primary_modifier()]),
+    ));
+    // Arc parity: Cmd+Shift+2 (Ctrl+Shift+2 off macOS) starts the selected-area
+    // screenshot flow, same as the utility panel's Screenshot button.
+    bindings.push(ShortcutBinding::new(
+        "capture_screenshot",
+        "Capture Screenshot",
+        view.clone(),
+        KeyCombo::new("2", vec![primary_modifier(), KeyModifier::Shift]),
     ));
 
     // === Developer ===
@@ -643,5 +661,42 @@ mod contract_tests {
                 binding.action,
             );
         }
+    }
+
+    #[test]
+    fn spaces_overlay_shortcut_is_registered_and_collision_free() {
+        let manager = ShortcutManager::new();
+        let binding = manager
+            .bindings
+            .iter()
+            .find(|b| b.action == "toggle_spaces_overlay")
+            .expect("toggle_spaces_overlay must be registered");
+        assert_eq!(binding.key_combo.key, "s");
+        assert!(binding.key_combo.modifiers.contains(&KeyModifier::Alt));
+        assert!(
+            binding.key_combo.modifiers.contains(&if cfg!(target_os = "macos") {
+                KeyModifier::Meta
+            } else {
+                KeyModifier::Ctrl
+            })
+        );
+        assert!(
+            !binding.key_combo.modifiers.contains(&KeyModifier::Shift),
+            "toggle_spaces_overlay must not contain Shift"
+        );
+        assert_eq!(binding.category, ShortcutCategory::Spaces);
+
+        // Explicit collision check: no duplicate full modifier combo across bindings
+        let norm = binding.key_combo.to_normalized_string();
+        let duplicates: Vec<&ShortcutBinding> = manager
+            .bindings
+            .iter()
+            .filter(|b| b.key_combo.to_normalized_string() == norm)
+            .collect();
+        assert_eq!(
+            duplicates.len(),
+            1,
+            "found duplicate full modifier combo for toggle_spaces_overlay: {duplicates:?}"
+        );
     }
 }

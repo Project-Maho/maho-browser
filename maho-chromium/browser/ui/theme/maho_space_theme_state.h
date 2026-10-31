@@ -83,6 +83,7 @@ class MahoSpaceThemeState {
   // Replaces the committed cache from the all-Spaces Rust Core snapshot and
   // returns the Space IDs whose resolved committed theme changed.
   static ChangedSpaceIds UpdateFromCore();
+  static ChangedSpaceIds UpdateFromSnapshot(const std::string& spaces_json);
 
   static ChangedSpaceIds UpdateFromSnapshotForTesting(
       const std::string& spaces_json);

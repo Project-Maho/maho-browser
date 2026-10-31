@@ -78,7 +78,7 @@ void MahoSplitViewController::AddSplitWithURL(const GURL& url) {
     return;
   }
 
-  TabStripModel* model = browser_->tab_strip_model();
+  TabStripModel* model = browser_->GetTabStripModel();
   if (!model) {
     return;
   }
@@ -88,7 +88,7 @@ void MahoSplitViewController::AddSplitWithURL(const GURL& url) {
     return;
   }
 
-  content::WebContents::CreateParams create_params(browser_->profile());
+  content::WebContents::CreateParams create_params(browser_->GetProfile());
   auto new_contents = content::WebContents::Create(create_params);
   content::NavigationController::LoadURLParams load_params(url);
   load_params.transition_type = ui::PAGE_TRANSITION_GENERATED;
@@ -100,7 +100,7 @@ void MahoSplitViewController::AddSplitWithURL(const GURL& url) {
       AddTabTypes::ADD_NONE);
 
   split_tabs::SplitTabVisualData visual_data(
-      split_tabs::SplitTabLayout::kVertical, 0.5);
+      split_tabs::SplitTabLayout::kSideBySide, 0.5);
   // Split membership is owned by TabStripModel and is persisted through the
   // session service; no extra session bookkeeping is needed here.
   // Upstream AddToNewSplit CHECK_EQs exactly one partner index and pivots on
@@ -115,7 +115,7 @@ void MahoSplitViewController::AddSplitWithURL(const GURL& url) {
       !new_id.empty()) {
     std::string event_json = base::StringPrintf(
         "{\"kind\":\"create_split\",\"window_id\":\"%s\",\"tab_ids\":[\"%s\",\"%s\"],\"orientation\":\"horizontal\"}",
-        std::to_string(browser_->session_id().id()).c_str(),
+        std::to_string(browser_->GetSessionID().id()).c_str(),
         active_id.c_str(), new_id.c_str());
     if (auto* core = maho::GetCore()) {
       char* result = maho_core_handle_event(core, event_json.c_str());
@@ -127,7 +127,7 @@ void MahoSplitViewController::AddSplitWithURL(const GURL& url) {
 }
 
 void MahoSplitViewController::AddSplitForExistingTab(int clicked_index) {
-  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
+  TabStripModel* model = browser_ ? browser_->GetTabStripModel() : nullptr;
   if (!model || !model->ContainsIndex(clicked_index)) {
     return;
   }
@@ -158,7 +158,7 @@ void MahoSplitViewController::AddSplitForExistingTab(int clicked_index) {
   std::string clicked_id = GetTabIdForIndex(model, clicked_index);
 
   split_tabs::SplitTabVisualData visual_data(
-      split_tabs::SplitTabLayout::kVertical, 0.5);
+      split_tabs::SplitTabLayout::kSideBySide, 0.5);
   // Only the clicked existing tab is passed as the single partner index; the
   // active tab stays canonical active as the implicit pivot.
   model->AddToNewSplit(
@@ -169,7 +169,7 @@ void MahoSplitViewController::AddSplitForExistingTab(int clicked_index) {
       !clicked_id.empty()) {
     std::string event_json = base::StringPrintf(
         "{\"kind\":\"create_split\",\"window_id\":\"%s\",\"tab_ids\":[\"%s\",\"%s\"],\"orientation\":\"horizontal\"}",
-        std::to_string(browser_->session_id().id()).c_str(),
+        std::to_string(browser_->GetSessionID().id()).c_str(),
         active_id.c_str(), clicked_id.c_str());
     if (auto* core = maho::GetCore()) {
       char* result = maho_core_handle_event(core, event_json.c_str());
@@ -193,7 +193,7 @@ bool MahoSplitViewController::AddViewportSplitForExistingTab(
     size_t target_pane_index,
     split_tabs::SplitTabLayout layout,
     bool source_before_target) {
-  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
+  TabStripModel* model = browser_ ? browser_->GetTabStripModel() : nullptr;
   if (!model || !model->ContainsIndex(source_index)) {
     return false;
   }
@@ -265,7 +265,7 @@ void MahoSplitViewController::ToggleSplitWithURL(const GURL& url) {
 }
 
 void MahoSplitViewController::RemoveSplit() {
-  TabStripModel* model = browser_->tab_strip_model();
+  TabStripModel* model = browser_->GetTabStripModel();
   if (!model) {
     return;
   }
@@ -288,7 +288,7 @@ void MahoSplitViewController::RemoveSplit() {
   }
   std::string event_json = base::StringPrintf(
       "{\"kind\":\"clear_split_view\",\"window_id\":\"%s\"}",
-      std::to_string(browser_->session_id().id()).c_str());
+      std::to_string(browser_->GetSessionID().id()).c_str());
   if (auto* core = maho::GetCore()) {
     char* result = maho_core_handle_event(core, event_json.c_str());
     if (result) {
@@ -298,7 +298,7 @@ void MahoSplitViewController::RemoveSplit() {
 }
 
 void MahoSplitViewController::RemoveSplitForTab(int tab_strip_index) {
-  TabStripModel* model = browser_->tab_strip_model();
+  TabStripModel* model = browser_->GetTabStripModel();
   if (!model || !model->ContainsIndex(tab_strip_index)) {
     return;
   }
@@ -314,7 +314,7 @@ void MahoSplitViewController::RemoveSplitForTab(int tab_strip_index) {
   }
   std::string event_json = base::StringPrintf(
       "{\"kind\":\"clear_split_view\",\"window_id\":\"%s\"}",
-      std::to_string(browser_->session_id().id()).c_str());
+      std::to_string(browser_->GetSessionID().id()).c_str());
   if (auto* core = maho::GetCore()) {
     char* result = maho_core_handle_event(core, event_json.c_str());
     if (result) {
@@ -324,7 +324,7 @@ void MahoSplitViewController::RemoveSplitForTab(int tab_strip_index) {
 }
 
 void MahoSplitViewController::SwapSplit() {
-  TabStripModel* model = browser_->tab_strip_model();
+  TabStripModel* model = browser_->GetTabStripModel();
   if (!model) {
     return;  }
 
@@ -350,7 +350,7 @@ void MahoSplitViewController::SwapSplit() {
           !tab1_id.empty() && !tab2_id.empty()) {
         std::string event_json = base::StringPrintf(
             "{\"kind\":\"create_split\",\"window_id\":\"%s\",\"tab_ids\":[\"%s\",\"%s\"],\"orientation\":\"horizontal\"}",
-            std::to_string(browser_->session_id().id()).c_str(),
+            std::to_string(browser_->GetSessionID().id()).c_str(),
             tab1_id.c_str(), tab2_id.c_str());
         if (auto* core = maho::GetCore()) {
           char* result = maho_core_handle_event(core, event_json.c_str());
@@ -364,11 +364,12 @@ void MahoSplitViewController::SwapSplit() {
 }
 
 bool MahoSplitViewController::IsSplitActive() const {
-  TabStripModel* model = browser_->tab_strip_model();
+  TabStripModel* model = browser_->GetTabStripModel();
   if (!model) {
     return false;
   }
-  return model->IsActiveTabSplit();
+  return model->ContainsIndex(model->active_index()) &&
+         model->GetSplitForTab(model->active_index()).has_value();
 }
 
 // static
@@ -390,7 +391,7 @@ void MahoSplitViewController::RestoreForWindow(Browser* /*browser*/) {
 
 std::optional<split_tabs::SplitTabLayout>
 MahoSplitViewController::GetSplitOrientation() const {
-  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
+  TabStripModel* model = browser_ ? browser_->GetTabStripModel() : nullptr;
   if (!model) {
     return std::nullopt;
   }
@@ -412,7 +413,7 @@ MahoSplitViewController::GetSplitOrientation() const {
 
 bool MahoSplitViewController::SetSplitOrientation(
     split_tabs::SplitTabLayout orientation) {
-  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
+  TabStripModel* model = browser_ ? browser_->GetTabStripModel() : nullptr;
   if (!model) {
     return false;
   }
@@ -445,9 +446,9 @@ MahoSplitViewController::ToggleSplitOrientation() {
   if (!current.has_value()) {
     return std::nullopt;
   }
-  auto target = (*current == split_tabs::SplitTabLayout::kVertical)
-                    ? split_tabs::SplitTabLayout::kHorizontal
-                    : split_tabs::SplitTabLayout::kVertical;
+  auto target = (*current == split_tabs::SplitTabLayout::kSideBySide)
+                    ? split_tabs::SplitTabLayout::kStacked
+                    : split_tabs::SplitTabLayout::kSideBySide;
   if (SetSplitOrientation(target)) {
     return target;
   }
@@ -455,7 +456,7 @@ MahoSplitViewController::ToggleSplitOrientation() {
 }
 
 bool MahoSplitViewController::ResizeSplit(double delta) {
-  TabStripModel* model = browser_->tab_strip_model();
+  TabStripModel* model = browser_->GetTabStripModel();
   if (!model) {
     return false;
   }
@@ -479,10 +480,10 @@ bool MahoSplitViewController::ResizeSplit(double delta) {
   }
   model->UpdateSplitRatio(*split_id, new_ratio);
   if (auto* session_service =
-          SessionServiceFactory::GetForProfile(browser_->profile())) {
+          SessionServiceFactory::GetForProfile(browser_->GetProfile())) {
     if (const split_tabs::SplitTabVisualData* visual_data =
             model->GetSplitData(*split_id)->visual_data()) {
-      session_service->SetSplitTabData(browser_->session_id(), *split_id,
+      session_service->SetSplitTabData(browser_->GetSessionID(), *split_id,
                                        visual_data);
     }
   }

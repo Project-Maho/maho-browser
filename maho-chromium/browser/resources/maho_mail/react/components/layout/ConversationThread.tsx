@@ -127,8 +127,8 @@ export function ConversationThread({
         return (
           <li
             key={m.id}
-            className={`overflow-hidden rounded-xl border bg-card/40 ${
-              isSelected ? "border-primary/40" : "border-border"
+            className={`overflow-hidden rounded-xl border transition-colors ${
+              isSelected ? "border-border bg-primary/[0.06]" : "border-border/70 bg-card/40"
             }`}
           >
             <button
@@ -136,7 +136,7 @@ export function ConversationThread({
               onClick={() => toggle(m.id)}
               aria-expanded={isExpanded}
               aria-label={`${m.from_name || m.from_address}, ${formatMessageTime(m.date)}`}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-card/70"
+              className="flex min-h-14 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             >
               <span
                 aria-hidden="true"
@@ -162,9 +162,9 @@ export function ConversationThread({
               {m.is_starred && (
                 <Star className="h-3.5 w-3.5 shrink-0 fill-amber-400 text-amber-400" aria-hidden="true" />
               )}
-              <span className="shrink-0 text-xs text-muted-foreground">{formatMessageTime(m.date)}</span>
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatMessageTime(m.date)}</span>
               <ChevronDown
-                className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+                className={`mail-disclosure h-4 w-4 shrink-0 text-muted-foreground ${
                   isExpanded ? "rotate-180" : ""
                 }`}
                 aria-hidden="true"
@@ -172,7 +172,7 @@ export function ConversationThread({
             </button>
 
             {isExpanded && (
-              <div className="border-t border-border">
+              <div className="border-t border-border/60 animate-fade-in">
                 {detail ? (
                   <EmailBodyView
                     emailDetail={detail}

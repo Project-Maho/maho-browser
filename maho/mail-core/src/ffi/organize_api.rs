@@ -613,8 +613,10 @@ fn map_rule(row: &rusqlite::Row) -> rusqlite::Result<MailRule> {
     let is_enabled: i64 = row.get("is_enabled")?;
     let stop_processing: i64 = row.get("stop_processing")?;
 
-    let conditions: Vec<RuleCondition> = serde_json::from_str(&conditions_json).unwrap_or_default();
-    let actions: Vec<RuleAction> = serde_json::from_str(&actions_json).unwrap_or_default();
+    let conditions: Vec<RuleCondition> = serde_json::from_str(&conditions_json)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e)))?;
+    let actions: Vec<RuleAction> = serde_json::from_str(&actions_json)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e)))?;
 
     Ok(MailRule {
         id: row.get("id")?,
@@ -869,30 +871,34 @@ pub extern "C" fn MahoMailReorderMailRules(
     })
 }
 
-pub fn evaluate_rules_for_email(
-    db: &rusqlite::Connection,
+pub fn evaluate_rules_for_email_in_tx(
+    conn: &rusqlite::Connection,
     account_id: &str,
     email_id: &str,
 ) -> std::result::Result<(), maho_core::error::AppError> {
-    let email = match load_email_for_rules(db, email_id) {
+    let email = match load_email_for_rules(conn, account_id, email_id) {
         Ok(e) => e,
-        Err(_) => {
+        Err(maho_core::error::AppError::Database(rusqlite::Error::QueryReturnedNoRows)) => {
             log::warn!(
                 "evaluate_rules_for_email: email {} not found, skipping",
                 email_id
             );
             return Ok(());
         }
+        Err(error) => return Err(error),
     };
 
-    let mut stmt = db.prepare(
-        "SELECT id, account_id, name, priority, is_enabled, conditions_json, actions_json, stop_processing, created_at, updated_at
-         FROM mail_rules WHERE account_id = ?1 AND is_enabled = 1 ORDER BY priority ASC",
-    )?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, account_id, name, priority, is_enabled, conditions_json, actions_json, stop_processing, created_at, updated_at
+             FROM mail_rules WHERE account_id = ?1 AND is_enabled = 1 ORDER BY priority ASC",
+        )
+        .map_err(maho_core::error::AppError::Database)?;
     let rules: Vec<MailRule> = stmt
-        .query_map(params![account_id], map_rule)?
-        .filter_map(|r| r.ok())
-        .collect();
+        .query_map(params![account_id], map_rule)
+        .map_err(maho_core::error::AppError::Database)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(maho_core::error::AppError::Database)?;
 
     for rule in &rules {
         if rule.conditions.is_empty() {
@@ -906,21 +912,9 @@ pub fn evaluate_rules_for_email(
 
         let mut email_deleted = false;
         for action in &rule.actions {
-            match execute_action(db, email_id, action) {
-                Ok(true) => {
-                    email_deleted = true;
-                    break;
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    log::warn!(
-                        "Rule '{}' action {:?} failed for email {}: {}",
-                        rule.name,
-                        action.action_type,
-                        email_id,
-                        e
-                    );
-                }
+            if execute_action(conn, email_id, action)? {
+                email_deleted = true;
+                break;
             }
         }
 
@@ -929,6 +923,17 @@ pub fn evaluate_rules_for_email(
         }
     }
 
+    Ok(())
+}
+
+pub fn evaluate_rules_for_email(
+    db: &rusqlite::Connection,
+    account_id: &str,
+    email_id: &str,
+) -> std::result::Result<(), maho_core::error::AppError> {
+    let transaction = db.unchecked_transaction()?;
+    evaluate_rules_for_email_in_tx(&transaction, account_id, email_id)?;
+    transaction.commit()?;
     Ok(())
 }
 
@@ -942,11 +947,12 @@ struct EmailForRules {
 
 fn load_email_for_rules(
     db: &rusqlite::Connection,
+    account_id: &str,
     email_id: &str,
 ) -> std::result::Result<EmailForRules, maho_core::error::AppError> {
     db.query_row(
-        "SELECT from_address, to_addresses, subject, body_text, has_attachments FROM emails WHERE id = ?1",
-        params![email_id],
+        "SELECT from_address, to_addresses, subject, body_text, has_attachments FROM emails WHERE id = ?1 AND account_id = ?2",
+        params![email_id, account_id],
         |row| {
             let has_att: i64 = row.get(4)?;
             Ok(EmailForRules {
@@ -958,7 +964,7 @@ fn load_email_for_rules(
             })
         },
     )
-    .map_err(|_| maho_core::error::AppError::NotFound("Email not found".to_string()))
+    .map_err(maho_core::error::AppError::Database)
 }
 
 fn check_condition(condition: &RuleCondition, email: &EmailForRules) -> bool {
@@ -1009,62 +1015,120 @@ fn match_field_value(field_value: &str, operator: &str, value: &str) -> bool {
     }
 }
 
+fn get_email_scope(
+    db: &rusqlite::Connection,
+    email_id: &str,
+) -> std::result::Result<(String, String, i64), maho_core::error::AppError> {
+    db.query_row(
+        "SELECT e.account_id, f.path, COALESCE(e.uid, 0) FROM emails e JOIN folders f
+         ON e.folder_id=f.id AND e.account_id=f.account_id WHERE e.id=?1",
+        params![email_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .map_err(maho_core::error::AppError::Database)
+}
+
 fn execute_action(
     db: &rusqlite::Connection,
     email_id: &str,
     action: &RuleAction,
 ) -> std::result::Result<bool, maho_core::error::AppError> {
+    if matches!(action.action_type.as_str(), "mark_read" | "mark_unread" | "add_star" | "remove_star") {
+        db.execute("UPDATE folders SET reconciliation_version=reconciliation_version+1
+            WHERE id=(SELECT folder_id FROM emails WHERE id=?1)", [email_id])?;
+    }
     match action.action_type.as_str() {
         "mark_read" => {
+            let (account_id, folder_path, uid) = get_email_scope(db, email_id)?;
             db.execute(
                 "UPDATE emails SET is_read = 1 WHERE id = ?1",
                 params![email_id],
             )?;
+            if uid > 0 {
+                maho_core::services::offline_queue::queue_mutation(
+                    db, &account_id, uid, &folder_path, "mark_read", None,
+                )?;
+            }
         }
         "mark_unread" => {
+            let (account_id, folder_path, uid) = get_email_scope(db, email_id)?;
             db.execute(
                 "UPDATE emails SET is_read = 0 WHERE id = ?1",
                 params![email_id],
             )?;
+            if uid > 0 {
+                maho_core::services::offline_queue::queue_mutation(
+                    db, &account_id, uid, &folder_path, "mark_unread", None,
+                )?;
+            }
         }
         "add_star" => {
+            let (account_id, folder_path, uid) = get_email_scope(db, email_id)?;
             db.execute(
                 "UPDATE emails SET is_starred = 1 WHERE id = ?1",
                 params![email_id],
             )?;
+            if uid > 0 {
+                maho_core::services::offline_queue::queue_mutation(
+                    db, &account_id, uid, &folder_path, "star", None,
+                )?;
+            }
         }
         "remove_star" => {
+            let (account_id, folder_path, uid) = get_email_scope(db, email_id)?;
             db.execute(
                 "UPDATE emails SET is_starred = 0 WHERE id = ?1",
                 params![email_id],
             )?;
+            if uid > 0 {
+                maho_core::services::offline_queue::queue_mutation(
+                    db, &account_id, uid, &folder_path, "unstar", None,
+                )?;
+            }
         }
         "delete" => {
+            let (account_id, folder_path, uid) = get_email_scope(db, email_id)?;
+            if uid > 0 {
+                maho_core::services::offline_queue::queue_mutation(
+                    db, &account_id, uid, &folder_path, "delete", None,
+                )?;
+            }
+            db.execute("DELETE FROM attachments WHERE email_id = ?1", params![email_id])?;
             db.execute("DELETE FROM emails WHERE id = ?1", params![email_id])?;
             return Ok(true);
         }
         "move_to_folder" => {
-            if let Some(ref folder_name) = action.value {
-                let result: std::result::Result<String, _> = db.query_row(
-                    "SELECT f.id FROM folders f
-                     INNER JOIN emails e ON e.account_id = f.account_id
-                     WHERE e.id = ?1 AND LOWER(f.name) = LOWER(?2)
-                     LIMIT 1",
-                    params![email_id, folder_name],
-                    |row| row.get(0),
-                );
-                if let Ok(target_folder_id) = result {
-                    db.execute(
-                        "UPDATE emails SET folder_id = ?1 WHERE id = ?2",
-                        params![target_folder_id, email_id],
-                    )?;
-                } else {
-                    log::warn!(
-                        "Rule action move_to_folder: folder '{}' not found for email {}",
-                        folder_name,
-                        email_id
-                    );
+            let folder_name = action.value.as_deref().ok_or_else(|| {
+                maho_core::error::AppError::Validation("move_to_folder action missing target folder name".to_string())
+            })?;
+            let (account_id, current_folder_path, uid) = get_email_scope(db, email_id)?;
+            let target_result: rusqlite::Result<(String, String)> = db.query_row(
+                "SELECT f.id, f.path FROM folders f
+                 WHERE f.account_id = ?1 AND (LOWER(f.name) = LOWER(?2) OR LOWER(f.path) = LOWER(?2))
+                 LIMIT 1",
+                params![&account_id, folder_name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            );
+            match target_result {
+                Ok((target_folder_id, target_canonical_path)) => {
+                    maho_core::services::email::move_email(db, email_id, &target_folder_id)?;
+                    if uid > 0 {
+                        maho_core::services::offline_queue::queue_mutation(
+                            db,
+                            &account_id,
+                            uid,
+                            &current_folder_path,
+                            "move",
+                            Some(&target_canonical_path),
+                        )?;
+                    }
                 }
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    return Err(maho_core::error::AppError::NotFound(format!(
+                        "Target folder '{folder_name}' not found for account {account_id}"
+                    )));
+                }
+                Err(e) => return Err(maho_core::error::AppError::Database(e)),
             }
         }
         _ => {
@@ -1551,7 +1615,7 @@ pub extern "C" fn MahoMailListScheduledSends(
                 if let Some(ref aid) = account_id {
                     let mut s = conn.prepare(
                         "SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_text, scheduled_at, status, created_at
-                         FROM send_later WHERE account_id = ?1 AND status = 'pending' ORDER BY scheduled_at ASC",
+                         FROM send_later WHERE account_id = ?1 AND status = 'pending' ORDER BY julianday(scheduled_at) ASC, id ASC",
                     )?;
                     let rows = s
                         .query_map(params![aid], map_send_later_item)?
@@ -1560,7 +1624,7 @@ pub extern "C" fn MahoMailListScheduledSends(
                 } else {
                     let mut s = conn.prepare(
                         "SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_text, scheduled_at, status, created_at
-                         FROM send_later WHERE status = 'pending' ORDER BY scheduled_at ASC",
+                         FROM send_later WHERE status = 'pending' ORDER BY julianday(scheduled_at) ASC, id ASC",
                     )?;
                     let rows = s
                         .query_map([], map_send_later_item)?
@@ -1576,7 +1640,32 @@ pub extern "C" fn MahoMailListScheduledSends(
 // Scheduler Commands
 // ==========================================
 
+#[path = "scheduler_delivery.rs"]
+mod scheduler_delivery;
+
 static SCHEDULER_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// One lifecycle tick, also callable with a fixed instant for durable-work tests.
+pub(crate) async fn run_scheduler_once(
+    ctx: &crate::state::AppCtx,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<()> {
+    let now = now.to_rfc3339();
+    // The connection guard is `!Send`, so it is scoped to the two updates and
+    // dropped before the awaited delivery run.
+    ctx.with_db(|conn| {
+        conn.execute(
+            "UPDATE emails SET snoozed_until = NULL WHERE julianday(snoozed_until) <= julianday(?1)",
+            [&now],
+        )?;
+        conn.execute(
+            "UPDATE emails SET reminder_at = NULL WHERE julianday(reminder_at) <= julianday(?1)",
+            [&now],
+        )?;
+        Ok(())
+    })?;
+    scheduler_delivery::run(ctx, &now).await
+}
 
 #[no_mangle]
 pub extern "C" fn MahoMailStartScheduler(
@@ -1612,15 +1701,8 @@ pub extern "C" fn MahoMailStartScheduler(
                         break;
                     }
 
-                    if let Ok(conn) = ctx.pool.get() {
-                        let _ = conn.execute(
-                            "UPDATE emails SET snoozed_until = NULL WHERE snoozed_until IS NOT NULL AND snoozed_until <= datetime('now')",
-                            [],
-                        );
-                        let _ = conn.execute(
-                            "UPDATE emails SET reminder_at = NULL WHERE reminder_at IS NOT NULL AND reminder_at <= datetime('now')",
-                            [],
-                        );
+                    if let Err(error) = run_scheduler_once(&ctx, chrono::Utc::now()).await {
+                        log::error!("Scheduler tick failed: {error}");
                     }
                 }
             });
@@ -1915,7 +1997,7 @@ pub extern "C" fn MahoMailListBySmartCategory(
                         res.push(val);
                     }
                 }
-                serde_json::to_string(&res).map_err(MailFfiError::from)
+                Ok(res)
             })
         })
     })

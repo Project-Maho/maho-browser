@@ -6,21 +6,9 @@ use zeroize::Zeroizing;
 
 use crate::vault_crypto::WrappedVaultKeyEnvelope;
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "windows")]
-mod windows;
-
-#[cfg(target_os = "linux")]
-pub use linux::LinuxVaultDeviceProtector;
-#[cfg(target_os = "macos")]
-pub use macos::MacOsVaultDeviceProtector;
-#[cfg(target_os = "windows")]
-pub use windows::WindowsVaultDeviceProtector;
-
-/// Device protector seam implemented by future platform-specific providers.
+/// Device protector seam. The only production implementation is
+/// `crate::oscrypt::FileVaultDeviceProtector`; the OS keystore (Keychain,
+/// Secret Service, DPAPI) is intentionally never used.
 pub trait VaultDeviceProtector {
     fn device_secret(&self) -> Result<Zeroizing<Vec<u8>>, VaultDeviceProtectorError>;
 }

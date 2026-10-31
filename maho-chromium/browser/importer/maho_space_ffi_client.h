@@ -49,7 +49,8 @@ class MahoSpaceFFIClient {
   virtual void ActivateSpace(const std::string& space_id);
 
   // Sets the icon for an existing space.
-  // Dispatches `kind: "set_space_icon"` event.
+  // Dispatches `kind: "update_space_config"` with {spaceId, icon}; maho-core
+  // canonicalizes the value (icon names become emoji).
   // MUST be called on UI thread.
   virtual void SetSpaceIcon(const std::string& space_id,
                             const std::string& icon);

@@ -61,6 +61,7 @@ type Action =
   | { type: 'CANCEL_RENAME' }
   | { type: 'RENAME_START' }
   | { type: 'RENAME_DONE'; id: string; title: string }
+  | { type: 'RENAME_ERROR'; message: string }
   | { type: 'OPERATION_START' }
   | { type: 'OPERATION_DONE'; result: ConversationBulkResult; operation: BulkOperation }
   | { type: 'OPERATION_ERROR'; message: string }
@@ -136,6 +137,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, renamingId: null, renameDraft: '', renaming: false };
     case 'RENAME_START':
       return { ...state, renaming: true, errorMessage: null };
+    case 'RENAME_ERROR':
+      return { ...state, renaming: false, errorMessage: action.message };
     case 'RENAME_DONE':
       return {
         ...state,
@@ -326,7 +329,7 @@ export function ConversationListScreen({
       if (!ok) throw new Error('Unable to rename this conversation.');
       dispatch({ type: 'RENAME_DONE', id: conversationId, title: nextTitle });
     } catch (error) {
-      dispatch({ type: 'OPERATION_ERROR', message: toErrorMessage(error, 'Unable to rename this conversation.') });
+      dispatch({ type: 'RENAME_ERROR', message: toErrorMessage(error, 'Unable to rename this conversation.') });
     }
   }, [bridge, state.renameDraft]);
 

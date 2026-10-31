@@ -43,7 +43,7 @@ class COMPONENT_EXPORT(MAHO_UPDATES) LinuxManifestUpdaterDelegate
   // verification itself is covered by maho_update_signature_unittest.cc.
   void ApplyVerifiedManifest(std::string_view payload_json);
 
-  virtual std::string GetUpdateGuidance() const = 0;
+  std::string GetUpdateGuidance() const override = 0;
 
  protected:
   LinuxManifestUpdaterDelegate();

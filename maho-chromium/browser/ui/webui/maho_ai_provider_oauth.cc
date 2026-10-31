@@ -179,7 +179,7 @@ std::string RefreshOnBlockingPool(std::string config_json,
 content::WebContents* NavigateToProviderSignIn(Profile* profile,
                                                Browser* peek_host_browser,
                                                const GURL& url) {
-  if (peek_host_browser && peek_host_browser->profile() == profile &&
+  if (peek_host_browser && peek_host_browser->GetProfile() == profile &&
       profile->GetPrefs()->GetBoolean(maho::sidebar_prefs::kPeekEnabled) &&
       maho::IsPeekEligible(peek_host_browser)) {
     BrowserView* browser_view =

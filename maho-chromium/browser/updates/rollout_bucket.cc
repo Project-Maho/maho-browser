@@ -2,6 +2,7 @@
 
 #include "maho/browser/updates/rollout_bucket.h"
 
+#include <stdint.h>
 #include <string_view>
 #include "base/containers/span.h"
 #include "crypto/hmac.h"

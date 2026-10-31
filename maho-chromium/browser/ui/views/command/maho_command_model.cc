@@ -19,6 +19,7 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -28,7 +29,7 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "url/gurl.h"
-#include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "url/url_constants.h"
 #include "chrome/browser/favicon/large_icon_service_factory.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "components/favicon/content/content_favicon_driver.h"
@@ -36,12 +37,13 @@
 #include "components/favicon/core/large_icon_service.h"
 #include "components/favicon_base/favicon_callback.h"
 #include "components/favicon_base/favicon_types.h"
+#include "components/omnibox/browser/autocomplete_input.h"
+#include "components/omnibox/browser/autocomplete_scheme_classifier.h"
 #include "components/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
-#include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
@@ -233,88 +235,6 @@ std::optional<ImageData> BuildImageDataFromTab(tabs::TabInterface* tab) {
   return BuildImageDataFromFavicon(helper->GetFavicon());
 }
 
-std::optional<ImageData> LookupOpenTabIconForUrl(Browser* browser,
-                                                 const GURL& url) {
-  if (!browser || url.is_empty() || !browser->profile()) {
-    return std::nullopt;
-  }
-
-  std::optional<ImageData> icon;
-  const Profile* profile = browser->profile();
-  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-      [&icon, profile, &url](BrowserWindowInterface* candidate) {
-        if (icon.has_value()) {
-          return false;
-        }
-        if (!IsEligibleBrowserForTabSearch(candidate, profile)) {
-          return true;
-        }
-
-        TabStripModel* model = candidate->GetTabStripModel();
-        for (int i = 0; i < model->count(); ++i) {
-          auto* tab = model->GetTabAtIndex(i);
-          auto* contents = model->GetWebContentsAt(i);
-          if (!tab || !contents || contents->GetVisibleURL() != url) {
-            continue;
-          }
-          icon = BuildImageDataFromTab(tab);
-          if (icon.has_value()) {
-            return false;
-          }
-        }
-        return true;
-      });
-  return icon;
-}
-
-void CollectBookmarkSuggestions(bookmarks::BookmarkModel* bookmark_model,
-                                const bookmarks::BookmarkNode* node,
-                                Browser* browser,
-                                const std::string& query_lower,
-                                std::vector<CommandSuggestion>& out) {
-  if (!node) {
-    return;
-  }
-
-  for (const auto& child : node->children()) {
-    if (!child) {
-      continue;
-    }
-
-    if (child->is_url()) {
-      const GURL& url = child->url();
-      const std::string title = base::UTF16ToUTF8(child->GetTitle());
-      const std::string url_spec = url.spec();
-      if (!query_lower.empty()) {
-        const std::string title_lower = base::ToLowerASCII(title);
-        const std::string url_lower = base::ToLowerASCII(url_spec);
-        if (title_lower.find(query_lower) == std::string::npos &&
-            url_lower.find(query_lower) == std::string::npos) {
-          continue;
-        }
-      }
-
-      CommandSuggestion suggestion;
-      suggestion.type = CommandSuggestionType::kBookmark;
-      suggestion.key = "bookmark:" + base::NumberToString(child->id());
-      suggestion.title = title;
-      suggestion.subtitle = url_spec;
-      suggestion.execution_payload = url_spec;
-      if (bookmark_model) {
-        suggestion.icon =
-            BuildImageDataFromImage(bookmark_model->GetFavicon(child.get()));
-      }
-      if (!suggestion.icon.has_value()) {
-        suggestion.icon = LookupOpenTabIconForUrl(browser, url);
-      }
-      out.push_back(std::move(suggestion));
-    }
-
-    CollectBookmarkSuggestions(bookmark_model, child.get(), browser, query_lower,
-                               out);
-  }
-}
-
 const char* GetBackendSearchMode(CommandOverlayMode mode) {
   switch (mode) {
     case CommandOverlayMode::kCurrentTab:
@@ -360,15 +280,15 @@ MahoCommandModel::MahoCommandModel(Browser* browser)
       remote_source_factory_(base::BindRepeating(
           &CreateMahoRemoteSearchSuggestionSource)) {
   context_class_ = MahoClassifyProfile(
-      browser_ ? browser_->profile() : nullptr);
+      browser_ ? browser_->GetProfile() : nullptr);
   browser_collection_observation_.Observe(
       GlobalBrowserCollection::GetInstance());
 
   if (context_class_ == MahoPrivateContextClass::kPrimaryIncognito) {
     // Current-window only: observe just this browser's strip and never read
     // saved sources (no HydrateSiteSearchEngines).
-    if (browser_ && browser_->tab_strip_model()) {
-      browser_->tab_strip_model()->AddObserver(this);
+    if (browser_ && browser_->GetTabStripModel()) {
+      browser_->GetTabStripModel()->AddObserver(this);
     }
     return;
   }
@@ -400,8 +320,8 @@ MahoCommandModel::MahoCommandModel(Browser* browser)
 MahoCommandModel::~MahoCommandModel() {
   Cancel();
   if (context_class_ == MahoPrivateContextClass::kPrimaryIncognito) {
-    if (browser_ && browser_->tab_strip_model()) {
-      browser_->tab_strip_model()->RemoveObserver(this);
+    if (browser_ && browser_->GetTabStripModel()) {
+      browser_->GetTabStripModel()->RemoveObserver(this);
     }
     return;
   }
@@ -412,31 +332,6 @@ MahoCommandModel::~MahoCommandModel() {
         }
         return true;
       });
-}
-
-// static
-std::vector<CommandSuggestion>
-MahoCommandModel::BuildChromiumBookmarkSuggestions(Browser* browser,
-                                                   const std::string& query) {
-  std::vector<CommandSuggestion> suggestions;
-  if (!browser || !browser->profile()) {
-    return suggestions;
-  }
-
-  bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser->profile());
-  if (!bookmark_model || !bookmark_model->loaded()) {
-    return suggestions;
-  }
-
-  const std::string query_lower = base::ToLowerASCII(query);
-  CollectBookmarkSuggestions(bookmark_model, bookmark_model->bookmark_bar_node(),
-                             browser,
-                             query_lower, suggestions);
-  CollectBookmarkSuggestions(bookmark_model, bookmark_model->other_node(),
-                             browser,
-                             query_lower, suggestions);
-  return suggestions;
 }
 
 void MahoCommandModel::Search(const std::string& query,
@@ -617,7 +512,7 @@ void MahoCommandModel::FireSearch(uint32_t generation) {
     actions_only_ = true;
   }
 
-  Profile* profile = browser_ ? browser_->profile() : nullptr;
+  Profile* profile = browser_ ? browser_->GetProfile() : nullptr;
   const std::string trimmed_query(
       base::TrimWhitespaceASCII(query_, base::TRIM_ALL));
   const bool remote_eligible = IsRemoteSearchEligible(
@@ -649,15 +544,13 @@ void MahoCommandModel::FireSearch(uint32_t generation) {
   }
 
   std::string tabs_json = actions_only_ ? std::string() : BuildTabsJson();
-  std::vector<CommandSuggestion> chromium_bookmarks =
-      BuildChromiumBookmarkSuggestions(browser_, search_query);
   const bool is_incognito = profile->IsOffTheRecord();
 
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&MahoCommandModel::SearchOnPool, search_query, tabs_json,
-                     chromium_bookmarks, mode_, is_incognito),
+                     mode_, is_incognito),
       base::BindOnce(&MahoCommandModel::OnResults,
                      weak_factory_.GetWeakPtr(), generation));
 }
@@ -741,17 +634,30 @@ bool PrivateActionMatchesQuery(const PrivateAction& action,
   return target.find(lower_query) != std::string::npos;
 }
 
-bool IsUrlLikeQuery(const std::string& query) {
-  if (query.empty()) {
-    return false;
+// Scheme policy for typed palette input. http/https/file are parsed by
+// AutocompleteInput itself; this only decides the remaining explicit schemes.
+// javascript: and data: are never navigated from typed palette text.
+class PaletteSchemeClassifier final : public AutocompleteSchemeClassifier {
+ public:
+  metrics::OmniboxInputType GetInputTypeForScheme(
+      const std::string& scheme) const override {
+    if (base::EqualsCaseInsensitiveASCII(scheme, url::kJavaScriptScheme) ||
+        base::EqualsCaseInsensitiveASCII(scheme, url::kDataScheme)) {
+      return metrics::OmniboxInputType::QUERY;
+    }
+    for (const std::string_view known :
+         {"chrome", "about", "view-source", "file", "maho"}) {
+      if (base::EqualsCaseInsensitiveASCII(scheme, known)) {
+        return metrics::OmniboxInputType::URL;
+      }
+    }
+    return metrics::OmniboxInputType::EMPTY;
   }
-  if (IsProtocolLike(query)) {
-    return true;
-  }
-  if (query.find_first_of(" \t\r\n") != std::string::npos) {
-    return false;
-  }
+};
 
+// Dev-server shorthands the omnibox heuristics do not all accept as URLs
+// ("localhost", "localhost:3000", "devbox:3000", "123:3000").
+bool IsLocalhostOrHostPort(const std::string& query) {
   const std::string lower_query = base::ToLowerASCII(query);
   if (lower_query == "localhost" ||
       base::StartsWith(lower_query, "localhost:",
@@ -760,10 +666,6 @@ bool IsUrlLikeQuery(const std::string& query) {
                        base::CompareCase::SENSITIVE)) {
     return true;
   }
-  if (query.find('.') != std::string::npos) {
-    return true;
-  }
-
   const size_t colon = query.find(':');
   if (colon == std::string::npos || colon == 0 ||
       colon != query.rfind(':') || colon + 1 == query.size()) {
@@ -779,6 +681,19 @@ bool IsUrlLikeQuery(const std::string& query) {
          std::ranges::all_of(query.substr(colon + 1), is_ascii_digit);
 }
 
+bool IsUrlLikeQuery(const std::string& query) {
+  if (query.empty()) {
+    return false;
+  }
+  if (IsProtocolLike(query)) {
+    return true;
+  }
+  if (query.find_first_of(" \t\r\n") != std::string::npos) {
+    return false;
+  }
+  return MahoCommandModel::ClassifyTypedNavigation(query).has_value();
+}
+
 // Mirrors IsSidebarEligibleUrl (maho_sidebar_tab_list_view.cc): the NTP,
 // downloads, history and about: pages are not user-facing "Switch to Tab"
 // targets, so they are excluded from the command palette to match the sidebar.
@@ -791,9 +706,12 @@ bool IsCommandBarEligibleTabUrl(const GURL& url) {
   }
   if (url.SchemeIs("chrome")) {
     if (url.host() == "newtab" || url.host() == "downloads" ||
-        url.host() == "history") {
+        url.host() == "history" || url.host() == "new-tab-page") {
       return false;
     }
+  }
+  if (url.SchemeIs("chrome-search")) {
+    return false;
   }
   return true;
 }
@@ -819,6 +737,14 @@ bool IsNavigableCommandUrl(const GURL& url) {
          IsApprovedMahoAliasUrl(url);
 }
 
+// Typed text may additionally open local files and about:/view-source: pages,
+// matching what the omnibox accepts.
+bool IsTypedNavigableUrl(const GURL& url) {
+  return IsNavigableCommandUrl(url) ||
+         (url.is_valid() && (url.SchemeIsFile() || url.SchemeIs("about") ||
+                             url.SchemeIs("view-source")));
+}
+
 }  // namespace
 
 std::string MahoCommandModel::BuildTabsJson() {
@@ -828,13 +754,13 @@ std::string MahoCommandModel::BuildTabsJson() {
   }
 
   base::Value tabs(base::Value::Type::LIST);
-  if (!browser_ || !browser_->window() || !browser_->tab_strip_model()) {
+  if (!browser_ || !browser_->GetWindow() || !browser_->GetTabStripModel()) {
     cached_tabs_json_ = std::string();
     tabs_cache_dirty_ = false;
     return cached_tabs_json_;
   }
 
-  const Profile* profile = browser_->profile();
+  const Profile* profile = browser_->GetProfile();
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [&tabs, profile](BrowserWindowInterface* candidate) {
         if (!IsEligibleBrowserForTabSearch(candidate, profile))
@@ -852,6 +778,14 @@ std::string MahoCommandModel::BuildTabsJson() {
           if (!IsCommandBarEligibleTabUrl(wc->GetVisibleURL()))
             continue;
 
+          std::string title = base::UTF16ToUTF8(wc->GetTitle());
+          std::string url = wc->GetVisibleURL().spec();
+          if (title.empty() && url.empty())
+            continue;
+          if (title.empty()) {
+            title = url;
+          }
+
           std::string stable_id = BuildStableTabId(candidate, wc);
           if (stable_id.empty())
             continue;
@@ -860,8 +794,8 @@ std::string MahoCommandModel::BuildTabsJson() {
               stable_id,
               base::NumberToString(candidate->GetSessionID().id()),
               base::NumberToString(tab_helper->session_id().id()),
-              base::UTF16ToUTF8(wc->GetTitle()),
-              wc->GetVisibleURL().spec()));
+              title,
+              url));
         }
         return true;
       });
@@ -907,22 +841,56 @@ CommandSuggestion MahoCommandModel::BuildDefaultProviderSearchSuggestion(
   return suggestion;
 }
 
+// static
+std::optional<MahoCommandModel::TypedNavigation>
+MahoCommandModel::ClassifyTypedNavigation(const std::string& text) {
+  const std::string trimmed(base::TrimWhitespaceASCII(text, base::TRIM_ALL));
+  if (trimmed.empty()) {
+    return std::nullopt;
+  }
+
+  const PaletteSchemeClassifier classifier;
+  const AutocompleteInput input(base::UTF8ToUTF16(trimmed),
+                                metrics::OmniboxEventProto::OTHER, classifier);
+  GURL url;
+  if (input.type() == metrics::OmniboxInputType::URL) {
+    url = input.canonicalized_url();
+  } else if (trimmed.find_first_of(" \t\r\n") == std::string::npos &&
+             IsLocalhostOrHostPort(trimmed)) {
+    url = GURL("http://" + trimmed);
+  }
+  if (!IsTypedNavigableUrl(url)) {
+    return std::nullopt;
+  }
+
+  TypedNavigation navigation;
+  navigation.url = std::move(url);
+  navigation.typed_http_scheme = input.typed_url_had_http_scheme();
+  return navigation;
+}
+
 std::optional<CommandSuggestion> MahoCommandModel::BuildNavigationSuggestionForQuery(
     const std::string& query) {
   if (!IsUrlLikeQuery(query)) {
     return std::nullopt;
   }
 
-  const std::string url_spec = IsProtocolLike(query) ? query : "https://" + query;
-  GURL url(url_spec);
-  if (!IsNavigableCommandUrl(url)) {
+  std::optional<TypedNavigation> navigation = ClassifyTypedNavigation(query);
+  if (!navigation || !IsNavigableCommandUrl(navigation->url)) {
     return std::nullopt;
   }
+  const GURL& url = navigation->url;
 
   CommandSuggestion suggestion;
   suggestion.type = CommandSuggestionType::kNavigation;
   suggestion.key = "nav:" + url.spec();
-  suggestion.title = "Go to " + url.spec();
+  // Scheme-less input keeps the user's spelling; the navigation itself relies
+  // on HTTPS-Upgrades (with http fallback) instead of a forced https://.
+  suggestion.title =
+      "Go to " + (IsProtocolLike(query)
+                      ? url.spec()
+                      : std::string(base::TrimWhitespaceASCII(
+                            query, base::TRIM_ALL)));
   suggestion.subtitle = "Navigate";
   suggestion.execution_payload = url.spec();
   return suggestion;
@@ -930,11 +898,11 @@ std::optional<CommandSuggestion> MahoCommandModel::BuildNavigationSuggestionForQ
 
 std::optional<std::pair<std::string, std::string>>
 MahoCommandModel::ResolveDefaultProviderSearch(const std::string& query) const {
-  if (!browser_ || !browser_->profile() || query.empty()) {
+  if (!browser_ || !browser_->GetProfile() || query.empty()) {
     return std::nullopt;
   }
   TemplateURLService* service =
-      TemplateURLServiceFactory::GetForProfile(browser_->profile());
+      TemplateURLServiceFactory::GetForProfile(browser_->GetProfile());
   if (!service) {
     return std::nullopt;
   }
@@ -984,8 +952,8 @@ std::vector<CommandSuggestion> MahoCommandModel::BuildPrivateResults(
     }
   }
 
-  if (browser_ && browser_->tab_strip_model()) {
-    TabStripModel* model = browser_->tab_strip_model();
+  if (browser_ && browser_->GetTabStripModel()) {
+    TabStripModel* model = browser_->GetTabStripModel();
     for (int i = 0; i < model->count(); ++i) {
       content::WebContents* wc = model->GetWebContentsAt(i);
       tabs::TabInterface* tab = model->GetTabAtIndex(i);
@@ -1016,7 +984,7 @@ std::vector<CommandSuggestion> MahoCommandModel::BuildPrivateResults(
       suggestion.execution_payload = url;
       suggestion.stable_tab_id = stable_id;
       suggestion.browser_session_id =
-          base::NumberToString(browser_->session_id().id());
+          base::NumberToString(browser_->GetSessionID().id());
       if (tab_helper) {
         suggestion.tab_session_id =
             base::NumberToString(tab_helper->session_id().id());
@@ -1058,7 +1026,6 @@ void MahoCommandModel::FireSearchPrivate(uint32_t generation) {
 std::vector<CommandSuggestion> MahoCommandModel::SearchOnPool(
     const std::string& query,
     const std::string& tabs_json,
-    const std::vector<CommandSuggestion>& chromium_bookmarks,
     CommandOverlayMode mode,
     bool is_incognito) {
   MahoCore* core = maho::GetCore();
@@ -1074,34 +1041,18 @@ std::vector<CommandSuggestion> MahoCommandModel::SearchOnPool(
   std::string json_str(json);
   maho_string_free(json);
 
-  return ParseSearchResultsJson(json_str, chromium_bookmarks);
+  return ParseSearchResultsJson(json_str);
 }
 
 // static
 std::vector<CommandSuggestion> MahoCommandModel::ParseSearchResultsJson(
-    const std::string& json_str,
-    const std::vector<CommandSuggestion>& chromium_bookmarks) {
+    const std::string& json_str) {
   std::vector<CommandSuggestion> results;
 
   std::optional<base::Value> parsed =
       base::JSONReader::Read(json_str, base::JSON_PARSE_RFC);
   if (!parsed || !parsed->is_list())
-    return chromium_bookmarks;
-
-  const bool has_core_bookmarks = std::ranges::any_of(
-      parsed->GetList(), [](const base::Value& item) {
-        const auto* dict = item.GetIfDict();
-        const std::string* kind = dict ? dict->FindString("kind") : nullptr;
-        return kind && *kind == "bookmark";
-      });
-
-  std::map<std::string, ImageData> chromium_bookmark_icons_by_payload;
-  for (const auto& bookmark : chromium_bookmarks) {
-    if (!bookmark.execution_payload.empty() && bookmark.icon.has_value()) {
-      chromium_bookmark_icons_by_payload.emplace(bookmark.execution_payload,
-                                                 *bookmark.icon);
-    }
-  }
+    return results;
 
   for (const auto& item : parsed->GetList()) {
     const auto* dict = item.GetIfDict();
@@ -1130,18 +1081,23 @@ std::vector<CommandSuggestion> MahoCommandModel::ParseSearchResultsJson(
     if (payload)
       suggestion.execution_payload = *payload;
 
+    if (suggestion.type == CommandSuggestionType::kTab ||
+        suggestion.type == CommandSuggestionType::kArchivedTab ||
+        suggestion.type == CommandSuggestionType::kClosedTab) {
+      if (suggestion.title.empty() && suggestion.subtitle.empty() &&
+          suggestion.execution_payload.empty()) {
+        continue;
+      }
+      if (suggestion.title.empty()) {
+        suggestion.title = !suggestion.subtitle.empty()
+                               ? suggestion.subtitle
+                               : suggestion.execution_payload;
+      }
+    }
+
     const base::Value* icon_value = dict->Find("icon");
     if (icon_value)
       suggestion.icon = ParseImageData(*icon_value);
-
-    if (suggestion.type == CommandSuggestionType::kBookmark &&
-        !suggestion.icon.has_value() && !suggestion.execution_payload.empty()) {
-      auto it = chromium_bookmark_icons_by_payload.find(
-          suggestion.execution_payload);
-      if (it != chromium_bookmark_icons_by_payload.end()) {
-        suggestion.icon = it->second;
-      }
-    }
 
     const std::string* shortcut = dict->FindString("shortcut");
     if (shortcut)
@@ -1189,12 +1145,6 @@ std::vector<CommandSuggestion> MahoCommandModel::ParseSearchResultsJson(
     }
 
     results.push_back(std::move(suggestion));
-  }
-
-  if (!has_core_bookmarks) {
-    for (auto& bookmark : chromium_bookmarks) {
-      results.push_back(std::move(bookmark));
-    }
   }
 
   return results;
@@ -1247,8 +1197,8 @@ void MahoCommandModel::OnResults(
   }
 
   MahoMailService* mail_service =
-      browser_ && browser_->profile()
-          ? MahoMailServiceFactory::GetForProfileIfExists(browser_->profile())
+      browser_ && browser_->GetProfile()
+          ? MahoMailServiceFactory::GetForProfileIfExists(browser_->GetProfile())
           : nullptr;
   constexpr bool kMailPlatformSupported =
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
@@ -1371,12 +1321,12 @@ void MahoCommandModel::RequestBookmarkFavicons(uint32_t generation) {
     return;
   }
   favicon_task_tracker_.TryCancelAll();
-  if (!browser_ || !browser_->profile()) {
+  if (!browser_ || !browser_->GetProfile()) {
     return;
   }
 
   favicon::LargeIconService* large_icon_service =
-      LargeIconServiceFactory::GetForBrowserContext(browser_->profile());
+      LargeIconServiceFactory::GetForBrowserContext(browser_->GetProfile());
   if (!large_icon_service) {
     return;
   }
@@ -1451,7 +1401,7 @@ void MahoCommandModel::RequestTabFavicons(uint32_t generation) {
     return;
   }
 
-  const Profile* profile = browser_->profile();
+  const Profile* profile = browser_->GetProfile();
   bool updated = false;
 
   for (auto& result : results_) {
@@ -1567,15 +1517,15 @@ std::vector<CommandSuggestion> MahoCommandModel::PrepareLocalCandidates(
     std::erase_if(results, [](const CommandSuggestion& suggestion) {
       return suggestion.type != CommandSuggestionType::kAction;
     });
-  } else if (std::optional<CommandSuggestion> navigation =
-                 BuildNavigationSuggestionForQuery(query)) {
-    const std::string payload = navigation->execution_payload;
-    const bool already_present = std::ranges::any_of(
-        results, [&payload](const CommandSuggestion& result) {
-          return result.type == CommandSuggestionType::kNavigation &&
-                 result.execution_payload == payload;
-        });
-    if (!already_present) {
+  } else {
+    // The desktop palette owns the "Go to" row: the core's row uses a looser
+    // any-dot URL heuristic and a different spelling of the same URL, which
+    // produced duplicate or bogus rows ("node.js").
+    std::erase_if(results, [](const CommandSuggestion& suggestion) {
+      return suggestion.type == CommandSuggestionType::kNavigation;
+    });
+    if (std::optional<CommandSuggestion> navigation =
+            BuildNavigationSuggestionForQuery(query)) {
       results.insert(results.begin(), std::move(*navigation));
     }
   }
@@ -1881,6 +1831,43 @@ const MahoCommandModel::SiteSearchEngine* MahoCommandModel::MatchExactSiteSearch
   return nullptr;
 }
 
+// static
+GURL MahoCommandModel::ExpandSiteSearchTemplate(const std::string& url_template,
+                                                const std::string& query) {
+  if (url_template.empty() || query.empty()) {
+    return GURL();
+  }
+  const std::string escaped = base::EscapeQueryParamValue(query, true);
+  std::string expanded = url_template;
+  bool substituted = false;
+  for (const std::string_view placeholder : {"{query}", "{searchTerms}", "%s"}) {
+    size_t pos = expanded.find(placeholder);
+    while (pos != std::string::npos) {
+      expanded.replace(pos, placeholder.size(), escaped);
+      substituted = true;
+      pos = expanded.find(placeholder, pos + escaped.size());
+    }
+  }
+  if (!substituted) {
+    return GURL();
+  }
+  GURL url(expanded);
+  if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) {
+    return GURL();
+  }
+  return url;
+}
+
+GURL MahoCommandModel::BuildSiteSearchUrl(const std::string& prefix,
+                                          const std::string& query) const {
+  for (const auto& engine : site_search_engines_) {
+    if (engine.prefix == prefix) {
+      return ExpandSiteSearchTemplate(engine.url_template, query);
+    }
+  }
+  return GURL();
+}
+
 void MahoCommandModel::SaveRecentSearch(const std::string& query) {
   MahoCore* core = maho::GetCore();
   if (!core || query.empty())
@@ -1926,7 +1913,7 @@ void MahoCommandModel::RequestSearchEngineFavicons(uint32_t generation) {
     return;
   }
   MahoCore* core = maho::GetCore();
-  if (!core || !browser_ || !browser_->profile()) {
+  if (!core || !browser_ || !browser_->GetProfile()) {
     return;
   }
 
@@ -1990,7 +1977,7 @@ void MahoCommandModel::RequestSearchEngineFavicons(uint32_t generation) {
   }
 
   favicon::LargeIconService* large_icon_service =
-      LargeIconServiceFactory::GetForBrowserContext(browser_->profile());
+      LargeIconServiceFactory::GetForBrowserContext(browser_->GetProfile());
   if (!large_icon_service) {
     return;
   }
@@ -2056,8 +2043,7 @@ void MahoCommandModel::OnTabStripModelChanged(
 }
 
 void MahoCommandModel::OnTabChangedAt(tabs::TabInterface* tab,
-                                       int index,
-                                       TabChangeType change_type) {
+                                    TabChangeType change_type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   tabs_cache_dirty_ = true;
 }
@@ -2083,9 +2069,9 @@ void MahoCommandModel::OnBrowserClosed(BrowserWindowInterface* browser) {
     // FireSearchPrivate() cannot query a KeyedService (e.g. TemplateURLService)
     // on the shutting-down OTR profile after KeyedService::Shutdown() has run.
     if (browser_ && browser && browser->GetTabStripModel() &&
-        browser->GetTabStripModel() == browser_->tab_strip_model()) {
+        browser->GetTabStripModel() == browser_->GetTabStripModel()) {
       Cancel();
-      browser_->tab_strip_model()->RemoveObserver(this);
+      browser_->GetTabStripModel()->RemoveObserver(this);
       browser_ = nullptr;
     }
     return;

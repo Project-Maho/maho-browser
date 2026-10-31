@@ -7,7 +7,11 @@ export type {
   AgentToolPermission,
   AgentToolProvenance,
   BridgeError,
+  BridgeRequestAbandonPayload,
+  BridgeResourceClaimPayload,
+  BridgeRpcErrorCode,
   BrowserToolInvokeResult,
+  CallOptions,
   ChatToolResultOptions,
   ChatContent,
   ChatEvent,
@@ -41,6 +45,6 @@ export type {
   ToolResult,
 } from './types';
 
-export { callBridge, call, isBridgeRpcError, detectPlatform } from './rpc';
+export { callBridge, call, disposeDocumentBridge, isBridgeRpcError, detectPlatform } from './rpc';
 export { subscribeStream, subscribeStreamWithCadence } from './streaming';
 export type { ImageDelta, StreamSubscriber, ToolCallDelta } from './streaming';

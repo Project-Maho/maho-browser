@@ -27,7 +27,11 @@ class MahoMcpBrowserDelegate;
 
 namespace maho::ai {
 struct BrowserActionContract;
+struct CapabilityRequestContext;
 }
+
+// Global-scope session runtime config (maho_ai_runtime_adapter.h).
+struct MahoAiRuntimeConfig;
 
 namespace content {
 class WebContents;
@@ -74,7 +78,8 @@ class MahoBrowserToolExecutor {
           nullptr,
       maho::MahoMcpLeaseRegistry* browser_action_lease_registry_for_testing =
           nullptr,
-      std::string browser_action_lease_holder_id = std::string());
+      std::string browser_action_lease_holder_id = std::string(),
+      const MahoAiRuntimeConfig* runtime_config = nullptr);
   MahoBrowserToolExecutor(const MahoBrowserToolExecutor&) = delete;
   MahoBrowserToolExecutor& operator=(const MahoBrowserToolExecutor&) = delete;
   ~MahoBrowserToolExecutor();
@@ -85,6 +90,17 @@ class MahoBrowserToolExecutor {
 
   static base::DictValue BuildErrorResult(const std::string& tool_name,
                                             const std::string& error);
+
+  // Wave 2A (G6 read-back): stamps the session runtime-config triple plus the
+  // tier file-gate inputs into a broker request context. |runtime_config| is
+  // the adapter's live session config; nullptr keeps the broker defaults.
+  // |fs_path| is taken from the request's "path" argument (empty = the request
+  // is not file-scoped and the tier gate is inert). Exposed so unittests can
+  // pin the exact fields stamped at both broker-gate sites.
+  static void StampRuntimeConfig(
+      maho::ai::CapabilityRequestContext* req_ctx,
+      const MahoAiRuntimeConfig* runtime_config,
+      const base::DictValue& arguments);
 
   // True for every sensitive Mail write/account mutation in the canonical
   // Mail authorization table.
@@ -125,6 +141,8 @@ class MahoBrowserToolExecutor {
   void ExecuteScreenshotProof(const std::string& tool_name,
                               const base::DictValue& arguments,
                               ToolResultCallback callback);
+  void ExecuteBrowserObserve(const base::DictValue& arguments,
+                             ToolResultCallback callback);
 
   void OnReadCurrentPageContext(ToolResultCallback callback,
                                MahoAiPageContextExtractor::PageContextResult result);
@@ -201,6 +219,14 @@ class MahoBrowserToolExecutor {
       const maho::ai::BrowserActionContract& contract,
       const BrowserActionFallbackDecision& decision);
 
+  void ExecuteBrowserObserve(
+      const base::DictValue& arguments,
+      int tab_id,
+      maho::MahoMcpBrowserDelegate* delegate,
+      BrowserActionFallbackDecision fallback_decision,
+      const maho::ai::BrowserActionContract& contract,
+      ToolResultCallback callback);
+
  private:
 
   content::WebContents* GetActiveWebContents() const;
@@ -220,6 +246,15 @@ class MahoBrowserToolExecutor {
   bool EnsureBrowserActionLease(const maho::ai::BrowserActionContract& contract,
                                 int tab_id,
                                 std::string& error);
+  // Runs the action approval callback for a broker-mandated ask (tier file
+  // ask, final-confirm gate) on a tool whose contract carries no approval
+  // handshake of its own. Returns true when approved; on denial (or when no
+  // callback is wired) fills *error and returns false.
+  bool RunBrokerApprovalAsk(const std::string& tool_name,
+                            const std::string& kind,
+                            const std::string& sensitivity,
+                            const std::string& active_origin,
+                            std::string* error);
 
   SEQUENCE_CHECKER(sequence_checker_);
 
@@ -231,6 +266,11 @@ class MahoBrowserToolExecutor {
   raw_ptr<maho::MahoMcpLeaseRegistry>
       browser_action_lease_registry_for_testing_;
   std::string browser_action_lease_holder_id_;
+  // Points at the adapter's live session runtime_config_ (Wave 2A). Never
+  // owned; dereferenced only during the synchronous broker-gate prefix of
+  // Execute(), so every Evaluate reads the current flags (per-call freshness
+  // for mid-session tier tightening).
+  raw_ptr<const MahoAiRuntimeConfig> runtime_config_;
   std::unordered_map<int, ui::AXNodeID> browser_action_refs_;
   int browser_action_refs_tab_id_ = 0;
   std::string browser_action_refs_origin_;

@@ -24,15 +24,17 @@
 #include "net/base/isolation_info.h"
 #include "net/storage_access_api/status.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/cpp/originating_process_id.h"
 #include "services/network/public/mojom/client_security_state.mojom.h"
+#include "services/network/public/mojom/ip_address_space.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"
@@ -166,8 +168,11 @@ void MahoSyncRelayClient::DrainReceivedTabs() {
                     : u"Tab received from your device";
             std::u16string ubody = title ? base::UTF8ToUTF16(*title) : base::UTF8ToUTF16(*url);
             
-            BrowserWindowInterface* bwi = chrome::FindLastActiveWithProfile(profile_);
-            Browser* browser = bwi ? bwi->GetBrowserForMigrationOnly() : nullptr;
+            ProfileBrowserCollection* collection =
+                ProfileBrowserCollection::GetForProfile(profile_);
+            BrowserWindowInterface* bwi =
+                collection ? collection->GetLastActiveBrowser() : nullptr;
+            Browser* browser = static_cast<Browser*>(bwi);
             if (browser) {
               chrome::AddSelectedTabWithURL(browser, GURL(*url), ui::PAGE_TRANSITION_LINK);
               
@@ -349,7 +354,8 @@ void MahoSyncRelayClient::Connect(const std::string& server_url, const std::stri
       /*auth_handler=*/mojo::NullRemote(),
       /*header_client=*/mojo::NullRemote(),
       /*throttling_profile_id=*/std::nullopt,
-      /*network_restrictions_id=*/std::nullopt);
+      /*network_restrictions_id=*/network::GetNoOpNetworkRestrictionsId(),
+      /*target_address_space=*/network::mojom::IPAddressSpace::kUnknown);
 }
 
 void MahoSyncRelayClient::Disconnect() {

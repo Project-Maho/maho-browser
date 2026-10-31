@@ -109,7 +109,7 @@ class MahoSidebarDnDBrowserTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUpOnMainThread();
     SetShellEventObserverForTesting(&observer_);
 
-    PrefService* prefs = browser()->profile()->GetPrefs();
+    PrefService* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(sidebar_prefs::kSidebarLayoutEnabled, true);
     prefs->SetBoolean(sidebar_prefs::kSidebarPanelExpanded, true);
 
@@ -117,7 +117,7 @@ class MahoSidebarDnDBrowserTest : public InProcessBrowserTest {
         browser(), GURL("chrome://maho-test/?seed=2")));
 
     content::WebContents* wc =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     ASSERT_TRUE(wc);
     ASSERT_TRUE(content::WaitForLoadStop(wc));
 
@@ -158,7 +158,7 @@ class MahoSidebarDnDBrowserTest : public InProcessBrowserTest {
 
   MahoSidebarViewStateModel GetState() {
     MahoSidebarStateAdapter adapter;
-    return adapter.BuildViewStateModel(browser());
+    return adapter.BuildViewStateModel(static_cast<Browser*>(browser()));
   }
 
   SidebarTabRowView* FindLiveTabRow(const std::string& tab_id) {
@@ -396,7 +396,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveTabToPinnedSection) {
   observer_.Clear();
   auto payload = MakeTabPayload(source_tab_id,
                                 SidebarDragOrigin::kNormalSection);
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
   const int source_index = ResolveIndexForStableId(model, source_tab_id);
   ASSERT_GE(source_index, 0);
@@ -445,7 +445,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
   ASSERT_TRUE(header);
   ASSERT_TRUE(header->GetVisible());
 
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
   ASSERT_TRUE(model->ContainsIndex(source_index));
   ASSERT_FALSE(model->IsTabPinned(source_index));
@@ -625,9 +625,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveTabBodySplitCreatesSplit) 
   EXPECT_EQ(target_row->tab_id_for_testing(), target_id);
   target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
-  Browser* browser = this->browser();
+  Browser* browser = static_cast<Browser*>(this->browser());
   ASSERT_TRUE(browser);
-  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  TabStripModel* tab_strip_model = browser->GetTabStripModel();
   ASSERT_TRUE(tab_strip_model);
   ASSERT_TRUE(tab_strip_model->ContainsIndex(source_index));
   ASSERT_TRUE(tab_strip_model->ContainsIndex(target_index));
@@ -682,7 +682,7 @@ IN_PROC_BROWSER_TEST_F(
             MahoSidebarTabSection::kPinned);
   target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
   ASSERT_TRUE(model->ContainsIndex(source_index));
   ASSERT_TRUE(model->ContainsIndex(target_index));
@@ -1064,22 +1064,24 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
                        AddSplitCreatesTwoPaneSplitAndRetainsActiveTab) {
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
   const int original_active_index = model->active_index();
   ASSERT_NE(original_active_index, TabStripModel::kNoTab);
   const int original_count = model->count();
-  ASSERT_FALSE(model->IsActiveTabSplit());
+  ASSERT_FALSE((model->ContainsIndex(model->active_index()) &&
+               model->GetSplitForTab(model->active_index()).has_value()));
 
   // Construct the controller directly; its only dependency is Browser*, the
   // narrowest seam for the split-creation contract.
-  MahoSplitViewController controller(browser());
+  MahoSplitViewController controller(static_cast<Browser*>(browser()));
   controller.AddSplit();
 
   EXPECT_EQ(model->count(), original_count + 1);
   EXPECT_EQ(model->active_index(), original_active_index)
       << "Original active tab must remain active after AddSplit";
-  EXPECT_TRUE(model->IsActiveTabSplit());
+  EXPECT_TRUE((model->ContainsIndex(model->active_index()) &&
+               model->GetSplitForTab(model->active_index()).has_value()));
   EXPECT_TRUE(controller.IsSplitActive());
 
   const int partner_index = original_active_index + 1;
@@ -1101,13 +1103,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
                        AddSplitOnAlreadySplitActiveTabIsNoOp) {
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
   ASSERT_NE(model->active_index(), TabStripModel::kNoTab);
 
-  MahoSplitViewController controller(browser());
+  MahoSplitViewController controller(static_cast<Browser*>(browser()));
   controller.AddSplit();
-  ASSERT_TRUE(model->IsActiveTabSplit())
+  ASSERT_TRUE((model->ContainsIndex(model->active_index()) &&
+               model->GetSplitForTab(model->active_index()).has_value()))
       << "Precondition: first AddSplit must create a split";
 
   const int count_after_first = model->count();
@@ -1145,13 +1148,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
 // strategy), so this body is proven by build-clean + source-level RED here.
 IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
                        FallbackBuildersGroupSplitTabsWithDualActiveState) {
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
   ASSERT_NE(model->active_index(), TabStripModel::kNoTab);
 
-  MahoSplitViewController controller(browser());
+  MahoSplitViewController controller(static_cast<Browser*>(browser()));
   controller.AddSplit();
-  ASSERT_TRUE(model->IsActiveTabSplit())
+  ASSERT_TRUE((model->ContainsIndex(model->active_index()) &&
+               model->GetSplitForTab(model->active_index()).has_value()))
       << "Precondition: AddSplit must create a live two-pane split";
 
   const int split_a = model->active_index();
@@ -1228,7 +1232,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
 // strategy), so this body is proven by build-clean + source-level RED here.
 IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
                        MultiSelectSplitSplitsFirstTwoEligibleLeavingThirdUnsplit) {
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
 
   while (model->count() < 3) {
@@ -1245,7 +1249,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
   const std::string third_id = ids[2];
 
   // Eligibility gate: three eligible tabs → command enabled.
-  MahoTabContextMenu menu(browser(), 0, nullptr, first_id,
+  MahoTabContextMenu menu(static_cast<Browser*>(browser()), 0, nullptr, first_id,
                           {first_id, second_id, third_id});
   EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_OPEN_SPLIT))
       << "Three eligible tabs must enable the multi-select split command";
@@ -1293,13 +1297,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
 // no-op. Same CI-deferred rationale as above (source-level RED + build-clean).
 IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
                        MultiSelectSplitDisabledWhenSelectedTabsAlreadySplit) {
-  TabStripModel* model = browser()->tab_strip_model();
+  TabStripModel* model = browser()->GetTabStripModel();
   ASSERT_TRUE(model);
   ASSERT_NE(model->active_index(), TabStripModel::kNoTab);
 
-  MahoSplitViewController controller(browser());
+  MahoSplitViewController controller(static_cast<Browser*>(browser()));
   controller.AddSplit();
-  ASSERT_TRUE(model->IsActiveTabSplit())
+  ASSERT_TRUE((model->ContainsIndex(model->active_index()) &&
+               model->GetSplitForTab(model->active_index()).has_value()))
       << "Precondition: AddSplit must create a two-pane split";
 
   const int split_a = model->active_index();
@@ -1321,7 +1326,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
   ASSERT_FALSE(id_a.empty());
   ASSERT_FALSE(id_b.empty());
 
-  MahoTabContextMenu menu(browser(), split_a, nullptr, id_a, {id_a, id_b});
+  MahoTabContextMenu menu(static_cast<Browser*>(browser()), split_a, nullptr, id_a, {id_a, id_b});
   EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_OPEN_SPLIT))
       << "Two already-split tabs are ineligible → command disabled";
 

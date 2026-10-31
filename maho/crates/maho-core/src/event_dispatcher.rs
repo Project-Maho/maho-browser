@@ -66,6 +66,7 @@ pub trait TabManagerInterface {
     fn update_tab_custom_title(&mut self, tab_id: &TabId, custom_title: Option<String>);
     fn update_tab_custom_icon(&mut self, tab_id: &TabId, custom_icon: Option<String>);
     fn set_tab_pinned_url(&mut self, tab_id: &TabId, url: Url) -> bool;
+    fn reset_favorite_url_to_pinned(&mut self, tab_id: &TabId) -> bool;
     fn update_tab_url(&mut self, tab_id: &TabId, url: Url);
     fn update_tab_loading(&mut self, tab_id: &TabId, is_loading: bool);
     fn update_tab_favicon(
@@ -532,6 +533,11 @@ impl EventDispatcher {
                 vec![]
             }
             ShellEvent::SuspendTab { tab_id } => {
+                // The shell dispatches this when the user puts a close-protected
+                // tab to sleep (close button / two-stage close). A favorite must
+                // sleep as its home page so a later wake reopens the pinned URL
+                // instead of the last visited page.
+                tab_mgr.reset_favorite_url_to_pinned(&tab_id);
                 tab_mgr.suspend_tab(&tab_id);
                 vec![]
             }

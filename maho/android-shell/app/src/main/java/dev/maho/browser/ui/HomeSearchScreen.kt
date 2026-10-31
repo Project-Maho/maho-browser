@@ -111,27 +111,31 @@ fun HomeSearchScreen(
                 Spacer(modifier = Modifier.height(32.dp))
 
                 if (visibleRecentTabs.isNotEmpty()) {
-                    HomeSectionHeader(title = "Continue", isIncognito = isIncognito)
-                    Spacer(modifier = Modifier.height(10.dp))
-                    visibleRecentTabs.forEach { tab ->
-                        HomeRecentTabCard(
-                            tab = tab,
-                            isIncognito = isIncognito,
-                            onClick = { onResumeTab(tab.id) },
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
+                    Column(modifier = Modifier.testTag("homeRecentTabsSection")) {
+                        HomeSectionHeader(title = "Continue", isIncognito = isIncognito)
+                        Spacer(modifier = Modifier.height(10.dp))
+                        visibleRecentTabs.forEach { tab ->
+                            HomeRecentTabCard(
+                                tab = tab,
+                                isIncognito = isIncognito,
+                                onClick = { onResumeTab(tab.id) },
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
                     }
                     Spacer(modifier = Modifier.height(20.dp))
                 }
 
                 if (visibleTopSites.isNotEmpty()) {
-                    HomeSectionHeader(title = "Top Sites", isIncognito = isIncognito)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    HomeTopSitesGrid(
-                        sites = visibleTopSites,
-                        isIncognito = isIncognito,
-                        onSelectSite = onSelectSite,
-                    )
+                    Column(modifier = Modifier.testTag("homeTopSitesSection")) {
+                        HomeSectionHeader(title = "Top Sites", isIncognito = isIncognito)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HomeTopSitesGrid(
+                            sites = visibleTopSites,
+                            isIncognito = isIncognito,
+                            onSelectSite = onSelectSite,
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(120.dp))
@@ -148,7 +152,9 @@ private fun MahoHomeHeroLogo(isIncognito: Boolean, compact: Boolean = false) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
-        modifier = Modifier.padding(horizontal = 24.dp),
+        modifier = Modifier
+            .padding(horizontal = 24.dp)
+            .testTag("homeHeroPanel"),
     ) {
         Surface(
             shape = CircleShape,

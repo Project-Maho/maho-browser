@@ -71,6 +71,7 @@ struct DiscoveryProjection {
 pub struct MahoBrowserMcpServer {
     client: Arc<BrowserClient>,
     mutation_approval: Option<MutationApprovalCallback>,
+    browser_approval_delegated: bool,
     /// Snapshot of the `maho.browser.mcp_public_enabled` registry setting
     /// taken at construction. Absent/false (the default) freezes public
     /// dispatch fail-closed; kPublicMcp code is retained, not deleted.
@@ -89,6 +90,7 @@ impl MahoBrowserMcpServer {
         Ok(Self {
             client: Arc::new(client),
             mutation_approval: None,
+            browser_approval_delegated: std::env::var("MAHO_MCP_APPROVAL").ok().as_deref() == Some("browser"),
             public_mcp_enabled: public_mcp_enabled(),
         })
     }
@@ -106,6 +108,7 @@ impl MahoBrowserMcpServer {
         Ok(Self {
             client: Arc::new(client),
             mutation_approval: Some(mutation_approval),
+            browser_approval_delegated: false,
             public_mcp_enabled: public_mcp_enabled(),
         })
     }
@@ -115,6 +118,7 @@ impl MahoBrowserMcpServer {
         Self {
             client,
             mutation_approval: None,
+            browser_approval_delegated: std::env::var("MAHO_MCP_APPROVAL").ok().as_deref() == Some("browser"),
             public_mcp_enabled: public_mcp_enabled(),
         }
     }
@@ -127,6 +131,7 @@ impl MahoBrowserMcpServer {
         Self {
             client,
             mutation_approval,
+            browser_approval_delegated: false,
             public_mcp_enabled: public_mcp_enabled(),
         }
     }
@@ -141,6 +146,17 @@ impl MahoBrowserMcpServer {
     }
 
     fn authorize(&self, operation: &str) -> Result<(), rmcp::ErrorData> {
+        self.authorize_with_delegation(
+            operation,
+            if self.browser_approval_delegated { Some("browser") } else { None },
+        )
+    }
+
+    fn authorize_with_delegation(
+        &self,
+        operation: &str,
+        delegation: Option<&str>,
+    ) -> Result<(), rmcp::ErrorData> {
         match &self.mutation_approval {
             Some(callback) if callback(operation) == MutationDecision::Allow => Ok(()),
             Some(_) => Err(rmcp::ErrorData::invalid_request(
@@ -148,10 +164,7 @@ impl MahoBrowserMcpServer {
                 Some(json!({"status": "denied_by_broker"})),
             )),
             None => {
-                if std::env::var("MAHO_MCP_AUTO_APPROVE")
-                    .map(|v| v == "true" || v == "1")
-                    .unwrap_or(false)
-                {
+                if delegation == Some("browser") {
                     return Ok(());
                 }
                 Err(rmcp::ErrorData::invalid_request(
@@ -649,7 +662,7 @@ mod tests {
             "properties": {
                 "tab_id": {
                     "type": "integer",
-                    "description": "Browser tab id. Omit or pass 0 for the active tab."
+                    "description": "Browser tab id from browser_tab_list. Mutating tools require it: omitting one fails with -32013 instead of following the focused tab. Read-only tools omit it to target the active tab. Do not pass 0: it is the legacy active-tab sentinel and cannot address a real tab 0."
                 },
                 "locator": {
                     "type": "object",
@@ -677,8 +690,12 @@ mod tests {
         let schema = &projection.tools[0].mcp.input_schema;
         let properties = schema["properties"].as_object().expect("properties");
 
-        // P1-5: an empty locator must stop validating.
-        assert!(properties["locator"].get("anyOf").is_some());
+        // P1-5: the locator constraint lives in the description; a
+        // combinator beside `properties` makes Gemini reject every request.
+        assert!(properties["locator"].get("anyOf").is_none());
+        assert!(properties["locator"]["description"]
+            .as_str()
+            .is_some_and(|d| d.contains("`role` plus `name`")));
         // P0-2: `selector` is read by the parser and was missing.
         assert_eq!(
             properties["wait"]["properties"]["selector"]["type"],
@@ -1141,6 +1158,31 @@ mod tests {
                 );
 
             assert_eq!(result.structured_content, Some(served));
+        }
+
+        #[tokio::test]
+        async fn boundary_approval_delegation_is_fail_closed_and_forwards_to_browser() {
+            let (_sock_dir, sock_path, listener) = temp_socket();
+            let registry_dir = tempfile::tempdir().expect("registry tempdir");
+            let db_path = registry_fixture(&registry_dir, Some(true));
+            spawn_serving_browser(listener, vec![descriptor("boundary", true)], json!({"ok": true}));
+            let client = Arc::new(BrowserClient::connect_as(
+                &sock_path, Duration::from_secs(5), ControllerKind::MahoBrowserMcp,
+            ).await.expect("client connects"));
+            let mut server = server_with_registry(client, &db_path);
+            server.browser_approval_delegated = false;
+            for flag in [None, Some("true"), Some("unknown")] {
+                let error = server.authorize_with_delegation("boundary", flag)
+                    .expect_err("no browser delegation must deny");
+                assert_eq!(error.data.expect("status")["status"], ERR_BROKER_UNAVAILABLE);
+            }
+            server.authorize_with_delegation("boundary", Some("browser"))
+                .expect("browser owns approval");
+            assert!(server.dispatch_public(CallToolRequestParams::new("boundary")).await.is_err());
+            server.browser_approval_delegated = true;
+            let result = server.dispatch_public(CallToolRequestParams::new("boundary"))
+                .await.expect("browser receives delegated call");
+            assert_eq!(result.structured_content.expect("browser result")["ok"], true);
         }
     }
 }

@@ -28,6 +28,9 @@ fn origins(values: &[&str]) -> Vec<CredentialOrigin> {
 
 fn login_meta(title: &str, origin_values: &[&str]) -> VaultItemPublicMetadata {
     VaultItemPublicMetadata {
+        favorite: false,
+        trashed_at: None,
+        has_notes: false,
         title: title.to_string(),
         origins: origins(origin_values),
         username_hint: String::new(),
@@ -53,6 +56,8 @@ fn login_input(
 
 fn list_all() -> VaultItemListRequest {
     VaultItemListRequest {
+        trash: Default::default(),
+        favorites_only: false,
         schema_version: VaultSchemaVersion::CURRENT,
         provider: None,
         kinds: Vec::new(),
@@ -120,6 +125,7 @@ fn vault_audit_records_successful_library_operations_without_item_ids_or_secret_
             added.id,
             added.revision,
             VaultLoginUpdate {
+                notes: None,
                 metadata,
                 username: "alice".to_string(),
                 password: Some(Zeroizing::new(SENTINEL.to_string())),
@@ -165,6 +171,7 @@ fn vault_audit_records_failed_and_denied_attempts_without_item_ids_or_secret_val
         added.id,
         VaultRevision::new(99),
         VaultLoginUpdate {
+            notes: None,
             metadata: login_meta("Audit", &["https://audit-failed.example"]),
             username: "alice".to_string(),
             password: Some(Zeroizing::new("new-secret".to_string())),

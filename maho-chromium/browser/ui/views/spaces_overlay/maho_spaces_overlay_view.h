@@ -5,6 +5,7 @@
 
 #include <string>
 #include <memory>
+#include <utility>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -63,6 +64,14 @@ class MahoSpacesOverlayView : public views::View {
   views::View* GetAnimatedView() { return surface_; }
 
   void SetPalette(const MahoSidebarPalette& palette);
+  // Invoked from OnThemeChanged() to pull the docked rail's authoritative
+  // snapshot. This overlay lives in its own top-level widget, so Chromium
+  // delivers its theme change independently of the rail's; without the pull the
+  // widget can repaint from a snapshot the rail has already replaced.
+  void set_palette_refresh_callback(base::RepeatingClosure callback) {
+    palette_refresh_callback_ = std::move(callback);
+  }
+  bool palette_opaque_for_testing() const { return palette_.opaque; }
 
   void RequestFocus() override;
   void OnThemeChanged() override;
@@ -87,6 +96,7 @@ class MahoSpacesOverlayView : public views::View {
   raw_ptr<MahoSpacesOverlayBoardView> board_view_ = nullptr;
   raw_ptr<views::View> separator_ = nullptr;
   MahoSidebarPalette palette_;
+  base::RepeatingClosure palette_refresh_callback_;
 };
 
 }  // namespace maho
