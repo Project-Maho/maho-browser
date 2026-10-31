@@ -193,7 +193,10 @@ public:
       uint32_t limit = 50,
       MahoCore* core = nullptr);
 
-  // Human help request dispatch and validation bridge.
+  // Validates a browser_request_help call and mints its request. The caller
+  // hands the tab to the user and shows the help banner; the agent resumes
+  // once the task space is back under agent ownership.
+  static constexpr char kHumanHelpWaitingStatus[] = "waiting_for_human_help";
   static base::DictValue ExecuteBrowserRequestHelp(
       const base::DictValue& params,
       std::string* error_out = nullptr);

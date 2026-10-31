@@ -335,12 +335,13 @@ async fn browser_mcp_tools(
 /// Browser manipulation is full access by policy; only capabilities that leave the
 /// browser boundary are approval-gated. Keep both copies in step.
 fn capability_leaves_browser_boundary(canonical_id: &str) -> bool {
-    const OFF_BROWSER_PREFIXES: [&str; 10] = [
+    const OFF_BROWSER_PREFIXES: [&str; 12] = [
         "mail.", "mail_",
         "vault.", "vault_",
         "routines.", "routines_",
         "control.", "control_",
         "policy.", "policy_",
+        "import.", "browser_import_",
     ];
 
     OFF_BROWSER_PREFIXES
@@ -354,6 +355,12 @@ fn capability_leaves_browser_boundary(canonical_id: &str) -> bool {
         || canonical_id == "input_file_upload_select"
         || canonical_id == "browser.visual_click"
         || canonical_id == "browser_visual_click"
+        || canonical_id == "browser.native_type"
+        || canonical_id == "browser_native_type"
+        || canonical_id == "browser.native_key"
+        || canonical_id == "browser_native_key"
+        || canonical_id == "page.download"
+        || canonical_id == "browser_download"
 }
 
 fn parse_mcp_tools(message: &serde_json::Value) -> Option<Vec<ToolDefinition>> {
@@ -443,10 +450,106 @@ pub fn browser_mcp_config(binary: &Path, socket_path: Option<&Path>) -> serde_js
                 "enabled": true,
                 "directTools": true,
                 "exposure": "direct",
-                "lifecycle": "keep-alive"
+                "lifecycle": "keep-alive",
+                "startupTimeoutMs": MAHO_MCP_STARTUP_TIMEOUT_MS
             }
         }
     })
+}
+
+/// Binary name of Maho's engine tool server (js_eval, artifact_create, browser_script).
+pub const AGENT_TOOLS_BINARY: &str = "maho-agent-tools";
+
+// omo races a server's connect for only 250 ms before backgrounding it, so a cold Maho
+// server would miss the first turn's tool list; Maho's own servers are local and fast,
+// so waiting for them keeps their tools present from the first turn.
+pub const MAHO_MCP_STARTUP_TIMEOUT_MS: u64 = 5_000;
+
+/// Registers `maho-agent-tools` beside `maho-browser` when the build staged it next to
+/// the browser MCP binary. Absent binary: the server is simply not offered.
+pub fn add_agent_tools_server(
+    config: &mut serde_json::Value,
+    browser_mcp_binary: &Path,
+    artifact_dir: &Path,
+) {
+    let Some(binary) = browser_mcp_binary
+        .parent()
+        .map(|dir| dir.join(AGENT_TOOLS_BINARY))
+        .filter(|path| path.is_file())
+    else {
+        return;
+    };
+    let Some(servers) = config
+        .get_mut("mcpServers")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    // browser_script spawns its own maho-browser-mcp child, which inherits this env and so
+    // needs the same dispatch/socket settings as the maho-browser server.
+    let mut env = servers
+        .get("maho-browser")
+        .and_then(|server| server.get("env"))
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    env.insert(
+        "MAHO_AGENT_TOOLS_ARTIFACT_DIR".to_string(),
+        artifact_dir.to_string_lossy().into(),
+    );
+    env.insert(
+        "MAHO_BROWSER_MCP_BINARY".to_string(),
+        browser_mcp_binary.to_string_lossy().into(),
+    );
+    if let Some(agent_dir) = artifact_dir.parent() {
+        env.insert(
+            crate::agent_tools::AUTOMATION_STORE_ENV.to_string(),
+            maho_core::automations::AutomationStore::in_agent_dir(agent_dir)
+                .path()
+                .to_string_lossy()
+                .into(),
+        );
+        // Search uses the Maho proxy token from models.json, read at call time.
+        env.insert(
+            crate::agent_tools::MODELS_FILE_ENV.to_string(),
+            agent_dir.join("models.json").to_string_lossy().into(),
+        );
+        env.insert(
+            crate::agent_tools::SEARCH_BASE_URL_ENV.to_string(),
+            crate::proxy_url().into(),
+        );
+    }
+    servers.insert(
+        AGENT_TOOLS_BINARY.to_string(),
+        serde_json::json!({
+            "type": "stdio",
+            "command": binary.to_string_lossy(),
+            "args": [],
+            "env": env,
+            "enabled": true,
+            "directTools": true,
+            "exposure": "direct",
+            "lifecycle": "keep-alive",
+            "startupTimeoutMs": MAHO_MCP_STARTUP_TIMEOUT_MS
+        }),
+    );
+}
+
+/// `settings.json` for the isolated omo agent dir: loads the omo-ai plugin package when
+/// present, with its skills/prompts/themes filtered out so only extensions (memory engine,
+/// task, workpool) load.
+pub fn omo_settings_json(plugin_dir: Option<&Path>) -> serde_json::Value {
+    match plugin_dir {
+        Some(dir) => serde_json::json!({
+            "packages": [{
+                "source": dir.to_string_lossy(),
+                "skills": [],
+                "prompts": [],
+                "themes": []
+            }]
+        }),
+        None => serde_json::json!({}),
+    }
 }
 
 fn map_rpc_event(event: &RpcEvent) -> Option<AgentStreamEvent> {
@@ -626,7 +729,13 @@ impl OmoBackend {
 
     pub fn mcp_config(&self) -> serde_json::Value {
         let socket_path = self.browser_socket_path();
-        browser_mcp_config(&self.browser_mcp_binary, socket_path.as_deref())
+        let mut config = browser_mcp_config(&self.browser_mcp_binary, socket_path.as_deref());
+        add_agent_tools_server(
+            &mut config,
+            &self.browser_mcp_binary,
+            &self.config.agent_dir().join("artifacts"),
+        );
+        config
     }
 
     async fn connection(&self) -> Result<Arc<RpcConnection>, AgentError> {
@@ -707,18 +816,17 @@ impl OmoBackend {
         Ok(())
     }
 
-    /// Disables omo's built-in tools.
+    /// Writes the isolated agent dir's `settings.json`.
     ///
-    /// Maho's agent reaches the browser through MCP, so omo's filesystem and shell
-    /// built-ins are both unwanted capability and an outright failure: omo's `eval`
-    /// schema is rejected by Anthropic-backed endpoints (`tools.N.custom.input_schema:
-    /// JSON schema is invalid`), which omo then reports as an empty assistant message.
+    /// omo's file/shell built-ins stay off through `--no-builtin-tools` (process.rs); this
+    /// file only decides which packages load. With the omo-ai plugin staged it loads the
+    /// plugin's extensions (memory engine, task, workpool); otherwise it is `{}`.
     fn write_settings_config(&self) -> Result<(), AgentError> {
         std::fs::create_dir_all(self.config.agent_dir()).map_err(|error| {
             AgentError::ExecutionError(format!("failed to create omo agent directory: {error}"))
         })?;
         let path = self.config.agent_dir().join("settings.json");
-        let bytes = serde_json::to_vec_pretty(&serde_json::json!({}))
+        let bytes = serde_json::to_vec_pretty(&omo_settings_json(self.config.plugin_dir()))
             .map_err(|error| AgentError::ExecutionError(error.to_string()))?;
         std::fs::write(&path, bytes).map_err(|error| {
             AgentError::ExecutionError(format!(
@@ -862,6 +970,12 @@ impl OmoBackend {
                 "cwd": self.cwd.to_string_lossy(),
             });
             std::fs::write(&session_file, format!("{header}\n")).map_err(write_error)?;
+        }
+        // The RPC socket name is random per host process, so a second process (`maho agent
+        // session ...`) finds this session's host through this pointer.
+        let pointer = super::session_control::socket_pointer_file(&session_file);
+        if let Err(error) = std::fs::write(&pointer, self.config.socket_path().to_string_lossy().as_bytes()) {
+            tracing::warn!(target: "maho_agent::omo", %error, path = %pointer.display(), "session control pointer not written; live steering of this session is unavailable");
         }
         let session_path = Some(session_file.to_string_lossy().to_string());
 
@@ -2213,7 +2327,15 @@ mod tests {
                 { "name": "input.file_upload_select" },
                 { "name": "input_file_upload_select" },
                 { "name": "browser.visual_click" },
-                { "name": "browser_visual_click" }
+                { "name": "browser_visual_click" },
+                { "name": "browser_native_type" },
+                { "name": "browser_native_key" },
+                { "name": "browser_download" },
+                { "name": "browser_import_list" },
+                { "name": "browser_import_run" },
+                { "name": "browser_task_space" },
+                { "name": "browser_dialog_respond" },
+                { "name": "browser_insert_text" }
             ]}
         });
 
@@ -2232,6 +2354,9 @@ mod tests {
             "browser.snapshot",
             "browser_tab_list",
             "browser_page_content",
+            "browser_task_space",
+            "browser_dialog_respond",
+            "browser_insert_text",
         ] {
             assert_eq!(
                 permission(inside),
@@ -2253,6 +2378,11 @@ mod tests {
             "input_file_upload_select",
             "browser.visual_click",
             "browser_visual_click",
+            "browser_native_type",
+            "browser_native_key",
+            "browser_download",
+            "browser_import_list",
+            "browser_import_run",
         ] {
             assert_eq!(
                 permission(boundary),
@@ -2279,6 +2409,49 @@ mod tests {
         assert_eq!(tools[0].description, "Navigate a tab");
         assert_eq!(tools[1].name, "browser_tab_list");
         assert_eq!(tools[1].parameters_schema["type"], "object");
+    }
+
+    #[test]
+    fn settings_json_loads_plugin_extensions_only_when_present() {
+        assert_eq!(omo_settings_json(None), serde_json::json!({}));
+        let with = omo_settings_json(Some(Path::new("/opt/maho/omo-plugin")));
+        let pkg = &with["packages"][0];
+        assert_eq!(pkg["source"], "/opt/maho/omo-plugin");
+        for key in ["skills", "prompts", "themes"] {
+            assert_eq!(pkg[key], serde_json::json!([]), "{key} must be filtered out");
+        }
+    }
+
+    #[test]
+    fn agent_tools_server_registered_only_when_binary_is_staged() {
+        let temp = tempfile::tempdir().unwrap();
+        let mcp = temp.path().join("maho-browser-mcp");
+        std::fs::write(&mcp, b"").unwrap();
+        let mut config = browser_mcp_config(&mcp, Some(Path::new("/tmp/maho.sock")));
+        add_agent_tools_server(&mut config, &mcp, Path::new("/tmp/artifacts"));
+        assert!(config["mcpServers"].get(AGENT_TOOLS_BINARY).is_none());
+
+        let tools = temp.path().join(AGENT_TOOLS_BINARY);
+        std::fs::write(&tools, b"").unwrap();
+        add_agent_tools_server(&mut config, &mcp, Path::new("/tmp/artifacts"));
+        let server = &config["mcpServers"][AGENT_TOOLS_BINARY];
+        assert_eq!(server["type"], "stdio");
+        assert_eq!(server["command"], tools.to_string_lossy().as_ref());
+        assert_eq!(server["env"]["MAHO_AGENT_TOOLS_ARTIFACT_DIR"], "/tmp/artifacts");
+        assert_eq!(
+            server["env"]["MAHO_AGENT_AUTOMATIONS_FILE"],
+            "/tmp/automations.json"
+        );
+        assert_eq!(server["env"]["MAHO_AGENT_MODELS_FILE"], "/tmp/models.json");
+        assert!(server["env"]["MAHO_AGENT_SEARCH_BASE_URL"].as_str().unwrap().starts_with("http"));
+        assert_eq!(server["env"]["MAHO_MCP_SOCKET_PATH"], "/tmp/maho.sock");
+        assert_eq!(server["env"]["MAHO_MCP_PUBLIC_ENABLED"], "true");
+        assert_eq!(server["startupTimeoutMs"], MAHO_MCP_STARTUP_TIMEOUT_MS);
+        assert_eq!(
+            config["mcpServers"]["maho-browser"]["startupTimeoutMs"],
+            MAHO_MCP_STARTUP_TIMEOUT_MS
+        );
+        assert_eq!(config["mcpServers"]["maho-browser"]["type"], "stdio");
     }
 
     #[test]

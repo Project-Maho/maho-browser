@@ -306,15 +306,15 @@ fn tool_list_json_uses_packaged_catalog_without_browser() {
     assert_eq!(value["catalogDiagnostics"]["catalogVersion"], 1);
     assert_eq!(value["catalogDiagnostics"]["schemaVersion"], 1);
     assert_eq!(value["catalogDiagnostics"]["resultVersion"], 1);
-    assert_eq!(value["catalogDiagnostics"]["canonicalCount"], 94);
+    assert_eq!(value["catalogDiagnostics"]["canonicalCount"], 102);
     let tools = value["tools"].as_array().unwrap();
     let tool_ids = tools
         .iter()
         .map(|tool| tool["capabilityId"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(tool_ids.len(), 60);
+    assert_eq!(tool_ids.len(), 68);
     assert_eq!(tool_ids[0], "tab.list");
-    assert_eq!(tool_ids[59], "browser.request_help");
+    assert_eq!(tool_ids[67], "browser.request_help");
 
     let diagnostic_ids = value["catalogDiagnostics"]["surfaces"]["publicMcp"]["ids"]
         .as_array()

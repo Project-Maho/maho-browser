@@ -28,6 +28,7 @@
 #include "maho/browser/ai/maho_browser_action_contract.h"
 #include "maho/browser/ai/maho_browser_tool_registry.h"
 #include "maho/browser/ai/maho_page_adapter_registry.h"
+#include "maho/browser/mcp/maho_mcp_agent_policy.h"
 #include "maho/browser/mail_helper/maho_mail_service.h"
 #include "maho/browser/mail_helper/maho_mail_service_factory.h"
 #include "maho/browser/mcp/maho_mcp_browser_action_handler.h"
@@ -45,6 +46,7 @@ constexpr size_t kDefaultSearchResultLimit = 5;
 constexpr size_t kSnippetRadius = 80;
 constexpr int kInvalidParamsError = -32602;
 constexpr int kActionFailedError = -32000;
+constexpr char kDesktopAgentTaskSpaceSession[] = "maho-desktop-agent";
 constexpr int kActionDeniedError = -32008;
 
 bool HasUsablePageContext(
@@ -764,17 +766,46 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
     return;
   }
 
-  // Seam lookup for specialized exact-origin page adapter before generic DOM fallback
+  // Exact-origin page adapters that declare insert_text (canvas and rich
+  // editors) receive browser_type through the editor insertion path; DOM
+  // typing cannot reach their hidden input surfaces.
   const std::optional<std::string> active_origin_opt =
       GetActiveTabOrigin(delegate, tab_id);
-  if (active_origin_opt.has_value()) {
-    if (auto page_adapter = maho::ai::LookupPageAdapterForSeam(
-            *active_origin_opt, tool_name)) {
-      // Specialized page adapter matched: log presence and continue falling through
-      // to DOM execution tier so actual browser operations are executed and verified.
-      LOG(INFO) << "Matched page adapter " << page_adapter->id() << " for origin "
-                << *active_origin_opt << "; proceeding with real browser action dispatch.";
+  const bool adapter_inserts_text =
+      active_origin_opt.has_value() &&
+      maho::ai::LookupPageAdapterForSeam(*active_origin_opt, "insert_text");
+  if (maho::DecideTypeRoute(tool_name, adapter_inserts_text) ==
+      maho::TypeRoute::kInsertText) {
+    const std::string* text = arguments.FindString("text");
+    if (!text || text->empty()) {
+      std::move(callback).Run(BuildBrowserActionErrorResult(
+          tool_name, kInvalidParamsError, "Invalid params: text required"));
+      return;
     }
+    delegate->InsertTextAtCaret(
+        tab_id, *text,
+        base::BindOnce(
+            [](std::string tool, ToolResultCallback cb,
+               BrowserActionFallbackDecision fallback, bool inserted) {
+              if (!inserted) {
+                base::DictValue error = BuildBrowserActionErrorResult(
+                    tool, kActionFailedError,
+                    "Action failed: page adapter text insertion was not "
+                    "applied");
+                AttachFallbackDecision(error, fallback);
+                std::move(cb).Run(std::move(error));
+                return;
+              }
+              base::DictValue result;
+              result.Set("typed", true);
+              result.Set("method", "page_adapter_insert_text");
+              base::DictValue success =
+                  BuildBrowserActionSuccessResult(tool, std::move(result));
+              AttachFallbackDecision(success, fallback);
+              std::move(cb).Run(std::move(success));
+            },
+            tool_name, std::move(callback), std::move(fallback_decision)));
+    return;
   }
   const bool consumes_ref =
       tool_name == "browser_click" || tool_name == "browser_type" ||
@@ -1076,6 +1107,32 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
       delegate->SelectFileForPendingChooserAsync(tab_id, *path_str,
                                                  std::move(completion_cb));
     }
+    return;
+  } else if (tool_name == "browser_request_help") {
+    std::string help_error;
+    base::DictValue request =
+        MahoBrowserToolRegistry::ExecuteBrowserRequestHelp(arguments,
+                                                           &help_error);
+    if (!help_error.empty()) {
+      std::move(callback).Run(BuildBrowserActionErrorResult(
+          tool_name, kInvalidParamsError, "Invalid params: " + help_error));
+      return;
+    }
+    maho::MahoAgentTaskSpaceRegistry& spaces =
+        maho::MahoAgentTaskSpaceRegistry::Get();
+    if (!spaces.Find(tab_id)) {
+      spaces.Create(tab_id, kDesktopAgentTaskSpaceSession);
+    }
+    spaces.Handoff(tab_id, kDesktopAgentTaskSpaceSession);
+    delegate->ShowHumanHelpRequest(tab_id, kDesktopAgentTaskSpaceSession,
+                                   *request.FindString("request_id"),
+                                   *request.FindString("prompt"));
+    request.Set("tab_id", tab_id);
+    request.Set("owner", "user");
+    base::DictValue success =
+        BuildBrowserActionSuccessResult(tool_name, std::move(request));
+    AttachFallbackDecision(success, fallback_decision);
+    std::move(callback).Run(std::move(success));
     return;
   } else {
     std::move(callback).Run(BuildBrowserActionErrorResult(

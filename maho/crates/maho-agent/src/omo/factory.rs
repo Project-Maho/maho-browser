@@ -55,6 +55,7 @@ pub fn omo_runtime_from_bundle(
     let config = OmoLaunchConfig::builder(&agent_dir)
         .runtime_binary(&bundled.runtime_binary)
         .rpc_entry(&bundled.rpc_entry)
+        .maybe_plugin_dir(bundled.plugin_dir.as_deref())
         .socket_path(&socket_path)
         .add_cleanup_path(&socket_path)
         // omo exits when Maho does instead of lingering as an orphan.
@@ -115,6 +116,7 @@ pub fn create_agent_runtime(
         let config = match OmoLaunchConfig::builder(&agent_dir)
             .runtime_binary(&bundled.runtime_binary)
             .rpc_entry(&bundled.rpc_entry)
+            .maybe_plugin_dir(bundled.plugin_dir.as_deref())
             .socket_path(&socket_path)
             .add_cleanup_path(&socket_path)
             .watch_ppid(std::process::id())

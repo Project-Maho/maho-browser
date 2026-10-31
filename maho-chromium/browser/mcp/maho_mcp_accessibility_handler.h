@@ -58,6 +58,11 @@ class MahoMcpAccessibilityHandler {
     bool include_hidden = false;
     std::optional<std::string> scope_selector;
     std::optional<int> scope_ref;
+    // Drop interactive nodes the renderer reports as offscreen.
+    bool viewport_only = false;
+    // Annotate refs whose role+name (or DOM id / href) is unique in the
+    // snapshot with a stable `loc=` locator usable after the ref expires.
+    bool emit_locators = true;
     std::optional<std::string> since_snapshot_token;
     size_t max_bytes = kV2DefaultMaxBytes;
     std::optional<int> max_depth;

@@ -916,11 +916,17 @@ bool IsTabTargetTool(std::string_view tool_name) {
       "browser_network_get_har",
       "browser_visual_click",
       "browser.visual_click",
+      "browser_native_type",
+      "browser_native_key",
       "browser_acquire_lease",
       "browser_heartbeat_lease",
       "browser_release_lease",
       "browser_tab_borrow",
       "browser_tab_return",
+      "browser_task_space",
+      "browser_dialog_respond",
+      "browser_download",
+      "browser_insert_text",
       "vault_list_credentials_for_active_page",
       "vault_request_credential_use",
       "vault_fill_credential",
@@ -933,6 +939,31 @@ bool IsTabTargetTool(std::string_view tool_name) {
   }
   return false;
 }
+
+}  // namespace
+
+std::optional<NativeActionRequest::ActionType> ResolveNativeActionType(
+    std::string_view tool_name,
+    std::string_view subaction) {
+  if (tool_name == "browser_native_type") {
+    return NativeActionRequest::ActionType::kType;
+  }
+  if (tool_name == "browser_native_key") {
+    return NativeActionRequest::ActionType::kKey;
+  }
+  if (subaction.empty() || subaction == "click") {
+    return NativeActionRequest::ActionType::kClick;
+  }
+  if (subaction == "native_type" || subaction == "type") {
+    return NativeActionRequest::ActionType::kType;
+  }
+  if (subaction == "native_key" || subaction == "key") {
+    return NativeActionRequest::ActionType::kKey;
+  }
+  return std::nullopt;
+}
+
+namespace {
 
 // R-8: tools that create or act on a browser/profile rather than an existing
 // tab. They require an eligible regular browser (-32006 otherwise).
@@ -980,6 +1011,9 @@ bool IsLeaseGatedMutation(std::string_view tool_name) {
          tool_name == "browser.act_and_observe" ||
          tool_name == "browser_visual_click" ||
          tool_name == "browser.visual_click" ||
+         tool_name == "browser_native_type" ||
+         tool_name == "browser_native_key" ||
+         tool_name == "browser_insert_text" ||
          tool_name == "browser_file_upload_select" ||
          tool_name == "browser_select" || tool_name == "browser_scroll" ||
          tool_name == "browser_key_press" || tool_name == "browser_navigate" ||
@@ -2325,15 +2359,6 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     return;
   }
 
-  if (*tool_name == "native_type" || *tool_name == "native_key" ||
-      *tool_name == "browser.native_type" || *tool_name == "browser.native_key" ||
-      *tool_name == "browser_native_type" || *tool_name == "browser_native_key") {
-    std::string err = framer_.BuildErrorResponse(
-        msg.id, -32601, "not implemented");
-    responses.push_back(std::move(err));
-    return;
-  }
-
   // Connection health-check only: intentionally functional but absent from
   // the browser capability catalog and every advertised surface.
   if (*tool_name == "ping") {
@@ -2675,6 +2700,45 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
   }
 
+  if (use_resolved_target && *tool_name != "browser_task_space" &&
+      (IsLeaseGatedMutation(*tool_name) ||
+       RequiresExplicitTabBinding(*tool_name))) {
+    switch (MahoAgentTaskSpaceRegistry::Get().CheckMutation(resolved_tab_id,
+                                                           session_id_)) {
+      case TaskSpaceMutationDecision::kAllowed:
+        break;
+      case TaskSpaceMutationDecision::kUserInControl:
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, kMahoMcpErrorTaskSpaceUserInControl,
+            kMahoMcpMessageTaskSpaceUserInControl));
+        return;
+      case TaskSpaceMutationDecision::kNotOwner:
+      case TaskSpaceMutationDecision::kClosed:
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, kMahoMcpErrorLeaseRequired,
+            "tab belongs to another agent task space"));
+        return;
+    }
+  }
+
+  if (use_resolved_target && g_browser_delegate &&
+      IsBlockedByPendingDialog(*tool_name)) {
+    if (std::optional<PendingPageDialog> dialog =
+            g_browser_delegate->GetPendingDialog(resolved_tab_id)) {
+      base::DictValue data;
+      data.Set("status", kMahoMcpMessagePageDialogOpened);
+      data.Set("tab_id", resolved_tab_id);
+      data.Set("dialog_type", dialog->type);
+      data.Set("message", dialog->message);
+      data.Set("default_prompt", dialog->default_prompt);
+      data.Set("url", dialog->url);
+      responses.push_back(BuildJsonRpcErrorLine(
+          CloneMessageId(msg.id), kMahoMcpErrorPageDialogOpened,
+          kMahoMcpMessagePageDialogOpened, base::Value(std::move(data))));
+      return;
+    }
+  }
+
   const ai::MailToolClass mail_tool_class = ai::ClassifyMailTool(*tool_name);
 
   const bool credential_typing_requested =
@@ -2898,19 +2962,39 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   if (*tool_name == "browser.visual_click" ||
-      *tool_name == "browser_visual_click") {
+      *tool_name == "browser_visual_click" ||
+      *tool_name == "browser_native_type" ||
+      *tool_name == "browser_native_key") {
     const std::string* subaction =
         arguments ? arguments->FindString("action") : nullptr;
     if (!subaction && arguments) {
       subaction = arguments->FindString("subaction");
     }
-    if (!subaction && arguments) {
-      subaction = arguments->FindString("type");
-    }
-    if (subaction && (*subaction == "native_type" || *subaction == "native_key" ||
-                      *subaction == "type" || *subaction == "key")) {
+    const std::optional<NativeActionRequest::ActionType> native_action =
+        ResolveNativeActionType(*tool_name,
+                                subaction ? std::string_view(*subaction)
+                                          : std::string_view());
+    if (!native_action) {
       responses.push_back(framer_.BuildErrorResponse(
-          msg.id, -32601, "not implemented"));
+          msg.id, -32602, "Unknown visual action"));
+      return;
+    }
+    const std::string* type_text =
+        arguments ? arguments->FindString("text") : nullptr;
+    const std::string* key_name =
+        arguments ? arguments->FindString("key") : nullptr;
+    if (*native_action == NativeActionRequest::ActionType::kType &&
+        (!type_text || type_text->empty())) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: 'text' is required"));
+      return;
+    }
+    if (*native_action == NativeActionRequest::ActionType::kKey &&
+        (!key_name ||
+         MahoMcpInputSynthesizer::KeyStringToKeyCode(*key_name) ==
+             ui::VKEY_UNKNOWN)) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: 'key' must name a known key"));
       return;
     }
 
@@ -3115,7 +3199,28 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       return;
     }
 
-    // 7. Coordinates resolution
+    NativeActionRequest request;
+    request.type = *native_action;
+    request.frame_token = frame.token;
+    request.tab_id = target_tab_id;
+    request.lease_epoch = live_lease_epoch;
+    request.document_epoch = frame.document_epoch;
+
+    if (*native_action == NativeActionRequest::ActionType::kType) {
+      request.text = MahoMcpInputSynthesizer::NormalizeCrlf(*type_text);
+    } else if (*native_action == NativeActionRequest::ActionType::kKey) {
+      request.key = *key_name;
+      if (const base::ListValue* mods = arguments->FindList("modifiers")) {
+        for (const base::Value& mod : *mods) {
+          if (mod.is_string()) {
+            request.modifiers.push_back(mod.GetString());
+          }
+        }
+      }
+    }
+
+    // 7. Coordinates resolution (click only: type/key go to the focused
+    // element of the foreground window, gated by the same frame and lease).
     gfx::PointF click_point(100.0f, 100.0f);
     if (arguments) {
       if (const auto* pt_dict = arguments->FindDict("click_point_css")) {
@@ -3148,24 +3253,21 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
                                20.0f, 20.0f);
     }
 
-    auto dip = MahoMcpInputSynthesizer::CssToScreenDip(frame, click_point);
-    if (!dip) {
-      responses.push_back(framer_.BuildErrorResponse(
-          msg.id, -32009, "Failed to resolve coordinates via ResolveNativePoint"));
-      return;
+    if (*native_action == NativeActionRequest::ActionType::kClick) {
+      auto dip = MahoMcpInputSynthesizer::CssToScreenDip(frame, click_point);
+      if (!dip) {
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, -32009,
+            "Failed to resolve coordinates via ResolveNativePoint"));
+        return;
+      }
+      request.click_point_css = click_point;
+      request.target_rect_css = target_rect;
+      request.motion_profile.pre_click_dwell_ms = {0, 0};
+      request.motion_profile.press_release_ms = {0, 0};
     }
 
-    // 8. Prepare NativeActionRequest and dispatch
-    NativeActionRequest request;
-    request.type = NativeActionRequest::ActionType::kClick;
-    request.frame_token = frame.token;
-    request.tab_id = target_tab_id;
-    request.lease_epoch = live_lease_epoch;
-    request.document_epoch = frame.document_epoch;
-    request.click_point_css = click_point;
-    request.target_rect_css = target_rect;
-    request.motion_profile.pre_click_dwell_ms = {0, 0};
-    request.motion_profile.press_release_ms = {0, 0};
+    // 8. Dispatch the prepared NativeActionRequest
 
     NativeInputDispatcher* dispatcher = GetNativeDispatcher();
     if (!dispatcher) {
@@ -4364,9 +4466,13 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
                               ? *arguments->FindString("url")
                               : "about:blank";
     const GURL nav_url(url_str);
+    const bool foreground = ShouldForegroundAgentTab(
+        controller_kind_,
+        arguments ? arguments->FindBool("background") : std::nullopt);
     int new_id = 0;
     if (g_browser_delegate) {
-      new_id = g_browser_delegate->CreateNewTab(nav_url);
+      new_id = g_browser_delegate->CreateNewTabWithDisposition(nav_url,
+                                                               foreground);
     } else {
       for (const auto& t : tabs_) {
         if (t.id >= new_id) {
@@ -4374,16 +4480,23 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
         }
       }
     }
-    for (auto& t : tabs_) {
-      t.is_active = false;
+    if (foreground) {
+      for (auto& t : tabs_) {
+        t.is_active = false;
+      }
     }
     TabInfo new_tab;
     new_tab.id = new_id;
     new_tab.title = url_str == "about:blank" ? "New Tab" : nav_url.host();
     new_tab.url = url_str;
-    new_tab.is_active = true;
+    new_tab.is_active = foreground;
     tabs_.push_back(new_tab);
-    active_tab_id_ = new_id;
+    if (foreground) {
+      active_tab_id_ = new_id;
+    }
+    if (!foreground && new_id > 0) {
+      MahoAgentTaskSpaceRegistry::Get().Create(new_id, session_id_);
+    }
 
     base::DictValue tab;
     tab.Set("id", new_tab.id);
@@ -4854,6 +4967,10 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
         if (std::optional<int> r = scope->FindInt("ref")) {
           options.scope_ref = *r;
         }
+        options.viewport_only = scope->FindBool("viewport").value_or(false);
+      } else if (const std::string* scope_name =
+                     arguments->FindString("scope")) {
+        options.viewport_only = *scope_name == "viewport";
       }
       if (const std::string* since =
               arguments->FindString("since_snapshot_token")) {
@@ -4886,6 +5003,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     v2_params.include_hidden = options.include_hidden;
     v2_params.scope_selector = options.scope_selector;
     v2_params.scope_ref = options.scope_ref;
+    v2_params.viewport_only = options.viewport_only;
     v2_params.since_snapshot_token = options.since_snapshot_token;
     v2_params.max_bytes = options.max_bytes;
     v2_params.max_depth = options.max_depth;
@@ -6491,6 +6609,230 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     return;
   }
 
+  if (*tool_name == "browser_task_space") {
+    const std::string* action =
+        arguments ? arguments->FindString("action") : nullptr;
+    const std::string op = action ? *action : "status";
+    const int tab_id = use_resolved_target
+                           ? resolved_tab_id
+                           : (arguments ? arguments->FindInt("tab_id").value_or(0)
+                                        : 0);
+    MahoAgentTaskSpaceRegistry& spaces = MahoAgentTaskSpaceRegistry::Get();
+    bool ok = true;
+    if (op == "create") {
+      ok = spaces.Create(tab_id, session_id_);
+    } else if (op == "handoff") {
+      ok = spaces.Handoff(tab_id, session_id_);
+    } else if (op == "takeover") {
+      ok = spaces.Takeover(tab_id, session_id_);
+    } else if (op == "complete") {
+      ok = spaces.Complete(tab_id, session_id_);
+    } else if (op == "error") {
+      ok = spaces.Fail(tab_id, session_id_);
+    } else if (op != "status") {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602,
+          "Invalid params: action must be status, create, handoff, "
+          "takeover, complete or error"));
+      return;
+    }
+    if (!ok) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000,
+          "Task space transition '" + op + "' is not allowed in its state"));
+      return;
+    }
+    base::DictValue result;
+    result.Set("tab_id", tab_id);
+    if (std::optional<MahoAgentTaskSpaceRegistry::Space> space =
+            spaces.Find(tab_id)) {
+      result.Set("owner",
+                 space->owner == TaskSpaceOwner::kAgent ? "agent" : "user");
+      result.Set("state", space->state == TaskSpaceState::kActive
+                              ? "active"
+                              : (space->state == TaskSpaceState::kCompleted
+                                     ? "completed"
+                                     : "error"));
+      result.Set("owned_by_this_session", space->session_id == session_id_);
+    } else {
+      result.Set("owner", "none");
+    }
+    responses.push_back(
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result))));
+    return;
+  }
+
+  if (*tool_name == "browser_dialog_respond") {
+    const std::optional<bool> accept =
+        arguments ? arguments->FindBool("accept") : std::nullopt;
+    if (!accept.has_value()) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: accept (boolean) required"));
+      return;
+    }
+    const int tab_id = use_resolved_target
+                           ? resolved_tab_id
+                           : (arguments ? arguments->FindInt("tab_id").value_or(0)
+                                        : 0);
+    std::optional<std::string> prompt_text;
+    if (const std::string* text = arguments->FindString("prompt_text")) {
+      prompt_text = *text;
+    }
+    if (!g_browser_delegate ||
+        !g_browser_delegate->RespondToDialog(tab_id, *accept, prompt_text)) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, kMahoMcpErrorNoPendingDialog,
+          kMahoMcpMessageNoPendingDialog));
+      return;
+    }
+    base::DictValue result;
+    result.Set("tab_id", tab_id);
+    result.Set("accepted", *accept);
+    responses.push_back(
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result))));
+    return;
+  }
+
+  if (*tool_name == "browser_request_help") {
+    std::string help_error;
+    const base::DictValue empty_arguments;
+    base::DictValue request = MahoBrowserToolRegistry::ExecuteBrowserRequestHelp(
+        arguments ? *arguments : empty_arguments, &help_error);
+    if (!help_error.empty()) {
+      responses.push_back(
+          framer_.BuildErrorResponse(msg.id, -32602, "Invalid params: " +
+                                                         help_error));
+      return;
+    }
+    const int tab_id =
+        arguments ? arguments->FindInt("tab_id").value_or(active_tab_id_)
+                  : active_tab_id_;
+    const std::string request_id = *request.FindString("request_id");
+    MahoAgentTaskSpaceRegistry& spaces = MahoAgentTaskSpaceRegistry::Get();
+    if (!spaces.Find(tab_id)) {
+      spaces.Create(tab_id, session_id_);
+    }
+    spaces.Handoff(tab_id, session_id_);
+    if (g_browser_delegate) {
+      g_browser_delegate->ShowHumanHelpRequest(
+          tab_id, session_id_, request_id, *request.FindString("prompt"));
+    }
+    request.Set("tab_id", tab_id);
+    request.Set("owner", "user");
+    responses.push_back(
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(request))));
+    return;
+  }
+
+  if (*tool_name == "browser_download" || *tool_name == "browser_insert_text" ||
+      *tool_name == "browser_import_list") {
+    if (!g_browser_delegate || !terminal_deferred_sender) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000, "Action failed: requires deferred transport"));
+      return;
+    }
+    const int tab_id = use_resolved_target
+                           ? resolved_tab_id
+                           : (arguments ? arguments->FindInt("tab_id").value_or(0)
+                                        : 0);
+    std::optional<base::Value> message_id = CloneMessageId(msg.id);
+    if (*tool_name == "browser_download") {
+      const std::string* url = arguments ? arguments->FindString("url") : nullptr;
+      const std::string* dest_dir =
+          arguments ? arguments->FindString("dest_dir") : nullptr;
+      const DownloadRequestValidation validation = ValidateDownloadRequest(
+          url ? std::string_view(*url) : std::string_view(),
+          dest_dir ? std::optional<std::string_view>(*dest_dir)
+                   : std::nullopt);
+      if (!validation.ok) {
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, -32602, "Invalid params: " + validation.error));
+        return;
+      }
+      g_browser_delegate->StartDownload(
+          tab_id, GURL(*url),
+          dest_dir ? std::optional<std::string>(*dest_dir) : std::nullopt,
+          base::BindOnce(
+              [](std::optional<base::Value> id, DeferredResponseSender sender,
+                 std::string target_path, std::string error) {
+                if (target_path.empty()) {
+                  sender.Run(BuildJsonRpcErrorLine(
+                      std::move(id), -32000, "Download failed: " + error));
+                  return;
+                }
+                base::DictValue result;
+                result.Set("started", true);
+                result.Set("path", std::move(target_path));
+                sender.Run(BuildJsonRpcSuccessLine(
+                    std::move(id), base::Value(std::move(result))));
+              },
+              std::move(message_id), terminal_deferred_sender));
+      return;
+    }
+    if (*tool_name == "browser_insert_text") {
+      const std::string* text =
+          arguments ? arguments->FindString("text") : nullptr;
+      if (!text || text->empty()) {
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, -32602, "Invalid params: text required"));
+        return;
+      }
+      g_browser_delegate->InsertTextAtCaret(
+          tab_id, *text,
+          base::BindOnce(
+              [](std::optional<base::Value> id, DeferredResponseSender sender,
+                 bool inserted) {
+                if (!inserted) {
+                  sender.Run(BuildJsonRpcErrorLine(
+                      std::move(id), kMahoMcpErrorActionNotApplied,
+                      "Action failed: text was not inserted"));
+                  return;
+                }
+                base::DictValue result;
+                result.Set("inserted", true);
+                result.Set("method", "insert_text");
+                sender.Run(BuildJsonRpcSuccessLine(
+                    std::move(id), base::Value(std::move(result))));
+              },
+              std::move(message_id), terminal_deferred_sender));
+      return;
+    }
+    g_browser_delegate->ListImportSources(base::BindOnce(
+        [](std::optional<base::Value> id, DeferredResponseSender sender,
+           std::vector<ImportSourceInfo> sources) {
+          sender.Run(BuildJsonRpcSuccessLine(
+              std::move(id), base::Value(SerializeImportSources(sources))));
+        },
+        std::move(message_id), terminal_deferred_sender));
+    return;
+  }
+
+  if (*tool_name == "browser_import_run") {
+    const std::optional<int> index =
+        arguments ? arguments->FindInt("index") : std::nullopt;
+    if (!index.has_value() || *index < 0) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602,
+          "Invalid params: index from browser_import_list required"));
+      return;
+    }
+    const int items = arguments->FindInt("items").value_or(0);
+    std::string import_error = "import is unavailable";
+    if (!g_browser_delegate ||
+        !g_browser_delegate->StartImport(*index, static_cast<uint32_t>(items),
+                                         &import_error)) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000, "Import failed: " + import_error));
+      return;
+    }
+    base::DictValue result;
+    result.Set("started", true);
+    result.Set("index", *index);
+    responses.push_back(
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result))));
+    return;
+  }
+
   std::string err = framer_.BuildErrorResponse(
       msg.id, -32601, "Method not found: unknown tool");
   responses.push_back(std::move(err));
@@ -6759,6 +7101,58 @@ bool MahoMcpBrowserDelegate::RevalidateTarget(
 bool MahoMcpBrowserDelegate::IsTabWindowActive(int tab_id) {
   return false;
 }
+
+int MahoMcpBrowserDelegate::CreateNewTabWithDisposition(const GURL& url,
+                                                        bool foreground) {
+  return CreateNewTab(url);
+}
+
+std::optional<PendingPageDialog> MahoMcpBrowserDelegate::GetPendingDialog(
+    int tab_id) {
+  return std::nullopt;
+}
+
+bool MahoMcpBrowserDelegate::RespondToDialog(
+    int tab_id,
+    bool accept,
+    const std::optional<std::string>& prompt_text) {
+  return false;
+}
+
+void MahoMcpBrowserDelegate::StartDownload(
+    int tab_id,
+    const GURL& url,
+    const std::optional<std::string>& dest_dir,
+    DownloadCallback callback) {
+  std::move(callback).Run(std::string(), "downloads are unavailable");
+}
+
+void MahoMcpBrowserDelegate::InsertTextAtCaret(int tab_id,
+                                               const std::string& text,
+                                               InsertTextCallback callback) {
+  std::move(callback).Run(false);
+}
+
+void MahoMcpBrowserDelegate::ListImportSources(
+    ImportSourcesCallback callback) {
+  std::move(callback).Run({});
+}
+
+bool MahoMcpBrowserDelegate::StartImport(int source_index,
+                                         uint32_t items,
+                                         std::string* error) {
+  *error = "import is unavailable";
+  return false;
+}
+
+void MahoMcpBrowserDelegate::ShowHumanHelpRequest(
+    int tab_id,
+    const std::string& session_id,
+    const std::string& request_id,
+    const std::string& prompt) {}
+
+void MahoMcpBrowserDelegate::DismissHumanHelpRequest(
+    const std::string& request_id) {}
 
 MahoMcpFieldMetadata MahoMcpBrowserDelegate::GetFieldMetadata(
     int tab_id,

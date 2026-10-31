@@ -9,6 +9,8 @@ vault-agent-tools = []
 # Test-only hooks (forced sandbox unavailability, induced panics). Official
 # and release builds never enable this feature.
 debug-test-hooks = []
+# Dispatches visual CUA native actions to the browser MCP native-input tools.
+visual-cua-native = []
 
 [dependencies]
 maho-types = { path = "../maho-types" }

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use maho_types::chat::{ChatContent, ChatMessage};
 
+pub mod agent_tools;
 pub mod approval;
 pub mod artifacts;
 pub mod approval_audit;
@@ -61,6 +62,8 @@ pub mod trace_recorder;
 pub mod turn_control;
 pub mod vault_tools;
 pub mod visual_cua;
+#[cfg(feature = "visual-cua-native")]
+pub mod visual_cua_native;
 pub mod web_search;
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]

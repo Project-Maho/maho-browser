@@ -5,6 +5,7 @@
 #include "maho/browser/mcp/maho_mcp_session.h"
 
 #include <deque>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -25,6 +26,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
+#include "maho/browser/mcp/maho_mcp_agent_policy.h"
 #include "maho/browser/mcp/maho_mcp_capability_registry.h"
 #include "maho/browser/mcp/maho_mcp_controller_pairing.h"
 #include "base/files/file_util.h"
@@ -302,6 +304,38 @@ public:
     return true;
   }
 
+  std::optional<bool> last_new_tab_foreground;
+  int CreateNewTabWithDisposition(const GURL& url, bool foreground) override {
+    last_new_tab_foreground = foreground;
+    return 501;
+  }
+  std::map<int, PendingPageDialog> pending_dialogs;
+  std::optional<bool> last_dialog_accept;
+  std::optional<PendingPageDialog> GetPendingDialog(int tab_id) override {
+    auto it = pending_dialogs.find(tab_id);
+    if (it == pending_dialogs.end()) {
+      return std::nullopt;
+    }
+    return it->second;
+  }
+  bool RespondToDialog(int tab_id,
+                       bool accept,
+                       const std::optional<std::string>& prompt_text) override {
+    if (!pending_dialogs.erase(tab_id)) {
+      return false;
+    }
+    last_dialog_accept = accept;
+    return true;
+  }
+  int download_calls = 0;
+  void StartDownload(int tab_id,
+                     const GURL& url,
+                     const std::optional<std::string>& dest_dir,
+                     DownloadCallback callback) override {
+    ++download_calls;
+    std::move(callback).Run("/downloads/Maho Agent/" + url.ExtractFileName(),
+                            std::string());
+  }
   bool IsTabWindowActive(int tab_id) override {
     return tab_id == active_tab_id && eligible_tabs.contains(tab_id);
   }
@@ -3372,13 +3406,13 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
   EXPECT_EQ(diagnostics->FindInt("catalogVersion"), 1);
   EXPECT_EQ(diagnostics->FindInt("schemaVersion"), 1);
   EXPECT_EQ(diagnostics->FindInt("resultVersion"), 1);
-  EXPECT_EQ(diagnostics->FindInt("canonicalCount"), 94);
+  EXPECT_EQ(diagnostics->FindInt("canonicalCount"), 102);
   const auto *surfaces = diagnostics->FindDict("surfaces");
   ASSERT_TRUE(surfaces);
   const auto *public_mcp = surfaces->FindDict("publicMcp");
   ASSERT_TRUE(public_mcp);
-  EXPECT_EQ(public_mcp->FindInt("count"), 59);
-  EXPECT_EQ(public_mcp->FindList("ids")->size(), 59u);
+  EXPECT_EQ(public_mcp->FindInt("count"), 65);
+  EXPECT_EQ(public_mcp->FindList("ids")->size(), 65u);
 
   const auto *tools = result->FindList("tools");
   ASSERT_TRUE(tools);
@@ -3392,6 +3426,12 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
   EXPECT_EQ(advertised.size(), tools->size());
 
   const std::set<std::string> expected = {
+      "browser_task_space",
+      "browser_dialog_respond",
+      "browser_download",
+      "browser_insert_text",
+      "browser_import_list",
+      "browser_import_run",
       "page_accessibility_snapshot_v2",
       "browser_act_and_observe",
       "browser_locator_click",
@@ -7187,37 +7227,135 @@ TEST_F(MahoMcpSessionTest, VisualFrame_RealCaptureMintsTokenAndDispatches) {
             NativeEvent::Type::kMouseUp);
 }
 
-TEST_F(MahoMcpSessionTest,
-       HybridSecurity_SubactionsRejectedWithNotImplemented) {
-  InitResolvingSession(true);
-  delegate_->native_input_enabled = true;
-  ASSERT_TRUE(
-      lease_registry_->Acquire(7, session_->session_id(), base::Seconds(60), /*force_steal=*/false).ok);
+TEST(MahoMcpNativeActionTypeTest, ResolvesToolsAndSubactions) {
+  using ActionType = NativeActionRequest::ActionType;
+  EXPECT_EQ(ResolveNativeActionType("browser_native_type", ""),
+            ActionType::kType);
+  EXPECT_EQ(ResolveNativeActionType("browser_native_key", "click"),
+            ActionType::kKey);
+  EXPECT_EQ(ResolveNativeActionType("browser_visual_click", ""),
+            ActionType::kClick);
+  EXPECT_EQ(ResolveNativeActionType("browser_visual_click", "click"),
+            ActionType::kClick);
+  EXPECT_EQ(ResolveNativeActionType("browser_visual_click", "native_type"),
+            ActionType::kType);
+  EXPECT_EQ(ResolveNativeActionType("browser_visual_click", "key"),
+            ActionType::kKey);
+  EXPECT_EQ(ResolveNativeActionType("browser_visual_click", "drag"),
+            std::nullopt);
+}
 
-  // 1. Standalone native_type
-  base::Value type_res = ParseLine(CallToolLine(
-      "browser.native_type", R"({"tab_id":7,"text":"hello"})", 4060));
-  const base::DictValue* type_err = type_res.GetDict().FindDict("error");
-  ASSERT_TRUE(type_err);
-  EXPECT_EQ(type_err->FindInt("code"), -32601);
-  EXPECT_EQ(*type_err->FindString("message"), "not implemented");
+class MahoMcpNativeKeyboardTest : public MahoMcpSessionTest {
+ protected:
+  void PrepareFrame(TestNativeInputDispatcher* dispatcher) {
+    InitResolvingSession(true);
+    delegate_->native_input_enabled = true;
+    delegate_->approve_browser_actions = true;
+    ASSERT_TRUE(lease_registry_
+                    ->Acquire(7, session_->session_id(), base::Seconds(60),
+                              /*force_steal=*/false)
+                    .ok);
+    session_->SetNativeInputDispatcherForTesting(dispatcher);
+    VisualFrame frame;
+    frame.token = "kbd-frame";
+    frame.target.tab_id = 7;
+    frame.target.valid = true;
+    frame.lease_epoch = lease_registry_->LeaseEpoch(7);
+    frame.document_epoch = 1;
+    frame.viewport_css_size = gfx::SizeF(800.0f, 600.0f);
+    frame.bitmap_size = gfx::Size(800, 600);
+    frame.view_bounds_in_screen = gfx::Rect(0, 0, 800, 600);
+    frame.view_transform_generation = 1;
+    session_->SetVisualFrameForTesting(frame);
+  }
 
-  // 2. Standalone native_key
-  base::Value key_res = ParseLine(CallToolLine(
-      "browser.native_key", R"({"tab_id":7,"key":"Enter"})", 4061));
-  const base::DictValue* key_err = key_res.GetDict().FindDict("error");
+  base::Value Call(const char* tool, const std::string& args, int id) {
+    std::string line = CallToolLine(tool, args, id);
+    task_environment_.RunUntilIdle();
+    if (line.empty() && !deferred_responses_.empty()) {
+      line = deferred_responses_.back();
+    }
+    return ParseLine(line);
+  }
+};
+
+TEST_F(MahoMcpNativeKeyboardTest, NativeTypeDispatchesKeyEventsPerCharacter) {
+  TestNativeInputDispatcher dispatcher;
+  PrepareFrame(&dispatcher);
+  base::Value parsed =
+      Call("browser_native_type",
+           R"({"tab_id":7,"frame_token":"kbd-frame","text":"hi"})", 4060);
+  ASSERT_FALSE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+  ASSERT_FALSE(dispatcher.dispatched_events().empty());
+  size_t chars = 0;
+  for (const NativeEvent& event : dispatcher.dispatched_events()) {
+    EXPECT_NE(event.type, NativeEvent::Type::kMouseDown);
+    if (event.type == NativeEvent::Type::kKeyChar) {
+      ++chars;
+    }
+  }
+  EXPECT_EQ(chars, 2u);
+}
+
+TEST_F(MahoMcpNativeKeyboardTest, NativeKeyPressesModifiersAroundMainKey) {
+  TestNativeInputDispatcher dispatcher;
+  PrepareFrame(&dispatcher);
+  base::Value parsed = Call(
+      "browser_native_key",
+      R"({"tab_id":7,"frame_token":"kbd-frame","key":"a","modifiers":["shift"]})",
+      4061);
+  ASSERT_FALSE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+  const auto& events = dispatcher.dispatched_events();
+  ASSERT_EQ(events.size(), 4u);
+  EXPECT_EQ(events[0].type, NativeEvent::Type::kKeyDown);
+  EXPECT_EQ(events[0].key_code, ui::VKEY_SHIFT);
+  EXPECT_EQ(events[1].type, NativeEvent::Type::kKeyDown);
+  EXPECT_EQ(events[1].key_code, ui::VKEY_A);
+  EXPECT_EQ(events[2].type, NativeEvent::Type::kKeyUp);
+  EXPECT_EQ(events[2].key_code, ui::VKEY_A);
+  EXPECT_EQ(events[3].type, NativeEvent::Type::kKeyUp);
+  EXPECT_EQ(events[3].key_code, ui::VKEY_SHIFT);
+}
+
+TEST_F(MahoMcpNativeKeyboardTest, NativeKeyboardNegativePaths) {
+  TestNativeInputDispatcher dispatcher;
+  PrepareFrame(&dispatcher);
+
+  base::Value unknown_key = Call(
+      "browser_native_key",
+      R"({"tab_id":7,"frame_token":"kbd-frame","key":"NotAKey"})", 4062);
+  const base::DictValue* key_err = unknown_key.GetDict().FindDict("error");
   ASSERT_TRUE(key_err);
-  EXPECT_EQ(key_err->FindInt("code"), -32601);
-  EXPECT_EQ(*key_err->FindString("message"), "not implemented");
+  EXPECT_EQ(key_err->FindInt("code"), -32602);
 
-  // 3. Subaction in visual_click
-  base::Value sub_res = ParseLine(CallToolLine(
+  base::Value empty_text = Call(
+      "browser_native_type",
+      R"({"tab_id":7,"frame_token":"kbd-frame","text":""})", 4063);
+  ASSERT_TRUE(empty_text.GetDict().FindDict("error"));
+
+  base::Value bad_subaction = Call(
       "browser.visual_click",
-      R"({"tab_id":7,"frame_token":"tok-1","action":"native_type"})", 4062));
-  const base::DictValue* sub_err = sub_res.GetDict().FindDict("error");
+      R"({"tab_id":7,"frame_token":"kbd-frame","action":"drag"})", 4064);
+  const base::DictValue* sub_err = bad_subaction.GetDict().FindDict("error");
   ASSERT_TRUE(sub_err);
-  EXPECT_EQ(sub_err->FindInt("code"), -32601);
-  EXPECT_EQ(*sub_err->FindString("message"), "not implemented");
+  EXPECT_EQ(sub_err->FindInt("code"), -32602);
+
+  base::Value stale = Call(
+      "browser_native_type",
+      R"({"tab_id":7,"frame_token":"other-frame","text":"x"})", 4065);
+  const base::DictValue* stale_err = stale.GetDict().FindDict("error");
+  ASSERT_TRUE(stale_err);
+  EXPECT_EQ(stale_err->FindInt("code"), -32009);
+
+  delegate_->active_tab_id = 8;
+  base::Value background = Call(
+      "browser_native_type",
+      R"({"tab_id":7,"frame_token":"kbd-frame","text":"x"})", 4066);
+  const base::DictValue* bg_err = background.GetDict().FindDict("error");
+  ASSERT_TRUE(bg_err) << background.DebugString();
+  EXPECT_EQ(bg_err->FindInt("code"), -32011);
+  EXPECT_NE(bg_err->FindInt("code"), -32601);
+  EXPECT_EQ(dispatcher.event_count(), 0u);
 }
 
 TEST_F(MahoMcpSessionTest, HybridLoop_VisualClickDispatchesViaNativeDispatcherSeam) {
@@ -7647,6 +7785,153 @@ TEST_F(MahoMcpSessionControllerPairingGateTest,
     EXPECT_NE(ErrorCode(line), kMahoMcpErrorPairingRequired);
   }
   EXPECT_EQ(prompts_, 0);
+}
+
+
+TEST_F(MahoMcpSessionTest, AgentTabNewOpensInBackgroundTaskSpace) {
+  InitResolvingSession(/*browser_mcp=*/true);
+  base::Value parsed = ParseLine(CallToolLine(
+      "browser_tab_new", R"({"url":"https://example.com/"})", 5101));
+  ASSERT_FALSE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+  EXPECT_EQ(delegate_->last_new_tab_foreground, false);
+  std::optional<MahoAgentTaskSpaceRegistry::Space> space =
+      MahoAgentTaskSpaceRegistry::Get().Find(501);
+  ASSERT_TRUE(space.has_value());
+  EXPECT_EQ(space->session_id, session_->session_id());
+  EXPECT_EQ(space->owner, TaskSpaceOwner::kAgent);
+  MahoAgentTaskSpaceRegistry::Get().Remove(501);
+
+  InitResolvingSession(/*browser_mcp=*/false);
+  parsed = ParseLine(CallToolLine("browser_tab_new",
+                                  R"({"url":"https://example.com/"})", 5102));
+  ASSERT_FALSE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+  EXPECT_EQ(delegate_->last_new_tab_foreground, true);
+  EXPECT_FALSE(MahoAgentTaskSpaceRegistry::Get().Find(501).has_value());
+}
+
+TEST_F(MahoMcpSessionTest, UserOwnedTaskSpaceRejectsAgentMutations) {
+  InitResolvingSession(/*browser_mcp=*/true);
+  ASSERT_TRUE(lease_registry_
+                  ->Acquire(7, session_->session_id(), base::Seconds(60),
+                            /*force_steal=*/false)
+                  .ok);
+  base::Value parsed = ParseLine(CallToolLine(
+      "browser_task_space", R"({"tab_id":7,"action":"create"})", 5110));
+  ASSERT_FALSE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+  parsed = ParseLine(CallToolLine("browser_task_space",
+                                  R"({"tab_id":7,"action":"handoff"})", 5111));
+  ASSERT_FALSE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+  EXPECT_EQ(*parsed.GetDict().FindDict("result")->FindString("owner"),
+            "user");
+
+  parsed = ParseLine(CallToolLine(
+      "browser_navigate", R"({"tab_id":7,"url":"https://example.org/"})",
+      5112));
+  const base::DictValue* error = parsed.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << parsed.DebugString();
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorTaskSpaceUserInControl);
+  EXPECT_EQ(*error->FindString("message"), "TASK_SPACE_USER_IN_CONTROL");
+  EXPECT_TRUE(delegate_->last_navigated_url.empty());
+
+  parsed = ParseLine(CallToolLine("browser_task_space",
+                                  R"({"tab_id":7,"action":"takeover"})", 5113));
+  ASSERT_FALSE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+  parsed = ParseLine(CallToolLine(
+      "browser_navigate", R"({"tab_id":7,"url":"https://example.org/"})",
+      5114));
+  if (const base::DictValue* after = parsed.GetDict().FindDict("error")) {
+    EXPECT_NE(after->FindInt("code"), kMahoMcpErrorTaskSpaceUserInControl);
+  }
+
+  parsed = ParseLine(CallToolLine("browser_task_space",
+                                  R"({"tab_id":7,"action":"bogus"})", 5115));
+  ASSERT_TRUE(parsed.GetDict().FindDict("error"));
+  EXPECT_EQ(parsed.GetDict().FindDict("error")->FindInt("code"), -32602);
+  MahoAgentTaskSpaceRegistry::Get().Remove(7);
+}
+
+TEST_F(MahoMcpSessionTest, PendingDialogBlocksPageToolsUntilAnswered) {
+  InitResolvingSession(/*browser_mcp=*/true);
+  delegate_->pending_dialogs[7] = {"confirm", "Leave page?", "",
+                                   "https://example.com/"};
+  base::Value parsed = ParseLine(CallToolLine(
+      "page_get_text", R"({"tab_id":7,"selector":"body"})", 5120));
+  const base::DictValue* error = parsed.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << parsed.DebugString();
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorPageDialogOpened);
+  const base::DictValue* data = error->FindDict("data");
+  ASSERT_TRUE(data);
+  EXPECT_EQ(*data->FindString("dialog_type"), "confirm");
+  EXPECT_EQ(*data->FindString("message"), "Leave page?");
+
+  parsed = ParseLine(CallToolLine("browser_tab_list", "{}", 5121));
+  EXPECT_FALSE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+
+  parsed = ParseLine(CallToolLine("browser_dialog_respond",
+                                  R"({"tab_id":7,"accept":true})", 5122));
+  ASSERT_FALSE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+  EXPECT_EQ(delegate_->last_dialog_accept, true);
+
+  parsed = ParseLine(CallToolLine("browser_dialog_respond",
+                                  R"({"tab_id":7,"accept":false})", 5123));
+  error = parsed.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << parsed.DebugString();
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorNoPendingDialog);
+  EXPECT_EQ(*error->FindString("message"), "NO_PENDING_DIALOG");
+
+  parsed = ParseLine(
+      CallToolLine("browser_dialog_respond", R"({"tab_id":7})", 5124));
+  ASSERT_TRUE(parsed.GetDict().FindDict("error"));
+  EXPECT_EQ(parsed.GetDict().FindDict("error")->FindInt("code"), -32602);
+}
+
+TEST_F(MahoMcpSessionTest, DownloadValidatesBeforeDispatch) {
+  InitResolvingSession(/*browser_mcp=*/true);
+  base::Value parsed = ParseLine(CallToolLine(
+      "browser_download",
+      R"({"tab_id":7,"url":"https://example.com/a/report.pdf"})", 5130));
+  ASSERT_FALSE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+  EXPECT_EQ(*parsed.GetDict().FindDict("result")->FindString("path"),
+            "/downloads/Maho Agent/report.pdf");
+  EXPECT_EQ(delegate_->download_calls, 1);
+
+  for (const char* args :
+       {R"({"tab_id":7,"url":"file:///etc/passwd"})",
+        R"({"tab_id":7,"url":"https://example.com/x","dest_dir":"../out"})",
+        R"({"tab_id":7,"url":"https://example.com/x","dest_dir":"/tmp"})"}) {
+    parsed = ParseLine(CallToolLine("browser_download", args, 5131));
+    ASSERT_TRUE(parsed.GetDict().FindDict("error")) << args;
+    EXPECT_EQ(parsed.GetDict().FindDict("error")->FindInt("code"), -32602)
+        << args;
+  }
+  EXPECT_EQ(delegate_->download_calls, 1);
+
+  delegate_->approve_browser_actions = false;
+  const int approvals_before = delegate_->browser_action_approval_calls;
+  parsed = ParseLine(CallToolLine(
+      "browser_download",
+      R"({"tab_id":7,"url":"https://example.com/b.pdf"})", 5132));
+  ASSERT_TRUE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+  EXPECT_EQ(parsed.GetDict().FindDict("error")->FindInt("code"),
+            kMahoMcpErrorApprovalDenied);
+  EXPECT_EQ(delegate_->browser_action_approval_calls, approvals_before + 1);
+  EXPECT_EQ(delegate_->download_calls, 1);
+}
+
+TEST_F(MahoMcpSessionTest, RequestHelpHandsTaskSpaceToUser) {
+  InitResolvingSession(/*browser_mcp=*/true);
+  base::Value parsed = ParseLine(CallToolLine(
+      "browser_request_help",
+      R"({"tab_id":7,"prompt":"Solve the CAPTCHA"})", 5140));
+  ASSERT_FALSE(parsed.GetDict().FindDict("error")) << parsed.DebugString();
+  const base::DictValue* result = parsed.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  EXPECT_EQ(*result->FindString("status"), "waiting_for_human_help");
+  EXPECT_EQ(*result->FindString("owner"), "user");
+  EXPECT_EQ(MahoAgentTaskSpaceRegistry::Get().CheckMutation(
+                7, session_->session_id()),
+            TaskSpaceMutationDecision::kUserInControl);
+  MahoAgentTaskSpaceRegistry::Get().Remove(7);
 }
 
 } // namespace

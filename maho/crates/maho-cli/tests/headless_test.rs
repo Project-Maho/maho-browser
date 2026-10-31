@@ -17,6 +17,15 @@ fn read_golden(name: &str) -> String {
 }
 
 async fn make_headless_mock_server() -> (tempfile::TempDir, PathBuf, tokio::task::JoinHandle<()>) {
+    let (dir, sock_path, handle, _) = make_recording_mock_server().await;
+    (dir, sock_path, handle)
+}
+
+type Calls = std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>;
+
+async fn make_recording_mock_server() -> (tempfile::TempDir, PathBuf, tokio::task::JoinHandle<()>, Calls) {
+    let calls: Calls = Default::default();
+    let recorded = calls.clone();
     let dir = tempfile::tempdir().unwrap();
     let sock_path = dir.path().join("test.sock");
     let listener = UnixListener::bind(&sock_path).unwrap();
@@ -44,6 +53,10 @@ async fn make_headless_mock_server() -> (tempfile::TempDir, PathBuf, tokio::task
                 })
             } else if method == "tools/call" {
                 let tool_name = req["params"]["name"].as_str().unwrap_or("");
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((tool_name.to_string(), req["params"]["arguments"].clone()));
                 let result = match tool_name {
                     "browser_get_allowed_domains" => json!({"domains": []}),
                     "browser_set_allowed_domains" => json!({"success": true}),
@@ -83,7 +96,7 @@ async fn make_headless_mock_server() -> (tempfile::TempDir, PathBuf, tokio::task
         }
     });
 
-    (dir, sock_path.clone(), handle)
+    (dir, sock_path.clone(), handle, calls)
 }
 
 fn run_cli(args: &[&str], sock_path: &std::path::Path) -> std::process::Output {
@@ -178,4 +191,38 @@ async fn headless_extract_links() {
     assert!(stdout.contains("https://a.com"));
     assert!(stdout.contains("https://b.com"));
     assert!(output.status.success());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_space_runs_in_a_background_task_space() {
+    let (_dir, sock_path, server, calls) = make_recording_mock_server().await;
+
+    let output = run_cli(
+        &["headless", "--url", "https://example.com", "--extract", "title", "--space"],
+        &sock_path,
+    );
+    server.abort();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), read_golden("headless_title.txt"));
+    let calls = calls.lock().unwrap();
+    let new_tab = calls.iter().find(|(name, _)| name == "browser_tab_new").expect("tab opened");
+    assert_eq!(new_tab.1, json!({"url": "https://example.com", "background": true}));
+    let names: Vec<&str> = calls.iter().map(|(name, _)| name.as_str()).collect();
+    let complete = names.iter().position(|n| *n == "browser_task_space").expect("space settled");
+    let close = names.iter().position(|n| *n == "browser_tab_close").expect("tab closed");
+    assert!(complete < close, "space completes before its tab closes: {names:?}");
+    assert_eq!(calls[complete].1, json!({"tab_id": 99, "action": "complete"}));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_without_space_keeps_the_foreground_tab_path() {
+    let (_dir, sock_path, server, calls) = make_recording_mock_server().await;
+    let output = run_cli(&["headless", "--url", "https://example.com", "--extract", "title"], &sock_path);
+    server.abort();
+    assert!(output.status.success());
+    let calls = calls.lock().unwrap();
+    assert!(calls.iter().all(|(name, _)| name != "browser_task_space"));
+    let new_tab = calls.iter().find(|(name, _)| name == "browser_tab_new").unwrap();
+    assert_eq!(new_tab.1, json!({"url": "https://example.com"}));
 }

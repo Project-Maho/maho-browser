@@ -29,6 +29,7 @@
 #include "ui/gfx/geometry/size.h"
 #include "maho/browser/ai/maho_mail_tool_authorization.h"
 #include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
+#include "maho/browser/mcp/maho_mcp_agent_policy.h"
 #include "maho/browser/mcp/maho_mcp_capability_registry.h"
 #include "maho/browser/mcp/maho_mcp_controller_pairing.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
@@ -190,6 +191,13 @@ class MahoMcpNetworkCaptureState
 };
 
 class MahoMcpControllerState;
+
+// Maps a visual tool (browser_visual_click with an optional action/subaction,
+// browser_native_type, browser_native_key) to the native action it performs.
+// Returns nullopt for an unknown subaction.
+std::optional<NativeActionRequest::ActionType> ResolveNativeActionType(
+    std::string_view tool_name,
+    std::string_view subaction);
 
 #if BUILDFLAG(IS_WIN)
 class MahoMcpSessionToken;
@@ -581,6 +589,7 @@ class MahoMcpBrowserDelegate {
     bool include_hidden = false;
     std::optional<std::string> scope_selector;
     std::optional<int> scope_ref;
+    bool viewport_only = false;
     std::optional<std::string> since_snapshot_token;
     size_t max_bytes = 24000;
     std::optional<int> max_depth;
@@ -679,6 +688,47 @@ class MahoMcpBrowserDelegate {
                                SameOriginFetchCallback callback);
 
   virtual int CreateNewTab(const GURL& url) = 0;
+  // Agent controllers open tabs in the background (ShouldForegroundAgentTab);
+  // delegates that cannot do so fall back to CreateNewTab.
+  virtual int CreateNewTabWithDisposition(const GURL& url, bool foreground);
+
+  // JavaScript dialog pending on |tab_id|, if any.
+  virtual std::optional<PendingPageDialog> GetPendingDialog(int tab_id);
+  // Answers the pending dialog; false when none is pending.
+  virtual bool RespondToDialog(int tab_id,
+                               bool accept,
+                               const std::optional<std::string>& prompt_text);
+
+  // Starts a download of |url| in |tab_id|'s profile into the agent
+  // downloads folder (optionally a relative |dest_dir| below it). The
+  // callback receives the target path, or an empty path with an error.
+  using DownloadCallback =
+      base::OnceCallback<void(std::string target_path, std::string error)>;
+  virtual void StartDownload(int tab_id,
+                             const GURL& url,
+                             const std::optional<std::string>& dest_dir,
+                             DownloadCallback callback);
+
+  // Commits |text| at the focused caret through the editor insertion path.
+  using InsertTextCallback = base::OnceCallback<void(bool inserted)>;
+  virtual void InsertTextAtCaret(int tab_id,
+                                 const std::string& text,
+                                 InsertTextCallback callback);
+
+  // Importable browser profiles installed on this computer.
+  using ImportSourcesCallback =
+      base::OnceCallback<void(std::vector<ImportSourceInfo>)>;
+  virtual void ListImportSources(ImportSourcesCallback callback);
+  // Starts an import of |source_index| from the last listing; |items| is the
+  // importer service bitmask (0 = everything the source supports).
+  virtual bool StartImport(int source_index, uint32_t items, std::string* error);
+
+  // Shows or dismisses the human-help banner for |tab_id|'s window.
+  virtual void ShowHumanHelpRequest(int tab_id,
+                                    const std::string& session_id,
+                                    const std::string& request_id,
+                                    const std::string& prompt);
+  virtual void DismissHumanHelpRequest(const std::string& request_id);
   virtual bool CloseTab(int tab_id) = 0;
 
   struct BookmarkInfo {

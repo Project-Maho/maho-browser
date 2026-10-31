@@ -21,6 +21,23 @@ pub const SENPI_RPC_HOST_CLEANUP_PATHS: &str = "SENPI_RPC_HOST_CLEANUP_PATHS";
 pub const SENPI_MCP_STARTUP_TIMEOUT_MS: &str = "SENPI_MCP_STARTUP_TIMEOUT_MS";
 
 pub const DEFAULT_RPC_ENTRY_PATH: &str = "dist/rpc-entry.js";
+/// Dev/CI override for the omo-ai senpi plugin (memory engine, task, workpool).
+pub const MAHO_OMO_PLUGIN_DIR_ENV: &str = "MAHO_OMO_PLUGIN_DIR";
+/// LSP tools the omo-ai plugin registers; Maho's browser agent has no workspace to analyse.
+pub const EXCLUDED_PLUGIN_TOOLS: &[&str] = &[
+    "lsp_diagnostics",
+    "lsp_goto_definition",
+    "lsp_find_references",
+    "lsp_symbols",
+    "lsp_prepare_rename",
+    "lsp_rename",
+];
+
+/// A directory counts as the omo-ai plugin only when it carries the package manifest and
+/// the extension entry senpi loads.
+pub fn is_omo_plugin_dir(dir: &Path) -> bool {
+    dir.join("package.json").is_file() && dir.join("extensions").join("omo.js").is_file()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OmoConfigError {
@@ -141,6 +158,7 @@ pub struct OmoLaunchConfig {
     model_id: Option<String>,
     thinking_level: Option<String>,
     custom_provider: Option<CustomProvider>,
+    plugin_dir: Option<PathBuf>,
 }
 
 /// An OpenAI-compatible endpoint Maho declares for omo in `models.json`.
@@ -176,6 +194,8 @@ pub struct BundledRuntime {
     pub runtime_binary: PathBuf,
     pub rpc_entry: PathBuf,
     pub browser_mcp_binary: PathBuf,
+    /// The omo-ai plugin (memory engine). Optional: the agent still runs without it.
+    pub plugin_dir: Option<PathBuf>,
 }
 
 impl BundledRuntime {
@@ -210,10 +230,20 @@ impl BundledRuntime {
             dir.join("bun")
         };
 
+        let plugin_dir = [
+            dir.parent().map(|p| p.join("Resources").join("omo-plugin")),
+            Some(dir.join("omo-plugin")),
+            std::env::var_os(MAHO_OMO_PLUGIN_DIR_ENV).map(PathBuf::from),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|candidate| is_omo_plugin_dir(candidate));
+
         Self {
             runtime_binary,
             rpc_entry,
             browser_mcp_binary,
+            plugin_dir,
         }
     }
 
@@ -327,6 +357,15 @@ impl OmoLaunchConfig {
     pub fn custom_provider(&self) -> Option<&CustomProvider> {
         self.custom_provider.as_ref()
     }
+
+    pub fn plugin_dir(&self) -> Option<&Path> {
+        self.plugin_dir.as_deref()
+    }
+
+    /// Absolute root of the omo memory repos (`OMO_MEMORY_HOME`).
+    pub fn memory_home(&self) -> PathBuf {
+        self.agent_dir.join("memory")
+    }
 }
 
 fn is_safe_environment_entry(key: &str, val: &str) -> bool {
@@ -369,6 +408,7 @@ pub struct OmoLaunchConfigBuilder {
     model_id: Option<String>,
     thinking_level: Option<String>,
     custom_provider: Option<CustomProvider>,
+    plugin_dir: Option<PathBuf>,
 }
 
 impl OmoLaunchConfigBuilder {
@@ -394,7 +434,20 @@ impl OmoLaunchConfigBuilder {
             model_id: None,
             thinking_level: None,
             custom_provider: None,
+            plugin_dir: None,
         }
+    }
+
+    /// Loads the omo-ai plugin from `dir` (memory engine, task, workpool).
+    pub fn plugin_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.plugin_dir = Some(dir.into());
+        self
+    }
+
+    /// Applies a resolved bundle's optional plugin dir.
+    pub fn maybe_plugin_dir(mut self, dir: Option<&Path>) -> Self {
+        self.plugin_dir = dir.map(Path::to_path_buf);
+        self
     }
 
     pub fn provider(mut self, provider: impl Into<String>) -> Self {
@@ -622,6 +675,21 @@ impl OmoLaunchConfigBuilder {
         env_vars.insert("OMO_CODING_AGENT_SESSION_DIR".to_string(), session_dir.to_string_lossy().to_string());
         env_vars.insert("SENPI_CODING_AGENT_SESSION_DIR".to_string(), session_dir.to_string_lossy().to_string());
 
+        // The omo-ai plugin keeps git-backed memory repos under OMO_MEMORY_HOME; a relative
+        // value would resolve against omo's cwd, so pin it inside the isolated agent dir.
+        env_vars.insert(
+            "OMO_MEMORY_HOME".to_string(),
+            self.agent_dir.join("memory").to_string_lossy().to_string(),
+        );
+        env_vars.insert("DO_NOT_TRACK".to_string(), "1".to_string());
+        env_vars.insert("OMO_DISABLE_TELEMETRY".to_string(), "1".to_string());
+
+        if let Some(ref plugin) = self.plugin_dir {
+            if !plugin.is_absolute() {
+                return Err(OmoConfigError::PathNotAbsolute(plugin.clone()));
+            }
+        }
+
         if let Some(ref scratch) = self.scratch_dir {
             env_vars.insert(
                 SENPI_RPC_HOST_SCRATCH_DIR.to_string(),
@@ -682,6 +750,7 @@ impl OmoLaunchConfigBuilder {
             model_id: self.model_id,
             thinking_level: self.thinking_level,
             custom_provider: self.custom_provider,
+            plugin_dir: self.plugin_dir,
         })
     }
 }
@@ -739,6 +808,47 @@ mod tests {
             unsafe_res,
             Err(OmoConfigError::UnsafeConfigDir(_))
         ));
+    }
+
+    #[test]
+    fn memory_home_and_telemetry_env_are_pinned() {
+        let config = OmoLaunchConfig::builder("/tmp/mahoagent-mem").build().unwrap();
+        let env = config.env_vars();
+        assert_eq!(
+            env.get("OMO_MEMORY_HOME").map(String::as_str),
+            Some("/tmp/mahoagent-mem/memory")
+        );
+        assert_eq!(env.get("DO_NOT_TRACK").map(String::as_str), Some("1"));
+        assert_eq!(env.get("OMO_DISABLE_TELEMETRY").map(String::as_str), Some("1"));
+        assert_eq!(config.plugin_dir(), None);
+    }
+
+    #[test]
+    fn relative_plugin_dir_is_rejected() {
+        assert!(matches!(
+            OmoLaunchConfig::builder("/tmp/mahoagent-mem").plugin_dir("rel/plugin").build(),
+            Err(OmoConfigError::PathNotAbsolute(_))
+        ));
+    }
+
+    #[test]
+    fn bundled_runtime_finds_staged_plugin_in_resources() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let macos = temp.path().join("Contents").join("MacOS");
+        let plugin = temp.path().join("Contents").join("Resources").join("omo-plugin");
+        std::fs::create_dir_all(&macos).unwrap();
+        std::fs::create_dir_all(plugin.join("extensions")).unwrap();
+        assert_ne!(
+            BundledRuntime::from_executable_dir(&macos).plugin_dir.as_deref(),
+            Some(plugin.as_path()),
+            "a dir without package.json/extensions/omo.js is not the plugin"
+        );
+        std::fs::write(plugin.join("package.json"), b"{}").unwrap();
+        std::fs::write(plugin.join("extensions").join("omo.js"), b"// omo\n").unwrap();
+        assert_eq!(
+            BundledRuntime::from_executable_dir(&macos).plugin_dir.as_deref(),
+            Some(plugin.as_path())
+        );
     }
 
     #[test]

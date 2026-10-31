@@ -5,6 +5,7 @@
 #include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
 
 #include <algorithm>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -82,6 +83,23 @@ std::string EscapeQuotes(std::string_view str) {
   return out;
 }
 
+std::string BuildLocatorCandidate(std::string_view role,
+                                  std::string_view name,
+                                  std::string_view dom_id,
+                                  std::string_view href) {
+  if (!dom_id.empty()) {
+    return "#" + std::string(dom_id);
+  }
+  if (!name.empty()) {
+    return std::string(role) + "[name=\"" + EscapeQuotes(std::string(name)) +
+           "\"]";
+  }
+  if (!href.empty() && role == "link") {
+    return "link[href=\"" + EscapeQuotes(std::string(href)) + "\"]";
+  }
+  return std::string();
+}
+
 bool HasCredentialSignal(const ui::AXNodeData& data) {
   if (data.HasState(ax::mojom::State::kProtected)) {
     return true;
@@ -118,6 +136,8 @@ bool HasCredentialSignal(const ui::AXNodeData& data) {
 struct IntermediateNode {
   raw_ptr<const ui::AXNode> ax_node;
   std::string role_str;
+  std::string locator_key;
+  std::string locator;
   std::string name;
   std::string value;
   std::string states_str;
@@ -180,6 +200,10 @@ void FilterSubtreeRecursive(
   }
 
   if (options.max_depth.has_value() && current_depth > *options.max_depth) {
+    return;
+  }
+  if (options.viewport_only &&
+      node->data().HasState(ax::mojom::State::kInvisible)) {
     return;
   }
 
@@ -328,9 +352,18 @@ void FilterSubtreeRecursive(
     }
   }
 
+  if (keep && options.viewport_only && is_interactive && node->tree()) {
+    bool offscreen = false;
+    node->tree()->GetTreeBounds(node, &offscreen);
+    keep = !offscreen;
+  }
+
   if (keep) {
     IntermediateNode item;
     item.ax_node = node;
+    if (is_interactive && options.emit_locators) {
+      item.locator_key = BuildLocatorCandidate(role_str, name, dom_id, href_url);
+    }
     item.role_str = std::move(role_str);
     item.name = std::move(name);
     item.value = std::move(value);
@@ -345,6 +378,31 @@ void FilterSubtreeRecursive(
     // Flatten children up to parent
     for (auto& child : collected_children) {
       out_nodes.push_back(std::move(child));
+    }
+  }
+}
+
+void AssignUniqueLocators(std::vector<IntermediateNode>& nodes) {
+  std::map<std::string, int> counts;
+  std::vector<IntermediateNode*> stack;
+  for (auto& node : nodes) {
+    stack.push_back(&node);
+  }
+  std::vector<IntermediateNode*> all;
+  while (!stack.empty()) {
+    IntermediateNode* node = stack.back();
+    stack.pop_back();
+    all.push_back(node);
+    if (!node->locator_key.empty()) {
+      ++counts[node->locator_key];
+    }
+    for (auto& child : node->children) {
+      stack.push_back(&child);
+    }
+  }
+  for (IntermediateNode* node : all) {
+    if (!node->locator_key.empty() && counts[node->locator_key] == 1) {
+      node->locator = node->locator_key;
     }
   }
 }
@@ -369,6 +427,9 @@ void RenderIntermediateNodes(
     }
     if (!node.states_str.empty()) {
       line += " " + node.states_str;
+    }
+    if (!node.locator.empty()) {
+      line += " loc=" + node.locator;
     }
 
     std::string indent(depth * 2, ' ');
@@ -944,6 +1005,9 @@ MahoMcpAccessibilityHandler::BuildSnapshotV2(
   std::vector<IntermediateNode> filtered_nodes;
   FilterSubtreeRecursive(scoped_root, /*current_depth=*/0, options, out_refs,
                          next_ref, captured_count, filtered_nodes);
+  if (options.emit_locators) {
+    AssignUniqueLocators(filtered_nodes);
+  }
 
   std::string tree_text;
   std::vector<NodeSummary> summaries;

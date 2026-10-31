@@ -627,11 +627,15 @@ source_set("maho_agent_views") {
   sources = [
     "ui/views/agent/maho_agent_help_bar.cc",
     "ui/views/agent/maho_agent_help_bar.h",
+    "ui/views/agent/maho_agent_help_overlay.cc",
+    "ui/views/agent/maho_agent_help_overlay.h",
     "ui/views/agent/maho_tab_borrow_chip.cc",
     "ui/views/agent/maho_tab_borrow_chip.h",
   ]
   deps = [
     "//base",
+    "//chrome/browser/ui",
+    "//maho/browser/mcp:maho_mcp",
     "//ui/gfx",
     "//ui/views",
   ]
@@ -1212,6 +1216,7 @@ source_set("maho_browser_main_extra_parts") {
 
   deps = [
     ":maho_agent_channel_service",
+    ":maho_agent_views",
     ":maho_core_holder",
     ":maho_content_blocker_update_service",
     ":maho_content_blocker_update_service_factory",
@@ -1239,6 +1244,9 @@ source_set("maho_browser_main_extra_parts") {
     "//third_party/blink/public/mojom:mojom_platform",
     "//url",
 
+    "//components/download/public/common:public",
+    "//components/javascript_dialogs",
+    "//components/web_modal",
     "//maho/browser/importer",
     "//maho/browser/mail_helper:maho_mail_notification_coordinator",
     "//maho/browser/mail_helper:maho_mail_service_factory",

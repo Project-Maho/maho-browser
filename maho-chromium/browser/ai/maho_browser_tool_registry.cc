@@ -459,7 +459,36 @@ base::DictValue BuildBrowserActionInputSchema(std::string_view tool_name,
                    BuildIntegerSchema("Expected lease epoch."));
     properties.Set("capture_id",
                    BuildStringSchema("Optional capture id (alias for frame_token)."));
+    properties.Set(
+        "action",
+        BuildStringSchema("Optional: click (default), native_type or native_key."));
+    properties.Set("text", BuildStringSchema("Text for action native_type."));
+    properties.Set("key", BuildStringSchema("Key for action native_key."));
+    properties.Set(
+        "modifiers",
+        BuildStringListSchema("Optional modifiers for native_key: shift, ctrl, alt, meta."));
     required.Append("frame_token");
+  } else if (tool_name == "browser_native_type") {
+    properties.Set("frame_token",
+                   BuildStringSchema("Server-issued visual frame token of the target tab."));
+    properties.Set("text",
+                   BuildStringSchema("Text typed into the focused element."));
+    properties.Set("lease_epoch",
+                   BuildIntegerSchema("Expected lease epoch."));
+    required.Append("frame_token");
+    required.Append("text");
+  } else if (tool_name == "browser_native_key") {
+    properties.Set("frame_token",
+                   BuildStringSchema("Server-issued visual frame token of the target tab."));
+    properties.Set("key",
+                   BuildStringSchema("Keyboard key, e.g. Enter or ArrowDown."));
+    properties.Set(
+        "modifiers",
+        BuildStringListSchema("Optional modifiers: shift, ctrl, alt, meta."));
+    properties.Set("lease_epoch",
+                   BuildIntegerSchema("Expected lease epoch."));
+    required.Append("frame_token");
+    required.Append("key");
   } else if (tool_name == "browser_request_help" ||
              tool_name == "browser.request_help") {
     properties.Set("prompt",
@@ -883,7 +912,51 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
   if (name == "browser_tab_new") {
     properties.Set("url",
                    BuildStringSchema("URL to open; defaults to about:blank."));
+    properties.Set(
+        "background",
+        BuildBooleanSchema("Open without activating the tab. Agent "
+                           "controllers default to true, the Maho CLI to "
+                           "false."));
     return BuildObjectSchema(std::move(properties), {});
+  }
+  if (name == "browser_task_space") {
+    properties.Set("tab_id", BuildIntegerSchema("Browser tab id."));
+    properties.Set("action",
+                   BuildStringSchema("status (default), create, handoff, "
+                                     "takeover, complete or error."));
+    return BuildObjectSchema(std::move(properties), {"tab_id"});
+  }
+  if (name == "browser_dialog_respond") {
+    properties.Set("tab_id", BuildIntegerSchema("Browser tab id."));
+    properties.Set("accept",
+                   BuildBooleanSchema("True to accept/OK, false to dismiss."));
+    properties.Set("prompt_text",
+                   BuildStringSchema("Text to answer a prompt() dialog with."));
+    return BuildObjectSchema(std::move(properties), {"tab_id", "accept"});
+  }
+  if (name == "browser_download") {
+    properties.Set("tab_id", BuildIntegerSchema("Browser tab id."));
+    properties.Set("url", BuildStringSchema("Absolute http(s) URL."));
+    properties.Set("dest_dir",
+                   BuildStringSchema("Optional folder relative to the agent "
+                                     "downloads folder."));
+    return BuildObjectSchema(std::move(properties), {"tab_id", "url"});
+  }
+  if (name == "browser_insert_text") {
+    properties.Set("tab_id", BuildIntegerSchema("Browser tab id."));
+    properties.Set("text", BuildStringSchema("Text to insert at the caret."));
+    return BuildObjectSchema(std::move(properties), {"tab_id", "text"});
+  }
+  if (name == "browser_import_list") {
+    return BuildNoArgSchema();
+  }
+  if (name == "browser_import_run") {
+    properties.Set("index",
+                   BuildIntegerSchema("Source index from browser_import_list."));
+    properties.Set("items",
+                   BuildIntegerSchema("Importer item bitmask; 0 imports "
+                                      "everything the source supports."));
+    return BuildObjectSchema(std::move(properties), {"index"});
   }
   if (name == "browser_history_search" ||
       name == "browser_history_search_desktop") {
@@ -906,6 +979,9 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
                     BuildStringSchema("Optional CSS selector to scope the snapshot."));
     scope_props.Set("ref",
                     BuildIntegerSchema("Optional accessibility ref to scope the snapshot."));
+    scope_props.Set("viewport",
+                    BuildBooleanSchema("Only include interactive nodes inside "
+                                       "the visible viewport."));
     base::DictValue scope_schema;
     scope_schema.Set("type", "object");
     scope_schema.Set("description",
@@ -1954,12 +2030,13 @@ base::DictValue MahoBrowserToolRegistry::ExecuteBrowserRequestHelp(
     request_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
   }
 
-  // Note: No adapter reference exists in MahoBrowserToolRegistry.
-  // Dispatch returns a waiting status stub as consistent with sibling tools;
-  // full adapter FSM glue lands with the executor lane review.
   base::DictValue result;
   result.Set("request_id", std::move(request_id));
-  result.Set("status", "waiting");
+  result.Set("prompt", *prompt);
+  result.Set("status", kHumanHelpWaitingStatus);
+  if (std::optional<int> timeout_ms = params.FindInt("timeout_ms")) {
+    result.Set("timeout_ms", *timeout_ms);
+  }
   return result;
 }
 

@@ -104,14 +104,14 @@ inline constexpr bool RequiresApproval(const BrowserActionContract& contract) {
 inline constexpr bool CapabilityLeavesBrowserBoundary(
     std::string_view canonical_id) {
   constexpr std::string_view kOffBrowserPrefixes[] = {
-      "mail.", "vault.", "routines.", "control.", "policy.",
+      "mail.", "vault.", "routines.", "control.", "policy.", "import.",
   };
   for (std::string_view prefix : kOffBrowserPrefixes) {
     if (canonical_id.starts_with(prefix)) {
       return true;
     }
   }
-  return canonical_id == "artifact.export";
+  return canonical_id == "artifact.export" || canonical_id == "page.download";
 }
 
 inline constexpr bool RequiresLease(const BrowserActionContract& contract) {

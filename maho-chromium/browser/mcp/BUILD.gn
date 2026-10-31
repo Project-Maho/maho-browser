@@ -9,6 +9,8 @@ source_set("maho_mcp") {
   sources = [
     "maho_mcp_accessibility_handler.cc",
     "maho_mcp_accessibility_handler.h",
+    "maho_mcp_agent_policy.cc",
+    "maho_mcp_agent_policy.h",
     "maho_mcp_capability_registry.cc",
     "maho_mcp_capability_registry.h",
     "maho_mcp_controller_pairing.cc",
@@ -77,6 +79,7 @@ source_set("unittests") {
 
   sources = [
     "maho_mcp_accessibility_handler_unittest.cc",
+    "maho_mcp_agent_policy_unittest.cc",
     "maho_mcp_firewall_unittest.cc",
     "maho_mcp_json_rpc_unittest.cc",
     "maho_mcp_lease_registry_unittest.cc",
@@ -128,6 +131,7 @@ test("maho_mcp_firewall_test") {
 test("maho_mcp_session_test") {
   sources = [
     "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_agent_policy_unittest.cc",
     "maho_mcp_controller_pairing_unittest.cc",
     "maho_mcp_session_unittest.cc",
   ]

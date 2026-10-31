@@ -821,5 +821,60 @@ TEST(MahoMcpAccessibilityHandlerTest, RedactionInDiffAndTree) {
   }
 }
 
+TEST(MahoMcpAccessibilityHandlerTest, StableLocatorsOnlyForUniqueTargets) {
+  ui::AXTreeUpdate update;
+  update.root_id = 1;
+  update.nodes.resize(5);
+  update.nodes[0].id = 1;
+  update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
+  update.nodes[0].child_ids = {2, 3, 4, 5};
+  update.nodes[1].id = 2;
+  update.nodes[1].role = ax::mojom::Role::kButton;
+  update.nodes[1].SetName("Save");
+  update.nodes[1].relative_bounds.bounds = gfx::RectF(10, 10, 80, 20);
+  update.nodes[2].id = 3;
+  update.nodes[2].role = ax::mojom::Role::kButton;
+  update.nodes[2].SetName("Save");
+  update.nodes[2].relative_bounds.bounds = gfx::RectF(10, 40, 80, 20);
+  update.nodes[3].id = 4;
+  update.nodes[3].role = ax::mojom::Role::kButton;
+  update.nodes[3].SetName("Delete");
+  update.nodes[3].relative_bounds.bounds = gfx::RectF(10, 70, 80, 20);
+  update.nodes[4].id = 5;
+  update.nodes[4].role = ax::mojom::Role::kButton;
+  update.nodes[4].SetName("Far Below");
+  update.nodes[4].relative_bounds.bounds = gfx::RectF(10, 5000, 80, 20);
+
+  ui::AXTree tree(update);
+  MahoMcpAccessibilityHandler::SnapshotV2Result::TabMetadata tab{
+      .id = 3, .url = "https://example.com/", .title = "Locators"};
+  {
+    MahoMcpAccessibilityHandler::RefTable refs;
+    MahoMcpAccessibilityHandler::ObservationCache cache;
+    MahoMcpAccessibilityHandler::SnapshotV2Options options;
+    auto res = MahoMcpAccessibilityHandler::BuildSnapshotV2(
+        tree, options, refs, tab, 1, "sig", cache, 1);
+    EXPECT_NE(res.tree.find("\"Delete\" loc=button[name=\"Delete\"]"),
+              std::string::npos)
+        << res.tree;
+    EXPECT_EQ(res.tree.find("loc=button[name=\"Save\"]"), std::string::npos)
+        << res.tree;
+    EXPECT_NE(res.tree.find("Far Below"), std::string::npos);
+  }
+  {
+    MahoMcpAccessibilityHandler::RefTable refs;
+    MahoMcpAccessibilityHandler::ObservationCache cache;
+    MahoMcpAccessibilityHandler::SnapshotV2Options options;
+    options.emit_locators = false;
+    options.viewport_only = true;
+    auto res = MahoMcpAccessibilityHandler::BuildSnapshotV2(
+        tree, options, refs, tab, 1, "sig", cache, 2);
+    EXPECT_EQ(res.tree.find("loc="), std::string::npos) << res.tree;
+    EXPECT_EQ(res.tree.find("Far Below"), std::string::npos) << res.tree;
+    EXPECT_NE(res.tree.find("Delete"), std::string::npos) << res.tree;
+  }
+}
+
 }  // namespace
 }  // namespace maho

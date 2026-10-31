@@ -44,6 +44,18 @@ pub type MutationApprovalCallback = Arc<dyn Fn(&str) -> MutationDecision + Send 
 /// Stable status used when no standalone approval broker is installed.
 pub(crate) const ERR_BROKER_UNAVAILABLE: &str = "broker_unavailable";
 
+pub(crate) fn is_native_input_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "browser_visual_click"
+            | "browser.visual_click"
+            | "browser_native_type"
+            | "browser.native_type"
+            | "browser_native_key"
+            | "browser.native_key"
+    )
+}
+
 pub(crate) fn is_server_native_input_enabled() -> bool {
     if let Ok(val) = std::env::var("MAHO_NATIVE_INPUT_ENABLED") {
         return val == "1" || val.eq_ignore_ascii_case("true");
@@ -166,9 +178,7 @@ impl MahoBrowserMcpServer {
         &self,
         request: CallToolRequestParams,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if !is_server_native_input_enabled()
-            && (request.name == "browser_visual_click" || request.name == "browser.visual_click")
-        {
+        if !is_server_native_input_enabled() && is_native_input_tool(&request.name) {
             return Err(rmcp::ErrorData::new(
                 ErrorCode::METHOD_NOT_FOUND,
                 format!("unknown or unavailable browser tool '{}'", request.name),
@@ -356,9 +366,7 @@ fn parse_discovery_internal(
             .as_object()
             .ok_or_else(|| discovery_error("browser tool descriptor is not an object"))?;
         let name = required_string(object, "name")?;
-        if (name == "browser_visual_click" || name == "browser.visual_click")
-            && !native_input_enabled
-        {
+        if is_native_input_tool(&name) && !native_input_enabled {
             hidden_native_tools += 1;
             continue;
         }
@@ -489,7 +497,7 @@ fn parse_discovery_internal(
         {
             ids.retain(|id| {
                 id.as_str()
-                    .map(|s| s != "browser.visual_click" && s != "browser_visual_click")
+                    .map(|s| !is_native_input_tool(s))
                     .unwrap_or(true)
             });
         }

@@ -212,6 +212,68 @@ def omo_runtime_source():
     return None
 
 
+# Pieces of the omo-ai senpi plugin the agent needs: extensions (memory
+# engine, task, workpool) and their runtime. skills/ and skills-conditional/
+# are developer-agent content that Maho filters out in settings.json anyway.
+_OMO_PLUGIN_ENTRIES = ('package.json', 'extensions', 'runtime', 'LICENSE',
+                       'NOTICE')
+
+
+def omo_plugin_source():
+    """Directory holding the omo-ai plugin to stage, or None when unavailable.
+
+    Override with MAHO_OMO_PLUGIN_DIR. Must contain package.json and
+    extensions/omo.js (the check OmoBackend's BundledRuntime applies).
+    """
+    override = os.environ.get('MAHO_OMO_PLUGIN_DIR')
+    candidates = [override] if override else [
+        os.path.expanduser('~/.bun/install/global/node_modules/omo-ai/plugin'),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(
+                os.path.join(candidate, 'package.json')) and os.path.isfile(
+                    os.path.join(candidate, 'extensions', 'omo.js')):
+            return candidate
+    return None
+
+
+def stage_omo_plugin(resources_dir: str) -> bool:
+    """Copy the omo-ai plugin into Contents/Resources/omo-plugin.
+
+    Missing plugin is a warning, not a failure: the agent runs without the
+    memory engine, task and workpool tools.
+    """
+    plugin = omo_plugin_source()
+    dest = os.path.join(resources_dir, 'omo-plugin')
+    if os.path.isdir(dest):
+        shutil.rmtree(dest)
+    if not plugin:
+        print('warning: omo-ai plugin not found (set MAHO_OMO_PLUGIN_DIR); '
+              'the agent ships without the memory engine', file=sys.stderr)
+        return False
+    os.makedirs(dest)
+    print(f'Embedding omo-ai plugin into {dest}')
+    for entry in _OMO_PLUGIN_ENTRIES:
+        src = os.path.join(plugin, entry)
+        if os.path.isdir(src):
+            shutil.copytree(src, os.path.join(dest, entry), symlinks=False)
+        elif os.path.isfile(src):
+            shutil.copy2(src, os.path.join(dest, entry))
+    return True
+
+
+def _newest_built_binary(name: str) -> str | None:
+    target_root = os.path.join(_WORKSPACE_ROOT, 'maho', 'target')
+    candidates = [
+        path for path in (
+            glob.glob(os.path.join(target_root, '*', 'release', name))
+            + [os.path.join(target_root, 'release', name),
+               os.path.join(target_root, 'debug', name)])
+        if os.path.isfile(path)
+    ]
+    return max(candidates, key=os.path.getmtime) if candidates else None
+
+
 # Must match rpc_argv() and READY_MARKER in
 # maho/crates/maho-agent/src/omo/process.rs: the gate launches the package
 # exactly the way OmoBackend will at runtime.
@@ -345,6 +407,20 @@ def embed_omo_runtime(app_path: str, out_dir: str) -> bool:
     print(f'Embedding maho-browser-mcp into {helpers_dir}')
     shutil.copy2(mcp, helpers_mcp)
 
+    # The engine tool server (js_eval, artifact_create, browser_script) is
+    # registered by OmoBackend only when it sits beside maho-browser-mcp.
+    agent_tools = _newest_built_binary('maho-agent-tools')
+    if agent_tools:
+        for dest_dir in (macos_dir, helpers_dir):
+            dest = os.path.join(dest_dir, 'maho-agent-tools')
+            if os.path.islink(dest) or os.path.isfile(dest):
+                os.remove(dest)
+            print(f'Embedding maho-agent-tools into {dest_dir}')
+            shutil.copy2(agent_tools, dest)
+    else:
+        print('warning: maho-agent-tools not built; the agent ships without '
+              'js_eval/browser_script', file=sys.stderr)
+
     # omo runtime files (JS/JSON/etc.) belong in Contents/Resources/omo so that
     # Apple's codesign seals them as resources rather than rejecting uncompiled
     # .d.ts/.js files in Contents/MacOS.
@@ -373,6 +449,7 @@ def embed_omo_runtime(app_path: str, out_dir: str) -> bool:
                       file=sys.stderr)
     if pruned:
         print(f'pruned {pruned} dangling symlink(s) from {omo_dest}')
+    stage_omo_plugin(resources_dir)
     return True
 
 
@@ -411,6 +488,11 @@ def build_maho_cli(target: str | None) -> str:
             'maho-browser-mcp',
             '--bin',
             'maho-browser-mcp',
+            # Native agent tools (js_eval, artifact_create, browser_script) for omo.
+            '--package',
+            'maho-agent',
+            '--bin',
+            'maho-agent-tools',
         ],
         cwd=os.path.join(_WORKSPACE_ROOT, 'maho'),
         check=True,

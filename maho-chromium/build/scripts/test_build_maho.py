@@ -477,6 +477,79 @@ class TestVerifyOmoRuntime(unittest.TestCase):
                 app_path, 'Contents', 'Resources', 'omo', 'dist', 'rpc-entry.js')))
 
 
+class TestOmoPluginStaging(unittest.TestCase):
+    def _plugin(self, root):
+        plugin = os.path.join(root, 'plugin')
+        os.makedirs(os.path.join(plugin, 'extensions'))
+        os.makedirs(os.path.join(plugin, 'runtime', 'x'))
+        os.makedirs(os.path.join(plugin, 'skills', 'big'))
+        for rel in ('package.json', 'extensions/omo.js', 'runtime/x/a.js',
+                    'skills/big/SKILL.md', 'LICENSE'):
+            with open(os.path.join(plugin, rel), 'w') as f:
+                f.write(rel)
+        return plugin
+
+    def test_source_requires_manifest_and_extension_entry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin = self._plugin(temp_dir)
+            with patch.dict(os.environ, {'MAHO_OMO_PLUGIN_DIR': plugin}):
+                self.assertEqual(_bm.omo_plugin_source(), plugin)
+            os.remove(os.path.join(plugin, 'extensions', 'omo.js'))
+            with patch.dict(os.environ, {'MAHO_OMO_PLUGIN_DIR': plugin}):
+                self.assertIsNone(_bm.omo_plugin_source())
+
+    def test_stage_copies_extensions_and_runtime_but_not_skills(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin = self._plugin(temp_dir)
+            resources = os.path.join(temp_dir, 'Resources')
+            os.makedirs(resources)
+            with patch.object(_bm, 'omo_plugin_source', return_value=plugin):
+                self.assertTrue(_bm.stage_omo_plugin(resources))
+            dest = os.path.join(resources, 'omo-plugin')
+            for rel in ('package.json', 'extensions/omo.js', 'runtime/x/a.js',
+                        'LICENSE'):
+                self.assertTrue(os.path.isfile(os.path.join(dest, rel)), rel)
+            self.assertFalse(os.path.exists(os.path.join(dest, 'skills')))
+
+    def test_missing_plugin_warns_and_removes_stale_copy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            resources = os.path.join(temp_dir, 'Resources')
+            os.makedirs(os.path.join(resources, 'omo-plugin', 'old'))
+            with patch.object(_bm, 'omo_plugin_source', return_value=None):
+                self.assertFalse(_bm.stage_omo_plugin(resources))
+            self.assertFalse(os.path.exists(os.path.join(resources, 'omo-plugin')))
+
+    def test_embed_stages_agent_tools_beside_bridge(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            release = os.path.join(temp_dir, 'maho', 'target', 'release')
+            os.makedirs(release)
+            for name in ('maho-browser-mcp', 'maho-agent-tools'):
+                with open(os.path.join(release, name), 'wb') as f:
+                    f.write(name.encode())
+            package = os.path.join(temp_dir, 'omo')
+            os.makedirs(os.path.join(package, 'dist'))
+            with open(os.path.join(package, 'dist', 'rpc-entry.js'), 'w') as f:
+                f.write('')
+            bun = os.path.join(temp_dir, 'bun')
+            with open(bun, 'wb') as f:
+                f.write(b'bun')
+            plugin = self._plugin(temp_dir)
+            app_path = os.path.join(temp_dir, 'Maho.app')
+            with patch.object(_bm, '_WORKSPACE_ROOT', temp_dir), \
+                 patch.object(_bm.shutil, 'which', return_value=bun), \
+                 patch.object(_bm, 'omo_runtime_source', return_value=package), \
+                 patch.object(_bm, 'omo_plugin_source', return_value=plugin), \
+                 patch.object(_bm, 'verify_omo_runtime', return_value=None):
+                self.assertTrue(_bm.embed_omo_runtime(app_path, 'out/Release'))
+            for sub in ('MacOS', 'Helpers'):
+                with open(os.path.join(app_path, 'Contents', sub,
+                                       'maho-agent-tools'), 'rb') as f:
+                    self.assertEqual(f.read(), b'maho-agent-tools')
+            self.assertTrue(os.path.isfile(os.path.join(
+                app_path, 'Contents', 'Resources', 'omo-plugin', 'extensions',
+                'omo.js')))
+
+
 class TestMahoCliBinaryName(unittest.TestCase):
 
     def test_windows_triple_gets_exe_suffix(self):

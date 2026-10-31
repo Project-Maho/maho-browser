@@ -114,6 +114,20 @@
 #include "maho/browser/ai/maho_control_activity_service.h"
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/importer/maho_browser_detector.h"
+#include "maho/browser/importer/maho_import_session_bridge.h"
+#include "maho/browser/mcp/maho_mcp_agent_policy.h"
+#include "maho/browser/mcp/maho_mcp_text_insertion_policy.h"
+#include "maho/browser/ui/views/agent/maho_agent_help_overlay.h"
+#include "chrome/browser/download/download_prefs.h"
+#include "components/download/public/common/download_interrupt_reasons.h"
+#include "components/download/public/common/download_url_parameters.h"
+#include "components/javascript_dialogs/tab_modal_dialog_manager.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "content/public/browser/download_manager.h"
+#include "content/public/browser/download_request_utils.h"
+#include "net/base/filename_util.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
 #include "maho/browser/ui/views/sidebar/maho_core_recovery_policy.h"
 #include "maho/browser/maho_routines_scheduler.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -3304,9 +3318,13 @@ std::string FormatMailActionDetails(const std::string& action_name,
   }
 
   int CreateNewTab(const GURL& url) override {
+    return CreateNewTabWithDisposition(url, /*foreground=*/true);
+  }
+
+  int CreateNewTabWithDisposition(const GURL& url, bool foreground) override {
     int new_tab_id = 0;
     ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-        [&new_tab_id, &url](BrowserWindowInterface* browser) {
+        [&new_tab_id, &url, foreground](BrowserWindowInterface* browser) {
           if (browser && browser->GetTabStripModel() &&
               IsBrowserMcpEligible(browser)) {
             TabStripModel* model = browser->GetTabStripModel();
@@ -3325,8 +3343,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
               // chrome://maho-routines) silently never runs. This matches the
               // upstream AddTabAt-then-LoadURL order.
               content::WebContents* raw_contents = new_contents.get();
-              model->AppendWebContents(std::move(new_contents),
-                                       /*foreground=*/true);
+              model->AppendWebContents(std::move(new_contents), foreground);
               if (!url.is_empty() && url.spec() != "about:blank") {
                 content::NavigationController::LoadURLParams nav_params(url);
                 nav_params.transition_type = ui::PageTransitionFromInt(
@@ -3426,6 +3443,163 @@ std::string FormatMailActionDetails(const std::string& action_name,
     return resolution;
   }
 
+  std::optional<maho::PendingPageDialog> GetPendingDialog(
+      int tab_id) override {
+    content::WebContents* wc = ResolveEligibleTab(tab_id).web_contents;
+    auto* modal_manager =
+        wc ? web_modal::WebContentsModalDialogManager::FromWebContents(wc)
+           : nullptr;
+    if (!modal_manager || !modal_manager->IsDialogActive()) {
+      return std::nullopt;
+    }
+    maho::PendingPageDialog dialog;
+    dialog.type = "modal";
+    dialog.url = wc->GetLastCommittedURL().spec();
+    return dialog;
+  }
+
+  bool RespondToDialog(int tab_id,
+                       bool accept,
+                       const std::optional<std::string>& prompt_text) override {
+    content::WebContents* wc = ResolveEligibleTab(tab_id).web_contents;
+    auto* dialogs =
+        wc ? javascript_dialogs::TabModalDialogManager::FromWebContents(wc)
+           : nullptr;
+    if (!dialogs) {
+      return false;
+    }
+    // Always pass an override: with only a pending (not yet shown) dialog
+    // the manager would otherwise read the input of a null view.
+    const std::u16string prompt =
+        base::UTF8ToUTF16(prompt_text.value_or(std::string()));
+    return dialogs->HandleJavaScriptDialog(wc, accept, &prompt);
+  }
+
+  void StartDownload(int tab_id,
+                     const GURL& url,
+                     const std::optional<std::string>& dest_dir,
+                     DownloadCallback callback) override {
+    content::WebContents* wc = ResolveEligibleTab(tab_id).web_contents;
+    DownloadPrefs* prefs =
+        wc ? DownloadPrefs::FromBrowserContext(wc->GetBrowserContext())
+           : nullptr;
+    if (!prefs) {
+      std::move(callback).Run(std::string(), "tab is not available");
+      return;
+    }
+    base::FilePath dir = prefs->DownloadPath().AppendASCII("Maho Agent");
+    if (dest_dir.has_value() && !dest_dir->empty()) {
+      dir = dir.Append(base::FilePath::FromUTF8Unsafe(*dest_dir));
+    }
+    const base::FilePath target = dir.Append(net::GenerateFileName(
+        url, std::string(), std::string(), std::string(), std::string(),
+        "download"));
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(&base::CreateDirectory, dir),
+        base::BindOnce(&MahoMcpBrowserDelegateImpl::StartDownloadInDirectory,
+                       ui_weak_ptr_, tab_id, url, target,
+                       std::move(callback)));
+  }
+
+  void InsertTextAtCaret(int tab_id,
+                         const std::string& text,
+                         InsertTextCallback callback) override {
+    content::WebContents* wc = ResolveEligibleTab(tab_id).web_contents;
+    if (!wc) {
+      std::move(callback).Run(false);
+      return;
+    }
+    InvalidateCachedRefSnapshot(tab_id, wc);
+    maho::MahoMcpInputSynthesizer::InsertTextWithFallback(
+        wc, text, "contenteditable", "insert_text",
+        base::BindOnce(
+            [](InsertTextCallback cb, maho::TextInsertionResult result) {
+              std::move(cb).Run(
+                  result != maho::TextInsertionResult::kInsertionNotObserved);
+            },
+            std::move(callback)));
+  }
+
+  void ListImportSources(ImportSourcesCallback callback) override {
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(&maho::DetectInstalledBrowsers),
+        base::BindOnce(&MahoMcpBrowserDelegateImpl::OnImportSourcesDetected,
+                       ui_weak_ptr_, std::move(callback)));
+  }
+
+  bool StartImport(int source_index,
+                   uint32_t items,
+                   std::string* error) override {
+    if (source_index < 0 ||
+        static_cast<size_t>(source_index) >= import_sources_.size()) {
+      *error = "unknown source index; call browser_import_list first";
+      return false;
+    }
+    if (import_bridge_ && import_bridge_->is_active()) {
+      *error = "another import is already running";
+      return false;
+    }
+    MahoCore* core = maho::GetCore();
+    Profile* profile = GetProfile();
+    if (!core || !profile) {
+      *error = "import is unavailable";
+      return false;
+    }
+    const maho::DetectedBrowser& source = import_sources_[source_index];
+    base::DictValue browser;
+    browser.Set("browser_type", ImportBrowserTypeName(source.type));
+    browser.Set("display_name", source.display_name);
+    browser.Set("profile_path", source.profile_path.AsUTF8Unsafe());
+    browser.Set("services_supported",
+                static_cast<int>(source.services_supported));
+    browser.Set("requires_full_disk_access", source.requires_full_disk_access);
+    std::string browser_json;
+    base::JSONWriter::Write(browser, &browser_json);
+    import_bridge_ = std::make_unique<maho::MahoImportSessionBridge>(
+        base::BindRepeating([](uint32_t kind, int32_t imported,
+                               const std::string& import_error, bool complete) {
+          if (!import_error.empty()) {
+            LOG(WARNING) << "[MahoMcp] import kind=" << kind
+                         << " failed: " << import_error;
+          }
+        }),
+        content::GetUIThreadTaskRunner({}), profile);
+    if (!import_bridge_->Start(core, browser_json,
+                               items ? items : source.services_supported,
+                               std::string())) {
+      import_bridge_.reset();
+      *error = "import could not be started";
+      return false;
+    }
+    return true;
+  }
+
+  void ShowHumanHelpRequest(int tab_id,
+                            const std::string& session_id,
+                            const std::string& request_id,
+                            const std::string& prompt) override {
+    BrowserWindowInterface* target = ResolveEligibleTab(tab_id).browser;
+    if (!target) {
+      return;
+    }
+    maho::MahoAgentHelpOverlay::GetOrCreateForBrowser(
+        static_cast<Browser*>(target))
+        ->ShowRequest(tab_id, session_id, request_id, prompt);
+  }
+
+  void DismissHumanHelpRequest(const std::string& request_id) override {
+    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+        [&request_id](BrowserWindowInterface* browser) {
+          if (auto* overlay = maho::MahoAgentHelpOverlay::FromBrowser(
+                  static_cast<Browser*>(browser))) {
+            overlay->DismissRequest(request_id);
+          }
+          return true;
+        });
+  }
+
   bool IsTabWindowActive(int tab_id) override {
     EligibleTab tab = ResolveEligibleTab(tab_id);
     return tab.browser && tab.browser->GetWindow() &&
@@ -3484,6 +3658,97 @@ std::string FormatMailActionDetails(const std::string& action_name,
       return false;
     }
     return true;
+  }
+
+  static const char* ImportBrowserTypeName(maho::BrowserType type) {
+    switch (type) {
+      case maho::BrowserType::kChrome:
+        return "Chrome";
+      case maho::BrowserType::kArc:
+        return "Arc";
+      case maho::BrowserType::kBrave:
+        return "Brave";
+      case maho::BrowserType::kEdge:
+        return "Edge";
+      case maho::BrowserType::kVivaldi:
+        return "Vivaldi";
+      case maho::BrowserType::kOpera:
+        return "Opera";
+      case maho::BrowserType::kFirefox:
+        return "Firefox";
+      case maho::BrowserType::kZen:
+        return "Zen";
+      case maho::BrowserType::kSafari:
+        return "Safari";
+    }
+  }
+
+  void OnImportSourcesDetected(ImportSourcesCallback callback,
+                               std::vector<maho::DetectedBrowser> detected) {
+    import_sources_ = std::move(detected);
+    std::vector<maho::ImportSourceInfo> sources;
+    for (const maho::DetectedBrowser& browser : import_sources_) {
+      sources.push_back({ImportBrowserTypeName(browser.type),
+                         browser.display_name,
+                         browser.profile_path.AsUTF8Unsafe(),
+                         browser.services_supported,
+                         browser.requires_full_disk_access});
+    }
+    std::move(callback).Run(std::move(sources));
+  }
+
+  void StartDownloadInDirectory(int tab_id,
+                                const GURL& url,
+                                const base::FilePath& target,
+                                DownloadCallback callback,
+                                bool directory_ready) {
+    content::WebContents* wc = ResolveEligibleTab(tab_id).web_contents;
+    if (!directory_ready || !wc) {
+      std::move(callback).Run(std::string(),
+                              directory_ready ? "tab is not available"
+                                              : "cannot create download folder");
+      return;
+    }
+    content::DownloadManager* manager =
+        wc->GetBrowserContext()->GetDownloadManager();
+    if (!manager) {
+      std::move(callback).Run(std::string(), "downloads are unavailable");
+      return;
+    }
+    net::NetworkTrafficAnnotationTag traffic_annotation =
+        net::DefineNetworkTrafficAnnotation("maho_agent_download", R"(
+        semantics {
+          sender: "Maho Browser Agent"
+          description:
+            "An agent session the user is running downloads a file the "
+            "page links to into the agent downloads folder."
+          trigger: "The agent calls the browser_download tool."
+          data: "The request the page would send for the same link."
+          destination: WEBSITE
+        }
+        policy {
+          cookies_allowed: YES
+          cookies_store: "user"
+          setting: "Agents can be disabled in Maho settings."
+          policy_exception_justification: "Not implemented."
+        })");
+    std::unique_ptr<download::DownloadUrlParameters> params =
+        content::DownloadRequestUtils::CreateDownloadForWebContentsMainFrame(
+            wc, url, traffic_annotation);
+    params->set_file_path(target);
+    params->set_callback(base::BindOnce(
+        [](DownloadCallback cb, base::FilePath path, download::DownloadItem*,
+           download::DownloadInterruptReason reason) {
+          if (reason != download::DOWNLOAD_INTERRUPT_REASON_NONE) {
+            std::move(cb).Run(
+                std::string(),
+                download::DownloadInterruptReasonToString(reason));
+            return;
+          }
+          std::move(cb).Run(path.AsUTF8Unsafe(), std::string());
+        },
+        std::move(callback), target));
+    manager->DownloadUrl(std::move(params));
   }
 
   Profile* GetProfile() {
@@ -4112,6 +4377,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
     opts.include_hidden = params.include_hidden;
     opts.scope_selector = params.scope_selector;
     opts.scope_ref = params.scope_ref;
+    opts.viewport_only = params.viewport_only;
     opts.since_snapshot_token = params.since_snapshot_token;
     opts.max_bytes = params.max_bytes;
     opts.max_depth = params.max_depth;
@@ -5868,9 +6134,12 @@ std::string FormatMailActionDetails(const std::string& action_name,
                                        : delegate->GetWebContentsForTabId(id);
                          if (wc) {
                            delegate->InvalidateCachedRefSnapshot(id, wc);
-                           wc->Focus();
-                           if (wc->GetRenderWidgetHostView()) {
-                             wc->GetRenderWidgetHostView()->Focus();
+                           content::RenderWidgetHostView* view =
+                               wc->GetRenderWidgetHostView();
+                           if (maho::ShouldFocusForKeyPress(
+                                   delegate->IsTabWindowActive(id),
+                                   view && view->HasFocus())) {
+                             wc->Focus();
                            }
                            maho::MahoMcpInputSynthesizer::KeyPress(wc, k, mods);
                          }
@@ -6451,6 +6720,8 @@ std::string FormatMailActionDetails(const std::string& action_name,
   // while its exact token still authorizes kMCP.
   std::map<int64_t, std::unique_ptr<MahoPrivateContextToken>>
       resolved_target_tokens_;
+  std::vector<maho::DetectedBrowser> import_sources_;
+  std::unique_ptr<maho::MahoImportSessionBridge> import_bridge_;
   base::WeakPtr<MahoMcpBrowserDelegateImpl> ui_weak_ptr_;
   base::WeakPtrFactory<MahoMcpBrowserDelegateImpl> weak_factory_{this};
 };

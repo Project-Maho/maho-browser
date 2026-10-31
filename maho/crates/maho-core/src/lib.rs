@@ -43,6 +43,7 @@ pub mod providers;
 pub mod reading_list_manager;
 pub mod routine_runs;
 pub mod routines;
+pub mod automations;
 pub mod security;
 pub mod settings_manager;
 pub mod sharing_manager;

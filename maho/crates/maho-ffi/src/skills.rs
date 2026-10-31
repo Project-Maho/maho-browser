@@ -1657,10 +1657,70 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
                 }
             }
 
+            fire_due_automations(&db_path, now_sec);
+
             0
         },
         -2
     )
+}
+
+/// Fires the agent-created interval automations (`automation_create`) that are due.
+/// They live in the agent dir's store, which `take_due` stamps before any run starts
+/// so the 30s tick never fires one twice. Unattended runs deny sensitive tools.
+fn fire_due_automations(db_path: &str, now_sec: i64) {
+    let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let store = maho_core::automations::AutomationStore::in_agent_dir(
+        &maho_agent::omo::factory::agent_dir_for_workspace(&workspace),
+    );
+    let due = match store.take_due(now_sec) {
+        Ok(due) => due,
+        Err(error) => {
+            eprintln!("[maho_routines_tick] automations: {error}");
+            return;
+        }
+    };
+    for automation in due {
+        let db_path = db_path.to_string();
+        let workspace = workspace.clone();
+        maho_core::memory_manager::get_runtime().spawn_blocking(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                Ok(rt) => rt,
+                Err(error) => {
+                    eprintln!("[automations] runtime: {error}");
+                    return;
+                }
+            };
+            rt.block_on(async move {
+                let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+                    Ok(storage) => storage,
+                    Err(error) => {
+                        eprintln!("[automations] {}: open storage: {error}", automation.id);
+                        return;
+                    }
+                };
+                let permission_callback: maho_agent::PermissionCallback = Box::new(|request| {
+                    Box::pin(async move {
+                        if request.sensitivity == maho_agent::ToolSensitivity::Sensitive {
+                            maho_agent::PermissionDecision::Deny
+                        } else {
+                            maho_agent::PermissionDecision::Allow
+                        }
+                    })
+                });
+                let backend = maho_agent::omo::factory::create_agent_runtime(
+                    Arc::new(maho_agent::MutexAgentStorage(Arc::new(Mutex::new(storage)))),
+                    Some(permission_callback),
+                    workspace,
+                    true,
+                );
+                let prompt = maho_core::automations::build_automation_prompt(&automation);
+                if let Err(error) = backend.run_prompt(&prompt).await {
+                    eprintln!("[automations] {} failed: {error}", automation.id);
+                }
+            });
+        });
+    }
 }
 
 // ============================================================

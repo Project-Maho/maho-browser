@@ -132,17 +132,26 @@ fn unknown_mcp_config_shape_fails_without_writing_skill_or_changing_config() {
 }
 
 #[test]
-fn unsupported_agent_and_missing_cursor_project_fail_closed() {
+fn unsupported_agent_fails_and_cursor_without_project_installs_user_level() {
     let env = TestEnv::new();
     assert!(!env
         .run(&["skills", "install", "--agent", "unknown"])
         .status
         .success());
-    assert!(!env
+    assert!(env
         .run(&["skills", "install", "--agent", "cursor"])
         .status
         .success());
     assert!(!env.project.path().join(".cursor").exists());
+    let home = env._home.path();
+    assert!(home.join(".cursor/skills/maho-browser/SKILL.md").exists());
+    let config = home.join(".cursor/mcp.json");
+    assert!(config_has_server("cursor", &config));
+    let value: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(
+        value["mcpServers"]["maho-browser"]["env"]["MAHO_MCP_PUBLIC_ENABLED"],
+        "true"
+    );
 }
 
 fn paths(env: &TestEnv, agent: &str) -> (std::path::PathBuf, std::path::PathBuf) {

@@ -1,0 +1,37 @@
+{
+  "site": "x",
+  "site_tools": [
+    {
+      "name": "search_posts",
+      "file": "search_posts.js",
+      "kind": "read",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "compose_post",
+      "file": "compose_post.js",
+      "kind": "action",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    }
+  ]
+}

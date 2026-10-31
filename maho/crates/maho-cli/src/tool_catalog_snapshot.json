@@ -1,7 +1,7 @@
 {
   "catalogDiagnostics": {
-    "canonicalCount": 94,
-    "catalogHash": "AED6EE2798F029F1143B9D37136E5F227FED99BD6C80E1FCC4C4C042CFBB3D9F",
+    "canonicalCount": 102,
+    "catalogHash": "153F68E29D8103823E7970723086AD33723D59B6D7DE2DCC7C9478AF05B19E5A",
     "catalogVersion": 1,
     "gates": {
       "mailBeta": true,
@@ -65,11 +65,13 @@
         ]
       },
       "cliGeneric": {
-        "count": 60,
+        "count": 68,
         "ids": [
           "bookmarks.create",
           "bookmarks.search",
           "browser.act_and_observe",
+          "browser.native_key",
+          "browser.native_type",
           "browser.observe",
           "browser.request_help",
           "browser.visual_click",
@@ -81,9 +83,12 @@
           "capture.screenshot_full",
           "capture.screenshot_viewport",
           "history.search",
+          "import.list",
+          "import.run",
           "input.click",
           "input.file_upload_select",
           "input.hover",
+          "input.insert_text",
           "input.key_press",
           "input.locator_click",
           "input.locator_type",
@@ -110,6 +115,8 @@
           "page.console_messages",
           "page.content",
           "page.context",
+          "page.dialog_respond",
+          "page.download",
           "page.get_attribute",
           "page.get_text",
           "page.query_selector",
@@ -126,7 +133,8 @@
           "tab.get",
           "tab.list",
           "tab.new",
-          "tab.switch"
+          "tab.switch",
+          "tab.task_space"
         ]
       },
       "controlPlane": {
@@ -206,11 +214,13 @@
         ]
       },
       "publicMcp": {
-        "count": 60,
+        "count": 68,
         "ids": [
           "bookmarks.create",
           "bookmarks.search",
           "browser.act_and_observe",
+          "browser.native_key",
+          "browser.native_type",
           "browser.observe",
           "browser.request_help",
           "browser.visual_click",
@@ -222,9 +232,12 @@
           "capture.screenshot_full",
           "capture.screenshot_viewport",
           "history.search",
+          "import.list",
+          "import.run",
           "input.click",
           "input.file_upload_select",
           "input.hover",
+          "input.insert_text",
           "input.key_press",
           "input.locator_click",
           "input.locator_type",
@@ -251,6 +264,8 @@
           "page.console_messages",
           "page.content",
           "page.context",
+          "page.dialog_respond",
+          "page.download",
           "page.get_attribute",
           "page.get_text",
           "page.query_selector",
@@ -267,7 +282,8 @@
           "tab.get",
           "tab.list",
           "tab.new",
-          "tab.switch"
+          "tab.switch",
+          "tab.task_space"
         ]
       }
     }
@@ -359,6 +375,10 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "background": {
+            "description": "Open without activating the tab. Agent controllers default to true, the Maho CLI to false.",
+            "type": "boolean"
+          },
           "url": {
             "description": "URL to open; defaults to about:blank.",
             "type": "string"
@@ -407,6 +427,204 @@
         "requiredBoundary": "tab",
         "requiredBroker": "browser",
         "sensitivity": "low"
+      }
+    },
+    {
+      "name": "browser_task_space",
+      "description": "Manage the agent task space of a tab: status, create, handoff to the user, takeover, complete or error. Mutations are rejected with TASK_SPACE_USER_IN_CONTROL while the user owns it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "status (default), create, handoff, takeover, complete or error.",
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "Browser tab id.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tab_id"
+        ],
+        "type": "object"
+      },
+      "capabilityId": "tab.task_space",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "changesAuthority": false,
+        "featureGate": "always",
+        "missingPolicy": "fail_closed",
+        "mutability": "mutable",
+        "requiredBoundary": "tab",
+        "requiredBroker": "browser",
+        "sensitivity": "low"
+      }
+    },
+    {
+      "name": "browser_dialog_respond",
+      "description": "Accept or dismiss the JavaScript dialog (alert/confirm/prompt) pending on a tab; other page commands return PAGE_DIALOG_OPENED until it is answered.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "accept": {
+            "description": "True to accept/OK, false to dismiss.",
+            "type": "boolean"
+          },
+          "prompt_text": {
+            "description": "Text to answer a prompt() dialog with.",
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "Browser tab id.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tab_id",
+          "accept"
+        ],
+        "type": "object"
+      },
+      "capabilityId": "page.dialog_respond",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "changesAuthority": false,
+        "featureGate": "always",
+        "missingPolicy": "fail_closed",
+        "mutability": "mutable",
+        "requiredBoundary": "tab",
+        "requiredBroker": "browser",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "name": "browser_download",
+      "description": "Download an http(s) URL in the context of a tab into the agent downloads folder.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "dest_dir": {
+            "description": "Optional folder relative to the agent downloads folder.",
+            "type": "string"
+          },
+          "tab_id": {
+            "description": "Browser tab id.",
+            "type": "integer"
+          },
+          "url": {
+            "description": "Absolute http(s) URL.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "url"
+        ],
+        "type": "object"
+      },
+      "capabilityId": "page.download",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "changesAuthority": true,
+        "featureGate": "always",
+        "missingPolicy": "fail_closed",
+        "mutability": "mutable",
+        "requiredBoundary": "tab",
+        "requiredBroker": "browser",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "name": "browser_insert_text",
+      "description": "Insert text at the focused caret through the editor insertion path (canvas and rich editors such as Google Docs).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "tab_id": {
+            "description": "Browser tab id.",
+            "type": "integer"
+          },
+          "text": {
+            "description": "Text to insert at the caret.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "capabilityId": "input.insert_text",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "changesAuthority": false,
+        "featureGate": "always",
+        "missingPolicy": "fail_closed",
+        "mutability": "mutable",
+        "requiredBoundary": "tab",
+        "requiredBroker": "browser",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "name": "browser_import_list",
+      "description": "List browsers and profiles installed on this computer that Maho can import from.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "capabilityId": "import.list",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "changesAuthority": false,
+        "featureGate": "always",
+        "missingPolicy": "fail_closed",
+        "mutability": "read_only",
+        "requiredBoundary": "profile",
+        "requiredBroker": "browser",
+        "sensitivity": "low"
+      }
+    },
+    {
+      "name": "browser_import_run",
+      "description": "Import data from a browser returned by browser_import_list into the current profile.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "description": "Source index from browser_import_list.",
+            "type": "integer"
+          },
+          "items": {
+            "description": "Importer item bitmask; 0 imports everything the source supports.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      },
+      "capabilityId": "import.run",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "changesAuthority": true,
+        "featureGate": "always",
+        "missingPolicy": "fail_closed",
+        "mutability": "mutable",
+        "requiredBoundary": "profile",
+        "requiredBroker": "browser",
+        "sensitivity": "sensitive"
       }
     },
     {
@@ -1496,6 +1714,10 @@
               "selector": {
                 "description": "Optional CSS selector to scope the snapshot.",
                 "type": "string"
+              },
+              "viewport": {
+                "description": "Only include interactive nodes inside the visible viewport.",
+                "type": "boolean"
               }
             },
             "type": "object"
@@ -1768,6 +1990,10 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "action": {
+            "description": "Optional: click (default), native_type or native_key.",
+            "type": "string"
+          },
           "capture_id": {
             "description": "Optional capture id (alias for frame_token).",
             "type": "string"
@@ -1794,9 +2020,20 @@
             "description": "Server-issued visual frame token.",
             "type": "string"
           },
+          "key": {
+            "description": "Key for action native_key.",
+            "type": "string"
+          },
           "lease_epoch": {
             "description": "Expected lease epoch.",
             "type": "integer"
+          },
+          "modifiers": {
+            "description": "Optional modifiers for native_key: shift, ctrl, alt, meta.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "ref": {
             "description": "Optional accessibility ref of target element.",
@@ -1829,6 +2066,10 @@
             "required": [],
             "type": "object"
           },
+          "text": {
+            "description": "Text for action native_type.",
+            "type": "string"
+          },
           "x": {
             "description": "Optional direct X coordinate.",
             "type": "number"
@@ -1844,6 +2085,97 @@
         "type": "object"
       },
       "capabilityId": "browser.visual_click",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "changesAuthority": true,
+        "featureGate": "native_input",
+        "missingPolicy": "fail_closed",
+        "mutability": "mutable",
+        "requiredBoundary": "tab",
+        "requiredBroker": "browser",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "name": "browser_native_type",
+      "description": "Type text with OS-level keyboard input into the focused element of the foreground tab (requires a fresh frame token).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "frame_token": {
+            "description": "Server-issued visual frame token of the target tab.",
+            "type": "string"
+          },
+          "lease_epoch": {
+            "description": "Expected lease epoch.",
+            "type": "integer"
+          },
+          "tab_id": {
+            "description": "Browser tab id. Mutations require it explicitly (-32013 without it); read-only tools fall back to the active tab when omitted.",
+            "type": "integer"
+          },
+          "text": {
+            "description": "Text typed into the focused element.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "frame_token",
+          "text"
+        ],
+        "type": "object"
+      },
+      "capabilityId": "browser.native_type",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "changesAuthority": true,
+        "featureGate": "native_input",
+        "missingPolicy": "fail_closed",
+        "mutability": "mutable",
+        "requiredBoundary": "tab",
+        "requiredBroker": "browser",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "name": "browser_native_key",
+      "description": "Press a key (with optional modifiers) with OS-level keyboard input in the foreground tab (requires a fresh frame token).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "frame_token": {
+            "description": "Server-issued visual frame token of the target tab.",
+            "type": "string"
+          },
+          "key": {
+            "description": "Keyboard key, e.g. Enter or ArrowDown.",
+            "type": "string"
+          },
+          "lease_epoch": {
+            "description": "Expected lease epoch.",
+            "type": "integer"
+          },
+          "modifiers": {
+            "description": "Optional modifiers: shift, ctrl, alt, meta.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tab_id": {
+            "description": "Browser tab id. Mutations require it explicitly (-32013 without it); read-only tools fall back to the active tab when omitted.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "frame_token",
+          "key"
+        ],
+        "type": "object"
+      },
+      "capabilityId": "browser.native_key",
       "schemaVersion": 1,
       "resultVersion": 1,
       "policy": {

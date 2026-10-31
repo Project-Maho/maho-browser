@@ -4,8 +4,13 @@ pub mod config;
 mod controllers;
 mod credits;
 mod doctor;
+mod memory_cmd;
 mod platform;
+#[cfg(unix)]
+mod session_cmd;
+mod site_tools;
 mod skills;
+mod update_cmd;
 
 use maho_cli::browser_pipe;
 
@@ -133,6 +138,26 @@ pub enum Commands {
     Skills {
         #[command(subcommand)]
         command: skills::SkillsCommands,
+    },
+
+    /// Print the full, version-matched Maho browser guide for coding agents
+    Guide,
+
+    /// Check whether a newer Maho release is available and how to install it
+    Update,
+
+    /// Read the agent's long-term memory (omo memory repo)
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
+
+        /// Workspace ID or name (defaults to the first workspace)
+        #[arg(long, global = true, conflicts_with = "root")]
+        workspace: Option<String>,
+
+        /// Workspace root directory, bypassing the workspace registry
+        #[arg(long, global = true)]
+        root: Option<PathBuf>,
     },
 
     /// Delegate browser goals to Maho's built-in agent; task runs a separate CLI agent
@@ -436,6 +461,46 @@ pub enum AgentCommands {
         #[arg(long)]
         all: bool,
     },
+
+    /// Control a running agent session from another terminal
+    Session {
+        #[command(subcommand)]
+        command: AgentSessionCommands,
+
+        /// Workspace ID or name the session belongs to
+        #[arg(long, global = true, conflicts_with = "root")]
+        workspace: Option<String>,
+
+        /// Workspace root directory, bypassing the workspace registry
+        #[arg(long, global = true)]
+        root: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum AgentSessionCommands {
+    /// Show whether the session's turn is running and how many messages are queued
+    Status { session_id: String },
+    /// Deliver a message into the running turn (queued for the next turn when idle)
+    Steer { session_id: String, text: String },
+    /// Queue a follow-up message for the session
+    Queue { session_id: String, text: String },
+    /// Stop the running turn
+    Stop { session_id: String },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum MemoryCommands {
+    /// List every memory file with its description
+    List,
+    /// Search memory paths, descriptions and bodies
+    Search {
+        query: String,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Print one memory file (path relative to the agent repo)
+    Show { path: String },
 }
 
 /// Permission tier for the `maho agent task` runtime_config. Unknown values
@@ -927,8 +992,13 @@ pub struct HeadlessArgs {
     pub skip_completed: Option<String>,
 
     /// Auto-launch Maho.app if browser is not running
-    #[arg(long)]
+    #[arg(long, conflicts_with = "space")]
     pub launch: bool,
+
+    /// Run inside the running, signed-in browser as a background agent task space
+    /// (no focus change, cookies of your profile) instead of a separate headless browser
+    #[arg(long)]
+    pub space: bool,
 
     /// Keep browser running after CLI exits (only with --launch)
     #[arg(long)]
@@ -949,6 +1019,24 @@ pub enum BrowserCommands {
         long_about = "One JSON object per line on stdin. Required field: op.\nOps: act, native, grant, observe, click, type, navigate, wait, upload.\nobserve: id, op, tab_id, mode=interactive\nclick: id, op, tab_id, locator.css\ntype: id, op, tab_id, locator.css, text\nupload: id, op, tab_id, path, selector (optional)\nMutating ops (act, click, type, navigate, upload) require tab_id: they never fall back to the focused tab."
     )]
     Pipe,
+
+    /// Run a JavaScript program against the browser in one call.
+    #[command(
+        long_about = "Runs the script in a sandboxed QuickJS runtime. browser.call(tool, args) invokes a Maho browser tool and returns its result; `input` holds --input. Prints the script's last expression as JSON."
+    )]
+    Script {
+        /// Script file, or - to read stdin
+        source: String,
+        /// JSON passed to the script as `input`
+        #[arg(long)]
+        input: Option<String>,
+        /// Browser call budget (1-500, default 50)
+        #[arg(long)]
+        max_browser_calls: Option<u64>,
+        /// Validate as a site tool first (rejects ephemeral @eN snapshot refs)
+        #[arg(long)]
+        site_tool: bool,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -1252,6 +1340,25 @@ async fn async_main() -> Result<()> {
                     cmd_repl(eval, socket_path.as_deref(), json_output).await
                 }
                 BrowserCommands::Pipe => browser_pipe::run_pipe(socket_path.as_deref()).await,
+                BrowserCommands::Script {
+                    source,
+                    input,
+                    max_browser_calls,
+                    site_tool,
+                } => {
+                    site_tools::ensure_script_source(&source)?;
+                    let result = tokio::task::spawn_blocking(move || {
+                        site_tools::run_script_command(
+                            &source,
+                            input.as_deref(),
+                            max_browser_calls,
+                            site_tool,
+                        )
+                    })
+                    .await??;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    Ok(())
+                }
             }
         }
 
@@ -1263,6 +1370,28 @@ async fn async_main() -> Result<()> {
         }
 
         Commands::Skills { command } => skills::run(command),
+
+        Commands::Update => update_cmd::run(json_output).await,
+
+        Commands::Guide => {
+            print!("{}", skills::guide_text());
+            Ok(())
+        }
+
+        Commands::Memory { command, workspace, root } => {
+            let root = match root {
+                Some(root) => root,
+                None => resolve_memory_workspace_root(workspace.as_deref()).await?,
+            };
+            let action = match command {
+                MemoryCommands::List => memory_cmd::MemoryAction::List,
+                MemoryCommands::Search { query, limit } => {
+                    memory_cmd::MemoryAction::Search { query, limit }
+                }
+                MemoryCommands::Show { path } => memory_cmd::MemoryAction::Show { path },
+            };
+            memory_cmd::run(action, &memory_cmd::default_memory_home(&root), json_output)
+        }
 
         // ─── Routine group ────────────────────────────────────────────────
         Commands::Routine { command } => match command {
@@ -1322,6 +1451,9 @@ async fn async_main() -> Result<()> {
             }
             AgentCommands::Sessions { limit, all } => {
                 cmd_agent_sessions(limit, all, socket_path.as_deref(), json_output).await
+            }
+            AgentCommands::Session { command, workspace, root } => {
+                cmd_agent_session(command, workspace.as_deref(), root, json_output).await
             }
         },
 
@@ -2405,6 +2537,33 @@ async fn cmd_page(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn headless_space_runs_in_a_background_task_space_and_never_launches() {
+        use super::*;
+        use clap::Parser as _;
+        let parsed = Cli::try_parse_from([
+            "maho", "headless", "--url", "https://example.com", "--extract", "title", "--space",
+        ])
+        .unwrap();
+        match parsed.command {
+            Commands::Headless(args) => assert!(args.space && !args.launch),
+            _ => panic!("expected headless"),
+        }
+        assert!(Cli::try_parse_from([
+            "maho", "headless", "--url", "https://example.com", "--extract", "title", "--space", "--launch",
+        ])
+        .is_err(), "--space runs in the user's browser and must never launch one");
+        assert_eq!(
+            headless_tab_new_args("https://a.example", true),
+            serde_json::json!({"url": "https://a.example", "background": true})
+        );
+        assert_eq!(
+            headless_tab_new_args("https://a.example", false),
+            serde_json::json!({"url": "https://a.example"})
+        );
+
+    }
+
+    #[test]
     fn agent_ask_parses_browser_goal_without_cli_runtime_options() {
         use clap::Parser as _;
         let parsed = Cli::try_parse_from(["maho", "agent", "ask", "Summarize open tabs"])
@@ -2421,8 +2580,8 @@ mod tests {
 
     use super::{
         browser, decode_browser_descriptors, decode_browser_execution, format_agent_stream_event,
-        mail_tool_request, AgentCommands, AgentStreamEvent, AgentTaskOutput,
-        AgentTaskRuntimeConfig, Cli, Commands, MailCommands, TabCommands, TierArg,
+        mail_tool_request, AgentCommands, AgentSessionCommands, AgentStreamEvent, AgentTaskOutput,
+        AgentTaskRuntimeConfig, Cli, Commands, MailCommands, MemoryCommands, TabCommands, TierArg,
     };
 
     #[test]
@@ -3705,6 +3864,54 @@ mod tests {
         assert!(config.provider.is_none());
     }
 
+    #[test]
+    fn guide_memory_and_agent_session_subcommands_parse() {
+        use clap::Parser as _;
+        assert!(matches!(
+            Cli::try_parse_from(["maho", "guide"]).unwrap().command,
+            Commands::Guide
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["maho", "update"]).unwrap().command,
+            Commands::Update
+        ));
+        let Commands::Memory { command: MemoryCommands::Search { query, limit }, workspace, .. } =
+            Cli::try_parse_from(["maho", "memory", "search", "zebra", "--limit", "3", "--workspace", "ws"])
+                .unwrap()
+                .command
+        else {
+            panic!("expected memory search");
+        };
+        assert_eq!((query.as_str(), limit, workspace.as_deref()), ("zebra", 3, Some("ws")));
+        assert!(matches!(
+            Cli::try_parse_from(["maho", "memory", "list", "--root", "/tmp/ws"]).unwrap().command,
+            Commands::Memory { root: Some(_), .. }
+        ));
+        assert!(Cli::try_parse_from(["maho", "memory", "list", "--root", "/a", "--workspace", "b"]).is_err());
+        assert!(matches!(
+            Cli::try_parse_from(["maho", "memory", "show", "reference/a.md"]).unwrap().command,
+            Commands::Memory { command: MemoryCommands::Show { .. }, .. }
+        ));
+        for (argv, expect_text) in [
+            (vec!["maho", "agent", "session", "status", "task-1"], false),
+            (vec!["maho", "agent", "session", "steer", "task-1", "go left"], true),
+            (vec!["maho", "agent", "session", "queue", "task-1", "then right"], true),
+            (vec!["maho", "agent", "session", "stop", "task-1"], false),
+        ] {
+            let Commands::Agent { command: AgentCommands::Session { command, .. } } =
+                Cli::try_parse_from(argv.clone()).unwrap().command
+            else {
+                panic!("expected agent session for {argv:?}");
+            };
+            let has_text = matches!(
+                command,
+                AgentSessionCommands::Steer { .. } | AgentSessionCommands::Queue { .. }
+            );
+            assert_eq!(has_text, expect_text, "{argv:?}");
+        }
+        assert!(Cli::try_parse_from(["maho", "agent", "session", "steer", "task-1"]).is_err());
+    }
+
     // ─── P0-2: session listing ────────────────────────────────────────────
 
     /// `maho agent sessions` makes `--resume <SESSION_ID>` discoverable.
@@ -4708,6 +4915,51 @@ fn profile_custom_provider(
 }
 
 #[cfg(unix)]
+async fn cmd_agent_session(
+    command: AgentSessionCommands,
+    workspace: Option<&str>,
+    root: Option<PathBuf>,
+    json: bool,
+) -> Result<()> {
+    use session_cmd::SessionAction;
+    let (action, session_id, text) = match command {
+        AgentSessionCommands::Status { session_id } => (SessionAction::Status, session_id, None),
+        AgentSessionCommands::Steer { session_id, text } => {
+            (SessionAction::Steer, session_id, Some(text))
+        }
+        AgentSessionCommands::Queue { session_id, text } => {
+            (SessionAction::Queue, session_id, Some(text))
+        }
+        AgentSessionCommands::Stop { session_id } => (SessionAction::Stop, session_id, None),
+    };
+    session_cmd::run(action, &session_id, text, workspace, root, json).await
+}
+
+#[cfg(not(unix))]
+async fn cmd_agent_session(
+    _command: AgentSessionCommands,
+    _workspace: Option<&str>,
+    _root: Option<PathBuf>,
+    _json: bool,
+) -> Result<()> {
+    bail!("maho agent session is only available on macOS and Linux")
+}
+
+async fn resolve_memory_workspace_root(workspace: Option<&str>) -> Result<PathBuf> {
+    let db_path = maho_cli::workspace::default_db_path();
+    let resolved = maho_cli::workspace::resolve_workspace_id(&db_path, workspace).await?;
+    let storage = maho_cli::workspace::open_storage(&db_path)
+        .map_err(|e| anyhow::anyhow!("Failed to open database: {e}"))?;
+    let root = storage
+        .list_workspaces()
+        .map_err(|e| anyhow::anyhow!("Failed to list workspaces: {e}"))?
+        .into_iter()
+        .find(|w| w.id == resolved)
+        .and_then(|w| w.workspace_root.map(PathBuf::from));
+    Ok(root.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))))
+}
+
+#[cfg(unix)]
 async fn build_agent_task_session(
     db_path: &std::path::Path,
     workspace: Option<&str>,
@@ -4781,6 +5033,7 @@ async fn build_agent_task_session(
     let mut config_builder = maho_agent::omo::config::OmoLaunchConfig::builder(&agent_dir)
         .runtime_binary(&bundled.runtime_binary)
         .rpc_entry(&bundled.rpc_entry)
+        .maybe_plugin_dir(bundled.plugin_dir.as_deref())
         .socket_path(&socket_path_rpc)
         .add_cleanup_path(&socket_path_rpc);
 
@@ -5603,6 +5856,10 @@ async fn cmd_headless(
 
     let client = match browser::connect(socket_path).await {
         Ok(c) => c,
+        Err(e) if args.space => {
+            eprintln!("Browser not running. --space needs the running Maho browser (it never launches one).");
+            return Err(e);
+        }
         Err(_) if args.launch => {
             let binary = find_maho_binary().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -5625,6 +5882,9 @@ async fn cmd_headless(
         }
     };
 
+    if args.space {
+        eprintln!("Running in a background agent task space of the running browser");
+    }
     let result = run_headless_extraction(&client, &url, &args).await;
 
     if let Some(ref mut browser) = spawned {
@@ -5650,12 +5910,51 @@ fn validate_headless_extractors(extract: &str) -> Result<()> {
     Ok(())
 }
 
+/// `browser_tab_new` arguments. In a task space the tab opens in the background,
+/// which makes the browser register it as an agent-owned task space.
+fn headless_tab_new_args(url: &str, space: bool) -> serde_json::Value {
+    if space {
+        serde_json::json!({ "url": url, "background": true })
+    } else {
+        serde_json::json!({ "url": url })
+    }
+}
+
+/// Settles the task space before its tab closes so the browser's space state
+/// reflects how the run ended.
+async fn finish_headless_tab(
+    client: &maho_browser_mcp::client::BrowserClient,
+    tab_id: i64,
+    space: bool,
+    ok: bool,
+) {
+    if space {
+        let action = if ok { "complete" } else { "error" };
+        if let Err(error) = browser::send_tool_call(
+            client,
+            "browser_task_space",
+            serde_json::json!({ "tab_id": tab_id, "action": action }),
+        )
+        .await
+        {
+            eprintln!("Warning: could not mark task space {tab_id} {action}: {error}");
+        }
+    }
+    let _ = browser::send_tool_call(
+        client,
+        "browser_tab_close",
+        serde_json::json!({ "tab_id": tab_id }),
+    )
+    .await;
+}
+
 async fn open_tab_and_wait(
     client: &maho_browser_mcp::client::BrowserClient,
     url: &str,
+    space: bool,
 ) -> Result<i64> {
     let new_tab_result =
-        browser::send_tool_call(client, "browser_tab_new", serde_json::json!({ "url": url }))
+        browser::send_tool_call(client, "browser_tab_new", headless_tab_new_args(url, space))
             .await?;
 
     let tab_id = new_tab_result
@@ -5695,8 +5994,17 @@ async fn run_headless_extraction(
     url: &str,
     args: &HeadlessArgs,
 ) -> Result<()> {
-    let tab_id = open_tab_and_wait(client, url).await?;
+    let tab_id = open_tab_and_wait(client, url, args.space).await?;
+    let result = extract_headless_fields(client, tab_id, args).await;
+    finish_headless_tab(client, tab_id, args.space, result.is_ok()).await;
+    result
+}
 
+async fn extract_headless_fields(
+    client: &maho_browser_mcp::client::BrowserClient,
+    tab_id: i64,
+    args: &HeadlessArgs,
+) -> Result<()> {
     let extractors: Vec<&str> = args.extract.split(',').map(|s| s.trim()).collect();
     for extractor in &extractors {
         match *extractor {
@@ -5765,23 +6073,10 @@ async fn run_headless_extraction(
                 println!("{text}");
             }
             other => {
-                let _ = browser::send_tool_call(
-                    client,
-                    "browser_tab_close",
-                    serde_json::json!({ "tab_id": tab_id }),
-                )
-                .await;
                 bail!("Unknown extractor: {other}. Valid: {}", HEADLESS_EXTRACTORS.join(", "));
             }
         }
     }
-
-    let _ = browser::send_tool_call(
-        client,
-        "browser_tab_close",
-        serde_json::json!({ "tab_id": tab_id }),
-    )
-    .await;
 
     Ok(())
 }
@@ -5792,9 +6087,20 @@ async fn run_batch_url(
     socket_path: Option<&str>,
     url: &str,
     extract: &str,
+    space: bool,
 ) -> Result<serde_json::Map<String, serde_json::Value>> {
     let client = browser::connect(socket_path).await?;
-    let tab_id = open_tab_and_wait(&client, url).await?;
+    let tab_id = open_tab_and_wait(&client, url, space).await?;
+    let result = extract_batch_fields(&client, tab_id, extract).await;
+    finish_headless_tab(&client, tab_id, space, result.is_ok()).await;
+    result
+}
+
+async fn extract_batch_fields(
+    client: &maho_browser_mcp::client::BrowserClient,
+    tab_id: i64,
+    extract: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
 
     let mut fields = serde_json::Map::new();
     let extractors: Vec<&str> = extract
@@ -5807,7 +6113,7 @@ async fn run_batch_url(
         match *extractor {
             "title" => {
                 let info = browser::send_tool_call(
-                    &client,
+                    client,
                     "browser_tab_get",
                     serde_json::json!({ "tab_id": tab_id }),
                 )
@@ -5821,7 +6127,7 @@ async fn run_batch_url(
             }
             "text" => {
                 let result = browser::send_tool_call(
-                    &client,
+                    client,
                     "browser_page_text",
                     serde_json::json!({ "tab_id": tab_id }),
                 )
@@ -5835,7 +6141,7 @@ async fn run_batch_url(
             }
             "links" => {
                 let result = browser::send_tool_call(
-                    &client,
+                    client,
                     "browser_page_context",
                     serde_json::json!({ "tab_id": tab_id }),
                 )
@@ -5848,7 +6154,7 @@ async fn run_batch_url(
             }
             "meta" => {
                 let result = browser::send_tool_call(
-                    &client,
+                    client,
                     "browser_page_context",
                     serde_json::json!({ "tab_id": tab_id }),
                 )
@@ -5867,7 +6173,7 @@ async fn run_batch_url(
             }
             "html" => {
                 let result = browser::send_tool_call(
-                    &client,
+                    client,
                     "browser_page_content",
                     serde_json::json!({ "tab_id": tab_id }),
                 )
@@ -5880,23 +6186,10 @@ async fn run_batch_url(
                 fields.insert("html".to_string(), serde_json::Value::String(text));
             }
             other => {
-                let _ = browser::send_tool_call(
-                    &client,
-                    "browser_tab_close",
-                    serde_json::json!({ "tab_id": tab_id }),
-                )
-                .await;
                 bail!("unknown extractor: {other}. Valid: title, text, links, meta, html");
             }
         }
     }
-
-    let _ = browser::send_tool_call(
-        &client,
-        "browser_tab_close",
-        serde_json::json!({ "tab_id": tab_id }),
-    )
-    .await;
 
     Ok(fields)
 }
@@ -5959,6 +6252,7 @@ async fn cmd_headless_batch(args: HeadlessArgs, socket_path: Option<&str>) -> Re
     let concurrency = (args.concurrency.max(1)) as usize;
     let extract = std::sync::Arc::new(args.extract.clone());
     let socket_owned: Option<String> = socket_path.map(|s| s.to_string());
+    let space = args.space;
 
     for chunk in urls.chunks(concurrency) {
         let mut handles = Vec::with_capacity(chunk.len());
@@ -5968,7 +6262,7 @@ async fn cmd_headless_batch(args: HeadlessArgs, socket_path: Option<&str>) -> Re
             let socket_owned = socket_owned.clone();
             let url = url.clone();
             handles.push(tokio::spawn(async move {
-                let row = match run_batch_url(socket_owned.as_deref(), &url, &extract).await {
+                let row = match run_batch_url(socket_owned.as_deref(), &url, &extract, space).await {
                     Ok(mut fields) => {
                         fields.insert("url".to_string(), serde_json::Value::String(url.clone()));
                         fields.insert("ok".to_string(), serde_json::Value::Bool(true));

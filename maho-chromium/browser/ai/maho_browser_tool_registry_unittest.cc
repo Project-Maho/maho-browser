@@ -426,6 +426,12 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
       "browser_tab_close",
       "browser_tab_get",
       "browser_tab_list",
+      "browser_task_space",
+      "browser_dialog_respond",
+      "browser_download",
+      "browser_insert_text",
+      "browser_import_list",
+      "browser_import_run",
       "browser_tab_new",
       "browser_tab_switch",
       "browser_type",
@@ -456,14 +462,14 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
     EXPECT_TRUE(actual.insert(std::string(descriptor->tool_name)).second)
         << descriptor->tool_name;
   }
-  EXPECT_EQ(capabilities.size(), 59u);
+  EXPECT_EQ(capabilities.size(), 65u);
   EXPECT_EQ(actual, expected);
 }
 
 TEST(MahoBrowserToolRegistryTest, PublicAndControlSchemasAreClosed) {
   base::ListValue public_tools =
       MahoBrowserToolRegistry::SerializePublicMcpCapabilities();
-  ASSERT_EQ(public_tools.size(), 59u);
+  ASSERT_EQ(public_tools.size(), 65u);
 
   auto expect_closed_schema = [](const base::DictValue &tool) {
     const std::string *name = tool.FindString("name");
@@ -644,7 +650,7 @@ TEST(MahoBrowserToolRegistryTest, CatalogSchemasMatchRuntimeArguments) {
 
 TEST(MahoBrowserToolRegistryTest, CanonicalDescriptorsHaveCompletePolicy) {
   const auto &descriptors = MahoBrowserToolRegistry::GetCapabilityDescriptors();
-  EXPECT_EQ(descriptors.size(), 94u);
+  EXPECT_EQ(descriptors.size(), 102u);
   EXPECT_TRUE(
       MahoBrowserToolRegistry::ValidateCapabilityDescriptors(descriptors));
 
@@ -695,8 +701,8 @@ TEST(MahoBrowserToolRegistryTest, FeatureGatesFilterSurfaceProjection) {
       MahoBrowserToolRegistry::kBrowserMcp);
   const auto gated = MahoBrowserToolRegistry::GetCapabilitiesForSurface(
       MahoBrowserToolRegistry::kBrowserMcp, false, false, false);
-  EXPECT_EQ(all.size(), 59u);
-  EXPECT_EQ(gated.size(), 45u);
+  EXPECT_EQ(all.size(), 65u);
+  EXPECT_EQ(gated.size(), 51u);
   for (const auto *descriptor : gated) {
     EXPECT_EQ(descriptor->feature_gate,
               MahoBrowserToolRegistry::FeatureGate::kAlways);
@@ -803,7 +809,7 @@ TEST(MahoBrowserToolRegistryTest,
   EXPECT_EQ(diagnostics.FindInt("catalogVersion"), 1);
   EXPECT_EQ(diagnostics.FindInt("schemaVersion"), 1);
   EXPECT_EQ(diagnostics.FindInt("resultVersion"), 1);
-  EXPECT_EQ(diagnostics.FindInt("canonicalCount"), 94);
+  EXPECT_EQ(diagnostics.FindInt("canonicalCount"), 102);
   ASSERT_TRUE(diagnostics.FindString("catalogHash"));
   EXPECT_EQ(diagnostics.FindString("catalogHash")->size(), 64u);
 
@@ -817,8 +823,8 @@ TEST(MahoBrowserToolRegistryTest,
   ASSERT_TRUE(surfaces);
   const base::DictValue* public_mcp = surfaces->FindDict("publicMcp");
   ASSERT_TRUE(public_mcp);
-  EXPECT_EQ(public_mcp->FindInt("count"), 45);
-  EXPECT_EQ(public_mcp->FindList("ids")->size(), 45u);
+  EXPECT_EQ(public_mcp->FindInt("count"), 51);
+  EXPECT_EQ(public_mcp->FindList("ids")->size(), 51u);
   EXPECT_FALSE(surfaces->Find("desktopAgent"));
   EXPECT_FALSE(surfaces->Find("cliAgent"));
   EXPECT_FALSE(surfaces->Find("cliGeneric"));
@@ -1519,7 +1525,6 @@ TEST(MahoBrowserToolRegistryTest, HelpRequestSchemaRequiresPrompt) {
 }
 
 TEST(MahoBrowserToolRegistryTest, HelpRequestDispatchReturnsWaiting) {
-  // Stub dispatch without request_id -> server-minted id with waiting status
   base::DictValue params;
   params.Set("prompt", "Please solve the verification challenge.");
   std::string error;
@@ -1528,12 +1533,14 @@ TEST(MahoBrowserToolRegistryTest, HelpRequestDispatchReturnsWaiting) {
   EXPECT_TRUE(error.empty());
   const std::string* status = outcome.FindString("status");
   ASSERT_TRUE(status);
-  EXPECT_EQ(*status, "waiting");
+  EXPECT_EQ(*status, "waiting_for_human_help");
+  ASSERT_TRUE(outcome.FindString("prompt"));
+  EXPECT_EQ(*outcome.FindString("prompt"),
+            "Please solve the verification challenge.");
   const std::string* request_id = outcome.FindString("request_id");
   ASSERT_TRUE(request_id);
   EXPECT_FALSE(request_id->empty());
 
-  // Stub dispatch with explicit request_id and timeout_ms
   base::DictValue explicit_params;
   explicit_params.Set("prompt", "Please complete 2FA on screen.");
   explicit_params.Set("request_id", "req-custom-42");
@@ -1545,7 +1552,8 @@ TEST(MahoBrowserToolRegistryTest, HelpRequestDispatchReturnsWaiting) {
   EXPECT_TRUE(explicit_error.empty());
   const std::string* explicit_status = explicit_outcome.FindString("status");
   ASSERT_TRUE(explicit_status);
-  EXPECT_EQ(*explicit_status, "waiting");
+  EXPECT_EQ(*explicit_status, "waiting_for_human_help");
+  EXPECT_EQ(explicit_outcome.FindInt("timeout_ms"), 60000);
   const std::string* explicit_id = explicit_outcome.FindString("request_id");
   ASSERT_TRUE(explicit_id);
   EXPECT_EQ(*explicit_id, "req-custom-42");

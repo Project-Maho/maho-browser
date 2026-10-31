@@ -1,0 +1,21 @@
+{
+  "site": "google",
+  "site_tools": [
+    {
+      "name": "web_search",
+      "file": "web_search.js",
+      "kind": "read",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  ]
+}

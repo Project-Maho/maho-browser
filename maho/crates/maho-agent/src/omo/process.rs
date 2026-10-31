@@ -54,12 +54,27 @@ impl From<ProcessError> for AgentError {
 // `--multi-session` is deliberately absent: the arg parser sets it itself when it
 // accepts `--listen`, so passing it again is redundant.
 pub fn rpc_argv(entry: &Path, socket: &Path, system_prompt: Option<&Path>) -> Vec<String> {
+    rpc_argv_with_plugin(entry, socket, system_prompt, false)
+}
+
+/// `plugin_loaded` adds `--exclude-tools` for the omo-ai plugin's LSP tools, which a
+/// browser agent without a workspace cannot use.
+pub fn rpc_argv_with_plugin(
+    entry: &Path,
+    socket: &Path,
+    system_prompt: Option<&Path>,
+    plugin_loaded: bool,
+) -> Vec<String> {
     let mut args = vec![
         entry.display().to_string(),
         "--listen".to_string(),
         format!("unix://{}", socket.display()),
         "--no-builtin-tools".to_string(),
     ];
+    if plugin_loaded {
+        args.push("--exclude-tools".to_string());
+        args.push(super::config::EXCLUDED_PLUGIN_TOOLS.join(","));
+    }
     if let Some(sp) = system_prompt {
         args.push("--system-prompt".to_string());
         args.push(sp.display().to_string());
@@ -95,7 +110,8 @@ impl OmoProcess {
         } else {
             None
         };
-        let argv = rpc_argv(rpc_entry, socket_path, sp_arg);
+        let argv =
+            rpc_argv_with_plugin(rpc_entry, socket_path, sp_arg, config.plugin_dir().is_some());
         let mut command = Command::new(runtime_binary);
         command.args(&argv);
 
@@ -203,6 +219,21 @@ mod tests {
             !argv.iter().any(|a| a == "--multi-session"),
             "--listen already implies multi-session; passing it again is redundant: {argv:?}"
         );
+    }
+
+    #[test]
+    fn rpc_argv_excludes_plugin_lsp_tools_only_when_plugin_loaded() {
+        let entry = Path::new("/opt/omo/rpc-entry.js");
+        let socket = Path::new("/tmp/x/rpc.sock");
+        let without = rpc_argv_with_plugin(entry, socket, None, false);
+        assert!(!without.iter().any(|a| a == "--exclude-tools"));
+        let with = rpc_argv_with_plugin(entry, socket, None, true);
+        let idx = with.iter().position(|a| a == "--exclude-tools").expect("flag");
+        assert_eq!(
+            with[idx + 1],
+            "lsp_diagnostics,lsp_goto_definition,lsp_find_references,lsp_symbols,lsp_prepare_rename,lsp_rename"
+        );
+        assert_eq!(with[3], "--no-builtin-tools");
     }
 
     #[test]

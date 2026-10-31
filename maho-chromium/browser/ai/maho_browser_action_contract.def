@@ -4,7 +4,8 @@
 // Approval column policy: driving the browser is full access, so plain page
 // and input actions are NotRequired. Only actions that leave the browser keep
 // an approval gate here: browser_file_upload_select reaches the local
-// filesystem and browser_visual_click drives OS-level (computer use) input.
+// filesystem and browser_visual_click / browser_native_type /
+// browser_native_key drive OS-level (computer use) input.
 // See CapabilityLeavesBrowserBoundary() in maho_browser_action_contract.h.
 
 #ifndef MAHO_BROWSER_ACTION_CONTRACT
@@ -27,5 +28,7 @@ MAHO_BROWSER_ACTION_CONTRACT(browser_scroll, "browser_scroll", Action, No, Sensi
 MAHO_BROWSER_ACTION_CONTRACT(browser_hover, "browser_hover", Action, No, Sensitive, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)
 MAHO_BROWSER_ACTION_CONTRACT(browser_key_press, "browser_key_press", Action, No, Sensitive, NotRequired, Required, ActiveTabOrigin, FailClosed)
 MAHO_BROWSER_ACTION_CONTRACT(browser_visual_click, "browser_visual_click", Action, Yes, Sensitive, Required, Required, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_native_type, "browser_native_type", Action, Yes, Sensitive, Required, Required, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_native_key, "browser_native_key", Action, Yes, Sensitive, Required, Required, ActiveTabOrigin, FailClosed)
 MAHO_BROWSER_ACTION_CONTRACT(browser_observe, "browser_observe", Read, No, Low, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)
 MAHO_BROWSER_ACTION_CONTRACT(browser_request_help, "browser_request_help", Action, No, Low, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)
