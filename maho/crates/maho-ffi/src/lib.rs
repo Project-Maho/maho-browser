@@ -20103,6 +20103,52 @@ pub unsafe extern "C" fn maho_vault_get_policy_json(core: *mut MahoCore) -> *mut
     )
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VaultResolveAgentPolicyRequest {
+    origin: String,
+}
+
+/// # Safety
+/// The caller provides a live uniquely borrowed core and readable NUL-terminated request.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_resolve_agent_policy_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = (unsafe { vault_core(core) }) else {
+                return ptr::null_mut();
+            };
+            let request = match unsafe {
+                vault_parse_json::<VaultResolveAgentPolicyRequest>(request_json)
+            } {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            let origin = match CredentialOrigin::try_from(request.origin) {
+                Ok(origin) => origin,
+                Err(_) => {
+                    return vault_error(
+                        VaultErrorCode::InvalidOrigin,
+                        "invalid credential origin",
+                    )
+                }
+            };
+            match core.resolve_vault_agent_policy(
+                None,
+                Some(&origin),
+                chrono::Utc::now(),
+            ) {
+                Ok(policy) => vault_ok(serde_json::json!({ "policy": policy.policy })),
+                Err(error) => vault_crud_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
 /// Persists an agent Vault policy override and records a policy-change audit row.
 ///
 /// # Safety
