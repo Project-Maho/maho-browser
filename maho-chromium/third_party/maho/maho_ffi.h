@@ -3919,7 +3919,9 @@ char *maho_vault_unlock_with_recovery_json(struct MahoCore *core, const char *re
 /**
  * Silently unlocks the profile-owned Vault with the device-wrapped key that
  * the last successful passphrase/recovery/account unlock enrolled for this
- * device. Returns the same envelope as `maho_vault_unlock_json`.
+ * device (a 0600 file next to the profile database; the OS keystore is
+ * never used). Returns the same
+ * envelope as `maho_vault_unlock_json`.
  *
  * # Safety
  * `core` must be valid.
