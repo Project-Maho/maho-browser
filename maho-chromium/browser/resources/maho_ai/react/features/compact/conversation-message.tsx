@@ -87,6 +87,14 @@ const markdownMessageClassName = cn(
     '[&_pre_code]:border-0 [&_pre_code]:bg-transparent [&_pre_code]:p-0',
     '[&_code]:rounded-md [&_code]:border [&_code]:border-border [&_code]:bg-secondary/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[0.85em] [&_code]:[overflow-wrap:anywhere]',
     '[&_blockquote]:m-0 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground',
+    // Tables size to their content, wrap cells at word boundaries, and scroll
+    // horizontally only when even the wrapped table is wider than the column.
+    // The message's overflow-wrap:anywhere would otherwise shrink every
+    // column's min-content to one glyph and split short words letter by letter.
+    '[&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:text-xs',
+    '[&_th]:border [&_th]:border-border [&_th]:bg-secondary/50 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:align-top [&_th]:font-semibold [&_th]:[overflow-wrap:break-word]',
+    '[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_td]:align-top [&_td]:[overflow-wrap:break-word]',
+    '[&_td_code]:[overflow-wrap:break-word] [&_td_a]:[overflow-wrap:anywhere]',
     '[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-4 hover:[&_a]:text-foreground');
 
 export const ConversationMessage = React.memo(
