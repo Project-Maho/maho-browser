@@ -1,72 +1,72 @@
 {
   "schemaVersion": 1,
   "bundleVersion": "0.1.0",
-  "buildTimestamp": 1792374993,
+  "buildTimestamp": 1793194330,
   "files": {
     "web-ai/index.html": {
       "size": 432,
-      "sha256": "2dddcda400b720c72f6780597f2ccb02b030720f3a48fe706dd43f0f44d16f46",
-      "modifiedTimestamp": 1792374993
+      "sha256": "9bad462c2928e31b9bc5b3527352ebd19bf1343c2f355cf12b953abcf73127d4",
+      "modifiedTimestamp": 1793194330
     },
-    "web-ai/chunks/conversation-list-screen-DOGh_61C.js": {
-      "size": 17203,
-      "sha256": "0c628aacf18854d272b94e4f975229f3a30da58baada8b5080c6ab1125306b6d",
-      "modifiedTimestamp": 1792374993
+    "web-ai/chunks/agent-screen-DptbpD8a.js": {
+      "size": 32437,
+      "sha256": "ea0fda2a6198fc150c02610f238dfa48ea1108463df96383d430dd33480ff073",
+      "modifiedTimestamp": 1793194330
     },
-    "web-ai/chunks/agent-screen-BBVklPN5.js": {
-      "size": 35039,
-      "sha256": "b0e2b78819bb2fdcb3c1d1490b598c3904db2b7e31311306564b7ae522a60b4a",
-      "modifiedTimestamp": 1792374993
+    "web-ai/chunks/byok-screen-BpJC4D_s.js": {
+      "size": 12618,
+      "sha256": "47c0faf1e9c63a94af8800ab7d06b6ba0802ae4928ad735bcc4652043714ad22",
+      "modifiedTimestamp": 1793194330
     },
-    "web-ai/chunks/byok-screen-Dd51_2Dj.js": {
-      "size": 12230,
-      "sha256": "8b94d1832451f5228cb95968b98f13f647e76ee7a93f0a4e6289300fe6c34bbd",
-      "modifiedTimestamp": 1792374993
+    "web-ai/chunks/onboarding-screen-CholYf7-.js": {
+      "size": 10176,
+      "sha256": "ced527dbe9f0cda96d53628b3d596eb20576bb1f43b50daaae02b81af391ac17",
+      "modifiedTimestamp": 1793194330
     },
-    "web-ai/chunks/onboarding-screen-DL7QZU5P.js": {
-      "size": 9534,
-      "sha256": "a35764d745ec0df90b58d47fe59878bc023487910f21ca79ee8f7eda0c2f0016",
-      "modifiedTimestamp": 1792374993
-    },
-    "web-ai/assets/index-Cqfq2zWL.css": {
-      "size": 19015,
-      "sha256": "fb999b2056951742a75b6518abe3fd9723baba89e5924eb2520ac5e5db5a2554",
-      "modifiedTimestamp": 1792374993
+    "web-ai/chunks/conversation-list-screen-Bc6lFZLk.js": {
+      "size": 19346,
+      "sha256": "42ddc557297ae379fa50dc4fc5a885a26a432469c8fb165e9ec3f1483145a672",
+      "modifiedTimestamp": 1793194330
     },
     "web-ai/assets/maho-logo-BtD8zpUc.png": {
       "size": 17462,
       "sha256": "845a0e5195a9b8b5adc44dde22dc700da0c3cc91a2005b0ee1e378bbd4ecdf37",
-      "modifiedTimestamp": 1792374993
+      "modifiedTimestamp": 1793194330
     },
-    "web-ai/assets/conversation-list-screen-BRhYgtxU.css": {
-      "size": 8758,
-      "sha256": "4d9dc53e600f60cd42c7a55e0ab28ebadf6328a125bf46e97ed4ad4053a84551",
-      "modifiedTimestamp": 1792374993
+    "web-ai/assets/conversation-list-screen-CmbW7PrS.css": {
+      "size": 9537,
+      "sha256": "55fb7abf388480b8080ea041fc96d253fe27d6d0517aa6eebd14bbdaf8185f00",
+      "modifiedTimestamp": 1793194330
     },
     "web-ai/assets/byok-screen-DAdoM5fb.css": {
       "size": 3720,
       "sha256": "01f3d441c61c57690227022c9cdc4923d1c35aaf347958dc40c0c222b771ad7b",
-      "modifiedTimestamp": 1792374993
+      "modifiedTimestamp": 1793194330
+    },
+    "web-ai/assets/index-DN_ulDuD.css": {
+      "size": 20012,
+      "sha256": "033961c846cf584ca08ba2f302d3cf001fdf7ad239a7eb94bd284d24bc61e500",
+      "modifiedTimestamp": 1793194330
+    },
+    "web-ai/assets/agent-screen-DficvUw9.css": {
+      "size": 15364,
+      "sha256": "3481881be99adf95da59d81e9a2cf159b83afb107b3110e6aa7d8fe6f40da15b",
+      "modifiedTimestamp": 1793194330
     },
     "web-ai/assets/maho-star-BKA5J-jZ.png": {
       "size": 134423,
       "sha256": "c050e88d1e6ebf39a060d7354cac306122481a0e3566f522d890461a2940f509",
-      "modifiedTimestamp": 1792374993
+      "modifiedTimestamp": 1793194330
     },
     "web-ai/assets/onboarding-screen-Dbx8HB5B.css": {
       "size": 8207,
       "sha256": "a3691651edd9d3e69f132a883937be1fcf2447e70a1d25613f5d7423e07cc866",
-      "modifiedTimestamp": 1792374993
-    },
-    "web-ai/assets/agent-screen-D616w5Uc.css": {
-      "size": 16361,
-      "sha256": "81d0866e2b4b97f316dc4f469ef0bdcd17d15cbef782b4379d9af7b347c10ab6",
-      "modifiedTimestamp": 1792374993
+      "modifiedTimestamp": 1793194330
     },
     "web-ai/ai-bundle.js": {
-      "size": 77475,
-      "sha256": "b06ca425800ee289418a1050c0147846eb2afa30524b73045de98cf889117e07",
-      "modifiedTimestamp": 1792374993
+      "size": 81799,
+      "sha256": "a7ebac98932355580f3f64d8850ce2379260ff9cea574f9d96ab19c317199939",
+      "modifiedTimestamp": 1793194330
     }
   }
 }

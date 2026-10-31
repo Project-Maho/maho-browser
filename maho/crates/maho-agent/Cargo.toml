@@ -41,6 +41,11 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 # laid out directly, so only the core writer is needed.
 printpdf = { version = "0.12", default-features = false }
 
+# rquickjs ships prebuilt QuickJS bindings only for desktop/server targets;
+# iOS has none, so generate them with bindgen (libclang from Xcode).
+[target.'cfg(target_os = "ios")'.dependencies]
+rquickjs = { version = "0.14", default-features = false, features = ["bindgen"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"
 seccompiler = "0.5.0"
