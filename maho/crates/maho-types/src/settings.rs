@@ -359,6 +359,22 @@ pub struct Settings {
     pub advanced: AdvancedSettings,
     #[serde(default)]
     pub notifications: NotificationSettings,
+    #[serde(default)]
+    pub episodic_memory: EpisodicMemorySettings,
+}
+
+/// Browser-only episodic memory. Off by default; nothing is recorded until
+/// the user enables it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodicMemorySettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub paused: bool,
+    /// Registrable domains the user excluded (e.g. "example.com").
+    #[serde(default)]
+    pub excluded_domains: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

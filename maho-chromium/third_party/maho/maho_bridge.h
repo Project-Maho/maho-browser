@@ -211,6 +211,20 @@ BlockResult CheckRequest(MahoCore* core,
 int GetContentBlockingMode(MahoCore* core);
 bool SetContentBlockingMode(MahoCore* core, int mode);
 std::string GetContentBlockerStateJson(MahoCore* core);
+// Episodic memory (opt-in, browser-only). Empty string / -1 on failure.
+std::string RecordEpisodeJson(MahoCore* core, const std::string& episode_json);
+int64_t ForgetEpisodeOrigin(MahoCore* core, const std::string& site);
+std::string SearchMemoryHybridJson(MahoCore* core,
+                                   const std::string& query,
+                                   uint32_t top_k);
+// SiteSession sync (opt-in https origins; cookies + localStorage). Call on the
+// thread that owns |core|. Empty string / false on failure.
+std::string GetSiteSessionOptedOriginsJson(MahoCore* core);
+bool SetSiteSessionOptedOriginsJson(MahoCore* core,
+                                    const std::string& origins_json);
+std::string GetSiteSessionExportOriginsJson(MahoCore* core);
+bool RecordSiteSessionJson(MahoCore* core, const std::string& record_json);
+std::string TakeSiteSessionAppliesJson(MahoCore* core);
 std::string AddFilterListResultJson(MahoCore* core,
                                     const char* id,
                                     const char* name,

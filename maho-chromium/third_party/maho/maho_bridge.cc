@@ -658,6 +658,65 @@ std::string GetContentBlockerStateJson(MahoCore* core) {
   return ret;
 }
 
+std::string RecordEpisodeJson(MahoCore* core, const std::string& episode_json) {
+  char* result = maho_core_episode_record_json(core, episode_json.c_str());
+  if (!result) {
+    return std::string();
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+int64_t ForgetEpisodeOrigin(MahoCore* core, const std::string& site) {
+  return maho_core_episode_forget_origin(core, site.c_str());
+}
+
+std::string SearchMemoryHybridJson(MahoCore* core,
+                                   const std::string& query,
+                                   uint32_t top_k) {
+  char* result = maho_core_search_memory_hybrid_json(core, query.c_str(), top_k);
+  if (!result) {
+    return std::string();
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+namespace {
+std::string TakeFfiString(char* result) {
+  if (!result) {
+    return std::string();
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+}  // namespace
+
+std::string GetSiteSessionOptedOriginsJson(MahoCore* core) {
+  return TakeFfiString(maho_core_site_session_get_opted_origins_json(core));
+}
+
+bool SetSiteSessionOptedOriginsJson(MahoCore* core,
+                                    const std::string& origins_json) {
+  return maho_core_site_session_set_opted_origins_json(core,
+                                                        origins_json.c_str());
+}
+
+std::string GetSiteSessionExportOriginsJson(MahoCore* core) {
+  return TakeFfiString(maho_core_site_session_records_for_export_json(core));
+}
+
+bool RecordSiteSessionJson(MahoCore* core, const std::string& record_json) {
+  return maho_core_site_session_record_json(core, record_json.c_str());
+}
+
+std::string TakeSiteSessionAppliesJson(MahoCore* core) {
+  return TakeFfiString(maho_core_site_session_take_applied_json(core));
+}
+
 std::string AddFilterListResultJson(MahoCore* core,
                                     const char* id,
                                     const char* name,

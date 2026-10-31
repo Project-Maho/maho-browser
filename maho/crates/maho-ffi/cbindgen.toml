@@ -6,6 +6,9 @@ no_includes = true
 sys_includes = ["stdint.h", "stddef.h", "stdbool.h"]
 style = "both"
 
+[defines]
+"feature = debug-test-hooks" = "MAHO_FFI_DEBUG_TEST_HOOKS"
+
 [export]
 # These three ABI types are declared by hand in the Chromium overlay
 # (browser/ai/maho_unified_agent_adapter.h) as a C++ `enum class` and matching
