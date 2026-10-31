@@ -1069,7 +1069,7 @@ void MahoMailPageHandler::ExtractOtp(const std::string& account_id, const std::s
     std::move(callback).Run(false, "Mail service unavailable");
     return;
   }
-  service->ExtractOtp(account_id, folder_id, query, max_age_seconds, base::BindOnce(
+  service->ExtractOtp(account_id, folder_id, query, max_age_seconds, /*page_origin=*/"", base::BindOnce(
       [](ExtractOtpCallback cb, bool ok, std::string result) {
         std::move(cb).Run(ok, std::move(result));
       },

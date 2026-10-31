@@ -149,18 +149,16 @@ pub fn recover_from_terminal() -> io::Result<RecoveryUnlockResult> {
     let mut reader = TerminalRecoverySecretReader;
     let db_path = crate::workspace::default_db_path();
 
-    #[cfg(target_os = "macos")]
+    // Same file-backed device key the browser uses (next to maho.db). The OS
+    // keystore (Keychain / Secret Service / DPAPI) is never touched.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        let mut unlocker = ProfileRecoveryUnlocker::open(&db_path, |_, device_id| {
-            maho_core::oscrypt::MacOsVaultDeviceProtector::for_device_id(device_id)
-        })?;
-        return recover_with(&mut reader, &mut unlocker);
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let mut unlocker = ProfileRecoveryUnlocker::open(&db_path, |profile_id, device_id| {
-            maho_core::oscrypt::LinuxVaultDeviceProtector::for_device(profile_id, device_id)
+        let device_key_path = db_path
+            .parent()
+            .ok_or_else(profile_recovery_open_error)?
+            .join(maho_core::oscrypt::FileVaultDeviceProtector::FILE_NAME);
+        let mut unlocker = ProfileRecoveryUnlocker::open(&db_path, |_, _| {
+            maho_core::oscrypt::FileVaultDeviceProtector::new(device_key_path)
         })?;
         return recover_with(&mut reader, &mut unlocker);
     }

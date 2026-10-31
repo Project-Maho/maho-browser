@@ -155,6 +155,14 @@ bool MahoPasswordAuthorizationService::ConsumeAuthorization(
   return true;
 }
 
+bool MahoPasswordAuthorizationService::IsPageFillLookupAllowed(
+    const std::string &profile_key, const std::string &origin_scope) const {
+  const bool vault_locked =
+      vault_locked_override_.value_or(maho::IsVaultLockedForUi());
+  return !profile_key.empty() &&
+         !CanonicalizeOriginScope(origin_scope).empty() && !vault_locked;
+}
+
 void MahoPasswordAuthorizationService::RevokeProfile(
     const std::string &profile_key) {
   if (profile_key.empty()) {

@@ -3728,6 +3728,25 @@ char *maho_vault_unlock_json(struct MahoCore *core, const char *request_json);
 char *maho_vault_unlock_with_recovery_json(struct MahoCore *core, const char *request_json);
 
 /**
+ * Silently unlocks the profile-owned Vault with the device-wrapped key that
+ * the last successful passphrase/recovery/account unlock enrolled for this
+ * device (a 0600 file next to the profile database; the OS keystore is
+ * never used). Returns the same
+ * envelope as `maho_vault_unlock_json`.
+ *
+ * # Safety
+ * `core` must be valid.
+ */
+char *maho_vault_unlock_with_device_json(struct MahoCore *core);
+
+/**
+ * Opts this process into the file-backed Vault device protector. Only the
+ * browser calls this, once at startup; tests and tools never create device key
+ * files. The OS keystore (Keychain/Secret Service/DPAPI) is never used.
+ */
+void maho_vault_enable_platform_device_protector(void);
+
+/**
  * Locks the profile-owned Vault and revokes active grants.
  *
  * # Safety

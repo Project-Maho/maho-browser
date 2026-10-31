@@ -27,6 +27,15 @@ pub struct VaultBackendSession {
     profile_id: maho_types::identifiers::ProfileId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VaultBackendMatchType {
+    /// Stored realm/origin equals the requested one (or unfiltered discovery).
+    Exact,
+    /// Different https host under the same registrable domain (eTLD+1).
+    Psl,
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultBackendLoginCredential {
@@ -45,12 +54,16 @@ pub struct VaultBackendLoginCredential {
     /// which case the C++ adapter falls back to Chromium's own defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub form_details: Option<VaultCredentialFormDetails>,
+    /// Serialized as `matchType`: `"exact"` or `"psl"`.
+    pub match_type: VaultBackendMatchType,
 }
 
 #[derive(Clone, Copy, Debug, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VaultBackendSecretAction {
     Fill,
+    /// Page-load discovery: decrypt without recording a use (no revision bump).
+    Preview,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -125,7 +138,9 @@ impl VaultBackendSession {
         let storage = maho_storage::sqlite::SqliteStorage::open(&self.profile_database_path)
             .map_err(|error| VaultBackendSessionError::Storage(error.to_string()))?;
         let operation = match action {
-            VaultBackendSecretAction::Fill => maho_types::vault::VaultAuditOperation::Fill,
+            VaultBackendSecretAction::Fill | VaultBackendSecretAction::Preview => {
+                maho_types::vault::VaultAuditOperation::Fill
+            }
         };
         let audit_context = super::audit::AuditContext::new(self.profile_id.clone(), operation);
 
@@ -138,6 +153,8 @@ impl VaultBackendSession {
                 VaultBackendSecretAction::Fill => {
                     runtime.use_login_password_at_revision(&repository, item_id, expected_revision)
                 }
+                VaultBackendSecretAction::Preview => runtime
+                    .peek_login_password_at_revision(&repository, item_id, expected_revision),
             }
         };
 
@@ -151,7 +168,7 @@ mod tests {
     use chrono::DateTime;
     use maho_types::vault::{VaultItemId, VaultRevision, VaultSchemaVersion};
 
-    use super::VaultBackendLoginCredential;
+    use super::{VaultBackendLoginCredential, VaultBackendMatchType};
 
     fn credential(revision: u64) -> VaultBackendLoginCredential {
         let timestamp = DateTime::from_timestamp(1_700_000_000, 0).expect("valid test timestamp");
@@ -165,6 +182,7 @@ mod tests {
             updated_at: timestamp,
             last_used_at: None,
             form_details: None,
+            match_type: VaultBackendMatchType::Exact,
         }
     }
 

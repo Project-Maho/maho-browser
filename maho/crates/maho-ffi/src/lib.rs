@@ -19305,6 +19305,38 @@ pub unsafe extern "C" fn maho_vault_unlock_with_recovery_json(
     )
 }
 
+/// Silently unlocks the profile-owned Vault with the device-wrapped key that
+/// the last successful passphrase/recovery/account unlock enrolled for this
+/// device (a 0600 file next to the profile database; the OS keystore is
+/// never used). Returns the same
+/// envelope as `maho_vault_unlock_json`.
+///
+/// # Safety
+/// `core` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_unlock_with_device_json(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = vault_core(core) else {
+                return ptr::null_mut();
+            };
+            match core.unlock_vault_with_platform_device() {
+                Ok(()) => vault_ok(core.vault_status()),
+                Err(error) => vault_lifecycle_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Opts this process into the file-backed Vault device protector. Only the
+/// browser calls this, once at startup; tests and tools never create device key
+/// files. The OS keystore (Keychain/Secret Service/DPAPI) is never used.
+#[no_mangle]
+pub extern "C" fn maho_vault_enable_platform_device_protector() {
+    maho_core::maho_core::set_platform_device_protector_enabled(true);
+}
+
 /// Locks the profile-owned Vault and revokes active grants.
 ///
 /// # Safety
@@ -20061,6 +20093,42 @@ mod vault_ffi_tests {
             read_owned_json(unsafe { maho_vault_status_json(core) })["data"]["lockState"],
             "auto_locked"
         );
+        free_core(core, &path);
+    }
+
+    #[test]
+    fn vault_ffi_device_unlock_after_passphrase_unlock_uses_file_key() {
+        maho_vault_enable_platform_device_protector();
+        let (_key_lock, core, path) = core_with_storage();
+        let init = initialize_request();
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_initialize_json(core, init.as_ptr()) })["ok"],
+            true
+        );
+        // SAFETY: the core is a valid profile-owned core.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_lock_json(core) })["data"]["lockState"],
+            "locked"
+        );
+        let unlock = request(serde_json::json!({"masterPassphrase": MASTER}));
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_unlock_json(core, unlock.as_ptr()) })["data"]
+                ["lockState"],
+            "unlocked"
+        );
+        let device_key = path.join("maho_vault_device.key");
+        assert!(device_key.exists(), "passphrase unlock must enroll the device key file");
+        // SAFETY: the core is a valid profile-owned core.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_lock_json(core) })["data"]["lockState"],
+            "locked"
+        );
+
+        // SAFETY: the core is a valid profile-owned core.
+        let device = read_owned_json(unsafe { maho_vault_unlock_with_device_json(core) });
+        assert_eq!(device["data"]["lockState"], "unlocked", "{device}");
         free_core(core, &path);
     }
 

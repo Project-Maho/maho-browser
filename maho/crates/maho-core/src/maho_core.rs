@@ -340,6 +340,16 @@ use crate::tab_preview_manager::TabPreviewManager;
 
 type UpdateListeners = Rc<RefCell<Vec<Box<dyn Fn(CoreUpdate)>>>>;
 
+/// Process-wide opt-in for the file-backed Vault device protector. Off by
+/// default so tests and tools never create device key files; the browser
+/// enables it once at startup. The OS keystore is never used.
+static PLATFORM_DEVICE_PROTECTOR_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_platform_device_protector_enabled(enabled: bool) {
+    PLATFORM_DEVICE_PROTECTOR_ENABLED.store(enabled, std::sync::atomic::Ordering::Release);
+}
+
 /// Typed outcome of [`crate::maho_core::MahoCore::ensure_vault_for_account`],
 /// the account-escrow ensure step driven at sign-in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,6 +462,127 @@ mod tests {
         let inherited = core.get_boosts_for_url("https://docs.example.co.uk/page");
         assert_eq!(inherited.len(), 1);
         assert_eq!(inherited[0].id, registrable.id);
+    }
+
+    struct FakeDeviceProtector {
+        secret: Option<&'static [u8]>,
+    }
+
+    impl crate::oscrypt::VaultDeviceProtector for FakeDeviceProtector {
+        fn device_secret(
+            &self,
+        ) -> Result<zeroize::Zeroizing<Vec<u8>>, crate::oscrypt::VaultDeviceProtectorError> {
+            self.secret
+                .map(|secret| zeroize::Zeroizing::new(secret.to_vec()))
+                .ok_or(crate::oscrypt::VaultDeviceProtectorError::OperationFailed)
+        }
+    }
+
+    fn device_test_core(name: &str, secret: Option<&'static [u8]>) -> (tempfile::TempDir, MahoCore) {
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join(name);
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        core.test_device_protector = Some(Box::new(FakeDeviceProtector { secret }));
+        (dir, core)
+    }
+
+    #[test]
+    fn vault_passphrase_unlock_enrolls_device_and_device_unlock_reopens() {
+        let (_dir, mut core) = device_test_core("device-enroll.sqlite", Some(b"unit-test-device-secret-32-bytes"));
+        core.initialize_vault(b"master", b"recovery").expect("init");
+        core.lock_vault().expect("lock after init");
+
+        core.unlock_vault(b"master").expect("passphrase unlock");
+        core.lock_vault().expect("lock");
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Locked
+        );
+
+        core.unlock_vault_with_platform_device()
+            .expect("device unlock with enrolled key");
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Unlocked
+        );
+    }
+
+    #[test]
+    fn vault_device_unlock_without_enrollment_fails_and_stays_locked() {
+        let (_dir, mut core) = device_test_core("device-none.sqlite", Some(b"unit-test-device-secret-32-bytes"));
+        core.initialize_vault(b"master", b"recovery").expect("init");
+        core.lock_vault().expect("lock");
+
+        let result = core.unlock_vault_with_platform_device();
+
+        assert!(matches!(
+            result,
+            Err(crate::vault_manager::VaultManagerError::DeviceBindingMismatch)
+        ));
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Locked
+        );
+    }
+
+    #[test]
+    fn vault_device_enroll_failure_never_fails_passphrase_unlock() {
+        let (_dir, mut core) = device_test_core("device-fail.sqlite", None);
+        core.initialize_vault(b"master", b"recovery").expect("init");
+        core.lock_vault().expect("lock");
+
+        core.unlock_vault(b"master")
+            .expect("passphrase unlock must succeed even if enrollment fails");
+
+        assert_eq!(
+            core.vault_status().lock_state,
+            maho_types::vault::VaultLockState::Unlocked
+        );
+        assert!(core.last_vault_lifecycle_error().is_some());
+    }
+
+    #[test]
+    fn vault_file_device_protector_creates_0600_secret_and_reuses_it() {
+        use crate::oscrypt::VaultDeviceProtector;
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join(crate::oscrypt::FileVaultDeviceProtector::FILE_NAME);
+        let protector = crate::oscrypt::FileVaultDeviceProtector::new(path.clone());
+
+        let first = protector.device_secret().expect("create secret");
+        let second = protector.device_secret().expect("reuse secret");
+
+        assert_eq!(first.len(), 32);
+        assert_eq!(first.as_slice(), second.as_slice());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn vault_device_protector_is_unavailable_until_browser_opts_in() {
+        crate::install_test_sqlcipher_key();
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("device-optin.sqlite");
+        let mut core = MahoCore::new().with_storage(path.to_str().expect("utf8"));
+        core.initialize_vault(b"master", b"recovery").expect("init");
+        core.lock_vault().expect("lock");
+
+        core.unlock_vault(b"master").expect("unlock");
+
+        assert!(matches!(
+            core.last_vault_lifecycle_error(),
+            Some(crate::vault_manager::VaultManagerError::DeviceProtector(
+                crate::oscrypt::VaultDeviceProtectorError::Unavailable
+            ))
+        ));
+        assert!(!dir
+            .path()
+            .join(crate::oscrypt::FileVaultDeviceProtector::FILE_NAME)
+            .exists());
     }
 
     #[test]
@@ -2528,6 +2659,13 @@ pub struct MahoCore {
     vault_item_persist_fault: bool,
     #[cfg(test)]
     vault_initialization_persist_fault: bool,
+    /// Test seam replacing the platform device protector (Keychain/DPAPI/
+    /// Secret Service) used by device auto-enroll and device unlock.
+    #[cfg(test)]
+    test_device_protector: Option<Box<dyn VaultDeviceProtector>>,
+    /// `maho_vault_device.key` next to the profile database; None for
+    /// in-memory cores.
+    vault_device_secret_path: Option<std::path::PathBuf>,
     #[cfg(test)]
     profile_sqlite_persist_fault: bool,
     #[cfg(test)]
@@ -2886,6 +3024,9 @@ impl MahoCore {
             #[cfg(test)]
             vault_initialization_persist_fault: false,
             #[cfg(test)]
+            test_device_protector: None,
+            vault_device_secret_path: None,
+            #[cfg(test)]
             profile_sqlite_persist_fault: false,
             #[cfg(test)]
             profile_lmdb_persist_fault: false,
@@ -2989,6 +3130,9 @@ impl MahoCore {
             Ok(storage) => {
                 eprintln!("[MahoCore::with_storage] OK: opened SQLite storage at {path}");
                 self.storage = Some(storage);
+                self.vault_device_secret_path = std::path::Path::new(path)
+                    .parent()
+                    .map(|dir| dir.join(crate::oscrypt::FileVaultDeviceProtector::FILE_NAME));
                 if let Some(ref storage) = self.storage {
                     self.sync_baseline_needed = storage.get_setting("sync_baseline_needed")
                         .ok().flatten().as_deref() == Some("true");
@@ -4239,7 +4383,91 @@ impl MahoCore {
         self.vault_runtime
             .unlock(master_passphrase, chrono::Utc::now())?;
         self.migrate_legacy_vault_to_account_escrow();
+        self.enroll_platform_device_best_effort();
         Ok(())
+    }
+
+    /// Binding for this profile on this device: active profile id + the
+    /// persistent sync device id (same pair the `maho` CLI recovery path uses).
+    fn platform_device_binding(&self) -> Result<VaultDeviceBinding, VaultManagerError> {
+        let profile_id = self
+            .get_active_profile_id()
+            .ok_or(VaultManagerError::DeviceBindingMismatch)?
+            .to_string();
+        let device_id = self.sync_device_id();
+        Ok(VaultDeviceBinding::new(
+            &profile_id,
+            &device_id,
+            crate::oscrypt::VaultDevicePlatform::Desktop,
+        ))
+    }
+
+    /// Runs `f` with the file-backed device protector stored next to the
+    /// profile database. Processes that have not opted in through
+    /// `set_platform_device_protector_enabled` (all cargo tests, the CLI) and
+    /// in-memory cores report `DeviceProtector(Unavailable)`.
+    fn with_platform_device_protector<R>(
+        &self,
+        binding: &VaultDeviceBinding,
+        f: impl FnOnce(&dyn VaultDeviceProtector) -> Result<R, VaultManagerError>,
+    ) -> Result<R, VaultManagerError> {
+        #[cfg(test)]
+        if let Some(protector) = self.test_device_protector.as_deref() {
+            return f(protector);
+        }
+        if !PLATFORM_DEVICE_PROTECTOR_ENABLED.load(std::sync::atomic::Ordering::Acquire) {
+            let _ = (binding, f);
+            return Err(VaultManagerError::DeviceProtector(
+                crate::oscrypt::VaultDeviceProtectorError::Unavailable,
+            ));
+        }
+        // File-backed only: the OS keystore (macOS Keychain, Secret Service,
+        // DPAPI) is never used for the device secret.
+        let _ = binding;
+        let path = self.vault_device_secret_path.clone().ok_or(
+            VaultManagerError::DeviceProtector(
+                crate::oscrypt::VaultDeviceProtectorError::Unavailable,
+            ),
+        )?;
+        let protector = crate::oscrypt::FileVaultDeviceProtector::new(path);
+        f(&protector)
+    }
+
+    /// Wraps the active Vault key for this device and persists it so the next
+    /// browser start can unlock silently. Best-effort: a failure is recorded in
+    /// `last_vault_lifecycle_error` and never fails the unlock that triggered it.
+    fn enroll_platform_device_best_effort(&mut self) {
+        if self.vault_runtime.status().lock_state != maho_types::vault::VaultLockState::Unlocked {
+            return;
+        }
+        let result = self.platform_device_binding().and_then(|binding| {
+            let bundle = self.with_platform_device_protector(&binding, |protector| {
+                self.vault_runtime.wrap_active_key_for_device(&binding, protector)
+            })?;
+            self.persist_vault_device_bundle(&bundle, &binding, chrono::Utc::now())
+        });
+        if let Err(error) = result {
+            eprintln!("[vault] device auto-enroll skipped; next start needs a manual unlock");
+            self.last_vault_lifecycle_error = Some(error);
+        }
+    }
+
+    /// Silent unlock with the device-wrapped key enrolled by a previous
+    /// successful unlock. No enrolled key -> `DeviceBindingMismatch`.
+    pub fn unlock_vault_with_platform_device(&mut self) -> Result<(), VaultManagerError> {
+        let binding = self.platform_device_binding()?;
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            VaultManagerError::Storage("vault storage is not configured".to_string())
+        })?;
+        let row = storage
+            .get_vault_device_key(binding.device_id())
+            .map_err(|error| VaultManagerError::Storage(error.to_string()))?
+            .ok_or(VaultManagerError::DeviceBindingMismatch)?;
+        let bundle = VaultDeviceWrapBundle::from_opaque_bytes(&row.wrapped_key)?;
+        self.with_platform_device_protector(&binding, |protector| {
+            self.vault_runtime
+                .unlock_with_device(&bundle, &binding, protector, chrono::Utc::now())
+        })
     }
 
     /// One-time account-escrow migration for a legacy passphrase vault: the
@@ -4266,7 +4494,9 @@ impl MahoCore {
         recovery_secret: &[u8],
     ) -> Result<(), VaultManagerError> {
         self.vault_runtime
-            .unlock_with_recovery(recovery_secret, chrono::Utc::now())
+            .unlock_with_recovery(recovery_secret, chrono::Utc::now())?;
+        self.enroll_platform_device_best_effort();
+        Ok(())
     }
 
     pub fn unlock_vault_with_device(
@@ -4317,6 +4547,7 @@ impl MahoCore {
         ) {
             Ok(outcome) => {
                 self.last_vault_account_outcome = Some(outcome.code());
+                self.enroll_platform_device_best_effort();
                 Ok(outcome)
             }
             Err(error) => {

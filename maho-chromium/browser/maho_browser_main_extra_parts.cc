@@ -59,6 +59,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/file_select_helper.h"
 #include "chrome/browser/notifications/notification_common.h"
 #include "chrome/browser/notifications/notification_display_service.h"
@@ -167,6 +168,9 @@
 
 namespace {
 MahoBrowserMainExtraParts* g_instance = nullptr;
+// Bumped on every lifecycle lock (UI thread only) so a device auto-unlock
+// reply that raced a suspend lock can detect it and stay locked.
+uint64_t g_vault_lifecycle_lock_count = 0;
 base::RepeatingCallback<void(
     MahoBrowserMainExtraParts::CoreStartupStageForTesting)>&
 CoreStartupObserverForTesting() {
@@ -470,13 +474,23 @@ std::string ExecuteMcpActionJsAllFramesBlocking(content::WebContents* wc,
   }
   base::WeakPtr<content::WebContents> wc_weak = wc->GetWeakPtr();
   std::string result;
-  std::vector<content::RenderFrameHost*> frames;
+  // Each iteration spins a nested RunLoop, during which frames can be
+  // navigated away or destroyed. Keep ids, not raw pointers, and re-resolve
+  // before every call.
+  std::vector<content::GlobalRenderFrameHostId> frame_ids;
   wc->ForEachRenderFrameHost([&](content::RenderFrameHost* rfh) {
     if (rfh && rfh->IsRenderFrameLive()) {
-      frames.push_back(rfh);
+      frame_ids.push_back(rfh->GetGlobalId());
     }
   });
-  for (content::RenderFrameHost* rfh : frames) {
+  for (const content::GlobalRenderFrameHostId& frame_id : frame_ids) {
+    if (!wc_weak) {
+      break;
+    }
+    content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(frame_id);
+    if (!rfh || !rfh->IsRenderFrameLive()) {
+      continue;
+    }
     base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
     std::string frame_result;
     rfh->ExecuteJavaScriptInIsolatedWorld(
@@ -2430,6 +2444,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
       const std::string& folder_id,
       const std::string& query,
       int64_t max_age_seconds,
+      const std::string& page_origin,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
     maho::MahoMailService* service = GetMailService();
     if (!service) {
@@ -2437,7 +2452,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
       return;
     }
     service->ExtractOtp(account_id, folder_id, query, max_age_seconds,
-                        std::move(callback));
+                        page_origin, std::move(callback));
   }
 
   void MailSendEmail(
@@ -6506,6 +6521,7 @@ void MahoBrowserMainExtraParts::StopObservingPowerSuspend() {
 
 void MahoBrowserMainExtraParts::LockVaultForLifecycle() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  ++g_vault_lifecycle_lock_count;
   maho::core::LockVault(core_);
   maho::passwords::MahoPasswordAuthorizationService::Get()->RevokeAll();
   GetMcpBrowserDelegate()->RevokeVaultCredentialLeases();
@@ -6848,6 +6864,82 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
         maho_routines_fire_event(core, "{\"kind\":\"on_startup\"}");
       }
     }));
+
+    // Startup Vault auto-unlock with the device-held key. Silent on failure
+    // (the Vault stays locked and the user unlocks manually); only the error
+    // code is logged, never key material. A stale startup generation, a
+    // closed core, or a suspend that raced the unlock must not publish an
+    // unlocked state. Resume is intentionally NOT wired: OnSuspend locks the
+    // Vault for lifecycle and resume keeps it locked by design.
+    maho::PostCoreTask<bool>(
+        FROM_HERE, base::BindOnce([]() -> bool {
+          MahoCore* core = maho::GetCore();
+          if (!core) {
+            return false;
+          }
+          // Only the real browser uses the OS keystore for the device key.
+          maho_vault_enable_platform_device_protector();
+          std::unique_ptr<char, decltype(&maho_string_free)> raw(
+              maho_vault_unlock_with_device_json(core), &maho_string_free);
+          if (!raw) {
+            LOG(WARNING) << "Maho Vault device unlock failed: no_response";
+            return false;
+          }
+          std::optional<base::Value> parsed =
+              base::JSONReader::Read(raw.get(), base::JSON_PARSE_RFC);
+          raw.reset();
+          if (!parsed || !parsed->is_dict()) {
+            LOG(WARNING) << "Maho Vault device unlock failed: invalid_response";
+            return false;
+          }
+          const base::DictValue& root = parsed->GetDict();
+          if (!root.FindBool("ok").value_or(false)) {
+            const base::DictValue* error = root.FindDict("error");
+            const std::string* code =
+                error ? error->FindString("code") : nullptr;
+            LOG(WARNING) << "Maho Vault device unlock failed: "
+                         << (code ? *code : std::string("invalid_response"));
+            return false;
+          }
+          const base::DictValue* data = root.FindDict("data");
+          const std::string* lock_state =
+              data ? data->FindString("lockState") : nullptr;
+          return lock_state && *lock_state == "unlocked";
+        }),
+        base::BindOnce(
+            [](base::WeakPtr<MahoBrowserMainExtraParts> self,
+               uint64_t generation, uint64_t lifecycle_lock_count,
+               bool unlocked) {
+              if (!unlocked || !self ||
+                  self->startup_state_ != StartupState::kReady ||
+                  generation != self->startup_generation_ || !self->core_) {
+                return;
+              }
+              if (lifecycle_lock_count != g_vault_lifecycle_lock_count) {
+                // A suspend lock raced the unlock; restore the locked state.
+                self->LockVaultForLifecycle();
+                return;
+              }
+              maho::NotifyVaultLockStateChanged(/*locked=*/false);
+              // Pages loaded while the Vault was locked fetched no logins, and
+              // desktop PasswordStore ignores an unknown-changes notification,
+              // so refetch every tab's password forms explicitly.
+              ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+                  [](BrowserWindowInterface* browser) {
+                    TabStripModel* tabs = browser->GetTabStripModel();
+                    for (int index = 0; tabs && index < tabs->count();
+                         ++index) {
+                      if (auto* client =
+                              ChromePasswordManagerClient::FromWebContents(
+                                  tabs->GetWebContentsAt(index))) {
+                        client->UpdateFormManagers();
+                      }
+                    }
+                    return true;
+                  });
+            },
+            weak_factory_.GetWeakPtr(), startup_generation_,
+            g_vault_lifecycle_lock_count));
   }
 
   LOG(INFO) << "MAHO_INIT_AUDIT: class=regular, decision=allow, "

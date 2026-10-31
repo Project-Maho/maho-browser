@@ -80,6 +80,11 @@ public:
   bool ConsumeAuthorization(const std::string &profile_key,
                             const std::string &origin_scope,
                             PasswordAuthorizationAction action);
+  // Page-load fill discovery needs only an unlocked Vault: Chromium's
+  // IsReauthBeforeFillingRequired() gates the actual fill, so a page load
+  // never prompts for device authentication.
+  bool IsPageFillLookupAllowed(const std::string &profile_key,
+                               const std::string &origin_scope) const;
   void RevokeProfile(const std::string &profile_key);
   void RevokeAll();
   void CopySecretToClipboard(std::u16string secret);

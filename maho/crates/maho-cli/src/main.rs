@@ -1129,8 +1129,26 @@ fn deprecation_warning(old: &str, new: &str) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-#[tokio::main]
-async fn main() -> Result<()> {
+// The command dispatcher below is one very large async state machine. In debug
+// builds it exceeds Windows' 1 MiB main-thread stack, so the runtime is driven
+// from a thread with an explicit stack size on every platform.
+const MAIN_THREAD_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .name("maho-main".into())
+        .stack_size(MAIN_THREAD_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?
+                .block_on(async_main())
+        })?
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+async fn async_main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_target(false)

@@ -904,6 +904,7 @@ class MahoMcpBrowserDelegate {
                               const std::string& folder_id,
                               const std::string& query,
                               int64_t max_age_seconds,
+                              const std::string& page_origin,
                               MailReadCallback callback);
   virtual void MailSendEmail(const std::string& request_json,
                              bool already_authorized,

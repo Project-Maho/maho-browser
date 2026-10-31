@@ -1069,12 +1069,22 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
         }, std::move(callback)));
   }
 
-  void ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, ExtractOtpCallback callback) override {
+  void ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, const std::string& page_origin, ExtractOtpCallback callback) override {
     MahoMailReadBridge::Start(
-        base::BindOnce([](std::string account_id, std::string folder_id, std::string query, int64_t max_age_seconds, MahoMailReadCallback cb, void* ud) {
-          return MahoMailExtractOtp(account_id.c_str(), folder_id.c_str(), query.c_str(), max_age_seconds, cb, ud);
-        }, account_id, folder_id, query, max_age_seconds),
+        base::BindOnce([](std::string account_id, std::string folder_id, std::string query, int64_t max_age_seconds, std::string page_origin, MahoMailReadCallback cb, void* ud) {
+          return MahoMailExtractOtp(account_id.c_str(), folder_id.c_str(), query.c_str(), max_age_seconds, page_origin.c_str(), cb, ud);
+        }, account_id, folder_id, query, max_age_seconds, page_origin),
         base::BindOnce([](ExtractOtpCallback cb, bool ok, std::string json) {
+          std::move(cb).Run(ok, std::move(json));
+        }, std::move(callback)));
+  }
+
+  void ExtractMessagesOtp(int64_t max_age_seconds, const std::string& page_origin, ExtractMessagesOtpCallback callback) override {
+    MahoMailReadBridge::Start(
+        base::BindOnce([](int64_t max_age_seconds, std::string page_origin, MahoMailReadCallback cb, void* ud) {
+          return MahoMessagesExtractOtp(max_age_seconds, page_origin.c_str(), cb, ud);
+        }, max_age_seconds, page_origin),
+        base::BindOnce([](ExtractMessagesOtpCallback cb, bool ok, std::string json) {
           std::move(cb).Run(ok, std::move(json));
         }, std::move(callback)));
   }

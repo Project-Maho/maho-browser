@@ -21,6 +21,10 @@ unsafe extern "C" fn capture(ok: bool, payload: *const c_char, data: *mut c_void
 }
 
 fn extract(query: &str) -> serde_json::Value {
+    extract_for_origin(query, None)
+}
+
+fn extract_for_origin(query: &str, page_origin: Option<&str>) -> serde_json::Value {
     let _guard = crate::test_support::global_ctx_guard();
     let pool = crate::test_support::pool_with_seeded_data();
     pool.get().unwrap().execute(
@@ -29,11 +33,12 @@ fn extract(query: &str) -> serde_json::Value {
     ).unwrap();
     crate::state::set_ctx(crate::test_support::ctx_arc(pool)).unwrap();
     let query = CString::new(query).unwrap();
+    let origin = page_origin.map(|o| CString::new(o).unwrap());
     let (sender, receiver) = mpsc::channel::<Captured>();
     let data = Box::into_raw(Box::new(sender));
     let accepted = MahoMailExtractOtp(
         std::ptr::null(), std::ptr::null(), query.as_ptr(), 600,
-        Some(capture), data.cast(),
+        origin.as_ref().map_or(std::ptr::null(), |o| o.as_ptr()), Some(capture), data.cast(),
     );
     if !accepted {
         // Rejected calls never transfer ownership to a callback.
@@ -51,6 +56,21 @@ fn extract(query: &str) -> serde_json::Value {
 #[test]
 fn otp_ffi_empty_callback_is_array() {
     assert_eq!(extract("no-matching-message"), json!([]));
+}
+
+#[test]
+fn otp_ffi_page_origin_binds_sender_domain() {
+    // Seeded em1 comes from sender@example.com and links nothing, so a known
+    // origin keeps the code only on a sender-domain match (SenderExact); a
+    // mismatched origin is Unrelated, which extract.rs drops entirely.
+    let code = json!([
+        {"field": "otp", "name": "one-time-code", "value": "123456"},
+        {"field": "code", "name": "one-time-code", "value": "123456"}
+    ]);
+    assert_eq!(extract_for_origin("Verification code", Some("https://example.com")), code);
+    assert_eq!(extract_for_origin("Verification code", Some("https://login.example.com")), code);
+    assert_eq!(extract_for_origin("Verification code", Some("https://evil.test")), json!([]));
+    assert_eq!(extract_for_origin("Verification code", Some("")), code);
 }
 
 #[test]

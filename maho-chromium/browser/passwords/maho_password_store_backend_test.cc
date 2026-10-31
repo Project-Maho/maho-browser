@@ -3,6 +3,7 @@
 #include "maho/browser/passwords/maho_password_store_backend.h"
 
 #include <algorithm>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -16,6 +17,8 @@
 #include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/task_environment.h"
@@ -251,8 +254,9 @@ public:
   ScopedCoreOverride &operator=(const ScopedCoreOverride &) = delete;
 
 private:
-  MahoCore *saved_core_;
-  Profile *saved_owner_;
+  // RAW_PTR_EXCLUSION: opaque Rust FFI handle; not PartitionAlloc memory.
+  RAW_PTR_EXCLUSION MahoCore *saved_core_;
+  raw_ptr<Profile> saved_owner_;
 };
 
 bool VaultResponseOk(char *response) {
@@ -317,7 +321,8 @@ public:
   MahoPasswordImportJob *get() const { return job_; }
 
 private:
-  MahoPasswordImportJob *job_ = nullptr;
+  // RAW_PTR_EXCLUSION: opaque Rust FFI handle; not PartitionAlloc memory.
+  RAW_PTR_EXCLUSION MahoPasswordImportJob *job_ = nullptr;
 };
 
 } // namespace
@@ -676,7 +681,8 @@ private:
   std::unique_ptr<TestingProfile> owner_profile_;
   std::unique_ptr<TestingPrefServiceSimple> pref_service_;
   std::unique_ptr<ScopedNativePasswordWritePrefsForTesting> pref_override_;
-  MahoCore *core_ = nullptr;
+  // RAW_PTR_EXCLUSION: opaque Rust FFI handle; not PartitionAlloc memory.
+  RAW_PTR_EXCLUSION MahoCore *core_ = nullptr;
   std::unique_ptr<ScopedCoreOverride> core_override_;
 };
 
@@ -767,8 +773,11 @@ TEST_F(MahoPasswordStoreBackendTest,
   read_loop.Run();
   EXPECT_FALSE(read_success);
 
+  // Page-load fill discovery needs only an unlocked Vault (Chromium's
+  // IsReauthBeforeFillingRequired gates the actual fill), so the lookup
+  // succeeds without a grant; nothing was saved, so it offers nothing.
   base::RunLoop fill_loop;
-  bool fill_success = true;
+  bool fill_success = false;
   backend.FillMatchingLoginsMahoAsync(
       form.signon_realm, form.scheme,
       base::BindOnce(
@@ -780,7 +789,7 @@ TEST_F(MahoPasswordStoreBackendTest,
           },
           &fill_loop, &fill_success));
   fill_loop.Run();
-  EXPECT_FALSE(fill_success);
+  EXPECT_TRUE(fill_success);
 }
 
 TEST_F(MahoPasswordStoreBackendTest,
@@ -1128,7 +1137,7 @@ TEST_F(MahoPasswordStoreBackendTest, UnlockedVaultAddListAndFillLoginAsync) {
 }
 
 TEST_F(MahoPasswordStoreBackendTest,
-       ContextDiscoveryIsSecretFreeAndExactSelectionResolvesOnce) {
+       ContextDiscoveryCarriesSecretAndExactSelectionResolvesOnce) {
   EnableNativeWriteForTesting();
   CreateInitializedVaultCore();
   SelectPasswordProvider("maho_native", "[]");
@@ -1144,7 +1153,9 @@ TEST_F(MahoPasswordStoreBackendTest,
   password_manager::BackendLoginsResult discovered =
       DiscoverForContext(backend, origin, context);
   ASSERT_EQ(1u, discovered.size());
-  EXPECT_TRUE(discovered[0].password_value.empty());
+  // Upstream fill-on-load, suggestions and save-vs-update compare all read
+  // match.password_value, so the page-scoped lookup carries the secret.
+  EXPECT_EQ(GetCredentialPassword(discovered[0]), kJitPassword16);
   ASSERT_TRUE(discovered[0].primary_key.has_value());
 
   const int primary_key = discovered[0].primary_key->value();
@@ -1189,6 +1200,65 @@ TEST_F(MahoPasswordStoreBackendTest,
 }
 
 TEST_F(MahoPasswordStoreBackendTest,
+       ContextDiscoveryReturnsSiblingSubdomainAsPslMatch) {
+  EnableNativeWriteForTesting();
+  CreateInitializedVaultCore();
+  SelectPasswordProvider("maho_native", "[]");
+  MahoPasswordStoreBackend backend = CreateBackend();
+  backend.InitBackend(base::OnceCallback<void(bool)>());
+  task_environment_.RunUntilIdle();
+
+  ASSERT_TRUE(ImportOnePasswordCredential("https://login.psl-example.com",
+                                          "psl@example.test", kJitPassword));
+  const std::string page = "https://www.psl-example.com";
+  password_manager::BackendLoginsResult discovered =
+      DiscoverForContext(backend, page, FillContextFor(page));
+
+  ASSERT_EQ(1u, discovered.size());
+  ASSERT_TRUE(discovered[0].match_type.has_value());
+  EXPECT_EQ(password_manager::PasswordForm::MatchType::kPSL,
+            *discovered[0].match_type);
+  EXPECT_EQ(GetCredentialPassword(discovered[0]), kJitPassword16);
+}
+
+TEST_F(MahoPasswordStoreBackendTest,
+       LockedVaultContextDiscoveryIsEmptySuccessNotError) {
+  EnableNativeWriteForTesting();
+  CreateInitializedVaultCore();
+  SelectPasswordProvider("maho_native", "[]");
+  MahoPasswordStoreBackend backend = CreateBackend();
+  backend.InitBackend(base::OnceCallback<void(bool)>());
+  task_environment_.RunUntilIdle();
+  const std::string origin = "https://locked-context.example";
+  ASSERT_TRUE(
+      ImportOnePasswordCredential(origin, "locked@example.test", kJitPassword));
+  ASSERT_TRUE(LockVault());
+
+  password_manager::PasswordFormDigest digest(
+      password_manager::PasswordForm::Scheme::kHtml, origin,
+      GURL(origin + "/login"));
+  base::RunLoop loop;
+  bool got_error = true;
+  size_t count = 1;
+  backend.GetGroupedMatchingLoginsAsync(
+      digest, FillContextFor(origin),
+      base::BindOnce(
+          [](base::RunLoop *loop, bool *error_out, size_t *count_out,
+             password_manager::BackendLoginsResultOrError result) {
+            auto *forms =
+                std::get_if<password_manager::BackendLoginsResult>(&result);
+            *error_out = !forms;
+            *count_out = forms ? forms->size() : 0;
+            loop->Quit();
+          },
+          &loop, &got_error, &count));
+  loop.Run();
+
+  EXPECT_FALSE(got_error);
+  EXPECT_EQ(0u, count);
+}
+
+TEST_F(MahoPasswordStoreBackendTest,
        ResolverRejectsUnknownStaleAndWrongDocumentSnapshotsBeforeSecretUse) {
   EnableNativeWriteForTesting();
   CreateInitializedVaultCore();
@@ -1217,12 +1287,15 @@ TEST_F(MahoPasswordStoreBackendTest,
   password_manager::PasswordFillSelection exact{
       .primary_key = discovered[0].primary_key,
       .observed_revision = *revision};
-  MahoPasswordAuthorizationService::Get()->RevokeProfile(OwnerProfileKey());
+  // Fill authorization needs only an unlocked Vault, so a locked Vault is what
+  // denies secret use here.
+  MahoPasswordAuthorizationService::Get()->SetVaultLockedForTesting(true);
   int authorization_callbacks = 0;
   EXPECT_FALSE(ResolveForContext(backend, context, exact,
                                  &authorization_callbacks));
   EXPECT_EQ(1, authorization_callbacks);
   EXPECT_EQ(0, ffi_probe.credential_execute_calls);
+  MahoPasswordAuthorizationService::Get()->SetVaultLockedForTesting(false);
 
   password_manager::PasswordFillSelection unknown{
       .primary_key = password_manager::FormPrimaryKey(primary_key + 1000),
@@ -1673,23 +1746,30 @@ TEST_F(MahoPasswordStoreBackendTest, AddLoginZeroizesEveryPlaintextPasswordCopy)
     add_loop.Run();
   }
 
-  // The request JSON carries the password, so it must be among the wiped
-  // buffers; that part already holds today.
+  // The observer runs after the overwrite (it never sees plaintext), so a wipe
+  // is identified by the size of the zeroed buffer.
+  const size_t password_size = std::strlen(kKillSwitchPassword);
+  auto all_zero = [](const std::string &value) {
+    return !value.empty() && std::all_of(value.begin(), value.end(),
+                                         [](char c) { return c == 0; });
+  };
+
+  // The request JSON carries the password, so a larger zeroed buffer must be
+  // among the wipes.
   const bool wiped_request_json =
       std::any_of(zeroized.begin(), zeroized.end(),
-                  [](const std::string &value) {
-                    return value.find(kKillSwitchPassword) != std::string::npos;
+                  [&](const std::string &value) {
+                    return all_zero(value) && value.size() > password_size;
                   });
   EXPECT_TRUE(wiped_request_json)
       << "the serialized request buffer was never zeroized";
 
-  // The dictionary's own password copy is a SEPARATE allocation. Exactly one
-  // wipe means only the JSON was cleared and the plaintext string the
-  // dictionary owned was released intact.
+  // The dictionary's own password copy is a SEPARATE allocation of exactly
+  // the password's size; it must be wiped too, not released intact.
   const size_t plaintext_wipes =
       std::count_if(zeroized.begin(), zeroized.end(),
-                    [](const std::string &value) {
-                      return value == kKillSwitchPassword;
+                    [&](const std::string &value) {
+                      return all_zero(value) && value.size() == password_size;
                     });
   EXPECT_GE(plaintext_wipes, 1u)
       << "the password copy owned by the request dictionary was released "
@@ -1965,8 +2045,10 @@ TEST_F(MahoPasswordStoreBackendTest, UnlockedVaultUpdateLoginAsync) {
   update_loop.Run();
   ASSERT_TRUE(update_success);
 
+  // A different registrable domain: a sibling under example.com would now be
+  // a PSL match for update.example.com.
   MahoPasswordForm updated =
-      AddLoginAndFetch(backend, "https://other.example.com",
+      AddLoginAndFetch(backend, "https://other.example.org",
                        "other@example.com", "other-password");
   EXPECT_FALSE(updated.id.empty());
 
@@ -2079,7 +2161,8 @@ TEST_F(MahoPasswordStoreBackendTest, UnlockedVaultLockedOperationsFailClosed) {
           },
           &fill_loop, &fill_success));
   fill_loop.Run();
-  EXPECT_FALSE(fill_success);
+  // A locked Vault answers "nothing to offer" instead of failing the store.
+  EXPECT_TRUE(fill_success);
 }
 
 TEST_F(MahoPasswordStoreBackendTest, LockedVaultState) {

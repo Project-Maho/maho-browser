@@ -69,6 +69,7 @@ MahoPasswordForm &MahoPasswordForm::operator=(const MahoPasswordForm &other) {
     display_name = other.display_name;
     icon_url = other.icon_url;
     match_type = other.match_type;
+    vault_psl_match = other.vault_psl_match;
     skip_zero_click = other.skip_zero_click;
     in_store = other.in_store;
     form_data_base64 = other.form_data_base64;
@@ -96,6 +97,7 @@ MahoPasswordForm::MahoPasswordForm(MahoPasswordForm &&other) noexcept
       times_used_in_html_form(other.times_used_in_html_form),
       display_name(std::move(other.display_name)),
       icon_url(std::move(other.icon_url)), match_type(other.match_type),
+      vault_psl_match(other.vault_psl_match),
       skip_zero_click(other.skip_zero_click), in_store(other.in_store),
       form_data_base64(std::move(other.form_data_base64)),
       notes(std::move(other.notes)) {}
@@ -128,6 +130,7 @@ MahoPasswordForm::operator=(MahoPasswordForm &&other) noexcept {
     display_name = std::move(other.display_name);
     icon_url = std::move(other.icon_url);
     match_type = other.match_type;
+    vault_psl_match = other.vault_psl_match;
     skip_zero_click = other.skip_zero_click;
     in_store = other.in_store;
     form_data_base64 = std::move(other.form_data_base64);
@@ -609,13 +612,26 @@ ParsePasswordFormFromDict(const base::DictValue &dict) {
       return std::nullopt;
     }
   }
-  // `password_value` deliberately remains empty for every discovery result.
+  if (const std::string *match = dict.FindString("matchType")) {
+    // Only a PSL match changes the form: an exact match keeps the stored
+    // `formDetails` match type (or none for legacy records) so saved forms
+    // round-trip unchanged.
+    if (*match == "psl") {
+      form.match_type = password_manager::PasswordForm::MatchType::kPSL;
+      form.vault_psl_match = true;
+    } else if (*match != "exact") {
+      return std::nullopt;
+    }
+  }
+  // `password_value` stays empty for discovery; only the context-aware fill
+  // lookup resolves secrets (see ResolveFormSecrets).
   return form;
 }
 
 std::optional<password_manager::PasswordFillResolution>
 ResolveBackendPassword(const std::string &serving_profile_key,
-                       const std::string &item_id, uint64_t revision) {
+                       const std::string &item_id, uint64_t revision,
+                       const char *action = "fill") {
   maho::core::VaultBackendSession session =
       maho::CreateVaultBackendSessionForProfileKey(serving_profile_key);
   if (!session.is_valid()) {
@@ -625,7 +641,7 @@ ResolveBackendPassword(const std::string &serving_profile_key,
   base::DictValue request;
   request.Set("itemId", item_id);
   request.Set("expectedRevision", base::NumberToString(revision));
-  request.Set("action", "fill");
+  request.Set("action", action);
   ScopedZeroizedString request_json;
   base::JSONWriter::Write(request, &request_json.get());
 
@@ -654,6 +670,28 @@ ResolveBackendPassword(const std::string &serving_profile_key,
     return std::nullopt;
   }
   return password_manager::PasswordFillResolution(std::move(password_utf16));
+}
+
+// Fills password_value for every discovered form from the Vault, using the same
+// revision-checked resolution path as ResolvePasswordFill. Forms whose secret
+// cannot be resolved (stale revision, locked Vault) are removed.
+void ResolveFormSecrets(const std::string &serving_profile_key,
+                        std::vector<MahoPasswordForm> &forms) {
+  std::erase_if(forms, [&](MahoPasswordForm &form) {
+    if (form.id.empty() || form.revision == 0) {
+      return true;
+    }
+    std::optional<password_manager::PasswordFillResolution> resolution =
+        // "preview" decrypts without recording a use, so the revision the
+        // page later selects stays the one discovered here.
+        ResolveBackendPassword(serving_profile_key, form.id, form.revision,
+                               "preview");
+    if (!resolution) {
+      return true;
+    }
+    form.password_value = base::UTF16ToUTF8(resolution->secret());
+    return form.password_value.empty();
+  });
 }
 
 std::optional<base::DictValue>
@@ -947,9 +985,15 @@ bool MahoPasswordStoreBackend::IsMahoVaultRoutingActive() {
 bool IsPasswordOperationAuthorized(const std::string &profile_key,
                                    const std::string &origin_scope,
                                    PasswordAuthorizationAction action) {
-  return maho::CreateVaultBackendSessionForProfileKey(profile_key).is_valid() &&
-         MahoPasswordAuthorizationService::Get()->ConsumeAuthorization(
-             profile_key, origin_scope, action);
+  if (!maho::CreateVaultBackendSessionForProfileKey(profile_key).is_valid()) {
+    return false;
+  }
+  MahoPasswordAuthorizationService *service =
+      MahoPasswordAuthorizationService::Get();
+  if (action == PasswordAuthorizationAction::kFill) {
+    return service->IsPageFillLookupAllowed(profile_key, origin_scope);
+  }
+  return service->ConsumeAuthorization(profile_key, origin_scope, action);
 }
 
 MahoPasswordStoreBackend::MahoPasswordStoreBackend(bool enabled,
@@ -962,7 +1006,23 @@ void MahoPasswordStoreBackend::InitBackend(
     RemoteChangesReceived remote_form_changes_received,
     base::RepeatingClosure sync_enabled_or_disabled_cb,
     base::OnceCallback<void(bool)> completion) {
+  remote_form_changes_received_ = std::move(remote_form_changes_received);
+  // A Vault unlock makes previously hidden credentials available. Form
+  // managers created while the Vault was locked fetched nothing, so tell the
+  // store its logins changed; PasswordManager then refetches.
+  vault_lock_state_subscription_ = maho::AddVaultLockStateChangeCallback(
+      base::BindRepeating(&MahoPasswordStoreBackend::OnVaultLockStateChanged,
+                          weak_ptr_factory_.GetWeakPtr()));
   InitBackend(std::move(completion));
+}
+
+void MahoPasswordStoreBackend::OnVaultLockStateChanged(bool locked) {
+  if (locked || !remote_form_changes_received_) {
+    return;
+  }
+  identity_map_.Clear();
+  fill_context_snapshots_.clear();
+  remote_form_changes_received_.Run(password_manager::PasswordChanges());
 }
 
 void MahoPasswordStoreBackend::InitBackend(
@@ -1234,7 +1294,7 @@ void MahoPasswordStoreBackend::FillMatchingLoginsAsync(
       queries.size(),
       base::BindOnce(
           [](base::WeakPtr<MahoPasswordStoreBackend> backend,
-             ChromiumLoginsOrErrorReply cb,
+             bool include_psl_matches, ChromiumLoginsOrErrorReply cb,
              std::vector<RealmQueryResult> results) {
             if (!backend) {
               return;
@@ -1251,12 +1311,17 @@ void MahoPasswordStoreBackend::FillMatchingLoginsAsync(
                                     std::make_move_iterator(realm_forms.begin()),
                                     std::make_move_iterator(realm_forms.end()));
             }
+            if (!include_psl_matches) {
+              std::erase_if(combined_forms, [](const MahoPasswordForm &form) {
+                return form.vault_psl_match;
+              });
+            }
             backend->ObserveIdentities(combined_forms);
             std::move(cb).Run(
                 ConvertToBackendCredentials(combined_forms,
                                             &backend->identity_map_));
           },
-          weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+          weak_ptr_factory_.GetWeakPtr(), include_psl, std::move(callback)));
 
   for (const auto &query : queries) {
     FillMatchingLoginsMahoAsync(
@@ -1341,8 +1406,16 @@ void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
             }
             backend->ObserveIdentities(forms);
             backend->RecordFillContext(request_context, forms);
+            // Chromium fills on page load, offers suggestions, and decides
+            // save-vs-update from match.password_value, so this page-scoped
+            // lookup carries the decrypted secret. Items whose secret cannot be
+            // resolved are dropped instead of being offered password-less.
+            ResolveFormSecrets(backend->profile_key_, forms);
             ChromiumBackendLoginsResult creds =
                 ConvertToBackendCredentials(forms, &backend->identity_map_);
+            for (auto &form : forms) {
+              form.Zeroize();
+            }
             for (auto &c : creds) {
               if (!c.match_type.has_value()) {
                 c.match_type =
@@ -1361,12 +1434,6 @@ void MahoPasswordStoreBackend::ResolvePasswordFill(
   if (!enabled_ || !initialized_ || !NativeWriteEnabled() ||
       !IsMahoVaultRoutingActive() || context.requesting_origin.opaque() ||
       !selection.primary_key || selection.observed_revision == 0) {
-    LOG(INFO) << "ResolvePasswordFill failed check 1: enabled=" << enabled_
-              << " init=" << initialized_ << " nwe=" << NativeWriteEnabled()
-              << " routing=" << IsMahoVaultRoutingActive()
-              << " opaque=" << context.requesting_origin.opaque()
-              << " pk=" << selection.primary_key.has_value()
-              << " rev=" << selection.observed_revision;
     std::move(resolver).Run(std::nullopt);
     return;
   }
@@ -1379,10 +1446,6 @@ void MahoPasswordStoreBackend::ResolvePasswordFill(
   if (!item_id || !revision || *revision != selection.observed_revision ||
       identity_map_.RevisionForVaultId(*item_id) != revision ||
       !WasSnapshotDiscoveredForContext(context, primary_key, *revision)) {
-    LOG(INFO) << "ResolvePasswordFill failed check 2: item_id=" << item_id.has_value()
-              << " rev_match=" << (revision && *revision == selection.observed_revision)
-              << " rev_vault_match=" << (item_id && revision && identity_map_.RevisionForVaultId(*item_id) == revision)
-              << " was_snapshot=" << (revision && WasSnapshotDiscoveredForContext(context, primary_key, *revision));
     std::move(resolver).Run(std::nullopt);
     return;
   }
@@ -1391,15 +1454,12 @@ void MahoPasswordStoreBackend::ResolvePasswordFill(
   if (!IsPasswordOperationAuthorized(profile_key_, origin,
                                      PasswordAuthorizationAction::kFill) ||
       !NativeWriteEnabled() || !IsMahoVaultRoutingActive()) {
-    LOG(INFO) << "ResolvePasswordFill failed check 3: auth="
-              << IsPasswordOperationAuthorized(profile_key_, origin, PasswordAuthorizationAction::kFill);
     std::move(resolver).Run(std::nullopt);
     return;
   }
 
   auto resolution = ResolveBackendPassword(profile_key_, *item_id,
                                            selection.observed_revision);
-  LOG(INFO) << "ResolvePasswordFill resolution success=" << resolution.has_value();
   std::move(resolver).Run(std::move(resolution));
 }
 
@@ -1866,10 +1926,20 @@ void MahoPasswordStoreBackend::ReadLoginsForOperationMahoAsync(
              PasswordAuthorizationAction read_action,
              std::optional<password_manager::PasswordForm::Scheme> read_scheme,
              LoginsOrErrorReply cb, bool authorized) {
-            if (!backend || !authorized ||
+            if (!backend) {
+              std::move(cb).Run(std::vector<MahoPasswordForm>{}, false);
+              return;
+            }
+            if (!authorized ||
                 !IsPasswordOperationAuthorized(backend->profile_key_, scope,
                                                read_action)) {
-              std::move(cb).Run(std::vector<MahoPasswordForm>{}, false);
+              // A locked Vault is not a backend failure: report "nothing to
+              // offer" so Chromium does not treat every saved site as new. A
+              // declined authorization on an unlocked Vault stays an error, and
+              // a real seam failure is still reported by ReadBackendCredentials
+              // below.
+              std::move(cb).Run(std::vector<MahoPasswordForm>{},
+                                maho::IsVaultLockedForUi());
               return;
             }
             std::vector<MahoPasswordForm> results;

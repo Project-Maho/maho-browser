@@ -98,7 +98,11 @@ interface MahoMailHelper {
   DeleteOutboxItem(string item_id) => (bool ok, string result_json);
   FlushOutbox() => (bool ok, string result_json);
   DownloadAttachment(string account_id, int64 email_uid, string folder_id, string part_id, string filename) => (bool ok, string result_json);
-  ExtractOtp(string account_id, string folder_id, string query, int64 max_age_seconds) => (bool ok, string result_json);
+  // `page_origin` empty = requesting page unknown (no domain binding).
+  ExtractOtp(string account_id, string folder_id, string query, int64 max_age_seconds, string page_origin) => (bool ok, string result_json);
+  // One-time codes from macOS Messages (iMessage/SMS); [] off macOS or
+  // without Full Disk Access.
+  ExtractMessagesOtp(int64 max_age_seconds, string page_origin) => (bool ok, string result_json);
   SnoozeEmail(string email_id, string snooze_until) => (bool ok, string result_json);
   UnsnoozeEmail(string email_id) => (bool ok, string result_json);
   ListSnoozedEmails(string account_id) => (bool ok, string result_json);

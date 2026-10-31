@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "components/device_reauth/mock_device_authenticator.h"
@@ -28,7 +29,7 @@ protected:
 
   void TearDown() override { service_->ResetForTesting(); }
 
-  MahoPasswordAuthorizationService *service_ = nullptr;
+  raw_ptr<MahoPasswordAuthorizationService> service_ = nullptr;
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 };
@@ -225,6 +226,23 @@ TEST_F(MahoPasswordAuthorizationServiceTest,
   EXPECT_FALSE(service_->ConsumeAuthorization(
       "profile-a", "https://example.test/login",
       PasswordAuthorizationAction::kFill));
+}
+
+TEST_F(MahoPasswordAuthorizationServiceTest,
+       PageFillLookupNeedsOnlyUnlockedVault) {
+  // Device reauth stays required (fixture default), yet no grant exists.
+  EXPECT_TRUE(service_->IsPageFillLookupAllowed("profile-a",
+                                                "https://example.test/login"));
+  EXPECT_FALSE(service_->ConsumeAuthorization(
+      "profile-a", "https://example.test/login",
+      PasswordAuthorizationAction::kFill));
+
+  service_->SetVaultLockedForTesting(true);
+  EXPECT_FALSE(service_->IsPageFillLookupAllowed(
+      "profile-a", "https://example.test/login"));
+  service_->SetVaultLockedForTesting(false);
+  EXPECT_FALSE(service_->IsPageFillLookupAllowed("", "https://example.test"));
+  EXPECT_FALSE(service_->IsPageFillLookupAllowed("profile-a", "not a url"));
 }
 
 TEST_F(MahoPasswordAuthorizationServiceTest,

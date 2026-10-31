@@ -920,10 +920,11 @@ index 32b047f..ec7f5cf 100644
    // See if the mouse pointer is within the bounds of the
    // OrganizerPanelView.
    if (organizer_panel_container_ && organizer_panel_container_->GetVisible()) {
-@@ -4974,6 +5525,40 @@ void BrowserView::AddedToWidget() {
+@@ -4974,6 +5525,42 @@ void BrowserView::AddedToWidget() {
    }
  #endif
  
++#if BUILDFLAG(IS_MAC)
 +  // Maho: Register all enabled Maho shortcuts as FocusManager accelerators so
 +  // they fire regardless of which view has focus. This is the only shortcut
 +  // path that survives when there is no active tab (no focused WebContents to
@@ -957,11 +958,12 @@ index 32b047f..ec7f5cf 100644
 +      }
 +    }
 +  }
++#endif  // BUILDFLAG(IS_MAC)
 +
    widget_observation_.Observe(GetWidget());
  
    auto* browser_elements =
-@@ -5090,6 +5675,10 @@ void BrowserView::AddedToWidget() {
+@@ -5090,6 +5677,10 @@ void BrowserView::AddedToWidget() {
    layout_views.multi_contents_view = multi_contents_view_;
    layout_views.side_panel = side_panel_;
    layout_views.top_container_separator = top_container_separator_;
@@ -972,7 +974,7 @@ index 32b047f..ec7f5cf 100644
    // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)
  
    SetLayoutManager(BrowserViewLayout::CreateLayout(
-@@ -5098,9 +5687,20 @@ void BrowserView::AddedToWidget() {
+@@ -5098,9 +5689,20 @@ void BrowserView::AddedToWidget() {
  
    EnsureFocusOrder();
  
@@ -994,7 +996,7 @@ index 32b047f..ec7f5cf 100644
    CHECK(toolbar_button_provider);
  
    // `AutofillBubbleHandlerImpl` depends on the ToolbarButtonProvider so it must
-@@ -5150,6 +5750,13 @@ void BrowserView::AddedToWidget() {
+@@ -5150,6 +5752,13 @@ void BrowserView::AddedToWidget() {
        kFallbackPopupAnchorElementId, *this);
  
    initialized_ = true;
@@ -1008,7 +1010,7 @@ index 32b047f..ec7f5cf 100644
  }
  
  void BrowserView::RemovedFromWidget() {
-@@ -5161,6 +5768,19 @@ void BrowserView::RemovedFromWidget() {
+@@ -5161,6 +5770,19 @@ void BrowserView::RemovedFromWidget() {
    focus_manager_observation_.Reset();
  }
  
@@ -1028,7 +1030,7 @@ index 32b047f..ec7f5cf 100644
  void BrowserView::PaintChildren(const views::PaintInfo& paint_info) {
    if (GetWidget()) {
      GetWidget()->GetCompositor()->RequestSuccessfulPresentationTimeForNextFrame(
-@@ -5183,6 +5803,7 @@ void BrowserView::OnThemeChanged() {
+@@ -5183,6 +5805,7 @@ void BrowserView::OnThemeChanged() {
    if (!initialized_) {
      return;
    }
@@ -1036,7 +1038,7 @@ index 32b047f..ec7f5cf 100644
  
    FrameColorsChanged();
  }
-@@ -5221,6 +5842,15 @@ const views::View* BrowserView::GetViewByElementId(
+@@ -5221,6 +5844,15 @@ const views::View* BrowserView::GetViewByElementId(
  // BrowserView, ui::AcceleratorTarget overrides:
  
  bool BrowserView::AcceleratorPressed(const ui::Accelerator& accelerator) {
@@ -1052,7 +1054,7 @@ index 32b047f..ec7f5cf 100644
    NativeWebKeyboardEvent native_event(accelerator.ToKeyEvent());
    if (browser_->GetFeatures().exclusive_access_manager()->HandleUserKeyEvent(
            native_event)) {
-@@ -5236,6 +5866,20 @@ bool BrowserView::AcceleratorPressed(const ui::Accelerator& accelerator) {
+@@ -5236,6 +5868,20 @@ bool BrowserView::AcceleratorPressed(const ui::Accelerator& accelerator) {
  
    UpdateAcceleratorMetrics(accelerator, command_id);
  
@@ -1073,7 +1075,7 @@ index 32b047f..ec7f5cf 100644
    if (command_id == IDC_CLEAR_BROWSING_DATA) {
      views::ElementTrackerViews::GetInstance()->NotifyCustomEvent(
          browsing_data_important_sites_util::
-@@ -5392,7 +6036,9 @@ bool BrowserView::MaybeUpdateSplitView(content::WebContents* contents) {
+@@ -5392,7 +6038,9 @@ bool BrowserView::MaybeUpdateSplitView(content::WebContents* contents) {
    if (updated_state) {
      split_tabs::SplitTabData* split_data =
          browser_->GetTabStripModel()->GetSplitData(new_tab->GetSplit().value());
@@ -1084,7 +1086,7 @@ index 32b047f..ec7f5cf 100644
    } else if (current_state != updated_state) {
      multi_contents_view_->CloseSplitView();
    } else {
-@@ -5981,7 +6627,12 @@ void BrowserView::OnImmersiveFullscreenEntered() {
+@@ -5981,7 +6629,12 @@ void BrowserView::OnImmersiveFullscreenEntered() {
      control->CloseMenu();
    }
  
@@ -1098,7 +1100,7 @@ index 32b047f..ec7f5cf 100644
  
    InvalidateLayout();
    GetWidget()->GetRootView()->DeprecatedLayoutImmediately();
-@@ -5998,7 +6649,9 @@ void BrowserView::OnImmersiveFullscreenExited() {
+@@ -5998,7 +6651,9 @@ void BrowserView::OnImmersiveFullscreenExited() {
    }
  #endif  // BUILDFLAG(IS_CHROMEOS)
  
@@ -1109,7 +1111,7 @@ index 32b047f..ec7f5cf 100644
  
    InvalidateLayout();
    GetWidget()->GetRootView()->DeprecatedLayoutImmediately();
-@@ -6007,7 +6660,9 @@ void BrowserView::OnImmersiveFullscreenExited() {
+@@ -6007,7 +6662,9 @@ void BrowserView::OnImmersiveFullscreenExited() {
  }
  
  void BrowserView::OnImmersiveModeControllerDestroyed() {

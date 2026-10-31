@@ -1,5 +1,8 @@
 // Copyright 2026 The Maho Authors. All rights reserved.
 
+// These tests serve the CLI over a Unix domain socket; Windows uses a named pipe.
+#![cfg(unix)]
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

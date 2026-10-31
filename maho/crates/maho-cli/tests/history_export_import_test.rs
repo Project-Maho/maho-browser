@@ -1,6 +1,9 @@
 // Integration tests for `maho history export` (D3) and `maho history import`
 // deprecation (D5).
 
+// These tests serve the CLI over a Unix domain socket; Windows uses a named pipe.
+#![cfg(unix)]
+
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

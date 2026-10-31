@@ -659,10 +659,21 @@ bool MahoMailListBySmartCategory(const char *account_id,
                                  MahoMailReadCallback callback,
                                  void *user_data);
 
+/**
+ * Scans recent incoming Messages for a one-time code and reports it with the
+ * same JSON shape as `MahoMailExtractOtp`: a two-entry field mapping, or `[]`.
+ * `page_origin` null/empty means the requesting page is unknown.
+ */
+bool MahoMessagesExtractOtp(int64_t max_age_seconds,
+                            const char *page_origin,
+                            MahoMailReadCallback callback,
+                            void *user_data);
+
 bool MahoMailExtractOtp(const char *account_id,
                         const char *folder_id,
                         const char *query,
                         int64_t max_age_seconds,
+                        const char *page_origin,
                         MahoMailReadCallback callback,
                         void *user_data);
 
